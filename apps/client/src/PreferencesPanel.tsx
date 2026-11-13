@@ -12,7 +12,8 @@ import ChordBuilder from "./ChordBuilder";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
 import {setShowTopBar, useShowTopBar} from "./sideMenuMode";
-import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
+import GestureTestPage from "./GestureTestPage";
+import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, gestureModes, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { providerName, usageProviders, type UsageBarMode } from "./usageAgentProvider";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
@@ -138,6 +139,8 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
       <p>{t("preferencesBindingsAreOptionalSelectionCompositionAndScreenReaderGestures")}</p>
       <h3 className="settings-group-title">{t("edgeGesturesHeading")}</h3>
       <p>{t("edgeGesturesHint")}</p>
+      <label>{t("gestureModeLabel")}<select value={edgeGestureSettings(preferences).mode} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), mode: e.target.value as typeof gestureModes[number]}})}>{gestureModes.map(mode => <option key={mode} value={mode}>{t(({auto: "gestureModeAuto", handles: "gestureModeHandles", edges: "gestureModeEdges", off: "gestureModeOff"} as const)[mode])}</option>)}</select></label>
+      <p>{t("gestureModeHint")}</p>
       {edgeGestureIds.map(id => <label key={id}><input type="checkbox" checked={edgeGestureSettings(preferences)[id]} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), [id]: e.target.checked}})} />{t(({leftMenu: "edgeGestureLeftMenu", bottomMenu: "edgeGestureBottomMenu", viewSwitch: "edgeGestureViewSwitch"} as const)[id])}</label>)}
       <label>{t("edgeGestureZoneWidth", {value: formatNumber(edgeGestureSettings(preferences).zoneWidth)})}<input type="range" min={edgeGestureZone.min} max={edgeGestureZone.max} step={edgeGestureZone.step} value={edgeGestureSettings(preferences).zoneWidth} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), zoneWidth: Number(e.target.value)}})} /></label>
       <label><input type="checkbox" checked={preferences.dismissKeyboardOnOverscroll} onChange={e=>update({dismissKeyboardOnOverscroll:e.target.checked})} />{t("preferencesDismissKeyboardOnOverscroll")}</label>
@@ -150,6 +153,7 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
       <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom, dismissKeyboardOnOverscroll: defaults.dismissKeyboardOnOverscroll, edgeGestures: undefined})}>{t("preferencesResetGestures")}</button>
 
 </>},
+{id:"gestureTestTitle",title:t("gestureTestTitle"),parent:"input",content:<GestureTestPage />},
 {id:"preferencesToolbarKeysAndOrder",title:t("preferencesToolbarKeysAndOrder"),parent:"input",content:<>
 
       <ToolbarKeysEditor preferences={preferences} update={update} />

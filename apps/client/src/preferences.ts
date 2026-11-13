@@ -61,7 +61,7 @@ function parseToolbar(value: unknown): ToolbarEntry[] {
     return true;
   });
 }
-export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "openAgents", "openWorkspaces", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
+export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "openAgents", "openWorkspaces", "bottomMenu", "agentView", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
 /** Actions that need a slot-specific meaning: level-aware defaults and pinch text sizing. */
 const slotOnlyActions: readonly GestureAction[] = ["auto", "fontSize"];
 /** Actions any discrete gesture, D-pad corner or toolbar long-press can run. */
@@ -77,21 +77,28 @@ export type GestureSlot = typeof gestureSlots[number];
 export type ToolbarAlternate = {action: GestureAction; keys?: string};
 /** Modifier keys keep their tap and lock cycle and Arrows is four keys; every other key can carry a long-press action. */
 export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr" && key !== "arrows"; }
-export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
+export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","bottomMenu":"gestureBottomMenu","agentView":"gestureAgentView","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
 export const edgeGestureIds = ["leftMenu", "bottomMenu", "viewSwitch"] as const;
 export type EdgeGestureId = typeof edgeGestureIds[number];
-export const edgeGestureZone = {min: 16, max: 48, step: 2, default: 24} as const;
-export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number};
-const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default};
+/** How deep a swipe's starting band reaches, in dp: from the screen edge, or from just past the system's own gesture zone on gesture navigation. */
+export const edgeGestureZone = {min: 16, max: 96, step: 2, default: 40} as const;
+/** How the gestures start: `auto` is handles (and swipes beside them) on Android gesture navigation and true edge swipes everywhere else. */
+export const gestureModes = ["auto", "handles", "edges", "off"] as const;
+export type GestureModePreference = typeof gestureModes[number];
+export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number; mode: GestureModePreference};
+/** The saved form: `mode` is absent until the user picks one. */
+export type StoredEdgeGestures = Omit<EdgeGestureSettings, "mode"> & {mode?: GestureModePreference};
+const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default, mode: "auto"};
 /** The saved edge gesture settings with the defaults filled in. */
 export function edgeGestureSettings(p: Pick<Preferences, "edgeGestures">): EdgeGestureSettings { return {...edgeGestureDefaults, ...p.edgeGestures}; }
-function parseEdgeGestures(value: unknown): EdgeGestureSettings | undefined {
+function parseEdgeGestures(value: unknown): StoredEdgeGestures | undefined {
   const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const zone = source.zoneWidth;
   const parsed: EdgeGestureSettings = {
     ...Object.fromEntries(edgeGestureIds.map(id => [id, source[id] !== false])) as Record<EdgeGestureId, boolean>,
     zoneWidth: typeof zone === "number" && Number.isInteger(zone) && zone >= edgeGestureZone.min && zone <= edgeGestureZone.max ? zone : edgeGestureZone.default,
+    mode: gestureModes.find(mode => mode === source.mode) ?? edgeGestureDefaults.mode,
   };
   return (Object.keys(parsed) as (keyof EdgeGestureSettings)[]).every(name => parsed[name] === edgeGestureDefaults[name]) ? undefined : parsed;
 }
@@ -124,7 +131,7 @@ export type Preferences = {
   /** Toolbar key height in CSS pixels; omitted at the default so older sync peers accept the snapshot. */
   toolbarKeyHeight?: number;
   /** Edge-swipe gestures and their zone width in dp; synced, and omitted at the defaults so older sync peers accept the snapshot. */
-  edgeGestures?: EdgeGestureSettings;
+  edgeGestures?: StoredEdgeGestures;
   /** Android only: ask the soft keyboard to act as a plain key source in the terminal (private mode); omitted when off, and kept on this device. */
   privateKeyboard?: boolean;
   /** The key rows were hidden or shown on purpose on this device; omitted until then so the automatic desktop behaviour still applies. */

@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {connectLocalTerminal,installLocalTerminal} from './fixtures/localTerminal';
+import {oneUi,reportGestureInsets as report,threeButtons} from './fixtures/gestureInsets';
 
 const key='lazysh.preferences.v1';
 const lastSize=(page:Page)=>page.evaluate(()=>window.simpleShortcutResizes.at(-1)!);
@@ -197,6 +198,100 @@ test.describe('on a phone',()=>{
   });
 });
 
+const handle=(page:Page)=>page.locator('[data-gesture-handle="bottom"]');
+const centre=async(page:Page)=>{const box=(await handle(page).boundingBox())!;return {x:box.x+box.width/2,y:box.y+box.height/2,bottom:box.y+box.height};};
+
+test.describe('on Android gesture navigation',()=>{
+  test.skip(({isMobile})=>!isMobile,'The bottom menu is for phone windows.');
+  test.use({viewport:{width:415,height:900}});
+
+  test('a handle above the Home zone opens the menu every time, by swipe and by tap, and the screen edge is left to the system',async({page},testInfo)=>{
+    await open(page);
+    await report(page,oneUi);
+    await expect(handle(page)).toBeVisible();
+    const first=await centre(page);
+    expect(first.bottom).toBeLessThanOrEqual(await height(page)-oneUi.mandatoryBottom);
+    await page.screenshot({path:testInfo.outputPath('handle-415x900.png')});
+    // The system owns the lowest pixels: a swipe from there never reaches the menu.
+    await swipeUp(page);await settle(page);await closed(page);
+    for(let attempt=0;attempt<5;attempt++){
+      const {x,y}=await centre(page);
+      await drag(page,y,y-300,{x});
+      await expect(menu(page)).toBeVisible();await settle(page);
+      await page.keyboard.press('Escape');
+      await closed(page);
+    }
+    await handle(page).tap();
+    await expect(menu(page)).toBeVisible();
+  });
+
+  test('a swipe that starts in the area just above the Home zone opens the menu, one inside the Home zone or well above does not',async({page})=>{
+    await open(page);
+    await report(page,oneUi);
+    await settle(page);
+    const bottom=await height(page);
+    // The Home zone is 24 dp; the swipe area starts 4 dp above it and is 40 dp deep. x=60 is clear of the handle.
+    for(const distance of [2,12,24,27]){await drag(page,bottom-distance,bottom-300,{x:60});await settle(page);await closed(page);}
+    for(const distance of [150,300]){await drag(page,bottom-distance,bottom-distance-250,{x:60});await settle(page);await closed(page);}
+    for(const distance of [28,48,68]){
+      await drag(page,bottom-distance,bottom-300,{x:60});
+      await expect(menu(page)).toBeVisible();await settle(page);
+      await page.keyboard.press('Escape');
+      await closed(page);
+    }
+  });
+
+  test('the area follows the Home zone the system reports now, and starts at the edge with three buttons',async({page})=>{
+    await open(page);
+    await report(page,{...oneUi,bottom:48,mandatoryBottom:56});
+    await settle(page);
+    const bottom=await height(page);
+    await drag(page,bottom-58,bottom-300,{x:60});await settle(page);await closed(page);
+    await drag(page,bottom-62,bottom-300,{x:60});
+    await expect(menu(page)).toBeVisible();await settle(page);
+    await page.keyboard.press('Escape');
+    await closed(page);
+    await report(page,threeButtons);
+    await settle(page);
+    await drag(page,bottom-3,bottom-300,{x:60});
+    await expect(menu(page)).toBeVisible();
+  });
+
+  test('the handle follows the zones the system reports now',async({page})=>{
+    await open(page);
+    await report(page,oneUi);
+    const before=await centre(page);
+    await report(page,{...oneUi,bottom:48,mandatoryBottom:56});
+    await expect.poll(async()=>(await centre(page)).y).toBeLessThan(before.y-20);
+    await report(page,threeButtons);
+    await expect(handle(page)).toHaveCount(1);
+  });
+
+  test('edge swipes, when chosen, start just above the Home zone and not at the lowest pixels',async({page})=>{
+    await open(page,{edgeGestures:{leftMenu:true,bottomMenu:true,viewSwitch:true,zoneWidth:24,mode:'edges'}});
+    await report(page,oneUi);
+    const bottom=await height(page);
+    await drag(page,bottom-8,bottom-300);await settle(page);await closed(page);
+    await drag(page,bottom-oneUi.mandatoryBottom-10,bottom-300);
+    await expect(menu(page)).toBeVisible();
+  });
+
+  test('three-button navigation keeps the true edge swipe',async({page})=>{
+    await open(page);
+    await report(page,threeButtons);
+    await swipeUp(page);
+    await expect(menu(page)).toBeVisible();
+  });
+
+  test('with the gestures off the handle is gone and the visible button opens the menu',async({page})=>{
+    await open(page,{edgeGestures:{leftMenu:true,bottomMenu:true,viewSwitch:true,zoneWidth:24,mode:'off'}});
+    await report(page,oneUi);
+    await expect(handle(page)).toHaveCount(0);
+    await opener(page).click();
+    await expect(menu(page)).toBeVisible();
+  });
+});
+
 test.describe('with a screen reader or the swipe switched off',()=>{
   test.skip(({isMobile})=>!isMobile,'The bottom menu is for phone windows.');
   test.use({viewport:{width:415,height:900}});
@@ -204,7 +299,7 @@ test.describe('with a screen reader or the swipe switched off',()=>{
   test('a visible button opens the menu, and the swipe does nothing',async({page},testInfo)=>{
     await open(page,{screenReader:true});
     await expect(opener(page)).toBeVisible();
-    await expect(page.locator('.bottom-menu-handle')).toHaveCount(0);
+    await expect(page.locator('.gesture-handle')).toHaveCount(0);
     await page.screenshot({path:testInfo.outputPath('button.png')});
     await swipeUp(page);
     await settle(page);

@@ -2009,6 +2009,18 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(mocks.invoke.mock.calls.filter(([command])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command))).toEqual([]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
+it('switches between the terminal and the Agent view on the terminal\'s two-finger action, and only for the active session',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'switching'});
+  mocks.invoke.mockImplementation(command=>command==='agent_snapshot'?Promise.resolve({schemaVersion:1,sessions:[]}):Promise.resolve(false));
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const act2=(sessionId:string)=>act(()=>{window.dispatchEvent(new CustomEvent('lazysh-terminal-action',{detail:{sessionId,action:'agentView'}}));});
+  act2('another');
+  expect(screen.queryByRole('region',{name:'Agent view'})).toBeNull();
+  act2('switching');
+  await screen.findByRole('region',{name:'Agent view'});
+  act2('switching');
+  await waitFor(()=>expect(screen.queryByRole('region',{name:'Agent view'})).toBeNull());
+});
 it.each(['enter','stale-pane','hidden','locked','wrong-server'] as const)('enters only the owned Agent view Herdr pane: %s',async outcome=>{
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
   mocks.api.connect.mockResolvedValue({sessionId:'agent-parent'});

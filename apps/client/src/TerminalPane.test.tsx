@@ -106,6 +106,51 @@ describe('bottom menu',()=>{
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
   });
+  describe('as a two-finger swipe from anywhere on the terminal',()=>{
+    const swipeTwoUp=(canvas:HTMLElement)=>{
+      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:300});
+      fireEvent.pointerDown(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:300});
+      fireEvent.pointerMove(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:200});
+      fireEvent.pointerMove(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:200});
+      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:200});
+      fireEvent.pointerUp(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:200});
+    };
+    const bind=(action:'bottomMenu'|'agentView')=>savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,up:action}});
+    const menu=()=>document.querySelector('.bottom-menu');
+    it('opens the bottom menu on a phone, and not on a desktop window',()=>{
+      stubWindow(true);bind('bottomMenu');
+      mount();
+      expect(menu()?.getAttribute('data-open')).toBe('false');
+      swipeTwoUp(screen.getByLabelText('Terminal for Host'));
+      expect(menu()?.getAttribute('data-open')).toBe('true');
+      cleanup();
+      stubWindow(false);
+      mount();
+      swipeTwoUp(screen.getByLabelText('Terminal for Host'));
+      expect(menu()).toBeNull();
+    });
+    it('asks the app to switch between the terminal and the Agent view',()=>{
+      stubWindow(true);bind('agentView');
+      const action=vi.fn();window.addEventListener('lazysh-terminal-action',action);
+      try{
+        mount();
+        swipeTwoUp(screen.getByLabelText('Terminal for Host'));
+        expect(action.mock.calls.map(([event])=>(event as CustomEvent).detail)).toEqual([{sessionId:'ssh',action:'agentView'}]);
+        expect(mocks.write).not.toHaveBeenCalled();
+      }finally{window.removeEventListener('lazysh-terminal-action',action);}
+    });
+    it('keeps the typing and selection guard of the edge swipes',()=>{
+      stubWindow(true);bind('bottomMenu');
+      mount();
+      const canvas=screen.getByLabelText('Terminal for Host');
+      act(()=>{document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'a',bubbles:true}));});
+      swipeTwoUp(canvas);
+      expect(menu()?.getAttribute('data-open')).toBe('false');
+      terminal.hasSelection.mockReturnValue(true);
+      swipeTwoUp(canvas);
+      expect(menu()?.getAttribute('data-open')).toBe('false');
+    });
+  });
   it('has no menu on a desktop window or for a session that ended',()=>{
     stubWindow(false);
     savePreferences({...defaults,screenReader:true});

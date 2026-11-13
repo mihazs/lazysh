@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {conversationText,openSwipeWorkspace,touchscreen} from './fixtures/swipeHost';
+import {oneUi,reportGestureInsets} from './fixtures/gestureInsets';
 
 test.use({viewport:{width:415,height:900}});
 const switcher=(page:Page)=>page.getByRole('group',{name:'Session view',exact:true});
@@ -11,7 +12,7 @@ const stored=(page:Page)=>page.evaluate(()=>localStorage.getItem('lazysh-session
 async function body(page:Page) {
   const box=(await page.locator('.session-body').boundingBox())!;
   const y=box.y+box.height/2;
-  return {rightEdge:{x:box.x+box.width-4,y},centre:{x:box.x+box.width*0.4,y},left:{x:box.x+40,y},right:{x:box.x+box.width-30,y},width:box.width};
+  return {rightEdge:{x:box.x+box.width-4,y},centre:{x:box.x+box.width*0.4,y},left:{x:box.x+40,y},right:{x:box.x+box.width-60,y},width:box.width};
 }
 /** The gesture engine refuses a touch while the user types or a drag is settling; wait until it would accept one. */
 const quiet=(page:Page)=>expect.poll(()=>page.evaluate(async()=>(await import('/src/edgeGestures.ts')).isTextInteractionActive())).toBe(false);
@@ -38,6 +39,47 @@ test.describe('phone',()=>{
     await expect(agentView(page)).toHaveCount(0);
     await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
     expect(await stored(page)).not.toContain('"agent"');
+  });
+
+  test('on Android gesture navigation a handle inside the Back zone starts the switch, and the screen edge does not',async({page})=>{
+    await openSwipeWorkspace(page);
+    const touch=await touchscreen(page,false);
+    await reportGestureInsets(page,oneUi);
+    const handle=page.locator('[data-gesture-handle="right"]');
+    await expect(handle).toBeVisible();
+    const grip=(await handle.boundingBox())!;
+    // The handle starts beyond the system's 32 dp Back zone, never inside it.
+    expect(grip.x+grip.width).toBeLessThanOrEqual(415-32);
+    const {rightEdge,left}=await body(page);
+    await touch.swipe(rightEdge,left);
+    await expect(terminal(page)).toHaveCount(1);
+    await expect(agentView(page)).toHaveCount(0);
+    // The screen-edge drag above counted as a scroll for a moment.
+    await quiet(page);
+    const from={x:grip.x+grip.width/2,y:grip.y+grip.height/2};
+    await touch.swipe(from,{x:left.x,y:from.y});
+    await expect(agentView(page).getByText(emptyAgent)).toBeVisible();
+    await expect(handle).toHaveCount(0);
+    await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+    await handle.tap();
+    await expect(agentView(page).getByText(emptyAgent)).toBeVisible();
+  });
+
+  test('on Android gesture navigation a swipe from the area just inside the Back zone starts the switch at any height above the toolbar',async({page})=>{
+    await openSwipeWorkspace(page);
+    const touch=await touchscreen(page,false);
+    await reportGestureInsets(page,oneUi);
+    const box=(await page.locator('.session-body').boundingBox())!,{left}=await body(page);
+    // The Back zone is 32 dp and the area is 4 dp past it, 40 dp deep: 415 - 36 is its inner edge, 415 - 76 its outer.
+    await quiet(page);
+    await touch.swipe({x:415-20,y:box.y+60},{...left,y:box.y+60});
+    await expect(terminal(page)).toHaveCount(1);
+    await quiet(page);
+    await touch.swipe({x:415-90,y:box.y+60},{...left,y:box.y+60});
+    await expect(terminal(page)).toHaveCount(1);
+    await quiet(page);
+    await touch.swipe({x:415-50,y:box.y+60},{...left,y:box.y+60});
+    await expect(agentView(page).getByText(emptyAgent)).toBeVisible();
   });
 
   test('the Terminal | Agent buttons still switch without a gesture',async({page})=>{

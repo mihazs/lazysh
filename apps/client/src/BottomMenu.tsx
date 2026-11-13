@@ -1,6 +1,7 @@
 import {Keyboard,KeyboardOff,PanelBottomClose,PanelBottomOpen,PenOff,SquarePen,type LucideIcon} from 'lucide-react';
 import {useEffect,useId,useRef,useState,type CSSProperties,type ReactNode,type RefObject} from 'react';
 import {useEdgeGestureMode,useEdgeGestures,useSwipeToClose} from './edgeGestures';
+import GestureHandle from './GestureHandle';
 import {t,useUi} from './i18n/core';
 import './BottomMenu.css';
 
@@ -40,17 +41,17 @@ function Item({icon: Icon, label, onClick, disabled}: {icon: LucideIcon; label: 
 /**
  * The bottom menu of a connected phone session. It overlays the terminal, so the terminal
  * never resizes while it is open, and every action closes it. A swipe up from the bottom
- * edge drags it open under the finger; a swipe down closes it. The pill at the edge only
- * shows where the swipe starts and takes no touch, so it never covers a key or a terminal
- * line. Screen readers, and the swipe switched off in Preferences, get a visible button
- * (`useBottomMenuButton`) that opens the same menu.
+ * handle drags it open under the finger (or tapping the handle opens it); a swipe down closes it.
+ * The handle sits just above the system's Home zone, which no app can use, so the system never
+ * takes its touches; the optional edge swipe starts in the same place. Screen readers, and the
+ * gestures switched off in Preferences, get a visible button (`useBottomMenuButton`) that opens the same menu.
  */
 export default function BottomMenu({open, onOpenChange, composing, onToggleComposer, toolbarVisible, onToggleToolbar, keyboard, disabled}: BottomMenuProps) {
   useUi();
   const id = useId();
   const sheet = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
-  // The swipe starts at the screen's bottom edge, which is the bottom of the app viewport.
+  // The swipe starts at the bottom of the app viewport, above the system's own bottom zone.
   const screen = useRef<HTMLElement | null>(null);
   if (!screen.current) screen.current = document.querySelector<HTMLElement>('.app-viewport') ?? document.body;
   const gesture = !useBottomMenuButton();
@@ -75,8 +76,8 @@ export default function BottomMenu({open, onOpenChange, composing, onToggleCompo
   const act = (run: () => void) => () => {onOpenChange(false); run();};
   const progress = drag ?? (open ? 1 : 0);
   return <>
-    {gesture && <div className="bottom-menu-handle" aria-hidden="true" data-hidden={progress > 0 || undefined}><span /></div>}
-    {progress > 0 && <div className="bottom-menu-scrim" aria-hidden="true" style={{'--bottom-menu-progress': progress} as CSSProperties} onPointerDown={() => onOpenChange(false)} />}
+    {gesture && <GestureHandle edge="bottom" gesture="bottomMenu" label={t('bottomMenuOpen')} hidden={progress > 0} onActivate={() => onOpenChange(true)} />}
+    {progress > 0 && <div className="bottom-menu-scrim" aria-hidden="true" style={{'--bottom-menu-progress': progress} as CSSProperties} onClick={() => onOpenChange(false)} />}
     <div ref={sheet} id={id} role="group" aria-label={t('bottomMenu')} className="bottom-menu" data-open={open} data-dragging={drag !== null || undefined} inert={!open && drag === null}
       style={{'--bottom-menu-progress': progress} as CSSProperties}>
       <button type="button" className="bottom-menu-grip" aria-label={t('bottomMenuClose')} onPointerDown={event => event.preventDefault()} onClick={() => onOpenChange(false)}><span aria-hidden="true" /></button>

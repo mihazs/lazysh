@@ -4,7 +4,8 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {act, cleanup, render} from '@testing-library/react';
 import {invoke, isTauri} from '@tauri-apps/api/core';
 import {loggingHandlers} from './edgeGestureLog';
-import {createSwipe, recognizer, useEdgeGestures, useSwipeToClose, type Edge, type Swipe} from './edgeGestures';
+import {createSwipe, recognizer, useEdgeGestureMode, useEdgeGestures, useSwipeToClose, type Edge, type Swipe} from './edgeGestures';
+import {setGestureInsets, unknownInsets, type GestureInsets} from './gestureInsets';
 import {defaults, savePreferences} from './preferences';
 import {typingWindowMs} from './textInteraction';
 import {registerTextInteraction} from './textInteraction';
@@ -23,8 +24,8 @@ function run(swipe: Swipe, samples: [number, number, number][]) {
 describe('swipe recogniser', () => {
   it('stays undecided inside the slop, then locks onto a dominant swipe axis', () => {
     const swipe = createSwipe(right, 0, 300, 0);
-    expect(swipe.move(5, 303, 10).state).toBe('pending');
-    expect(swipe.move(14, 305, 20)).toEqual({state: 'locked', progress: 14 / 200});
+    expect(swipe.move(3, 302, 10).state).toBe('pending');
+    expect(swipe.move(9, 305, 20)).toEqual({state: 'locked', progress: 9 / 200});
     expect(swipe.move(100, 310, 60).progress).toBe(.5);
     expect(swipe.move(400, 310, 90).progress).toBe(1);
   });
@@ -99,6 +100,7 @@ function swipe(target: Element, from: [number, number], through: [number, number
 const surface = () => document.querySelector('[data-testid="surface"]') as HTMLElement;
 function layout() {
   Object.defineProperty(window, 'innerWidth', {configurable: true, value: 390});
+  Object.defineProperty(window, 'innerHeight', {configurable: true, value: 800});
   surface().getBoundingClientRect = () => ({left: 0, top: 0, right: 390, bottom: 800, width: 390, height: 800, x: 0, y: 0, toJSON() {}}) as DOMRect;
 }
 const render390 = (props: Parameters<typeof Harness>[0]) => {const view = render(<Harness {...props} />); layout(); return view;};
@@ -109,7 +111,7 @@ afterAll(() => {vi.useRealTimers();});
 beforeEach(() => {
   document.body.dispatchEvent(new Event('compositionend', {bubbles: true}));
   vi.advanceTimersByTime(60_000);
-  localStorage.clear(); savePreferences({...defaults});
+  localStorage.clear(); savePreferences({...defaults}); setGestureInsets(unknownInsets);
 });
 afterEach(() => {cleanup();});
 
@@ -233,23 +235,225 @@ describe('edge gestures', () => {
   });
 });
 
+/** One UI with the back gesture on: 32 dp Back zones, a 24 dp Home zone of which 20 dp is the system gesture bar. */
+const oneUi: GestureInsets = {left: 32, right: 32, bottom: 20, mandatoryBottom: 24, navigation: 'gesture'};
+const setMode = (mode: 'auto' | 'handles' | 'edges' | 'off') => act(() => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 24, mode}}));
+const withInsets = (insets: GestureInsets) => act(() => setGestureInsets(insets));
+const handleOn = (edge: Edge) => {
+  const handle = document.createElement('i');
+  handle.setAttribute('data-edge-gestures-handle', edge);
+  surface().append(handle);
+  return handle;
+};
+
 describe('Android system gesture exclusion', () => {
-  const claimed = () => vi.mocked(invoke).mock.calls.map(([, args]) => args);
-  beforeEach(() => {vi.mocked(invoke).mockClear(); vi.mocked(isTauri).mockReturnValue(true);});
+  const calls = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === 'edge_gesture_exclusion').map(([, args]) => args as Record<string, unknown>);
+  beforeEach(() => {vi.mocked(invoke).mockClear(); vi.mocked(isTauri).mockReturnValue(true); withInsets(oneUi);});
   afterEach(() => {vi.mocked(isTauri).mockReturnValue(false);});
-  it('claims the enabled side bands at the zone width while mounted and gives them back on unmount', () => {
-    act(() => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: false, zoneWidth: 32}}));
+  it('claims the enabled side bands only on the rows of the handles while edge swipes are on, and gives them back on unmount', () => {
+    act(() => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: false, zoneWidth: 32, mode: 'edges'}}));
     const view = render390({log: []});
-    expect(claimed().at(-1)).toEqual({left: true, right: false, zoneDp: 32});
+    // 800 px viewport, 24 dp Home zone, 80 px clear of it: the 200 dp row ends at 696.
+    expect(calls().at(-1)).toEqual({left: true, right: false, zoneDp: 32, rowTopDp: 496, rowBottomDp: 696});
     view.unmount();
-    expect(claimed().at(-1)).toMatchObject({left: false, right: false});
+    expect(calls().at(-1)).toMatchObject({left: false, right: false});
   });
-  it('claims nothing when the gestures are off or in a plain browser', () => {
-    render390({log: [], enabled: false});
-    expect(claimed()).toEqual([]);
-    cleanup(); vi.mocked(isTauri).mockReturnValue(false);
+  it('never asks for more than 200 dp, nor for a row that reaches the Home zone', () => {
+    setMode('edges');
+    for (const height of [400, 600, 800, 1200]) {
+      Object.defineProperty(window, 'innerHeight', {configurable: true, value: height});
+      cleanup(); vi.mocked(invoke).mockClear();
+      render(<Harness log={[]} />);
+      const {rowTopDp, rowBottomDp} = calls().at(-1) as {rowTopDp: number; rowBottomDp: number};
+      expect(rowBottomDp - rowTopDp).toBeLessThanOrEqual(200);
+      expect(rowBottomDp).toBeLessThanOrEqual(height - oneUi.mandatoryBottom);
+    }
+  });
+  it('claims nothing with handles, with the gestures off, with three-button navigation or in a plain browser', () => {
+    for (const mode of ['handles', 'off'] as const) {setMode(mode); render390({log: []}); cleanup();}
+    setMode('auto'); render390({log: []}); cleanup();
+    setMode('edges'); withInsets({...oneUi, left: 0, right: 0, mandatoryBottom: 0, bottom: 0, navigation: 'buttons'}); render390({log: []}); cleanup();
+    expect(calls()).toEqual([]);
+    vi.mocked(isTauri).mockReturnValue(false); withInsets(oneUi);
+    render390({log: [], enabled: true});
+    expect(calls()).toEqual([]);
+  });
+  it('claims again when the system reports other zones or the window is resized', () => {
+    setMode('edges');
     render390({log: []});
-    expect(claimed()).toEqual([]);
+    const before = calls().length;
+    withInsets({...oneUi, mandatoryBottom: 48, bottom: 48});
+    expect(calls().length).toBeGreaterThan(before);
+    expect(calls().at(-1)).toMatchObject({left: true, right: true, rowBottomDp: 672});
+    Object.defineProperty(window, 'innerHeight', {configurable: true, value: 600});
+    act(() => {window.dispatchEvent(new Event('resize'));});
+    expect(calls().at(-1)).toMatchObject({rowBottomDp: 472});
+  });
+});
+
+describe('gesture modes on Android gesture navigation', () => {
+  beforeEach(() => withInsets(oneUi));
+  const rows = [500, 690] as const;
+  it('uses handles by default: the screen edge is left to the system and a handle starts the swipe', () => {
+    const log: Log = [];
+    render390({log});
+    swipe(surface(), [3, 600], [[30, 600], [150, 600]]);
+    swipe(surface(), [388, 600], [[360, 600], [250, 600]]);
+    swipe(surface(), [200, 794], [[201, 770], [201, 720], [201, 650]]);
+    expect(log).toEqual([]);
+    swipe(handleOn('left'), [40, 600], [[70, 600], [150, 600]]);
+    expect(log.at(-1)).toBe('commit:left');
+    swipe(handleOn('right'), [350, 600], [[320, 600], [250, 600]]);
+    expect(log.at(-1)).toBe('commit:right');
+    swipe(handleOn('bottom'), [200, 770], [[201, 740], [201, 690], [201, 620]]);
+    expect(log.at(-1)).toBe('commit:bottom');
+  });
+  it('a handle only starts its own edge', () => {
+    const log: Log = [];
+    render390({log});
+    swipe(handleOn('left'), [200, 600], [[170, 600], [100, 600]]);
+    expect(log).toEqual([]);
+  });
+  describe('the band beside the handles, just past the zones the system keeps', () => {
+    /** The last call of a swipe from `from` (30, 70 and 120 px toward `to`): the gesture it commits, or null when nothing starts. */
+    const starts = (from: [number, number], to: 'right' | 'left' | 'up') => {
+      const log: Log = [];
+      render390({log});
+      const [x, y] = from, step = (n: number): [number, number] => to === 'up' ? [x + 1, y - n] : [x + (to === 'right' ? n : -n), y];
+      swipe(surface(), from, [step(30), step(70), step(120)]);
+      cleanup();
+      return log.at(-1) ?? null;
+    };
+    it('starts a swipe past the zone, and leaves the screen edge, the zone itself and everything beyond the band alone', () => {
+      // 32 dp Back zones plus the 4 dp margin, and the 40 dp default width: the band is 36 to 76 dp from each side edge.
+      for (const x of [0, 3, 20, 32, 35]) expect(starts([x, 600], 'right')).toBeNull();
+      for (const x of [36, 40, 76]) expect(starts([x, 600], 'right')).toBe('commit:left');
+      for (const x of [77, 80, 120, 200]) expect(starts([x, 600], 'right')).toBeNull();
+      for (const x of [390, 387, 370, 355]) expect(starts([x, 600], 'left')).toBeNull();
+      for (const x of [353, 350, 314]) expect(starts([x, 600], 'left')).toBe('commit:right');
+      for (const x of [313, 300, 190]) expect(starts([x, 600], 'left')).toBeNull();
+    });
+    it('reaches up the sides to the toolbar, and keeps above the Home zone at the bottom', () => {
+      // The side bands stop 80 dp above the 24 dp Home zone, where the toolbar starts.
+      for (const y of [20, 100, 300, 600, 696]) expect(starts([40, y], 'right')).toBe('commit:left');
+      for (const y of [697, 730, 790]) expect(starts([40, y], 'right')).toBeNull();
+      // The Home zone is 24 dp, the band 4 dp past it and 40 dp deep.
+      for (const y of [799, 790, 776]) expect(starts([200, y], 'up')).toBeNull();
+      for (const y of [771, 760, 733]) expect(starts([200, y], 'up')).toBe('commit:bottom');
+      for (const y of [731, 700, 500]) expect(starts([200, y], 'up')).toBeNull();
+    });
+    it.each([
+      ['a narrow Back zone', 24, 28, 68],
+      ['the wide Back zone', 32, 36, 76],
+      ['an extra wide Back zone', 40, 44, 84],
+      ['One UI at its highest back sensitivity', 56, 60, 100],
+    ])('follows %s the system reports now', (_name, zone, first, last) => {
+      withInsets({...oneUi, left: zone, right: zone});
+      expect(starts([first - 1, 600], 'right')).toBeNull();
+      expect(starts([first, 600], 'right')).toBe('commit:left');
+      expect(starts([last, 600], 'right')).toBe('commit:left');
+      expect(starts([last + 1, 600], 'right')).toBeNull();
+      expect(starts([390 - first, 600], 'left')).toBe('commit:right');
+      expect(starts([390 - first + 1, 600], 'left')).toBeNull();
+    });
+    it('reaches as far as the zone width preference says', () => {
+      act(() => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 96, mode: 'handles'}}));
+      expect(starts([132, 600], 'right')).toBe('commit:left');
+      expect(starts([133, 600], 'right')).toBeNull();
+      act(() => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 16, mode: 'handles'}}));
+      expect(starts([52, 600], 'right')).toBe('commit:left');
+      expect(starts([53, 600], 'right')).toBeNull();
+    });
+    it('starts at the edge itself where the system keeps no zone', () => {
+      setMode('handles');
+      for (const insets of [unknownInsets, {...unknownInsets, navigation: 'buttons'} as GestureInsets]) {
+        withInsets(insets);
+        expect(starts([2, 100], 'right')).toBe('commit:left');
+        expect(starts([41, 100], 'right')).toBeNull();
+        expect(starts([200, 797], 'up')).toBe('commit:bottom');
+      }
+    });
+    it('stays a swipe for the recogniser: a vertical drag or a rested finger in the band is not claimed, and typing still stops it', () => {
+      const log: Log = [];
+      render390({log});
+      expect(swipe(surface(), [50, 600], [[51, 560], [52, 500]]).defaultPrevented).toBe(false);
+      expect(swipe(surface(), [50, 600], []).defaultPrevented).toBe(false);
+      swipe(surface(), [50, 600], [[80, 600], [150, 600]], recognizer.hold + 50);
+      expect(log).toEqual([]);
+      act(() => {document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', bubbles: true}));});
+      swipe(surface(), [50, 600], [[80, 600], [150, 600]]);
+      expect(log).toEqual([]);
+    });
+  });
+  it('edge swipes start only inside the handle rows at the sides, and above the Home zone at the bottom', () => {
+    setMode('edges');
+    const log: Log = [];
+    render390({log});
+    swipe(surface(), [3, 100], [[30, 100], [150, 100]]);
+    swipe(surface(), [388, 760], [[360, 760], [250, 760]]);
+    expect(log).toEqual([]);
+    swipe(surface(), [3, rows[0] + 20], [[30, rows[0] + 20], [150, rows[0] + 20]]);
+    expect(log.at(-1)).toBe('commit:left');
+    swipe(surface(), [388, rows[1] - 20], [[360, rows[1] - 20], [250, rows[1] - 20]]);
+    expect(log.at(-1)).toBe('commit:right');
+    // The lowest 24 px belong to the system; the bottom zone is the 24 px above them.
+    log.length = 0;
+    swipe(surface(), [200, 795], [[201, 770], [201, 720], [201, 650]]);
+    expect(log).toEqual([]);
+    swipe(surface(), [200, 765], [[201, 740], [201, 690], [201, 620]]);
+    expect(log.at(-1)).toBe('commit:bottom');
+  });
+  it('keeps true edge swipes with three-button navigation or when the system reports nothing', () => {
+    for (const insets of [unknownInsets, {...unknownInsets, navigation: 'buttons'} as GestureInsets]) {
+      withInsets(insets);
+      const log: Log = [];
+      render390({log});
+      swipe(surface(), [3, 100], [[30, 100], [150, 100]]);
+      expect(log.at(-1)).toBe('commit:left');
+      swipe(surface(), [200, 795], [[201, 770], [201, 720], [201, 650]]);
+      expect(log.at(-1)).toBe('commit:bottom');
+      cleanup();
+    }
+  });
+  it('follows the zones the system reports now: a wider Home zone moves the bottom zone up', () => {
+    setMode('edges');
+    const log: Log = [];
+    render390({log});
+    swipe(surface(), [200, 765], [[201, 740], [201, 690], [201, 620]]);
+    expect(log.at(-1)).toBe('commit:bottom');
+    withInsets({...oneUi, mandatoryBottom: 64, bottom: 64});
+    log.length = 0;
+    swipe(surface(), [200, 765], [[201, 740], [201, 690], [201, 620]]);
+    expect(log).toEqual([]);
+    swipe(surface(), [200, 725], [[201, 700], [201, 650], [201, 580]]);
+    expect(log.at(-1)).toBe('commit:bottom');
+  });
+  it('does nothing with the gestures off, and then asks the caller for its buttons', () => {
+    setMode('off');
+    const log: Log = [];
+    function Probe() {return <output>{useEdgeGestureMode('bottomMenu')}</output>;}
+    const view = render390({log});
+    render(<Probe />);
+    swipe(handleOn('left'), [40, 600], [[70, 600], [150, 600]]);
+    swipe(surface(), [3, 600], [[30, 600], [150, 600]]);
+    expect(log).toEqual([]);
+    expect(document.querySelector('output')?.textContent).toBe('buttons');
+    view.unmount();
+  });
+  it('still never starts while typing, whichever way the swipe began', () => {
+    const log: Log = [];
+    render390({log});
+    act(() => {document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', bubbles: true}));});
+    swipe(handleOn('left'), [40, 600], [[70, 600], [150, 600]]);
+    expect(log).toEqual([]);
+  });
+  it('lets a closing swipe start on a handle only when the handle does not open the other way', () => {
+    const log: Log = [];
+    render390({log, close: 'right'});
+    // The left handle opens to the right, the same direction this panel closes: the open swipe owns it.
+    swipe(handleOn('left'), [40, 600], [[70, 600], [150, 600]]);
+    expect(log.filter(line => line.startsWith('close'))).toEqual([]);
+    expect(log.at(-1)).toBe('commit:left');
   });
 });
 

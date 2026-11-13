@@ -30,8 +30,10 @@ describe("terminal settings", () => {
     expect(screen.getByRole('checkbox',{name:t('edgeGestureBottomMenu')})).toHaveProperty('checked',true);
     expect(screen.getByRole('checkbox',{name:t('edgeGestureViewSwitch')})).toHaveProperty('checked',true);
     fireEvent.click(left);
-    fireEvent.change(screen.getByRole('slider',{name:t('edgeGestureZoneWidth',{value:'24'})}),{target:{value:'40'}});
-    expect(getPreferences().edgeGestures).toEqual({leftMenu:false,bottomMenu:true,viewSwitch:true,zoneWidth:40});
+    fireEvent.change(screen.getByRole('slider',{name:t('edgeGestureZoneWidth',{value:'40'})}),{target:{value:'64'}});
+    expect(getPreferences().edgeGestures).toEqual({leftMenu:false,bottomMenu:true,viewSwitch:true,zoneWidth:64,mode:'auto'});
+    fireEvent.change(screen.getByRole('combobox',{name:t('gestureModeLabel')}),{target:{value:'edges'}});
+    expect(getPreferences().edgeGestures).toMatchObject({mode:'edges'});
     fireEvent.click(screen.getByRole('button',{name:t('preferencesResetGestures')}));
     expect(getPreferences().edgeGestures).toBeUndefined();
   });
@@ -59,6 +61,12 @@ describe("terminal settings", () => {
     const picker=screen.getByRole('combobox') as HTMLSelectElement;
     expect(picker.value).toBe('custom:acme');
     expect([...picker.options].map(option=>option.value)).toEqual(['',...usageProviders.map(([id])=>id),'anthropic@work','custom:acme']);
+    });
+  it('lists the gesture styles with the automatic one first',()=>{
+    savePreferences({...defaults});mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));
+    const style=screen.getByRole('combobox',{name:t('gestureModeLabel')}) as HTMLSelectElement;
+    expect([...style.options].map(option=>option.value)).toEqual(['auto','handles','edges','off']);
+    expect(style.value).toBe('auto');
   });
   it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
     savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});

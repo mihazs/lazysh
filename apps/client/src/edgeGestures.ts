@@ -1,5 +1,6 @@
 import {invoke, isTauri} from '@tauri-apps/api/core';
 import {useEffect, useRef, type RefObject} from 'react';
+import {edgeBand, resolveGestureMode, sideRow, swipeRows, useGestureInsets, viewport, getGestureInsets, type GestureInsets} from './gestureInsets';
 import {edgeGestureSettings, usePreferences, type EdgeGestureId} from './preferences';
 import {TOUCH_SELECTION_DELAY} from './terminalTouchSelection';
 import {clock, isTextInteractionActive, markTouchOwned} from './textInteraction';
@@ -25,8 +26,12 @@ export type EdgeHandlers = {
 
 /** Recogniser thresholds in CSS pixels and milliseconds. */
 export const recognizer = {
-  /** Movement that decides whether the touch is a swipe. */
-  slop: 10,
+  /**
+   * Movement that decides whether the touch is a swipe. It must stay below the browser's own touch slop (8 dp on Android): the first
+   * touchmove the page gets is the one that crosses that slop, and it is the last one that can be cancelled before the browser
+   * starts scrolling, so a recogniser that waits for more movement never gets to claim the touch.
+   */
+  slop: 4,
   /** The swipe axis must dominate the cross axis by this factor to lock. */
   lock: 1.5,
   /** Progress at release that commits without a fling. */
@@ -101,8 +106,8 @@ type Hook = {
 
 /** At most one recogniser owns a touch. */
 let owner: object | null = null;
-/** Enabled edge zones, so a closing swipe never starts where an edge swipe owns the touch. */
-const claimedZones = new Set<(x: number, y: number, travel: Swipe) => boolean>();
+/** Enabled edge zones and handles, so a closing swipe never starts where an edge swipe owns the touch. */
+const claimedZones = new Set<(x: number, y: number, travel: Swipe, over: EventTarget | null) => boolean>();
 
 /** Attaches the capture-phase recogniser; returns the detach. It only claims a touch once it locks onto its swipe. */
 function attach(element: HTMLElement, hook: Hook): () => void {
@@ -200,24 +205,43 @@ function attach(element: HTMLElement, hook: Hook): () => void {
 const sideClaims = new Set<{left: boolean; right: boolean; zone: number}>();
 function syncSystemExclusion() {
   if (!isTauri()) return;
-  const claims = [...sideClaims];
-  invoke('edge_gesture_exclusion', {left: claims.some(claim => claim.left), right: claims.some(claim => claim.right), zoneDp: Math.max(1, ...claims.map(claim => claim.zone))}).catch(() => {});
+  const claims = [...sideClaims], left = claims.some(claim => claim.left), right = claims.some(claim => claim.right);
+  // Only the rows where the handles sit, at most what Android allows an app to exclude; none while nothing is claimed.
+  const row = (left || right) ? sideRow(getGestureInsets(), viewport()) : null;
+  const claimed = !!row && (left || right);
+  invoke('edge_gesture_exclusion', {
+    left: claimed && left, right: claimed && right, zoneDp: Math.max(1, ...claims.map(claim => claim.zone)),
+    rowTopDp: Math.ceil(row?.top ?? 0), rowBottomDp: Math.floor(row?.bottom ?? 1),
+  }).catch(() => {});
 }
-/** Claims the side bands of the window from the system gesture; returns the release. */
+/** Claims the side bands of the window from the system gesture; returns the release. The rows follow the viewport, which the keyboard and rotation resize. */
 export function claimSystemEdges(claim: {left: boolean; right: boolean; zone: number}): () => void {
+  if (!sideClaims.size) window.addEventListener('resize', syncSystemExclusion);
   sideClaims.add(claim);
   syncSystemExclusion();
-  return () => {sideClaims.delete(claim); syncSystemExclusion();};
+  return () => {
+    sideClaims.delete(claim);
+    if (!sideClaims.size) window.removeEventListener('resize', syncSystemExclusion);
+    syncSystemExclusion();
+  };
 }
 
-const defaultTravel = (edge: Edge, rect: DOMRect) => edge === 'bottom' ? Math.min(320, rect.height * .5) : Math.min(360, rect.width * .8);
+const defaultTravel = (edge: Edge, rect: {width: number; height: number}) => edge === 'bottom' ? Math.min(320, rect.height * .5) : Math.min(360, rect.width * .8);
 const openSwipe: Record<Edge, Omit<Swipe, 'travel'>> = {left: {axis: 'x', sign: 1}, right: {axis: 'x', sign: -1}, bottom: {axis: 'y', sign: -1}};
 const closeSwipe: Record<CloseDirection, Omit<Swipe, 'travel'>> = {left: {axis: 'x', sign: -1}, right: {axis: 'x', sign: 1}, down: {axis: 'y', sign: 1}};
 
-/** Whether (x, y) lies in `edge`'s zone of `rect`, or `over` is a `data-edge-gestures-handle` element for it. */
-function inZone(edge: Edge, x: number, y: number, rect: DOMRect, zone: number, over: EventTarget | null) {
+/**
+ * Whether a touch at (x, y) begins `edge`'s swipe: on a `data-edge-gestures-handle` element for it, or in its band of `rect` (see
+ * `edgeBand`). On gesture navigation the side bands keep to the handle rows, clear of the toolbar, and the edge-swipe mode's band,
+ * which starts at the screen edge, shrinks to where an app touch arrives.
+ */
+function inZone(edge: Edge, x: number, y: number, rect: DOMRect, zone: number, over: EventTarget | null, reach: GestureInsets, past: boolean) {
   if (over instanceof Element && over.closest(`[data-edge-gestures-handle="${edge}"]`)) return true;
-  return edge === 'left' ? x >= rect.left && x - rect.left <= zone : edge === 'right' ? x <= rect.right && rect.right - x <= zone : y <= rect.bottom && rect.bottom - y <= zone;
+  const row = edge === 'bottom' ? undefined : swipeRows(reach, viewport(), past);
+  if (row === null || (row && (y < row.top || y > row.bottom))) return false;
+  const {from, to} = edgeBand(edge, reach, zone, past);
+  const distance = edge === 'bottom' ? rect.bottom - y : edge === 'left' ? x - rect.left : rect.right - x;
+  return distance >= from && distance <= to;
 }
 
 /** Swipes that start in an edge zone: left edge to the right, right edge to the left, bottom edge upward. */
@@ -234,26 +258,35 @@ export function useEdgeGestures({enabled, edges, target, handlers, zones, travel
 }) {
   const preferences = usePreferences();
   const settings = edgeGestureSettings(preferences);
-  const live = useRef({handlers, shouldStart});
-  live.current = {handlers, shouldStart};
-  // The Preferences switches and screen-reader mode apply here, so no caller repeats them.
-  const active = enabled && !preferences.screenReader ? edges.filter(edge => settings[gestureOfEdge[edge]]) : [];
+  const insets = useGestureInsets();
+  const mode = resolveGestureMode(settings.mode, insets);
+  const live = useRef({handlers, shouldStart, insets});
+  live.current = {handlers, shouldStart, insets};
+  // The Preferences switches, the gesture mode and screen-reader mode apply here, so no caller repeats them.
+  const active = enabled && !preferences.screenReader && mode !== 'off' ? edges.filter(edge => settings[gestureOfEdge[edge]]) : [];
   const size = (edge: Edge) => zones?.[edge] ?? settings.zoneWidth;
-  const key = active.map(edge => `${edge}:${size(edge)}:${travel?.[edge] ?? ''}`).join();
+  // Handles take the touch together with the band beside them, just past the system's zones; edge swipes start at the edge itself, and on
+  // gesture navigation ask the system to give up the handle rows.
+  const past = mode === 'handles';
+  const exclude = mode === 'edges' && insets.navigation === 'gesture';
+  const key = [...active.map(edge => `${edge}:${size(edge)}:${travel?.[edge] ?? ''}`), mode, exclude && `${insets.left}:${insets.right}:${insets.bottom}:${insets.mandatoryBottom}`].join();
   useEffect(() => {
-    const element = target.current;
+    // A handle is drawn on the page itself, inside the viewport rather than on the target's edge, so the page is where its touches are watched.
+    const element = mode === 'handles' ? document.body : target.current;
     if (!element || !active.length) return;
-    const inside = (x: number, y: number, close: Swipe) => {
-      const rect = element.getBoundingClientRect();
-      return active.some(edge => openSwipe[edge].axis === close.axis && openSwipe[edge].sign === close.sign && inZone(edge, x, y, rect, size(edge), null));
+    // The handle mode watches the whole page, which is not the viewport whose edges the system's zones are measured from.
+    const frame = (rect: DOMRect) => past ? new DOMRect(0, 0, viewport().width, viewport().height) : rect;
+    const inside = (x: number, y: number, close: Swipe, over: EventTarget | null) => {
+      const rect = frame(element.getBoundingClientRect());
+      return active.some(edge => openSwipe[edge].axis === close.axis && openSwipe[edge].sign === close.sign && inZone(edge, x, y, rect, size(edge), over, live.current.insets, past));
     };
     claimedZones.add(inside);
-    const releaseSystem = claimSystemEdges({left: active.includes('left'), right: active.includes('right'), zone: Math.max(size('left'), size('right'))});
+    const releaseSystem = exclude ? claimSystemEdges({left: active.includes('left'), right: active.includes('right'), zone: Math.max(size('left'), size('right'))}) : () => {};
     const detach = attach(element, {
       shouldStart: touch => live.current.shouldStart?.(touch) ?? true,
-      candidates: (x, y, over, rect) => active.filter(edge => inZone(edge, x, y, rect, size(edge), over)).map(edge => ({
+      candidates: (x, y, over, rect) => active.filter(edge => inZone(edge, x, y, frame(rect), size(edge), over, live.current.insets, past)).map(edge => ({
         edge,
-        swipe: {...openSwipe[edge], travel: travel?.[edge] ?? defaultTravel(edge, rect)},
+        swipe: {...openSwipe[edge], travel: travel?.[edge] ?? defaultTravel(edge, past ? viewport() : rect)},
         onStart: () => live.current.handlers.onStart?.(edge),
         onProgress: (progress, dx, dy) => live.current.handlers.onProgress(edge, progress, dx, dy),
         onCommit: () => live.current.handlers.onCommit(edge),
@@ -285,9 +318,9 @@ export function useSwipeToClose({enabled, direction, target, onProgress, onCommi
     if (!element || !active) return;
     return attach(element, {
       shouldStart: touch => live.current.shouldStart?.(touch) ?? true,
-      candidates: (x, y, _over, rect) => {
+      candidates: (x, y, over, rect) => {
         const swipe = {...closeSwipe[direction], travel: travel ?? (direction === 'down' ? rect.height : rect.width)};
-        if ([...claimedZones].some(inside => inside(x, y, swipe))) return [];
+        if ([...claimedZones].some(inside => inside(x, y, swipe, over))) return [];
         return [{
           swipe,
           onProgress: (progress, dx, dy) => live.current.onProgress(progress, dx, dy),
@@ -299,8 +332,8 @@ export function useSwipeToClose({enabled, direction, target, onProgress, onCommi
   }, [target, active, direction, travel]);
 }
 
-/** Accessibility: 'buttons' when the gesture is switched off or screen-reader mode is on, so the caller renders its visible control. */
+/** Accessibility: 'buttons' when the gesture or the whole gesture mode is switched off, or screen-reader mode is on, so the caller renders its visible control. */
 export function useEdgeGestureMode(id: EdgeGestureId): 'gesture' | 'buttons' {
-  const preferences = usePreferences();
-  return !preferences.screenReader && edgeGestureSettings(preferences)[id] ? 'gesture' : 'buttons';
+  const preferences = usePreferences(), settings = edgeGestureSettings(preferences);
+  return !preferences.screenReader && settings[id] && settings.mode !== 'off' ? 'gesture' : 'buttons';
 }

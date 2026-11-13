@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {cell,compose,fingerDrag,historyLines,historyView,longPress,mountHistory,rowHeight,settle} from './fixtures/terminalHistory';
+import {oneUi,reportGestureInsets,threeButtons} from './fixtures/gestureInsets';
 
 type Point={x:number;y:number};
 const log=(page:Page)=>page.evaluate(()=>window.edgeLog.slice());
@@ -27,6 +28,23 @@ async function swipe(page:Page,from:Point,to:Point,{steps=6,pause=12,rest=0}:{st
 /** The edge swipe that must fire, used to prove a guard has released. */
 async function swipeEdge(page:Page,edge:'left'|'right'|'bottom') {
   await swipe(page,{left,right,bottom}[edge],toward[edge]);
+}
+/** A pinch with one finger at `x`: it starts no swipe and still resizes the text. */
+async function pinchFrom(page:Page,x:number) {
+  const before=await fontSize(page),input=await page.context().newCDPSession(page);
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:420},{x:200,y:420}]});
+  for(let step=1;step<=8;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:420-step*6},{x:200+step*18,y:420+step*6}]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await input.detach();
+  expect(await log(page)).toEqual([]);
+  await expect.poll(()=>fontSize(page)).toBeGreaterThan(before);
+}
+/** A vertical finger drag that starts at `x` scrolls the terminal five rows and starts no swipe. */
+async function scrollFrom(page:Page,x:number) {
+  const box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!,rows=await rowHeight(page);
+  await fingerDrag(page,{x,y:box.y+box.height/4},rows,5);
+  expect((await historyView(page)).baseY-(await historyView(page)).viewportY).toBe(5);
+  expect(await log(page)).toEqual([]);
 }
 const commits=(entries:string[])=>entries.filter(entry=>entry.startsWith('commit:'));
 const fontSize=(page:Page)=>page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')??'{}').fontSize??14);
@@ -133,13 +151,7 @@ test.describe('phone',()=>{
 
     test('a pinch, even with a finger in an edge zone: no swipe, and the pinch still resizes text',async({page})=>{
       await open(page);
-      const before=await fontSize(page),input=await page.context().newCDPSession(page);
-      await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:4,y:420},{x:200,y:420}]});
-      for(let step=1;step<=8;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:4,y:420-step*6},{x:200+step*18,y:420+step*6}]});
-      await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-      await input.detach();
-      expect(await log(page)).toEqual([]);
-      await expect.poll(()=>fontSize(page)).toBeGreaterThan(before);
+      await pinchFrom(page,4);
       await page.waitForTimeout(400);
       await swipeEdge(page,'left');
       expect(commits(await log(page))).toEqual(['commit:left']);
@@ -158,12 +170,96 @@ test.describe('phone',()=>{
     });
   });
 
+  test.describe('on Android gesture navigation, where the system detects Back and Home from the screen edge',()=>{
+    // The system keeps 32 dp at the sides; the swipe area is 4 dp past that and 40 dp deep (390 x 844 dp). The bottom area is tried in
+    // bottom-menu.spec.ts, where the real bottom menu is, because this page's own bottom-menu engine takes those touches first.
+    const sideBand=[36,76] as const;
+    /** The shell reports the zones; the engine has moved its bands once the page has painted. */
+    const report=async(page:Page,insets:object)=>{await reportGestureInsets(page,insets);await settle(page);};
+    const bandOpen=async(page:Page,insets:object=oneUi)=>{await open(page);await report(page,insets);};
+    /** Whether a swipe from `distance` dp inside `edge` starts one gesture; the typing window is waited out after it. */
+    const starts=async(page:Page,edge:'left'|'right'|'bottom',distance:number)=>{
+      const from=edge==='bottom'?{x:width/2,y:height-distance}:{x:edge==='left'?distance:width-distance,y:420};
+      await page.evaluate(()=>{window.edgeLog.length=0;});
+      await swipe(page,from,edge==='bottom'?{x:from.x,y:from.y-250}:{x:from.x+(edge==='left'?150:-150),y:from.y});
+      const entries=await log(page);
+      const fired=commits(entries).length===1&&entries[0]===`start:${edge}`;
+      // A drag nothing claimed counts as a scroll for a moment, during which no swipe starts.
+      await page.waitForTimeout(fired?450:1000);
+      return fired;
+    };
+
+    test('a swipe that starts at the screen edge or inside the system zone is left to the system',async({page})=>{
+      await bandOpen(page);
+      for(const distance of [0,2,16,32,35])expect(await starts(page,'left',distance),`left ${distance}`).toBe(false);
+      for(const distance of [0,2,16,32,35])expect(await starts(page,'right',distance),`right ${distance}`).toBe(false);
+    });
+
+    test('a swipe that starts in the swipe area beside the system zone fires, every time',async({page})=>{
+      await bandOpen(page);
+      for(let attempt=0;attempt<3;attempt++){
+        for(const edge of ['left','right'] as const)for(const distance of [sideBand[0],56,sideBand[1]])expect(await starts(page,edge,distance),`${edge} ${distance}`).toBe(true);
+      }
+    });
+
+    test('a swipe that starts beyond the swipe area is an ordinary touch',async({page})=>{
+      await bandOpen(page);
+      for(const edge of ['left','right'] as const)for(const distance of [sideBand[1]+1,120,200])expect(await starts(page,edge,distance),`${edge} ${distance}`).toBe(false);
+    });
+
+    test('the swipe area follows the Back zone the system reports, whatever the back sensitivity',async({page})=>{
+      await bandOpen(page);
+      for(const zone of [24,40,56]){
+        await report(page,{...oneUi,left:zone,right:zone});
+        expect(await starts(page,'left',zone+3),`inside ${zone}`).toBe(false);
+        expect(await starts(page,'left',zone+4),`just past ${zone}`).toBe(true);
+        expect(await starts(page,'right',zone+44),`far end ${zone}`).toBe(true);
+        expect(await starts(page,'right',zone+45),`beyond ${zone}`).toBe(false);
+      }
+    });
+
+    test('with three-button navigation the swipe area starts at the screen edge',async({page})=>{
+      await bandOpen(page,threeButtons);
+      for(const edge of ['left','right'] as const)for(const distance of [0,4,40])expect(await starts(page,edge,distance),`${edge} ${distance}`).toBe(true);
+    });
+
+    test('a vertical drag that starts in the swipe area still scrolls the terminal',async({page})=>{
+      await bandOpen(page);
+      await scrollFrom(page,50);
+    });
+
+    test('a long press in the swipe area still selects a word, and dragging from there is not a swipe',async({page})=>{
+      await bandOpen(page);
+      await longPress(page,await cell(page,3,4));
+      await expect.poll(()=>page.evaluate(()=>window.ownedHistory.terminal.getSelection())).toMatch(/^HISTORY_\d{4}$/);
+      expect(await log(page)).toEqual([]);
+      await swipe(page,{x:50,y:420},{x:200,y:420});
+      expect(await log(page)).toEqual([]);
+      await page.evaluate(()=>window.ownedHistory.terminal.clearSelection());
+      await page.waitForTimeout(600);
+      expect(await starts(page,'left',50)).toBe(true);
+    });
+
+    test('a finger that rests in the swipe area, and a pinch with one finger in it, are not swipes',async({page})=>{
+      await bandOpen(page);
+      await swipe(page,{x:50,y:420},{x:200,y:420},{rest:650});
+      expect(await log(page)).toEqual([]);
+      await pinchFrom(page,50);
+    });
+
+    test('typing in the swipe area stops the swipe, which returns once the typing ends',async({page})=>{
+      await bandOpen(page);
+      await page.evaluate(()=>window.ownedHistory.terminal.focus());
+      await page.keyboard.press('a');
+      expect(await starts(page,'left',50)).toBe(false);
+      await page.waitForTimeout(1000);
+      expect(await starts(page,'left',50)).toBe(true);
+    });
+  });
+
   test('a vertical drag that starts in the edge zone still scrolls the terminal',async({page})=>{
     await open(page);
-    const box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!,rows=await rowHeight(page);
-    await fingerDrag(page,{x:3,y:box.y+box.height/4},rows,5);
-    expect((await historyView(page)).baseY-(await historyView(page)).viewportY).toBe(5);
-    expect(await log(page)).toEqual([]);
+    await scrollFrom(page,3);
   });
 
   test('a mouse-tracking program keeps receiving interior touches, and an edge swipe is not sent to it',async({page})=>{

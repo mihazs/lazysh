@@ -16,7 +16,7 @@ import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import BottomMenu, {useBottomMenuButton, usePhone} from './BottomMenu';
 import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
-import {endTextComposition, markTyping, registerTextInteraction} from './textInteraction';
+import {endTextComposition, isTextEditingActive, markTyping, registerTextInteraction} from './textInteraction';
 import { api as nativeApi } from "./bridge";
 import { bodyGestureSlots, decodeClipboardRequest, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
@@ -1051,6 +1051,9 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     else if (action === "hideKeyboard") hideKeyboard();
     else if (action === "paste") void paste();
     else if (action === "copy") {const text = session.terminal.getSelection(); if (text) void copy(text);}
+    // The menus a swipe from the screen edge would open, for a two-finger swipe that starts anywhere; never while typing or selecting.
+    else if (action === "bottomMenu") {if (menuEnabled && !isTextEditingActive()) setMenuOpen(true);}
+    else if (action === "agentView") {if (!isTextEditingActive()) window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));}
     else if (action === "nextSession" || action === "previousSession" || action === "openAgents" || action === "openWorkspaces") window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));
     else if (action === "custom") sendChord(keys);
     else {

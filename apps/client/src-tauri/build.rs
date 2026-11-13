@@ -86,6 +86,7 @@ fn main() {
         "notify_agent_attention",
         "notification_test",
         "edge_gesture_exclusion",
+        "edge_gesture_insets",
         "open_notification_settings",
         "request_notification_permission",
         "voice_models",

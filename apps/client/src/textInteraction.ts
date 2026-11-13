@@ -128,3 +128,5 @@ export function activeTextInteractions(): TextInteractionKind[] {
   return [...kinds];
 }
 export function isTextInteractionActive(): boolean { return activeTextInteractions().length > 0; }
+/** The same guard for a gesture that is two-fingered by nature: fingers on the screen are not what it guards against, typing and selecting are. */
+export function isTextEditingActive(): boolean { return activeTextInteractions().some(kind => kind !== 'pinch'); }

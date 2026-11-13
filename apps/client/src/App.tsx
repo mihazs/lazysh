@@ -109,6 +109,7 @@ import type {UploadedAttachment} from "./AttachmentPanel";
 import {stageComposerAttachment} from "./composerTokens";
 import {bothMinWidth,readSessionViews,saveSessionView,sessionViewKey,type SessionView} from "./sessionView";
 import {useEdgeGestureMode} from "./edgeGestures";
+import GestureHandle from "./GestureHandle";
 import {useViewSwipe} from "./useViewSwipe";
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
@@ -1554,11 +1555,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   const latestNavigationToggle=useRef(toggleNavigation);latestNavigationToggle.current=toggleNavigation;
   useCapturedShortcut(navigationShortcut,toggleNavigation);
-  useCapturedShortcut(agentViewShortcut,()=>{
+  const toggleAgentView=()=>{
     if(!active || !active.connected || active.local || view!=='terminal' || navigationCovered)return false;
     chooseSessionView(active,activeSessionView==='terminal'?'agent':'terminal');
     return true;
-  });
+  };
+  const latestAgentViewToggle=useRef(toggleAgentView);latestAgentViewToggle.current=toggleAgentView;
+  useCapturedShortcut(agentViewShortcut,toggleAgentView);
   function showAgentSetup(source:LiveSession) {
     if(!mounted.current || !lease.current() || document.hidden || source.disposed || !source.connected || closingSessions.current.has(source.id)
       || sessionsRef.current.find(session=>session.id===currentView.current.activeId)!==source)return;
@@ -1925,6 +1928,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       const detail = (event as CustomEvent<unknown>).detail;
       if (!detail || typeof detail !== 'object' || !('sessionId' in detail) || !('action' in detail) || detail.sessionId !== activeId) return;
       if (detail.action === 'openAgents' || detail.action === 'openWorkspaces') {latestNavigationToggle.current(detail.action === 'openAgents' ? 'agents' : 'workspaces'); return;}
+      if (detail.action === 'agentView') {latestAgentViewToggle.current(); return;}
       if (detail.action !== 'nextSession' && detail.action !== 'previousSession') return;
       const current = sessionsRef.current.findIndex(session=>session.id===activeId && session.connected);
       if (current < 0 || !sessionsRef.current.length) return;
@@ -2519,6 +2523,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               <button type="button" className="icon-button" title={t('navigationReturnTerminal')} aria-label={t('navigationReturnTerminal')} disabled={pendingMuxRequest} onClick={()=>returnToContext(true)}><TerminalSquare size={18} aria-hidden="true"/></button>
             </nav>}
             <div ref={measureSessionBody} className="session-body" data-session-view={view==='terminal' ? activeSessionView : undefined}>
+              {swipeEnabled && activeSessionView==='terminal' && active && <GestureHandle edge="right" gesture="viewSwitch" label={t('gestureHandleViewSwitch')} hidden={swipeFrom!==null} onActivate={()=>chooseSessionView(active,'agent')} />}
               <Suspense
                 fallback={
                   <p className="loading" role="status">{t("appOpeningTerminal")}</p>
@@ -2646,6 +2651,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         )}
       </main>
+      {sideMenuMode && active && !sidebar && !navigationCovered && <GestureHandle edge="left" gesture="leftMenu" label={t('gestureHandleLeftMenu')} onActivate={openNavigation} />}
       {editor && (
         <HostEditor
           hosts={hosts}
