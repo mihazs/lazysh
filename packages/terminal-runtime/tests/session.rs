@@ -408,6 +408,26 @@ fn the_budget_clamps_scrollback_refuses_when_exhausted_and_is_returned_on_close(
 }
 
 #[test]
+fn one_session_cannot_reserve_more_than_its_cap_whatever_it_asks_for() {
+    let hub = Hub::new(HubConfig {
+        scrollback_budget: 8 << 20,
+        session_scrollback_max: 3 << 20,
+        ..HubConfig::default()
+    });
+    let greedy = session(&hub, "greedy", config(80, 24, usize::MAX));
+    assert_eq!(greedy.session.scrollback_granted(), 3 << 20);
+    let second = session(&hub, "second", config(80, 24, 8 << 20));
+    let third = session(&hub, "third", config(80, 24, 8 << 20));
+    assert_eq!(second.session.scrollback_granted(), 3 << 20);
+    assert_eq!(
+        third.session.scrollback_granted(),
+        2 << 20,
+        "the rest of the budget is still there for the next session"
+    );
+    assert_eq!(hub.scrollback_reserved(), 8 << 20);
+}
+
+#[test]
 fn closing_frees_the_session_and_later_use_reports_closed() {
     let (hub, f) = hub_with_hello();
     assert_eq!(hub.live(), 1);

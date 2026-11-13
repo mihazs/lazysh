@@ -69,6 +69,9 @@ pub struct HubConfig {
     pub workers: usize,
     /// Scrollback bytes reserved across all live sessions.
     pub scrollback_budget: usize,
+    /// Most scrollback bytes one session may reserve, so a single request cannot take the whole
+    /// budget from the others (a request above it is clamped, like one above what is left).
+    pub session_scrollback_max: usize,
     /// Bytes one session has parsed per worker turn (whole chunks, so at least one chunk). 16 KiB is
     /// one transport chunk: the slice is also the longest a key press can wait for the session lock
     /// (see the session benchmark).
@@ -81,6 +84,7 @@ impl Default for HubConfig {
         Self {
             workers: 2,
             scrollback_budget: 256 * 1024 * 1024,
+            session_scrollback_max: 64 * 1024 * 1024,
             pump_slice: 16 * 1024,
         }
     }
@@ -335,7 +339,9 @@ impl Hub {
             .config
             .scrollback_budget
             .saturating_sub(registry.reserved);
-        let requested = config.scrollback_bytes;
+        let requested = config
+            .scrollback_bytes
+            .min(self.shared.config.session_scrollback_max);
         let granted = requested.min(available);
         if granted < requested.min(MIN_SCROLLBACK_BYTES) {
             return Err(HubError::Budget {

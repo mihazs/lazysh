@@ -209,6 +209,15 @@ pub(crate) fn prepare(channel: &Channel<SshEvent>) -> Result<Option<Prepared>, S
     factory.map(|factory| factory()).transpose()
 }
 
+/// The registry is process-wide, so in tests any renderer replacement would close the cores of
+/// tests running beside it. A test that needs its core to survive holds a read guard from this;
+/// `close_all` waits for all of them.
+#[cfg(test)]
+pub(crate) fn tests_keeping_cores() -> &'static std::sync::RwLock<()> {
+    static KEEPING: std::sync::RwLock<()> = std::sync::RwLock::new(());
+    &KEEPING
+}
+
 pub(crate) fn live(id: &str) -> Result<Arc<dyn Core>, String> {
     registry()
         .live
@@ -228,6 +237,8 @@ pub(crate) fn close(id: &str) {
 /// so a screen cannot outlive the lock that protected it. Unclaimed offers hold no core yet and are
 /// left to the cap above.
 pub(crate) fn close_all() {
+    #[cfg(test)]
+    let _exclusive = tests_keeping_cores().write();
     let live = std::mem::take(&mut registry().live);
     live.values().for_each(|core| core.close());
 }
@@ -284,6 +295,12 @@ mod native {
         }
     }
 
+    /// Live sessions and reserved scrollback bytes in the process-wide hub, for the lifecycle test.
+    #[cfg(test)]
+    pub(super) fn hub_usage() -> (usize, usize) {
+        (HUB.live(), HUB.scrollback_reserved())
+    }
+
     struct Runtime(Session);
 
     impl Core for Runtime {
@@ -335,6 +352,12 @@ mod native {
             Ok(Prepared::new(Arc::new(Runtime(session)), cell))
         }))
     }
+}
+
+/// Live sessions and reserved scrollback bytes of the real core's hub (lifecycle test only).
+#[cfg(all(test, feature = "native-terminal"))]
+pub(crate) fn hub_usage() -> (usize, usize) {
+    native::hub_usage()
 }
 
 /// A core stand-in for the transport tests: it parses (stores) chunks on its own thread, then

@@ -1022,6 +1022,7 @@ mod desktop {
             .await
             {
                 session.stop();
+                session.core.discard();
                 retire_session(&inner, &id, &session);
             }
         });
@@ -1753,12 +1754,52 @@ mod tests {
         assert!(result.is_err());
         assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
     }
-    /// Needs the `native-terminal` feature (Zig); the CI jobs that build the app do not enable it. Run
-    /// it alone (`--test-threads=1`): other tests' renderer replacements close every core.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn concurrent_local_terminals_feed_only_their_own_core() {
+        use crate::terminal_core::{self, fake::ChecksumCore};
+        let state = LocalState::default();
+        let mut running = Vec::new();
+        for tag in ["A", "B"] {
+            let (events, _rx) = events();
+            let (core, prepared) = ChecksumCore::prepared();
+            terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+            let program = format!("seq 1 3000 | sed 's/^/{tag}:/'; exec sleep 120");
+            let connected =
+                desktop::start_with_access(&state, access_lease(), shell(&program), 80, 24, events)
+                    .await
+                    .unwrap();
+            running.push((tag, core, connected.session_id));
+        }
+        for (tag, core, id) in &running {
+            let last = format!("{tag}:3000\r\n");
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !String::from_utf8_lossy(&core.seen.lock().unwrap()).ends_with(&last) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let seen = String::from_utf8_lossy(&core.seen.lock().unwrap()).into_owned();
+            let other = if *tag == "A" { "B:" } else { "A:" };
+            assert!(
+                !seen.contains(other),
+                "{tag} received the other terminal's output"
+            );
+            let expected: String = (1..=3000).map(|n| format!("{tag}:{n}\r\n")).collect();
+            assert_eq!(seen, expected, "{tag} complete and in order");
+            desktop::disconnect(&state, id);
+            terminal_core::close(id);
+            assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
+        }
+    }
+    /// Needs the `native-terminal` feature (Zig); the CI jobs that build the app do not enable it.
     #[cfg(all(unix, feature = "native-terminal"))]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn local_pty_output_is_parsed_by_the_real_core_and_readable_as_text() {
         use crate::terminal_core;
+        let _kept = terminal_core::tests_keeping_cores().read();
         use portable_pty::CommandBuilder;
         let state = LocalState::default();
         let (event, mut rx) = events();
@@ -1794,6 +1835,60 @@ mod tests {
         );
         terminal_core::terminal_core_close(id.clone()).unwrap();
         assert!(terminal_core::terminal_core_text(id).is_err());
+    }
+    /// Needs the `native-terminal` feature (Zig) and a Linux `/proc`; run alone (`--test-threads=1`)
+    /// with `--nocapture` to see the measured resident set.
+    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget() {
+        use crate::terminal_core;
+        let _kept = terminal_core::tests_keeping_cores().read();
+        fn resident_kib() -> usize {
+            let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
+            statm
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                * 4
+        }
+        let state = LocalState::default();
+        let mut baseline = 0;
+        for round in 0..110 {
+            if round == 10 {
+                baseline = resident_kib(); // after warm-up: allocator pools and thread stacks exist
+            }
+            let (event, mut rx) = events();
+            terminal_core::terminal_core_open(event.clone(), 80, 24, Some(1 << 20)).unwrap();
+            let connected = desktop::start_with_access(
+                &state,
+                access_lease(),
+                shell("seq 1 30000"),
+                80,
+                24,
+                event,
+            )
+            .await
+            .unwrap();
+            let id = connected.session_id;
+            closed(&mut rx).await;
+            let text = terminal_core::terminal_core_text(id.clone()).unwrap();
+            assert!(text.contains("30000"), "round {round}: {text:?}");
+            terminal_core::terminal_core_close(id).unwrap();
+        }
+        let grown = resident_kib().saturating_sub(baseline);
+        eprintln!("resident set: {baseline} KiB after 10 rounds, {grown} KiB more after 100 more");
+        assert_eq!(
+            terminal_core::hub_usage(),
+            (0, 0),
+            "every session and its scrollback budget was returned"
+        );
+        assert!(
+            grown < 32 * 1024,
+            "{grown} KiB growth over 100 sessions of 1 MiB scrollback"
+        );
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -1909,6 +2004,56 @@ mod tests {
             }
             closed(&mut rx).await;
             assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn an_unadopted_local_terminal_frees_its_core_but_an_adopted_one_keeps_it_through_a_lock()
+    {
+        use crate::terminal_core::{self, fake::ChecksumCore};
+        for adopted in [false, true] {
+            let _kept = terminal_core::tests_keeping_cores().read();
+            let state = LocalState::default();
+            let access = unlocked_access();
+            let nonce = access.status().unwrap().nonce.unwrap();
+            let creation = access.lease(Some(&nonce)).unwrap();
+            let (events, _rx) = events();
+            let (core, prepared) = ChecksumCore::prepared();
+            terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+            let connected = desktop::start_with_access(
+                &state,
+                creation.clone(),
+                shell("exec sleep 120"),
+                80,
+                24,
+                events,
+            )
+            .await
+            .unwrap();
+            let id = connected.session_id.clone();
+            if adopted {
+                assert!(desktop::adopt(&state, &id, &creation).unwrap());
+            }
+            use tauri::ipc::IpcResponse;
+            creation.guard(connected).unwrap().body().unwrap();
+            access.lock().unwrap();
+            let freed = tokio::time::timeout(Duration::from_secs(2), async {
+                while !core.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_ok();
+            assert_eq!(freed, !adopted, "adopted: {adopted}");
+            assert_eq!(terminal_core::live(&id).is_ok(), adopted);
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+            if adopted {
+                desktop::disconnect(&state, &id);
+                terminal_core::close(&id);
+                assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
+            }
         }
     }
     #[cfg(unix)]

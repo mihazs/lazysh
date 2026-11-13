@@ -925,6 +925,7 @@ fn watch_adoption(state: &AppState, id: &str, session: &Arc<Session>) {
         {
             session.cancel.send_replace(true);
             session.output_credits.close();
+            session.core.discard();
             retire_session(&sessions, &retiring, &id, &session).await;
         }
     });
@@ -8157,19 +8158,28 @@ mod tests {
             state: &AppState,
             handle: Arc<SshHandle>,
             creation: AccessLease,
-        ) -> (String, Arc<Session>) {
+            attach_core: bool,
+        ) -> (
+            String,
+            Arc<Session>,
+            Arc<crate::terminal_core::fake::ChecksumCore>,
+        ) {
             let (input, _) = mpsc::channel(1);
             let (cancel, _) = watch::channel(false);
             let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
             session.finished.send_replace(true);
             let id = uuid::Uuid::new_v4().to_string();
+            let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+            if attach_core {
+                prepared.attach(&id, &session.core, Arc::new(|_| {}));
+            }
             state
                 .sessions
                 .lock()
                 .await
                 .insert(id.clone(), session.clone());
             watch_adoption(state, &id, &session);
-            (id, session)
+            (id, session, core)
         }
         let (host, _, server_task) = server(false).await;
         let (_directory, state) = fixture_state();
@@ -8182,7 +8192,8 @@ mod tests {
             access.ready(access.generation().unwrap()).unwrap();
             let nonce = access.status().unwrap().nonce.unwrap();
             let creation = access.lease(Some(&nonce)).unwrap();
-            let (id, session) = register(&state, handle.clone(), creation.clone()).await;
+            let (id, session, core) =
+                register(&state, handle.clone(), creation.clone(), true).await;
             let response = creation
                 .guard(Connected {
                     session_id: id.clone(),
@@ -8206,6 +8217,10 @@ mod tests {
             .await
             .unwrap();
             assert!(*session.cancel.borrow());
+            assert!(
+                core.closed.load(std::sync::atomic::Ordering::SeqCst),
+                "an unadopted session's screen is freed with it"
+            );
             access.authorize(access.generation().unwrap()).unwrap();
             let fresh = ready_lease(&access);
             assert!(mark_adopted(&session, &fresh).is_err());
@@ -8213,7 +8228,7 @@ mod tests {
         let creation = access
             .lease(access.status().unwrap().nonce.as_deref())
             .unwrap();
-        let (id, session) = register(&state, handle, creation.clone()).await;
+        let (id, session, _) = register(&state, handle, creation.clone(), false).await;
         mark_adopted(&session, &creation).unwrap();
         creation
             .guard(Connected {
@@ -8324,14 +8339,18 @@ mod tests {
         let shutdowns = Arc::new(AtomicUsize::new(0));
         let stopped = shutdowns.clone();
         let observed = old_events.clone();
+        let pending_events = Channel::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        // The old renderer's native core must not outlive it either.
+        let (old_core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+        crate::terminal_core::offer(&pending_events, Box::new(move || Ok(prepared)));
         let pending = spawn_native_terminal(
             &state,
             creation.clone(),
             parent_session.clone(),
-            Channel::new(move |_| {
-                observed.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }),
+            pending_events,
             NativeTerminalKind::Fixture,
             None,
             check_size,
@@ -8351,6 +8370,8 @@ mod tests {
         .await
         .unwrap();
         let pending_session = state.session(&pending.session_id).await.unwrap();
+        let pending_id = pending.session_id.clone();
+        assert!(crate::terminal_core::live(&pending_id).is_ok());
         creation.guard(pending).unwrap().body().unwrap(); // ACK can be lost in the replaced renderer.
         access.replace_renderer().unwrap();
         assert!(creation.check().is_err());
@@ -8360,6 +8381,8 @@ mod tests {
             .unwrap();
         assert!(state.sessions.lock().await.is_empty());
         assert!(state.retiring.lock().await.is_empty());
+        assert!(old_core.closed.load(Ordering::SeqCst));
+        assert!(crate::terminal_core::live(&pending_id).is_err());
         for session in [&parent_session, &pending_session] {
             assert!(*session.renderer_gone.borrow());
             assert!(*session.cancel.borrow());
