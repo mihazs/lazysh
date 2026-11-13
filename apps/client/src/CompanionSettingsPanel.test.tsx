@@ -21,7 +21,7 @@ it("saves actual host settings with the fetched revision and explicit booleans",
 });
 it("shows the update policy only for a companion that has one, and saves a change with the fetched revision",async()=>{
   expect(parseCompanionSettings({...settings,autoUpdate:{revision:2,policy:"install"}}).autoUpdate).toEqual({revision:2,policy:"install"});
-  for(const autoUpdate of [null,{revision:-1,policy:"off"},{revision:1,policy:"always"},{revision:1,policy:"off",channel:"stable"},"off"])expect(()=>parseCompanionSettings({...settings,autoUpdate})).toThrow();
+  for(const autoUpdate of [null,{revision:-1,policy:"off"},{revision:1,policy:"always"},{revision:1,policy:"off",metered:true},"off"])expect(()=>parseCompanionSettings({...settings,autoUpdate})).toThrow();
   vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{revision:2,policy:"install"}}).mockResolvedValueOnce({...settings,revision:1,autoUpdate:{revision:3,policy:"off"}});
   render(<CompanionSettingsPanel sessionId="host-a"/>);
   expect(((await screen.findByLabelText("Update automatically")) as HTMLInputElement).checked).toBe(true);
@@ -33,6 +33,71 @@ it("shows the update policy only for a companion that has one, and saves a chang
   cleanup();
   vi.mocked(invoke).mockResolvedValueOnce(settings);render(<CompanionSettingsPanel sessionId="old-companion"/>);
   await screen.findByLabelText("Device tools");expect(screen.queryByLabelText("Never")).toBeNull();
+});
+const scheduled={revision:2,policy:"install" as const,channel:"stable" as const,intervalHours:24,window:null,lastCheck:{at:"2026-11-13T10:00:00Z",latest:"1.60.0",available:true}};
+it("accepts the schedule a companion with scheduled checks reports and refuses anything out of range",()=>{
+  expect(parseCompanionSettings({...settings,autoUpdate:scheduled}).autoUpdate).toEqual(scheduled);
+  expect(parseCompanionSettings({...settings,autoUpdate:{...scheduled,window:"22:00-06:00",lastCheck:{...scheduled.lastCheck,latest:null,available:false}}}).autoUpdate?.window).toBe("22:00-06:00");
+  for(const change of [{channel:"nightly"},{intervalHours:0},{intervalHours:721},{intervalHours:1.5},{window:"25:00-06:00"},{window:"06:00-06:00"},{window:"6:00-7:00"},{window:"06:00-07:00; reboot"},{lastCheck:{...scheduled.lastCheck,at:"now; id"}},{lastCheck:{at:"2026-11-13T10:00:00Z",latest:"1.60.0"}},{metered:false}])
+    expect(()=>parseCompanionSettings({...settings,autoUpdate:{...scheduled,...change}}),JSON.stringify(change)).toThrow();
+});
+it("shows what the last check found and saves the whole schedule only when it changed",async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:scheduled}).mockResolvedValueOnce({...settings,revision:1,autoUpdate:{...scheduled,revision:3,channel:"prerelease",intervalHours:6,window:"22:00-06:00"}});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  expect((await screen.findByText(/Update available/)).textContent).toBe("Update available: version 1.60.0");
+  expect(((screen.getByLabelText("Check every (hours)")) as HTMLInputElement).value).toBe("24");
+  expect(screen.queryByLabelText("From")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Releases to follow"),{target:{value:"prerelease"}});
+  fireEvent.change(screen.getByLabelText("Check every (hours)"),{target:{value:"6"}});
+  fireEvent.click(screen.getByLabelText("Only install between certain hours"));
+  fireEvent.change(screen.getByLabelText("From"),{target:{value:"22:00"}});fireEvent.change(screen.getByLabelText("Until"),{target:{value:"06:00"}});
+  fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
+  await screen.findByText("Host settings saved for new operations.");
+  expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",{sessionId:"host-a",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true,autoUpdate:{expectedRevision:2,policy:"install",schedule:{channel:"prerelease",intervalHours:6,window:"22:00-06:00"}}}}, { headers: { "X-Lazysh-Access": expect.any(String) } });
+  expect(((screen.getByLabelText("Releases to follow")) as HTMLSelectElement).value).toBe("prerelease");
+  // Saving something else leaves the schedule alone.
+  cleanup();vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:scheduled}).mockResolvedValueOnce({...settings,revision:1,recordedUsageEnabled:false,autoUpdate:scheduled});
+  render(<CompanionSettingsPanel sessionId="host-b"/>);
+  fireEvent.click(await screen.findByLabelText("Recorded usage inspection"));fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
+  await screen.findByText("Host settings saved for new operations.");
+  expect(vi.mocked(invoke).mock.lastCall?.[1]).toEqual({sessionId:"host-b",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:false,deviceToolsEnabled:true}});
+});
+it("keeps the schedule when only the policy changes",async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{...scheduled,intervalHours:6,window:"22:00-06:00"}}).mockResolvedValueOnce({...settings,revision:1,autoUpdate:{...scheduled,revision:3,policy:"notify",intervalHours:6,window:"22:00-06:00"}});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  fireEvent.click(await screen.findByLabelText("Only tell me"));
+  expect(((screen.getByLabelText("Check every (hours)")) as HTMLInputElement).value).toBe("6");
+  fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
+  await screen.findByText("Host settings saved for new operations.");
+  expect(vi.mocked(invoke).mock.lastCall?.[1]).toMatchObject({settings:{autoUpdate:{expectedRevision:2,policy:"notify",schedule:{channel:"stable",intervalHours:6,window:"22:00-06:00"}}}});
+});
+it("says when nothing is waiting or nothing was checked, and shows no schedule for a companion without scheduled checks",async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{...scheduled,lastCheck:{at:"2026-11-13T10:00:00Z",latest:"1.60.0",available:false}}});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  expect((await screen.findByText(/No update is waiting\. Last checked/)).textContent).toMatch(/2026|13/);
+  expect(screen.queryByText(/Update available/)).toBeNull();
+  cleanup();
+  const {lastCheck:_,...unchecked}=scheduled;
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:unchecked});render(<CompanionSettingsPanel sessionId="host-b"/>);
+  expect(await screen.findByText("This host has not checked for updates yet.")).toBeTruthy();
+  cleanup();
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{revision:2,policy:"install"}});render(<CompanionSettingsPanel sessionId="host-c"/>);
+  await screen.findByLabelText("Never");
+  for(const label of ["Releases to follow","Check every (hours)","Only install between certain hours"])expect(screen.queryByLabelText(label)).toBeNull();
+});
+it("turns the schedule controls off with updates and will not save an interval outside 1 to 720",async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:scheduled});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  const interval=await screen.findByLabelText("Check every (hours)") as HTMLInputElement;
+  for(const bad of ["0","721","","1.5"]){
+    fireEvent.change(interval,{target:{value:bad}});
+    expect((screen.getByRole("button",{name:"Save host settings"}) as HTMLButtonElement).disabled,bad).toBe(true);
+  }
+  fireEvent.change(interval,{target:{value:"720"}});
+  expect((screen.getByRole("button",{name:"Save host settings"}) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByLabelText("Never"));
+  expect(interval.disabled).toBe(true);
+  expect((screen.getByLabelText("Releases to follow") as HTMLSelectElement).disabled).toBe(true);
 });
 it("does not show actionable switches for an unsupported host companion",async()=>{
   vi.mocked(invoke).mockRejectedValue({message:"unknown subcommand settings"});render(<CompanionSettingsPanel sessionId="old"/>);
