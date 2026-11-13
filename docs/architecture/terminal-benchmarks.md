@@ -1,10 +1,10 @@
 # Terminal benchmarks
 
-Status: **the xterm.js baseline is measured on one desktop host; nothing else is.** No Android, iOS, Windows or macOS device, no emulator and no native candidate has been measured. The measured rows below come from the harness described in [Baseline harness](#baseline-harness-xterm-js-dom-renderer), run in headless desktop Chromium, which is **not an Android WebView**. A number may be quoted elsewhere in `docs/architecture` only if it comes from this suite, with its environment block. Tracking: harness [#1303](https://github.com/mihazs/lazysh/issues/1303), renderer shootout [#1323](https://github.com/mihazs/lazysh/issues/1323), CI regression [#1341](https://github.com/mihazs/lazysh/issues/1341), Android energy [#1340](https://github.com/mihazs/lazysh/issues/1340). Related: [PRD](terminal-performance-prd.md) · [native rendering](native-rendering.md).
+Status: **the xterm.js baseline and the xterm.js canvas and WebGL renderer addons are measured on one desktop host; nothing else is.** No Android, iOS, Windows or macOS device, no emulator and no native candidate (wgpu, Skia or Canvas drawing, a WASM terminal) has been built or measured. The measured rows below come from the harness described in [Baseline harness](#baseline-harness-xterm-js-dom-renderer), run in headless desktop Chromium, which is **not an Android WebView**. A number may be quoted elsewhere in `docs/architecture` only if it comes from this suite, with its environment block. Tracking: harness [#1303](https://github.com/mihazs/lazysh/issues/1303), renderer shootout [#1323](https://github.com/mihazs/lazysh/issues/1323), CI regression [#1341](https://github.com/mihazs/lazysh/issues/1341), Android energy [#1340](https://github.com/mihazs/lazysh/issues/1340). Related: [PRD](terminal-performance-prd.md) · [native rendering](native-rendering.md).
 
 ## Principles
 
-1. **Baseline before optimizing.** The first run measures the current xterm.js 5.5.0 DOM renderer and an optimized xterm.js variant (renderer addon and binary IPC); nothing else is compared until those exist.
+1. **Baseline before optimizing.** The first run measures the current xterm.js 5.5.0 DOM renderer and an optimized xterm.js variant (renderer addon and binary IPC); nothing else is compared until those exist. The renderer-addon half is measured ([renderer shootout](#renderer-shootout-xtermjs-renderers-1323)); the binary-IPC half is not built, only its bridge decode stage is measured in the baseline.
 2. **Release builds only**, with the build configuration recorded. Debug builds are rejected by the harness.
 3. **Stages are separated** so a regression can be attributed.
 4. **Physical devices** for latency pacing, energy, thermal and battery. An emulator may be used for functional checks and is labelled as such; it must not be used to claim energy or thermal results.
@@ -94,6 +94,8 @@ LAZYSH_BENCH_OUT=/tmp/run.json bun run bench:terminal -- --project desktop
 ```
 
 `bench:terminal` builds the benchmark page with `vite build -c vite.bench.config.ts` (minified, React production) and serves it with `vite preview`; the run is rejected if the page reports a non-production build. Output defaults to `apps/client/bench-results/terminal-baseline-<viewport>.json` (git-ignored). Results worth keeping are copied to [`benchmarks/`](benchmarks/).
+
+To measure another renderer on the same terminal, fixtures and counters, set `LAZYSH_BENCH_RENDERER=canvas` or `webgl` (default `dom`) and, to choose the GL backend, `LAZYSH_BENCH_CHROMIUM_ARGS`. `bench/compare.ts` prints several result files side by side: `bun bench/compare.ts dom=a.json webgl=b.json`.
 
 The same spec also runs in **smoke mode** inside the normal Playwright suite (`e2e/terminal-bench.spec.ts`, desktop project only, against the dev server). Smoke mode uses tiny fixtures and asserts only that every workload completes, ends on the expected screen, and reports finite numbers. It has **no timing thresholds**, so it cannot flake on a slow runner. The deterministic fixture generators and the statistics helpers have unit tests (`bench/workloads.test.ts`).
 
@@ -231,6 +233,110 @@ Each statement is about this host and these runs.
 
 Not shown by this baseline: anything about Android, WebView, a real GPU, energy, thermal behaviour, a real network, real remote echo, the app's full React tree, or the other workloads listed above.
 
+### Renderer shootout: xterm.js renderers ([#1323](https://github.com/mihazs/lazysh/issues/1323))
+
+The harness above, unchanged, on the same terminal with a different renderer: the DOM renderer (the baseline), the `@xterm/addon-canvas` 0.7.0 renderer and the `@xterm/addon-webgl` 0.18.0 renderer (both devDependencies of the benchmark only; the app does not load them). The driver refuses a run in which the chosen renderer is not drawing (canvas layers must exist for canvas and WebGL and for nothing else) or in which a WebGL context was lost, because a lost context silently falls back to the DOM renderer. WebGL ran twice: with Chromium's default headless backend, which on this host is the SwiftShader software rasterizer, and with `LAZYSH_BENCH_CHROMIUM_ARGS='--use-angle=vulkan --enable-features=Vulkan --ignore-gpu-blocklist --enable-gpu --disable-vulkan-surface'`, which selects the host's AMD Radeon RX 5500 XT through RADV (the GL renderer string is recorded in `page.gl` of each file). The canvas renderer ran with and without those flags. The correctness check (final screen text equal to the fixture's expected text) passed in every run of every candidate.
+
+Environment: the one of the [baseline](#measured-baseline) (AMD Ryzen 9 5900X, 31 GiB, Linux 7.3.3, `powersave` governor, headless Chromium 156.0.8078.4, Playwright 1.64.1, xterm.js 5.5.0, release build of the page, desktop viewport 152 columns by 38 rows at devicePixelRatio 1, 5 runs per workload and 3 for idle), with these differences: the host also ran other builds and agents, so the load average at the start of an invocation was between 2 and 14 on 24 threads (recorded per file), and the GPU was shared with that work. The runs were taken on 2026-11-12 in this order: DOM, canvas, WebGL software GL, WebGL hardware GL, DOM again; then canvas with GPU flags, WebGL hardware GL, DOM a third time, WebGL hardware GL a third time. DOM and WebGL hardware GL were taken three times each, so the cells below give the median of the three invocation medians and, in parentheses, their lowest and highest. The `commit` in each file is the base the working tree was on; `dirty` is true because the harness changes of this change were uncommitted (`a594aa69` for six runs, `9d7fb305` for the three later ones; the commits differ only in chat interaction cards, their i18n strings, agent transcript code and documentation, none of which the benchmark page renders). Raw files: `benchmarks/terminal-shootout-*.json`.
+
+**W2 plain text, 4 MiB**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| MiB/s through `xterm.write` | 36.1 (35.6-36.6) | 37.3 (36.9-40.7) | 0.26 | 1.27 | 2.28 |
+| main thread task ms | 126 (122-127) | 120 (110-121) | 15505 | 3196 | 1815 |
+| renderer process CPU ms | 210 (200-210) | 180 (170-180) | 860 | 3460 | 1970 |
+| GPU process CPU ms | 10.0 (10.0-10.0) | 0.00 (0.00-10.0) | 240570 | 240 | 860 |
+| frame interval p99 ms | 16.7 (16.7-16.7) | 16.7 (16.7-16.7) | 83.4 | 33.3 | 16.8 |
+| dropped frames | 0.00 (0.00-0.00) | 0.00 (0.00-0.00) | 698 | 3.00 | 1.00 |
+
+**W3 ANSI color, 2 MiB**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| MiB/s through `xterm.write` | 2.15 (1.57-2.19) | 6.43 (6.07-7.83) | 0.22 | 0.95 | 1.13 |
+| main thread task ms | 1004 (986-1374) | 346 (292-369) | 9244 | 2321 | 1958 |
+| renderer process CPU ms | 2080 (2060-2850) | 530 (480-580) | 1340 | 3300 | 2410 |
+| GPU process CPU ms | 60.0 (60.0-80.0) | 420 (310-440) | 134950 | 120 | 1990 |
+| frame interval p99 ms | 33.3 (33.3-33.3) | 165 (116-197) | 100 | 33.4 | 133 |
+| dropped frames | 2.00 (2.00-5.00) | 19.0 (13.0-21.0) | 428 | 35.0 | 90.0 |
+
+**W4 full-screen redraw**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| MiB/s through `xterm.write` | 47.0 (43.9-51.0) | 48.6 (46.7-49.9) | 0.24 | 1.67 | 1.02 |
+| main thread task ms | 211 (194-229) | 219 (218-238) | 39836 | 5949 | 9685 |
+| renderer process CPU ms | 270 (240-290) | 330 (320-360) | 2550 | 7290 | 11870 |
+| GPU process CPU ms | 40.0 (40.0-50.0) | 10.0 (10.0-20.0) | 624000 | 340 | 5820 |
+| frame interval p99 ms | 16.7 (16.7-16.7) | 16.7 (16.7-16.7) | 83.4 | 33.4 | 33.4 |
+| dropped frames | 0.00 (0.00-0.00) | 0.00 (0.00-0.00) | 1799 | 23.0 | 67.0 |
+
+**W0 idle, cursor blink on, 10 s**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| main thread task ms | 71.8 (62.3-89.1) | 23.2 (22.1-26.2) | 58.4 | 44.7 | 20.2 |
+| style recalculations | 654 (640-675) | 0.00 (0.00-0.00) | 0.00 | 0.00 | 0.00 |
+| renderer process CPU ms | 160 (120-180) | 70.0 (70.0-80.0) | 60.0 | 80.0 | 60.0 |
+| GPU process CPU ms | 30.0 (20.0-30.0) | 20.0 (20.0-20.0) | 140 | 10.00 | 20.0 |
+
+**W0 idle, cursor blink off, 10 s**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| main thread task ms | 13.2 (11.9-19.3) | 13.3 (13.2-13.3) | 15.4 | 17.3 | 12.5 |
+| style recalculations | 2.00 (2.00-2.00) | 0.00 (0.00-0.00) | 0.00 | 0.00 | 0.00 |
+| renderer process CPU ms | 40.0 (40.0-40.0) | 40.0 (40.0-50.0) | 40.0 | 50.0 | 30.0 |
+| GPU process CPU ms | 10.00 (0.00-10.00) | 0.00 (0.00-10.0) | 20.0 | 10.0 | 0.00 |
+
+**W12 keys during sustained output (echo queues behind the flood)**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| p50 ms | 15.2 (14.7-15.3) | 14.5 (14.3-14.6) | 66.0 | 25.0 | 26.4 |
+| p95 ms | 30.0 (29.9-30.1) | 30.7 (30.7-30.9) | 86.3 | 45.8 | 50.0 |
+| p99 ms | 31.7 (31.6-31.8) | 32.5 (32.5-32.6) | 135 | 56.6 | 59.4 |
+
+**W12 IME composition commit**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| p50 ms | 8.85 (8.75-9.10) | 8.80 (8.70-10.4) | 5.95 | 8.40 | 8.45 |
+| p95 ms | 15.7 (15.7-15.9) | 16.2 (16.2-20.8) | 16.5 | 14.8 | 15.7 |
+| p99 ms | 16.9 (16.9-16.9) | 17.0 (16.8-25.7) | 17.5 | 17.6 | 16.4 |
+
+**W10 scrollback 5000 lines**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| JS heap MiB | 32.1 (31.9-32.1) | 46.1 (45.5-46.2) | 102 | 100 | 95.2 |
+| renderer RSS MiB | 201 (153-202) | 219 (217-225) | 383 | 423 | 285 |
+| scroll frame p99 ms | 16.8 (16.8-16.8) | 16.8 (16.8-16.8) | 33.4 | 16.8 | 16.8 |
+
+**W9 10 sessions, others streaming**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| p50 ms | 12.0 (11.6-12.2) | 8.15 (8.05-8.20) | 7.30 | 7.95 | 8.25 |
+| p99 ms | 25.4 (25.3-27.7) | 16.2 (16.1-16.2) | 16.3 | 16.1 | 16.0 |
+| renderer RSS per session MiB | 7.64 (7.29-7.67) | 6.75 (6.53-6.81) | 32.1 | 10.4 | 7.26 |
+
+#### What the renderer shootout shows, and what it does not
+
+Each statement is about this host, headless Chromium and these runs.
+
+- **The canvas addon is far slower than the DOM renderer here.** W2 and W4 ran at 1.0 to 2.3 MiB/s (one invocation per flag set) against 36 and 47 MiB/s, with and without GPU flags; echo latency during sustained output had a median of 25 to 26 ms and p99 of 57 to 59 ms against 15 and 32 ms. Its cause was not isolated.
+- **WebGL on a software rasterizer is unusable and costs a great deal of CPU.** At 0.22 to 0.26 MiB/s the GPU process used 135 to 624 s of CPU in the streaming workloads. A device whose WebGL context is backed by software must keep the DOM renderer, which makes capability detection ([#1336](https://github.com/mihazs/lazysh/issues/1336)) a precondition of any WebGL path. Whether Android WebViews on real devices ever report a software context was not measured.
+- **WebGL on a hardware GPU matches the DOM renderer on plain text and redraws, and is much cheaper on style-heavy output.** The median W2 and W4 throughput of the three WebGL invocations is within 4 % of the DOM one. On W3 (ANSI colour at 152 columns) the three DOM invocations ran at 1.6 to 2.2 MiB/s and used 2.1 to 2.9 s of total process CPU; the three WebGL invocations ran at 6.1 to 7.8 MiB/s and used 0.8 to 1.0 s (all processes; computed from the raw files). W3 throughput on WebGL varied between 2.5 and 28 MiB/s across the individual runs of one invocation, so that figure is a median of an unstable quantity.
+- **WebGL's cost is in frame pacing and fixed memory.** The W3 frame interval p99 rose from 33 ms to 116 to 197 ms and dropped frames from 2 to 5 up to 13 to 21; in the first WebGL invocation four of the five runs had a frame interval p99 of 97 ms or more. W4 total process CPU (all processes) was 0.33 to 0.39 s against 0.28 to 0.34 s, about 10 % higher at the median. The JS heap rose by about 14 MiB (46 against 32 MiB at W10) and the renderer resident set by about 8 to 12 % (217 to 225 against 201 to 202 MiB; one DOM invocation reported 153 MiB, which was not investigated). The first WebGL invocation also had a slow IME p95/p99 (20.8 and 25.7 ms against 16.2 and 16.8 to 17.0 ms in the repeats), taken at a load average of 12 to 14.
+- **Idle is cheaper with WebGL and canvas while the cursor blinks.** With blink on, the DOM page performed 640 to 675 style recalculations and 62 to 89 ms of main-thread time per 10 s; WebGL performed none and 22 to 26 ms. With blink off there was no difference in main-thread time or renderer CPU.
+- **Input latency is not worse.** Idle keystrokes and IME commits are within the frame-quantization spread of the DOM runs. During sustained output WebGL's p50 was lower by about 0.7 ms and its p95 and p99 higher by about 0.7 to 0.9 ms (2 to 3 %, the same direction in all three invocations; a frame is 16.7 ms). With ten sessions mounted and streaming, the typing session's echo p50 was 8.1 ms against 12.0 and its p99 16.2 against 25.4 ms, for every non-DOM renderer, which the harness does not explain.
+- **Per-session memory did not grow.** With ten sessions, background sessions (hidden panes) cost 6.5 to 6.8 MiB of renderer resident memory each with WebGL against 7.3 to 7.7 with the DOM renderer (with five, 7.6 to 7.8 against 7.3 to 8.0); the fixed cost above applies once per page.
+- **The custom bold color seam does not survive a renderer change.** `terminalBold.ts` reaches into the DOM renderer's row factory. Run on the live terminal in smoke runs of the same harness (not part of the raw files above, which predate the probe), `configureTerminalBold` applied on the DOM renderer and was refused with "This terminal cannot apply custom bold colors." on both the canvas and the WebGL renderer. Adopting either renderer needs another mechanism for that preference.
+
+Not shown: anything about Android, an Android WebView (which is Chromium, but its GPU, driver, memory pressure and context-loss behaviour are exactly what is unknown), the Linux desktop WebView (WebKitGTK, not Chromium), macOS or iOS (WKWebView), Windows (WebView2), energy, thermal behaviour, a WebGL context loss and recovery, background and resume (W11), accessibility with a canvas renderer, the phone viewport, W5 to W8 and W13. WebGL numbers here come from a discrete desktop GPU shared with other work; they do not transfer to a phone GPU.
+
 ### Android procedure (manual gate, not run)
 
 The harness cannot run on Android in this form: it drives desktop Chromium over CDP. Until an Android runner exists ([#1303](https://github.com/mihazs/lazysh/issues/1303), [#1340](https://github.com/mihazs/lazysh/issues/1340)), the Android measurement is a manual gate with this procedure. **None of it has been executed;** the tools named are standard Android tooling and the steps have not been validated on a device for this app.
@@ -244,11 +350,11 @@ The harness cannot run on Android in this form: it drives desktop Chromium over 
 
 ## Results
 
-| Workload | xterm DOM (desktop Chromium) | xterm optimized | Native candidate(s) | Winner (per device) |
-| --- | --- | --- | --- | --- |
-| W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | not measured | not measured | undecided |
-| W5, W6, W7, W8, W11, W13 | not implemented | not measured | not measured | undecided |
-| All workloads on Android | not measured | not measured | not measured | undecided |
+| Workload | xterm DOM (desktop Chromium) | xterm optimized: WebGL addon, hardware GL | xterm canvas addon; WebGL software GL | Native candidate(s) | Winner (per device) |
+| --- | --- | --- | --- | --- | --- |
+| W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | measured, [shootout](#renderer-shootout-xtermjs-renderers-1323): on par or better except W3 frame pacing, W4 CPU and fixed memory | measured: much slower | not built, not measured | undecided; see [ADR 0001, amendment 1](adr-0001-terminal-runtime.md#amendment-1-2026-11-12-first-renderer-shootout-results) |
+| W5, W6, W7, W8, W11, W13 | not implemented | not measured | not measured | not measured | undecided |
+| All workloads on Android | not measured | not measured | not measured | not measured | undecided |
 
 ### Core parse throughput (host microbenchmark, not a device baseline)
 

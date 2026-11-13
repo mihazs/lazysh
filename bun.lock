@@ -59,6 +59,8 @@
         "@types/react": "^19.1.13",
         "@types/react-dom": "^19.1.9",
         "@vitejs/plugin-react": "^5.0.3",
+        "@xterm/addon-canvas": "0.7.0",
+        "@xterm/addon-webgl": "0.18.0",
         "jsdom": "^27.0.0",
         "typescript": "~5.9.2",
         "vite": "^7.1.7",
@@ -520,7 +522,11 @@
 
     "@wdio/utils": ["@wdio/utils@10.1.0", "", { "dependencies": { "@puppeteer/browsers": "^3.2.1", "@types/split2": "^4.2.3", "@wdio/logger": "10.1.0", "@wdio/types": "10.1.0", "aria-query": "^5.3.2", "decamelize": "^6.0.0", "deepmerge-ts": "^8.0.0", "edgedriver": "^8.0.0", "electron-to-chromium": "^1.5.439", "geckodriver": "^8.0.0", "get-port": "^7.0.0", "import-meta-resolve": "^4.0.0", "locate-app": "^2.2.24", "mitt": "^3.0.1", "safaridriver": "^3.0.0", "split2": "^4.2.0", "wait-port": "^1.1.0" } }, "sha512-BABJY+L4JidOD2bfQe3icuRZ0jQeUimTwUEe66I4BHVGWwaa5QBeVU+JZmdNQLjMA9q+Nk385aL96Mb1/PbKYw=="],
 
+    "@xterm/addon-canvas": ["@xterm/addon-canvas@0.7.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-LF5LYcfvefJuJ7QotNRdRSPc9YASAVDeoT5uyXS/nZshZXjYplGXRECBGiznwvhNL2I8bq1Lf5MzRwstsYQ2Iw=="],
+
     "@xterm/addon-fit": ["@xterm/addon-fit@0.10.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ=="],
+
+    "@xterm/addon-webgl": ["@xterm/addon-webgl@0.18.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-xCnfMBTI+/HKPdRnSOHaJDRqEpq2Ugy8LEj9GiY4J3zJObo3joylIFaMvzBwbYRg8zLtkO0KQaStCeSfoaI2/w=="],
 
     "@xterm/xterm": ["@xterm/xterm@5.5.0", "", {}, "sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A=="],
 
