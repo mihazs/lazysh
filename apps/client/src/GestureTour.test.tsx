@@ -4,7 +4,8 @@ import {act, cleanup, render, renderHook, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import GestureTour, {GestureTourHelp} from './GestureTour';
 import {gestureTourNotes, gestureTourUseful, gestureTourVersion, tourSteps, useGestureTour, type TourNotes} from './gestureTour';
-import {defaults} from './preferences';
+import {defaults, savePreferences} from './preferences';
+import {setGestureInsets, unknownInsets} from './gestureInsets';
 import {t} from './i18n/core';
 
 // The engine's guard is its own tested module; here it is a switch, as its clock would otherwise decide.
@@ -12,8 +13,8 @@ const guard = vi.hoisted(() => ({active: false}));
 vi.mock('./textInteraction', () => ({isTextInteractionActive: () => guard.active}));
 
 const all: TourNotes = {side: null, bottom: null, view: null};
-beforeEach(() => {localStorage.clear(); guard.active = false;});
-afterEach(() => {cleanup(); vi.useRealTimers(); vi.restoreAllMocks();});
+beforeEach(() => {localStorage.clear(); guard.active = false; savePreferences({...defaults});});
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); setGestureInsets(unknownInsets);});
 
 it('walks the four steps with Next, switches the last one to Done and offers Skip before it', async () => {
   const user = userEvent.setup(), finish = vi.fn();
@@ -116,6 +117,54 @@ it('says per gesture why a swipe does nothing here: screen reader, Preferences o
   expect(gestureTourNotes(off, true)).toEqual({side: 'gestureTourTopBar', bottom: 'gestureTourOff', view: null});
   // Screen-reader mode replaces every swipe with a button, whatever Preferences say.
   expect(gestureTourNotes({...off, screenReader: true}, false)).toEqual({side: 'gestureTourScreenReader', bottom: 'gestureTourScreenReader', view: 'gestureTourScreenReader'});
+});
+
+it('treats "Gesture style: Off" as every swipe switched off', () => {
+  const style = (mode: 'auto' | 'off') => ({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode}});
+  expect(gestureTourNotes(style('auto'), false)).toEqual(all);
+  const off = gestureTourNotes(style('off'), false);
+  expect(off).toEqual({side: 'gestureTourOff', bottom: 'gestureTourOff', view: 'gestureTourOff'});
+  expect(gestureTourUseful(off)).toBe(false);
+});
+
+const gestureNavigation = {left: 32, right: 32, bottom: 20, mandatoryBottom: 24, navigation: 'gesture'} as const;
+const style = (mode: 'auto' | 'edges') => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode}});
+const handlesOf = () => document.querySelectorAll('.gt-handle').length;
+
+it('draws the handle and says to start from it on Android gesture navigation, and shows the edge zone elsewhere', async () => {
+  const user = userEvent.setup();
+  style('auto');
+  const plain = render(<GestureTour notes={all} finish={vi.fn()} />);
+  expect(handlesOf()).toBe(0);
+  expect(document.querySelectorAll('.gt-zone')).toHaveLength(1);
+  expect(screen.queryByText(t('gestureTourHandles'))).toBeNull();
+  plain.unmount();
+  act(() => setGestureInsets(gestureNavigation));
+  render(<GestureTour notes={all} finish={vi.fn()} />);
+  for (const step of tourSteps.slice(0, 3)) {
+    expect(screen.getByRole('heading', {name: t(step.title)})).toBeTruthy();
+    expect(handlesOf()).toBe(1);
+    expect(document.querySelector('.gt-zone')).toBeNull();
+    expect(screen.getByText(t('gestureTourHandles'))).toBeTruthy();
+    await user.click(screen.getByRole('button', {name: t('gestureTourNext')}));
+  }
+  // Typing has no handle to use: the swipe goes nowhere.
+  expect(screen.getByRole('heading', {name: t('gestureTourTypingTitle')})).toBeTruthy();
+  expect(handlesOf()).toBe(0);
+  expect(screen.queryByText(t('gestureTourHandles'))).toBeNull();
+});
+
+it('keeps the rows rule for edge swipes on Android gesture navigation and says nothing on three buttons', () => {
+  style('edges');
+  act(() => setGestureInsets(gestureNavigation));
+  const gesture = render(<GestureTour notes={all} finish={vi.fn()} />);
+  expect(screen.getByText(t('gestureTourAndroidEdge'))).toBeTruthy();
+  expect(screen.queryByText(t('gestureTourHandles'))).toBeNull();
+  expect(handlesOf()).toBe(0);
+  gesture.unmount();
+  act(() => setGestureInsets({...gestureNavigation, left: 0, right: 0, bottom: 0, mandatoryBottom: 0, navigation: 'buttons'}));
+  render(<GestureTour notes={all} finish={vi.fn()} />);
+  expect(screen.queryByText(t('gestureTourAndroidEdge'))).toBeNull();
 });
 
 it('keeps the tour out of the way when no gesture works', () => {

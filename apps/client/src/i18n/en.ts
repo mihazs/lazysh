@@ -2394,6 +2394,7 @@ export const english = {
   gestureTourTopBar: "The top bar is on for this device, so there is no side menu to open. Turn off Show the top bar on phones in Preferences to use this swipe.",
   gestureTourScreenReader: "Screen-reader mode is on. The edge swipes are off and visible buttons do the same.",
   gestureTourAndroidEdge: "With Android gesture navigation, start the side swipes low on the edge, in the lower part of the screen, and the bottom swipe just above the system gesture bar. The rest of the edge stays with the system Back gesture.",
+  gestureTourHandles: "With Android gesture navigation the system keeps the very edge for Back and Home, so start each swipe from its small handle, or just inside it. A tap on a handle works too.",
   gestureTourProgress: "Step {{current}} of {{total}}",
   gestureTourSkip: "Skip",
   gestureTourNext: "Next",
