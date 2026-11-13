@@ -2,9 +2,10 @@ import {expect,test} from '@playwright/test';
 import {openAgentWork} from './fixtures/agentWorkPage';
 
 const wide=`<table><thead><tr>${Array.from({length:12},(_,index)=>`<th>Column ${index}</th>`).join('')}</tr></thead><tbody><tr>${Array.from({length:12},(_,index)=>`<td>${'a very long cell value '.repeat(3)}${index}</td>`).join('')}</tr></tbody></table>`;
+const pixel='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const messages=[
   {id:'p',role:'user',blocks:[{type:'text',text:'Fix this:\n\n<div><b>pasted</b> <img src="https://tracker.invalid/x.png" alt="screenshot"> <script>window.__xss=1</script></div>'}]},
-  {id:'a',role:'assistant',blocks:[{type:'text',text:`Result <kbd>Ctrl</kbd>+<kbd>C</kbd>\n\n${wide}\n\n<details><summary>Why</summary>See <a href="https://example.com/why">the docs</a>, not <a href="javascript:window.__xss=1">this</a>.</details>\n\n\`\`\`html\n<b>literal</b>\n\`\`\``}]},
+  {id:'a',role:'assistant',blocks:[{type:'text',text:`Result <kbd>Ctrl</kbd>+<kbd>C</kbd> <img src="${pixel}" alt="dot">\n\n${wide}\n\n<details><summary>Why</summary>See <a href="https://example.com/why">the docs</a>, not <a href="javascript:window.__xss=1">this</a>.</details>\n\n\`\`\`html\n<b>literal</b>\n\`\`\``}]},
 ];
 
 test('HTML in a message renders inside the viewport: a wide table scrolls, remote images and scripts do not load, links ask first, code stays literal',async({page})=>{
@@ -17,6 +18,9 @@ test('HTML in a message renders inside the viewport: a wide table scrolls, remot
   await expect(flow.locator('script')).toHaveCount(0);
   await expect(flow.getByText('[Image — view in terminal]')).toBeVisible();
   expect(requests).toEqual([]);
+  // A small embedded image shows; a remote one does not.
+  await expect(flow.getByRole('img',{name:'dot'})).toBeVisible();
+  expect(await flow.getByRole('img',{name:'dot'}).evaluate((image:HTMLImageElement)=>image.naturalWidth)).toBe(1);
   // A wide table scrolls inside its own region and never widens the page.
   const region=flow.getByRole('region',{name:'Table'});
   const box=(await region.boundingBox())!;
