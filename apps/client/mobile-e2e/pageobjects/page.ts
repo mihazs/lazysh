@@ -19,8 +19,8 @@ export default abstract class Page {
   }
 
   /** `select` is a thunk: `$()` starts resolving when it is called, so the lookup must run inside this page's context. */
-  protected tap(select: () => ChainablePromiseElement) {
-    return this.in(async () => { const element = select(); await element.waitForClickable({timeoutMsg: `${this.constructor.name}: element was not clickable`}); await element.click(); });
+  protected tap(select: () => ChainablePromiseElement, timeout?: number) {
+    return this.in(async () => { const element = select(); await element.waitForClickable({timeout, timeoutMsg: `${this.constructor.name}: element was not clickable`}); await element.click(); });
   }
 
   protected enter(select: () => ChainablePromiseElement, value: string | number) {

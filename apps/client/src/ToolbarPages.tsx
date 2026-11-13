@@ -81,7 +81,7 @@ export default function ToolbarPages({pages, repeats}: {pages: readonly ToolbarP
       {pages.map(page => <div key={page.id} role="group" aria-label={t(pageLabels[page.id])} className="terminal-keys-page" data-toolbar-page={page.id}>{page.content}</div>)}
     </div>
     <div className="terminal-keys-pager" data-visible={screenReader || shown} role="group" aria-label={t('terminalToolbarPages')}>
-      {pages.map((page, position) => <button key={page.id} type="button" aria-current={position === index || undefined} aria-label={t(pageLabels[page.id])} title={t(pageLabels[page.id])}
+      {pages.map((page, position) => <button key={page.id} type="button" data-testid={`toolbar-page-dot-${page.id}`} aria-current={position === index || undefined} aria-label={t(pageLabels[page.id])} title={t(pageLabels[page.id])}
         // Choosing a page leaves focus, and so the on-screen keyboard, where it was.
         onPointerDown={event => event.preventDefault()}
         onClick={() => {select(position); reveal();}}><span aria-hidden="true" /></button>)}

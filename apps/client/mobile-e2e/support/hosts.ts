@@ -90,13 +90,20 @@ export async function readEndpoint(kind: HostKind = 'ssh', file = process.env[EN
   return endpoint;
 }
 
-/** A per-run unique host name, so tests never collide with each other or with a leftover from an earlier run. */
-export const hostName = (label: string, nonce = process.env.LAZYSH_E2E_NONCE) => {
+/** The per-run nonce the launcher chose; it makes host names and typed text unique to this run. */
+export const runNonce = (nonce = process.env.LAZYSH_E2E_NONCE) => {
   if (!nonce) throw new Error('LAZYSH_E2E_NONCE is unset: owned hosts were not started');
-  return `e2e-${nonce}-${label}`;
+  return nonce;
 };
 
-export function hostKinds(value = process.env.LAZYSH_E2E_HOSTS ?? 'ssh'): HostKind[] {
+/** A per-run unique host name, so tests never collide with each other or with a leftover from an earlier run. */
+export const hostName = (label: string, nonce = runNonce()) => `e2e-${nonce}-${label}`;
+
+/** The hosts a run starts when LAZYSH_E2E_HOSTS is unset: SSH, plus Herdr when its three binaries are given (the Agent view journey needs it). */
+export const defaultHostKinds = (env: NodeJS.ProcessEnv = process.env) =>
+  ['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? 'ssh,herdr' : 'ssh';
+
+export function hostKinds(value = process.env.LAZYSH_E2E_HOSTS ?? defaultHostKinds()): HostKind[] {
   const kinds = value.split(',').map(kind => kind.trim()).filter(Boolean);
   const unknown = kinds.filter(kind => !(HOST_KINDS as readonly string[]).includes(kind));
   if (unknown.length) throw new Error(`Unknown LAZYSH_E2E_HOSTS entries: ${unknown.join(', ')} (use ${HOST_KINDS.join(', ')})`);

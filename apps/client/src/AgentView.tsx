@@ -227,7 +227,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const focusedFolder=herdrSession ? navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.cwd ?? undefined : undefined;
   const viewFolder=selected ? selected.cwd ?? selected.row?.project : row?.project ?? focusedFolder;
   const listing=!!herdrSession && !selected && (!reader || choosing);
-  return <section className="agent-view" data-history={reading.full?undefined:'conversation'} hidden={!shown} aria-label={t('agentViewTitle')}>
+  return <section className="agent-view" data-testid="agent-view" data-history={reading.full?undefined:'conversation'} hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
       {state && <StatusRing tone={state.tone} />}
       <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>

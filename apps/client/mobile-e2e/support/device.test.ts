@@ -3,7 +3,7 @@ import {access, mkdtemp, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {acquireDevice, adbFor, journalPath, restoreFromJournal, setDensity, setIme, setNavigation, setPermission, setWindowSize} from './device';
+import {acquireDevice, adbFor, ensurePhoneScreen, journalPath, restoreFromJournal, setDensity, setIme, setNavigation, setPermission, setWindowSize} from './device';
 import {createFakeAdb, type FakeDevice} from './fakeAdb';
 
 const SERIAL = 'fake:5555';
@@ -96,4 +96,16 @@ test('a worker restores the launcher baseline from the journal without touching 
   expect(baselineOf(await fake.read())).toBe(before);
   expect(await exists(journalPath(SERIAL, stateDir))).toBe(true);
   await session.release();
+});
+
+test('a tablet-shaped guest gets a phone window that the baseline takes away again, and a phone window is left alone', async () => {
+  expect(await ensurePhoneScreen(adbFor(SERIAL, fake.binary))).toBe(false);
+  expect(await fake.read()).toMatchObject({size: null, density: null});
+  await fake.write({...await fake.read(), physical: {size: '1920x1080', density: 180}});
+  const session = await acquireDevice(SERIAL, options());
+  expect(await ensurePhoneScreen(session.adb)).toBe(true);
+  expect(await fake.read()).toMatchObject({size: '1080x2400', density: 420});
+  expect(await ensurePhoneScreen(session.adb)).toBe(false);
+  await session.release();
+  expect(await fake.read()).toMatchObject({size: null, density: null});
 });
