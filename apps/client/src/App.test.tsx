@@ -2507,5 +2507,6 @@ describe('the navigation page and Android Back on a phone',()=>{
     }
     expect(mocks.api.disconnect).not.toHaveBeenCalled();
     expect(screen.getByText('Live SSH terminal')).toBeTruthy();
-  });
+    // A hundred open and close cycles take about 5 s: past the default timeout on a loaded runner.
+  },30_000);
 });
