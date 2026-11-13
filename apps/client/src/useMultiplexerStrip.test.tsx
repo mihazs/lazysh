@@ -152,3 +152,22 @@ it('renames and creates tmux windows in the attached tmux server, then switches 
     ['tmux_action',{sessionId:'ssh:1',tmuxServer:'ops',action:{type:'createWindow',target:'$1',name:'vim',directory:'/srv/app'}}]]);
   expect(sent('tmux_jump')[0]).toEqual(['tmux_jump',{sessionId:'ssh:1',generation:second,targetSessionId:'$1',windowId:'@2'}]);
 });
+it('does not report a created tab as failed when only the switch to it fails, so the prompt cannot create a duplicate',async()=>{
+  let created=false;
+  const onError=vi.fn();
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='multiplexer_sessions')return [{name:'default'}];
+    if(command==='herdr_tree')return created?{...herdrTree('t1'),tabs:[...herdrTree('t1').tabs,{workspace_id:'w1',tab_id:'t3',label:'build',number:3,focused:false,agent_status:'idle'}]}:herdrTree('t1');
+    if(command==='herdr_action'){
+      if((args as {action:{type:string}}).action.type==='focusTab')throw new Error('focus refused');
+      created=true;
+    }
+  });
+  render(<Strip attached={{kind:'herdr',name:'default'}} onError={onError}/>);
+  await screen.findByRole('button',{name:/^tab 2/});
+  await ask('New tab','build','/srv/app');
+  expect(sent('herdr_action').map(([,args])=>(args as {action:{type:string}}).action.type)).toEqual(['createTab','focusTab']);
+  expect(onError).not.toHaveBeenCalled();
+  expect(screen.queryByRole('form')).toBeNull();
+  await screen.findByRole('button',{name:/^build/});
+});

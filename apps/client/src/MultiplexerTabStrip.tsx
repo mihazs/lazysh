@@ -24,8 +24,8 @@ export default function MultiplexerTabStrip({strip,onSelect,onEdit}:{strip:MuxSt
   const [prompt,setPrompt]=useState<Prompt>();
   const [saving,setSaving]=useState(false);
   const alive=useRef(true);
-  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const hold=useRef<{timer:number;x:number;y:number;fired:boolean}|undefined>(undefined);
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;if(hold.current)window.clearTimeout(hold.current.timer);};},[]);
   const scroller=useRef<HTMLDivElement>(null);
   const root=useRef<HTMLDivElement>(null);
   const {group,tabs}=strip;

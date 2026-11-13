@@ -78,22 +78,27 @@ export function useMultiplexerStrip({sessionId,attached,enabled,onError}:{sessio
   });
   /** Resolves true once the command ran. Renames or creates through the multiplexer's typed action; a new tab or window is then switched to, like the multiplexer's own `new-tab`. */
   const edit=(change:MuxEdit,label:string,directory:string)=>guarded(change.kind==='herdr'?herdr.refresh:change.kind==='zellij'?zellij.refresh:tmux.refresh,async()=>{
+    // The switch is a courtesy after the tab exists: if it fails the tab is still there and the strip shows it, so it never reports the creation as failed.
+    let toNew:(()=>Promise<unknown>)|undefined;
     if(change.kind==='herdr') {
       const server=herdrServer(),before=await freshTree(server);
       await invoke('herdr_action',{sessionId,name:server,action:muxEditAction(change,label,directory,before)});
-      if(change.type!=='createTab')return;
-      const after=await freshTree(server),known=new Set(before.tabs.map(tab=>tab.tab_id));
-      const created=after.tabs.filter(tab=>tab.workspace_id===change.workspace && !known.has(tab.tab_id));
-      if(created.length===1)await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(after,{kind:'tab',workspace:change.workspace,tab:created[0].tab_id})});
+      if(change.type==='createTab')toNew=async()=>{
+        const after=await freshTree(server),known=new Set(before.tabs.map(tab=>tab.tab_id));
+        const created=after.tabs.filter(tab=>tab.workspace_id===change.workspace && !known.has(tab.tab_id));
+        if(created.length===1)await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(after,{kind:'tab',workspace:change.workspace,tab:created[0].tab_id})});
+      };
     } else if(change.kind==='zellij')await invoke('zellij_action',{sessionId,name,action:muxEditAction(change,label,directory)});
     else {
       const before=change.type==='createWindow'?await api.tmuxJumpSnapshot(sessionId):undefined;
       await invoke('tmux_action',{sessionId,action:muxEditAction(change,label,directory),...(attached?.tmuxServer && attached.tmuxServer!=='default'?{tmuxServer:attached.tmuxServer}:{})});
-      if(!before || change.type!=='createWindow')return;
-      const after=await api.tmuxJumpSnapshot(sessionId),known=new Set(before.sessions.flatMap(session=>session.windows.map(window=>window.id)));
-      const created=after.sessions.find(session=>session.id===change.target)?.windows.filter(window=>!known.has(window.id))??[];
-      if(created.length===1)await api.tmuxJump(sessionId,after.generation,change.target,created[0].id);
+      if(before && change.type==='createWindow')toNew=async()=>{
+        const after=await api.tmuxJumpSnapshot(sessionId),known=new Set(before.sessions.flatMap(session=>session.windows.map(window=>window.id)));
+        const created=after.sessions.find(session=>session.id===change.target)?.windows.filter(window=>!known.has(window.id))??[];
+        if(created.length===1)await api.tmuxJump(sessionId,after.generation,change.target,created[0].id);
+      };
     }
+    await toNew?.().catch(()=>undefined);
   });
   return {strip,pending,select,edit};
 }
