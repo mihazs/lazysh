@@ -47,7 +47,8 @@ pub(super) struct Scanner {
     indent: usize,
     words: usize,
     keyword: bool,
-    previous: String,
+    /// The last word of the line was `sign` or `log`: `in` next makes a sign-in phrase.
+    lead: bool,
     candidates: Vec<Target>,
     pending: Option<Pending>,
     recent: Vec<Seen>,
@@ -63,6 +64,8 @@ fn token_byte(byte: u8) -> bool {
 
 /// The first `http(s)://` inside a token (programs prefix it with `(`, `url=`, a bullet), to the end.
 fn url_in(token: &str) -> Option<&str> {
+    // Nearly every token of ordinary output is not a URL: say so without allocating.
+    token.find("://")?;
     let lower = token.to_ascii_lowercase();
     let start = ["http://", "https://"]
         .iter()
@@ -127,7 +130,7 @@ fn continues(token: &str) -> bool {
     structured || opaque
 }
 
-fn keyword(word: &str, previous: &str) -> bool {
+fn keyword(word: &str, lead: bool) -> bool {
     word.contains("login")
         || word.contains("signin")
         || word.contains("sign-in")
@@ -135,7 +138,7 @@ fn keyword(word: &str, previous: &str) -> bool {
         || word.contains("authenticat")
         || word.contains("authoriz")
         || word == "sso"
-        || (word == "in" && matches!(previous, "sign" | "log"))
+        || (word == "in" && lead)
 }
 
 impl Scanner {
@@ -151,7 +154,7 @@ impl Scanner {
             indent: 0,
             words: 0,
             keyword: false,
-            previous: String::new(),
+            lead: false,
             candidates: Vec::new(),
             pending: None,
             recent: Vec::new(),
@@ -219,7 +222,7 @@ impl Scanner {
         self.indent = 0;
         self.words = 0;
         self.keyword = false;
-        self.previous.clear();
+        self.lead = false;
     }
 
     fn end_token(&mut self, eol: bool) {
@@ -227,7 +230,18 @@ impl Scanner {
         if self.token.is_empty() && !overflow {
             return;
         }
-        let token = String::from_utf8_lossy(&std::mem::take(&mut self.token)).into_owned();
+        // `token_byte` admits ASCII only, so the bytes are always text; the buffer is kept for reuse.
+        let bytes = std::mem::take(&mut self.token);
+        self.finish_token(
+            std::str::from_utf8(&bytes).unwrap_or_default(),
+            overflow,
+            eol,
+        );
+        self.token = bytes;
+        self.token.clear();
+    }
+
+    fn finish_token(&mut self, token: &str, overflow: bool, eol: bool) {
         let index = self.words;
         self.words += 1;
         let wide = eol && self.width >= MIN_WRAP_WIDTH;
@@ -239,10 +253,10 @@ impl Scanner {
                 && pending.text.len() + token.len() <= MAX_URL
                 // A redirect that ends the URL may be cut anywhere: the last piece of it can be a short
                 // plain word (`9005`, `lback`) alone on its line.
-                && (continues(&token)
-                    || (eol && url::ends_in_redirect(&pending.text) && url_tail(&token)))
+                && (continues(token)
+                    || (eol && url::ends_in_redirect(&pending.text) && url_tail(token)))
             {
-                pending.text.push_str(&token);
+                pending.text.push_str(token);
                 pending.continuations += 1;
                 let more = wide && pending.continuations < MAX_CONTINUATIONS;
                 self.pending = Some(pending);
@@ -256,10 +270,10 @@ impl Scanner {
         }
         if overflow {
             // A URL longer than 4096 bytes is refused whole; the rest of its line is not read as one.
-            self.previous.clear();
+            self.lead = false;
             return;
         }
-        match url_in(&token) {
+        match url_in(token) {
             Some(url) => {
                 if let Some(target) = url::bare_origin(trimmed(url)) {
                     if self.candidates.len() < MAX_CANDIDATES {
@@ -281,14 +295,22 @@ impl Scanner {
                 } else {
                     self.analyse(url, Source::Url);
                 }
-                self.previous.clear();
+                self.lead = false;
             }
             None => {
-                let word: String = token
-                    .trim_matches(|c: char| !c.is_ascii_alphanumeric())
-                    .to_ascii_lowercase();
-                self.keyword |= keyword(&word, &self.previous);
-                self.previous = word;
+                let word = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+                // A word longer than any keyword phrase is no keyword (and costs no allocation).
+                let mut buffer = [0u8; 64];
+                self.lead = match buffer.get_mut(..word.len()) {
+                    Some(lower) => {
+                        lower.copy_from_slice(word.as_bytes());
+                        lower.make_ascii_lowercase();
+                        let lower = std::str::from_utf8(lower).unwrap_or_default();
+                        self.keyword |= keyword(lower, self.lead);
+                        matches!(lower, "sign" | "log")
+                    }
+                    None => false,
+                };
             }
         }
     }
@@ -352,7 +374,6 @@ impl Scanner {
     /// Bytes of host output held between chunks.
     pub(super) fn retained(&self) -> usize {
         self.token.len()
-            + self.previous.len()
             + self
                 .pending
                 .as_ref()
