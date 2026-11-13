@@ -2389,7 +2389,7 @@ const translations = {
   gestureTourTitle: ["Tour dos gestos", "Recorrido de gestos"],
   gestureHelpTitle: ["Gestos", "Gestos"],
   gestureTourSideTitle: ["Deslize a partir da borda esquerda", "Desliza desde el borde izquierdo"],
-  gestureTourSideBody: ["Arraste da borda esquerda em direção ao meio para abrir o menu lateral: sessões, visualizações, ferramentas e ajustes. Deslize-o de volta para a esquerda, toque fora dele ou use Voltar para fechá-lo.", "Arrastra desde el borde izquierdo hacia el centro para abrir el menú lateral: sesiones, vistas, herramientas y ajustes. Deslízalo de vuelta a la izquierda, toca fuera de él o usa Atrás para cerrarlo."],
+  gestureTourSideBody: ["Arraste da borda esquerda em direção ao meio para abrir o menu lateral: seus agentes, espaços, conexões, ferramentas e ajustes. Deslize-o de volta para a esquerda, ou use Voltar ou o botão de fechar, para fechá-lo.", "Arrastra desde el borde izquierdo hacia el centro para abrir el menú lateral: tus agentes, espacios, conexiones, herramientas y ajustes. Deslízalo de vuelta a la izquierda, o usa Atrás o el botón de cerrar, para cerrarlo."],
   gestureTourBottomTitle: ["Deslize para cima a partir da borda inferior", "Desliza hacia arriba desde el borde inferior"],
   gestureTourBottomBody: ["Arraste para cima a partir da borda inferior, onde fica a barrinha, para abrir o menu inferior: mostrar ou ocultar o editor de texto, a barra de teclas e o teclado. Deslize para baixo no menu para fechá-lo.", "Arrastra hacia arriba desde el borde inferior, donde está la barrita, para abrir el menú inferior: mostrar u ocultar el redactor, la barra de teclas y el teclado. Desliza hacia abajo en el menú para cerrarlo."],
   gestureTourViewTitle: ["Deslize a partir da borda direita", "Desliza desde el borde derecho"],
@@ -2404,7 +2404,7 @@ const translations = {
   gestureTourSkip: ["Pular", "Omitir"],
   gestureTourNext: ["Próximo", "Siguiente"],
   gestureTourDone: ["Concluir", "Listo"],
-  gestureTourReplay: ["Você pode rever este tour em Preferências, em Ajuda, ou no menu lateral.", "Puedes repetir este recorrido en Preferencias, en Ayuda, o en el menú lateral."],
+  gestureTourReplay: ["Você pode rever este tour em Preferências, em Ajuda, ou na aba Conexões do menu lateral.", "Puedes repetir este recorrido en Preferencias, en Ayuda, o en la pestaña Conexiones del menú lateral."],
   gestureTourPlay: ["Reproduzir o tour animado", "Reproducir el recorrido animado"],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 

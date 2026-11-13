@@ -8,7 +8,7 @@ Desktop and the connection list keep their existing controls.
 
 | Start at | Swipe | Result |
 | --- | --- | --- |
-| The left edge | Toward the middle | Opens the side menu: the session, its views, tools, connections and settings. Swipe it back to the left, tap outside it, use **Close menu** or press Back to close it. |
+| The left edge | Toward the middle | Opens the side menu, a full-screen page over the terminal: the session strip, and the **Agents**, **Workspaces** and **Connections** tabs with the tools and settings. Swipe it back to the left, use its close button or press Back to close it. |
 | The bottom edge, where the small bar sits | Up | Opens the bottom menu, where you show or hide the composer, the toolbar and the keyboard. Swipe down on the menu, or use its handle, to close it. |
 | The right edge | Toward the middle | Switches from the terminal to the Agent view of a remote session. In the Agent view, swipe right to return to the terminal. |
 
@@ -30,7 +30,7 @@ The first time you open a connected session on a phone, a short animated tour op
 
 The tour never starts or delays a connection. It opens only after the session is connected, waits while you type, and never opens on desktop, on the connection list, over another dialog, in screen-reader mode, or when every swipe is switched off. A step for a swipe you switched off, or for the side menu while the top bar is on, says where to change that.
 
-To see it again, choose **Preferences → Gestures** (under Help) and **Play the animated tour**, or **Gesture tour** in the side menu. The Help page holds the same text without animation. With reduce motion set on the device, the tour shows still pictures with an arrow for each swipe instead of the moving finger; the captions are the same.
+To see it again, choose **Preferences → Gestures** (under Help) and **Play the animated tour**, or **Gesture tour** on the **Connections** tab of the side menu. The Help page holds the same text without animation. With reduce motion set on the device, the tour shows still pictures with an arrow for each swipe instead of the moving finger; the captions are the same.
 
 ## Related
 

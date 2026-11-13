@@ -2383,7 +2383,7 @@ export const english = {
   gestureTourTitle: "Gesture tour",
   gestureHelpTitle: "Gestures",
   gestureTourSideTitle: "Swipe in from the left edge",
-  gestureTourSideBody: "Drag from the left edge toward the middle to open the side menu: sessions, views, tools and settings. Swipe it back to the left, tap outside it or press Back to close it.",
+  gestureTourSideBody: "Drag from the left edge toward the middle to open the side menu: your agents, workspaces, connections, tools and settings. Swipe it back to the left, or press Back or its close button, to close it.",
   gestureTourBottomTitle: "Swipe up from the bottom edge",
   gestureTourBottomBody: "Drag up from the bottom edge, where the small bar sits, to open the bottom menu: show or hide the composer, the toolbar and the keyboard. Swipe down on the menu to close it.",
   gestureTourViewTitle: "Swipe in from the right edge",
@@ -2398,6 +2398,6 @@ export const english = {
   gestureTourSkip: "Skip",
   gestureTourNext: "Next",
   gestureTourDone: "Done",
-  gestureTourReplay: "You can replay this tour from Preferences, under Help, or from the side menu.",
+  gestureTourReplay: "You can replay this tour from Preferences, under Help, or from the Connections tab of the side menu.",
   gestureTourPlay: "Play the animated tour",
 } as const;

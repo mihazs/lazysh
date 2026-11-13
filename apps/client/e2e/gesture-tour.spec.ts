@@ -154,17 +154,17 @@ test('the side menu replays the tour after it was seen, and Preferences closes w
   test.skip(!phone(testInfo),'phones only');
   await seed(page,{[key]:'1'});
   await connect(page);
-  const drawer=page.getByRole('dialog',{name:'Menu',exact:true});
-  // The engine holds swipes for a moment after a key press.
-  const openMenu=async()=>{await page.waitForTimeout(900);await swipe(page,[2,520],[300,524]);await expect(drawer).toBeVisible();};
+  // The side menu is the one full-screen page; the application rows are on its Connections tab.
+  const menu=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
+  const openMenu=async()=>{await page.waitForTimeout(900);await swipe(page,[2,520],[300,524]);await expect(page.locator('.sidebar')).toHaveClass(/sidebar-open/);await menu.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Connections'}).tap();};
   await openMenu();
-  await drawer.getByRole('button',{name:'Preferences',exact:true}).tap();
+  await menu.getByRole('button',{name:'Preferences',exact:true}).tap();
   await closePreferences(page);
   await page.waitForTimeout(1800);
   await expect(tour(page)).toHaveCount(0);
   await openMenu();
-  await drawer.getByRole('button',{name:'Gesture tour',exact:true}).tap();
-  await expect(drawer).toHaveCount(0);
+  await menu.getByRole('button',{name:'Gesture tour',exact:true}).tap();
+  await expect(page.locator('.sidebar')).not.toHaveClass(/sidebar-open/);
   await expect(tour(page)).toBeVisible();
   await expect(tour(page).getByRole('heading',{name:titles[0]})).toBeVisible();
 });
@@ -173,19 +173,20 @@ test('teaches what the app does: the left and bottom swipes open their menus, an
   test.skip(!phone(testInfo),'phones only');
   await seed(page,{[key]:'1'});
   await connect(page);
-  const drawer=page.getByRole('dialog',{name:'Menu',exact:true}),bottom=page.getByRole('group',{name:'Bottom menu'});
+  const drawer=page.locator('.sidebar'),bottom=page.getByRole('group',{name:'Bottom menu'});
   // Typing: a key just pressed holds the swipes off for a moment (the typing step's rule) ...
   await page.locator('.xterm-helper-textarea').first().focus();
   await page.keyboard.type('x');
   await swipe(page,[2,520],[300,524]);
-  await expect(drawer).toHaveCount(0);
+  await page.waitForTimeout(300);
+  await expect(drawer).not.toHaveClass(/sidebar-open/);
   // ... and once the typing has stopped, the left edge opens the side menu and the bottom edge the bottom menu.
   await page.evaluate(()=>(document.activeElement as HTMLElement|null)?.blur());
   await page.waitForTimeout(900);
   await swipe(page,[2,520],[300,524]);
-  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveClass(/sidebar-open/);
   await page.keyboard.press('Escape');
-  await expect(drawer).toHaveCount(0);
+  await expect(drawer).not.toHaveClass(/sidebar-open/);
   await page.waitForTimeout(900);
   const height=await page.evaluate(()=>window.innerHeight);
   await swipe(page,[207,height-8],[207,height-300]);
