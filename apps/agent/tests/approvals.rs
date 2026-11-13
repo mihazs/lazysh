@@ -415,7 +415,7 @@ fn a_plain_allow_adds_no_rule_and_a_deny_message_reaches_the_agent() {
     assert_eq!(decision(hook), json!({"behavior":"allow"}));
     let hook = start(dir.path(), "10");
     let request = pending(dir.path());
-    assert!(request.get("options").is_none());
+    assert_eq!(request["options"], json!([]));
     let output = resolve_with(
         dir.path(),
         &request,

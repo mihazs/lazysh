@@ -461,6 +461,11 @@ pub fn list(directory: &Path, limit: u8) -> Result<Value> {
         Ok(request)
     })?;
     let requests: Vec<Request> = rows.collect::<std::result::Result<_, _>>()?;
+    let mut requests = serde_json::to_value(requests).map_err(|_| Error::InvalidEvent)?;
+    // An empty `options` is still listed: it tells the client this companion also takes `--message`.
+    for request in requests.as_array_mut().into_iter().flatten() {
+        request["options"] = request.get("options").cloned().unwrap_or_else(|| json!([]));
+    }
     Ok(json!({"schemaVersion":1,"requests":requests}))
 }
 

@@ -18,6 +18,8 @@ type Approval = {
   toolName: string;
   toolInput: unknown;
   options: readonly Suggestion[];
+  /** Only a companion that lists `options` (even empty) takes a denial message. */
+  canMessage: boolean;
   createdAt: string;
   expiresAt: string;
 };
@@ -53,7 +55,7 @@ export function parseApprovals(value: unknown): Approval[] {
       JSON.stringify(item.toolInput ?? null).length > 32768
     )
       throw new LocalUiError('approvalsInvalidIdentity');
-    return {...item, options: parseOptions(item.options)} as Approval;
+    return {...item, options: parseOptions(item.options), canMessage: Array.isArray(item.options)} as Approval;
   });
 }
 /** `match` shows only the requests of one agent session in one pane; `validate` must hold again when a decision is sent. */
@@ -176,7 +178,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
               {expired?t('approvalsExpired'):t('approvalsExpiresIn',{time:formatCountdown(expires-now)})}
             </time>
           </p>
-          <ApprovalActions key={`${request.id}:${request.expectedHash}`} options={request.options} disabled={!visible || busy || expired} delay={delay} decide={answer=>void decide(request,answer)} />
+          <ApprovalActions key={`${request.id}:${request.expectedHash}`} options={request.options} canMessage={request.canMessage} disabled={!visible || busy || expired} delay={delay} decide={answer=>void decide(request,answer)} />
           <dl className="approval-facts">
             <div><dt>{t('approvalsProjectLabel')}</dt><dd>{request.project}</dd></div>
             <div><dt>{t('approvalsSessionLabel')}</dt><dd>{request.sessionId}</dd></div>

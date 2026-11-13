@@ -224,7 +224,7 @@ async function claudeApproval(page:Page,extra:object={}) {
     const base=window.nativeFixtureInvoke!;
     window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[]};
     window.nativeFixtureInvoke=async(command,args)=>{
-      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString(),...extra}]};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString(),...extra}]};
       if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
       return base(command,args);
     };

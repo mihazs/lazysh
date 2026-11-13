@@ -58,7 +58,7 @@ function detail(option: Suggestion) {
 /** Deny and Allow, then the request's other answers: allow with a suggested permission update (each behind its own
  * confirmation that shows the exact rule, and none is ever the default) and deny with a message for the agent.
  * A delay keeps a tap that landed as the card appeared from deciding. */
-export function ApprovalActions({options, disabled, delay, decide}: {options: readonly Suggestion[]; disabled: boolean; delay: number; decide: (answer: Answer) => void}) {
+export function ApprovalActions({options, canMessage, disabled, delay, decide}: {options: readonly Suggestion[]; canMessage: boolean; disabled: boolean; delay: number; decide: (answer: Answer) => void}) {
   const [ready, setReady] = useState(delay === 0);
   const [step, setStep] = useState<{option: number} | {message: string} | null>(null);
   useEffect(() => { if (!delay) return; const timer = window.setTimeout(() => setReady(true), delay); return () => window.clearTimeout(timer); }, [delay]);
@@ -71,9 +71,9 @@ export function ApprovalActions({options, disabled, delay, decide}: {options: re
       <button type="button" className="approval-deny" disabled={blocked} onClick={() => decide({decision: 'deny'})}><X size={16} aria-hidden="true" />{t('approvalsDeny')}</button>
       <button type="button" className="approval-allow" disabled={blocked} onClick={() => decide({decision: 'allow'})}><Check size={16} aria-hidden="true" />{t('approvalsAllow')}</button>
     </div>
-    {!step && <div className="approval-more">
+    {!step && (options.length > 0 || canMessage) && <div className="approval-more">
       {options.map((item, index) => <button key={index} type="button" className="approval-option" disabled={blocked} onClick={() => setStep({option: index})}>{label(item)}</button>)}
-      <button type="button" className="approval-option" disabled={blocked} onClick={() => setStep({message: ''})}><MessageSquareText size={16} aria-hidden="true" />{t('approvalsDenyMessage')}</button>
+      {canMessage && <button type="button" className="approval-option" disabled={blocked} onClick={() => setStep({message: ''})}><MessageSquareText size={16} aria-hidden="true" />{t('approvalsDenyMessage')}</button>}
     </div>}
     {option && step && 'option' in step && <section className="approval-confirm" aria-label={label(option)}>
       <p>{detail(option).intro}</p>
