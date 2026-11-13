@@ -15,6 +15,7 @@ mod ingress;
 mod input;
 pub mod layout;
 mod reference;
+mod mosh;
 mod render;
 mod runtime;
 mod size;
@@ -30,7 +31,8 @@ pub use render::{
     Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
-pub use runtime::{Config, Error, Events, Modes, TerminalRuntime};
+pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
+pub use runtime::{Config, Error, Events, Geometry, Modes, TerminalRuntime};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
 // Re-exported so consumers never depend on the binding crate (or a second VT engine) directly.

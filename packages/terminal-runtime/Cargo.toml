@@ -18,6 +18,8 @@ ghostty-vt = { path = "../herdr-upstream/crates/ghostty-vt" }
 [dev-dependencies]
 # Goldens only: already in the lock through ghostty-vt.
 png = "0.17"
+# Tests replay fixtures, such as the captured Mosh frames of apps/client/e2e/fixtures/mosh-resize-frames.json.
+serde_json = "1"
 
 [profile.release]
 debug = false
