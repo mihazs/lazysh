@@ -1,0 +1,167 @@
+[
+  {
+    "id": "mosh-frame-2",
+    "about": "Captured Mosh display frame 2 (state 1) from apps/client/e2e/fixtures/mosh-resize-frames.json, replayed after a plain resize to the envelope's 40x12. The canonical (non-reflowing, host-applied) resize of #1317 is not what this compares.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          40,
+          12
+        ]
+      },
+      {
+        "writeBase64": "G103Nzc3O2xhenlzaC1tb3NoOzE7YmVnaW47Mjs0MDsxMhtcG1tyG1swbRtbSBtbMkobWz8yNWwbWzA7MTszMW1PV05FRF9ST1dfMDAbWzBtG1tLDQpPV05FRF9ST1dfMDFfMDEyMzQ1Njc4OUFCQ0RFRkdISUpLTE1OG1tLDQpPV05FRF9ST1dfMDIbW0sNCk9XTkVEX1JPV18wMxtbSw0KT1dORURfUk9XXzA0X+S4lueVjBtbSw0KT1dORURfUk9XXzA1G1tLDQpPV05FRF9ST1dfMDYbW0sNCk9XTkVEX1JPV18wNxtbSw0KT1dORURfUk9XXzA4G1tLDQpPV05FRF9ST1dfMDkbW0sNCk9XTkVEX1JPV18xMBtbSw0KT1dORURfUk9XXzExG1tLG1sxMjszM0gbWz8yNWgbWzBtG104OzsbXBtbPzIwMDRsG1s/MTAwM2wbWz8xMDAybBtbPzEwMDFsG1s/MTAwMGwbWz8xMDA0bBtbPzEwMTVsG1s/MTAwNmwbWz8xMDA1bBtdNzc3NztsYXp5c2gtbW9zaDsxO2VuZDsyG1w="
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_00",
+        "OWNED_ROW_01_0123456789ABCDEFGHIJKLMN",
+        "OWNED_ROW_02",
+        "OWNED_ROW_03",
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05",
+        "OWNED_ROW_06",
+        "OWNED_ROW_07",
+        "OWNED_ROW_08",
+        "OWNED_ROW_09",
+        "OWNED_ROW_10",
+        "OWNED_ROW_11"
+      ],
+      "cursor": {
+        "x": 32,
+        "y": 11
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "mosh-frame-3",
+    "about": "Captured Mosh display frame 3 (state 2) from apps/client/e2e/fixtures/mosh-resize-frames.json, replayed after a plain resize to the envelope's 40x6. The canonical (non-reflowing, host-applied) resize of #1317 is not what this compares.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          40,
+          6
+        ]
+      },
+      {
+        "writeBase64": "G103Nzc3O2xhenlzaC1tb3NoOzE7YmVnaW47Mzs0MDs2G1wbW3IbWzBtG1tIG1syShtbPzI1bBtbMDsxOzMxbU9XTkVEX1JPV18wMBtbMG0bW0sNCk9XTkVEX1JPV18wMV8wMTIzNDU2Nzg5QUJDREVGR0hJSktMTU4bW0sNCk9XTkVEX1JPV18wMhtbSw0KT1dORURfUk9XXzAzG1tLDQpPV05FRF9ST1dfMDRf5LiW55WMG1tLDQpPV05FRF9ST1dfMDUbW0sbWzY7MzNIG1s/MjVoG1swbRtdODs7G1wbWz8yMDA0bBtbPzEwMDNsG1s/MTAwMmwbWz8xMDAxbBtbPzEwMDBsG1s/MTAwNGwbWz8xMDE1bBtbPzEwMDZsG1s/MTAwNWwbXTc3Nzc7bGF6eXNoLW1vc2g7MTtlbmQ7Mxtc"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_00",
+        "OWNED_ROW_01_0123456789ABCDEFGHIJKLMN",
+        "OWNED_ROW_02",
+        "OWNED_ROW_03",
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05"
+      ],
+      "cursor": {
+        "x": 32,
+        "y": 5
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "mosh-frame-6",
+    "about": "Captured Mosh display frame 6 (state 5) from apps/client/e2e/fixtures/mosh-resize-frames.json, replayed after a plain resize to the envelope's 20x12. The canonical (non-reflowing, host-applied) resize of #1317 is not what this compares.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          20,
+          12
+        ]
+      },
+      {
+        "writeBase64": "G103Nzc3O2xhenlzaC1tb3NoOzE7YmVnaW47NjsyMDsxMhtcG1tyG1swbRtbSBtbMkobWz8yNWwbWzA7MTszMW1PV05FRF9ST1dfMDAbWzBtG1tLDQpPV05FRF9ST1dfMDFfMDEyMzQ1Ng0KT1dORURfUk9XXzAyG1tLDQpPV05FRF9ST1dfMDMbW0sNCk9XTkVEX1JPV18wNF/kuJbnlYwbW0sNCk9XTkVEX1JPV18wNRtbSw0KT1dORURfUk9XXzA2G1tLDQpPV05FRF9ST1dfMDcbW0sNCk9XTkVEX1JPV18wOBtbSw0KT1dORURfUk9XXzA5G1tLDQpPV05FRF9ST1dfMTAbW0sNCk9XTkVEX1JPV18xMRtbSxtbMTI7MjBIG1s/MjVoG1swbRtdODs7G1wbWz8yMDA0bBtbPzEwMDNsG1s/MTAwMmwbWz8xMDAxbBtbPzEwMDBsG1s/MTAwNGwbWz8xMDE1bBtbPzEwMDZsG1s/MTAwNWwbXTc3Nzc7bGF6eXNoLW1vc2g7MTtlbmQ7Nhtc"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_00",
+        "OWNED_ROW_01_0123456",
+        "OWNED_ROW_02",
+        "OWNED_ROW_03",
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05",
+        "OWNED_ROW_06",
+        "OWNED_ROW_07",
+        "OWNED_ROW_08",
+        "OWNED_ROW_09",
+        "OWNED_ROW_10",
+        "OWNED_ROW_11"
+      ],
+      "cursor": {
+        "x": 19,
+        "y": 11
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        }
+      ]
+    }
+  }
+]

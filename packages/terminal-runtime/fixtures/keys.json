@@ -1,0 +1,905 @@
+[
+  {
+    "id": "up-normal",
+    "about": "",
+    "setup": "",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [],
+    "expect": "\u001b[A"
+  },
+  {
+    "id": "down-normal",
+    "about": "",
+    "setup": "",
+    "key": "ArrowDown",
+    "code": "ArrowDown",
+    "keyCode": 40,
+    "mods": [],
+    "expect": "\u001b[B"
+  },
+  {
+    "id": "right-normal",
+    "about": "",
+    "setup": "",
+    "key": "ArrowRight",
+    "code": "ArrowRight",
+    "keyCode": 39,
+    "mods": [],
+    "expect": "\u001b[C"
+  },
+  {
+    "id": "left-normal",
+    "about": "",
+    "setup": "",
+    "key": "ArrowLeft",
+    "code": "ArrowLeft",
+    "keyCode": 37,
+    "mods": [],
+    "expect": "\u001b[D"
+  },
+  {
+    "id": "home-normal",
+    "about": "",
+    "setup": "",
+    "key": "Home",
+    "code": "Home",
+    "keyCode": 36,
+    "mods": [],
+    "expect": "\u001b[H"
+  },
+  {
+    "id": "end-normal",
+    "about": "",
+    "setup": "",
+    "key": "End",
+    "code": "End",
+    "keyCode": 35,
+    "mods": [],
+    "expect": "\u001b[F"
+  },
+  {
+    "id": "pageup-normal",
+    "about": "",
+    "setup": "",
+    "key": "PageUp",
+    "code": "PageUp",
+    "keyCode": 33,
+    "mods": [],
+    "expect": "\u001b[5~"
+  },
+  {
+    "id": "pagedown-normal",
+    "about": "",
+    "setup": "",
+    "key": "PageDown",
+    "code": "PageDown",
+    "keyCode": 34,
+    "mods": [],
+    "expect": "\u001b[6~"
+  },
+  {
+    "id": "insert-normal",
+    "about": "",
+    "setup": "",
+    "key": "Insert",
+    "code": "Insert",
+    "keyCode": 45,
+    "mods": [],
+    "expect": "\u001b[2~"
+  },
+  {
+    "id": "delete-normal",
+    "about": "",
+    "setup": "",
+    "key": "Delete",
+    "code": "Delete",
+    "keyCode": 46,
+    "mods": [],
+    "expect": "\u001b[3~"
+  },
+  {
+    "id": "up-application-cursor",
+    "about": "DECCKM changes the final introducer to SS3",
+    "setup": "\u001b[?1h",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [],
+    "expect": "\u001bOA"
+  },
+  {
+    "id": "left-application-cursor",
+    "about": "DECCKM changes the final introducer to SS3",
+    "setup": "\u001b[?1h",
+    "key": "ArrowLeft",
+    "code": "ArrowLeft",
+    "keyCode": 37,
+    "mods": [],
+    "expect": "\u001bOD"
+  },
+  {
+    "id": "home-application-cursor",
+    "about": "DECCKM changes the final introducer to SS3",
+    "setup": "\u001b[?1h",
+    "key": "Home",
+    "code": "Home",
+    "keyCode": 36,
+    "mods": [],
+    "expect": "\u001bOH"
+  },
+  {
+    "id": "end-application-cursor",
+    "about": "DECCKM changes the final introducer to SS3",
+    "setup": "\u001b[?1h",
+    "key": "End",
+    "code": "End",
+    "keyCode": 35,
+    "mods": [],
+    "expect": "\u001bOF"
+  },
+  {
+    "id": "f1",
+    "about": "",
+    "setup": "",
+    "key": "F1",
+    "code": "F1",
+    "keyCode": 112,
+    "mods": [],
+    "expect": "\u001bOP"
+  },
+  {
+    "id": "f2",
+    "about": "",
+    "setup": "",
+    "key": "F2",
+    "code": "F2",
+    "keyCode": 113,
+    "mods": [],
+    "expect": "\u001bOQ"
+  },
+  {
+    "id": "f3",
+    "about": "",
+    "setup": "",
+    "key": "F3",
+    "code": "F3",
+    "keyCode": 114,
+    "mods": [],
+    "expect": "\u001bOR"
+  },
+  {
+    "id": "f4",
+    "about": "",
+    "setup": "",
+    "key": "F4",
+    "code": "F4",
+    "keyCode": 115,
+    "mods": [],
+    "expect": "\u001bOS"
+  },
+  {
+    "id": "f5",
+    "about": "",
+    "setup": "",
+    "key": "F5",
+    "code": "F5",
+    "keyCode": 116,
+    "mods": [],
+    "expect": "\u001b[15~"
+  },
+  {
+    "id": "f6",
+    "about": "",
+    "setup": "",
+    "key": "F6",
+    "code": "F6",
+    "keyCode": 117,
+    "mods": [],
+    "expect": "\u001b[17~"
+  },
+  {
+    "id": "f7",
+    "about": "",
+    "setup": "",
+    "key": "F7",
+    "code": "F7",
+    "keyCode": 118,
+    "mods": [],
+    "expect": "\u001b[18~"
+  },
+  {
+    "id": "f8",
+    "about": "",
+    "setup": "",
+    "key": "F8",
+    "code": "F8",
+    "keyCode": 119,
+    "mods": [],
+    "expect": "\u001b[19~"
+  },
+  {
+    "id": "f9",
+    "about": "",
+    "setup": "",
+    "key": "F9",
+    "code": "F9",
+    "keyCode": 120,
+    "mods": [],
+    "expect": "\u001b[20~"
+  },
+  {
+    "id": "f10",
+    "about": "",
+    "setup": "",
+    "key": "F10",
+    "code": "F10",
+    "keyCode": 121,
+    "mods": [],
+    "expect": "\u001b[21~"
+  },
+  {
+    "id": "f11",
+    "about": "",
+    "setup": "",
+    "key": "F11",
+    "code": "F11",
+    "keyCode": 122,
+    "mods": [],
+    "expect": "\u001b[23~"
+  },
+  {
+    "id": "f12",
+    "about": "",
+    "setup": "",
+    "key": "F12",
+    "code": "F12",
+    "keyCode": 123,
+    "mods": [],
+    "expect": "\u001b[24~"
+  },
+  {
+    "id": "up-shift",
+    "about": "modified cursor keys use the CSI 1;m form",
+    "setup": "",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [
+      "shift"
+    ],
+    "expect": "\u001b[1;2A"
+  },
+  {
+    "id": "pageup-shift",
+    "about": "",
+    "setup": "",
+    "key": "PageUp",
+    "code": "PageUp",
+    "keyCode": 33,
+    "mods": [
+      "shift"
+    ],
+    "expect": "",
+    "core": {
+      "divergence": [
+        "shift-pageup-handled-by-host"
+      ],
+      "expect": "\u001b[5;2~"
+    }
+  },
+  {
+    "id": "f5-shift",
+    "about": "",
+    "setup": "",
+    "key": "F5",
+    "code": "F5",
+    "keyCode": 116,
+    "mods": [
+      "shift"
+    ],
+    "expect": "\u001b[15;2~"
+  },
+  {
+    "id": "up-alt",
+    "about": "modified cursor keys use the CSI 1;m form",
+    "setup": "",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b[1;5A",
+    "core": {
+      "divergence": [
+        "alt-cursor-key-encoding"
+      ],
+      "expect": "\u001b[1;3A"
+    }
+  },
+  {
+    "id": "pageup-alt",
+    "about": "",
+    "setup": "",
+    "key": "PageUp",
+    "code": "PageUp",
+    "keyCode": 33,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b[5~",
+    "core": {
+      "divergence": [
+        "alt-cursor-key-encoding"
+      ],
+      "expect": "\u001b[5;3~"
+    }
+  },
+  {
+    "id": "f5-alt",
+    "about": "",
+    "setup": "",
+    "key": "F5",
+    "code": "F5",
+    "keyCode": 116,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b[15;3~"
+  },
+  {
+    "id": "up-ctrl",
+    "about": "modified cursor keys use the CSI 1;m form",
+    "setup": "",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u001b[1;5A"
+  },
+  {
+    "id": "pageup-ctrl",
+    "about": "",
+    "setup": "",
+    "key": "PageUp",
+    "code": "PageUp",
+    "keyCode": 33,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u001b[5;5~"
+  },
+  {
+    "id": "f5-ctrl",
+    "about": "",
+    "setup": "",
+    "key": "F5",
+    "code": "F5",
+    "keyCode": 116,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u001b[15;5~"
+  },
+  {
+    "id": "up-shift-ctrl",
+    "about": "modified cursor keys use the CSI 1;m form",
+    "setup": "",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [
+      "shift",
+      "ctrl"
+    ],
+    "expect": "\u001b[1;6A"
+  },
+  {
+    "id": "pageup-shift-ctrl",
+    "about": "",
+    "setup": "",
+    "key": "PageUp",
+    "code": "PageUp",
+    "keyCode": 33,
+    "mods": [
+      "shift",
+      "ctrl"
+    ],
+    "expect": "",
+    "core": {
+      "divergence": [
+        "shift-pageup-handled-by-host"
+      ],
+      "expect": "\u001b[5;6~"
+    }
+  },
+  {
+    "id": "f5-shift-ctrl",
+    "about": "",
+    "setup": "",
+    "key": "F5",
+    "code": "F5",
+    "keyCode": 116,
+    "mods": [
+      "shift",
+      "ctrl"
+    ],
+    "expect": "\u001b[15;6~"
+  },
+  {
+    "id": "enter",
+    "about": "",
+    "setup": "",
+    "key": "Enter",
+    "code": "Enter",
+    "keyCode": 13,
+    "mods": [],
+    "expect": "\r"
+  },
+  {
+    "id": "enter-shift",
+    "about": "lazysh handles Shift+Enter itself (#805); this is the terminal's own encoding",
+    "setup": "",
+    "key": "Enter",
+    "code": "Enter",
+    "keyCode": 13,
+    "mods": [
+      "shift"
+    ],
+    "expect": "\r",
+    "core": {
+      "divergence": [
+        "modified-enter-tab-encoding"
+      ],
+      "expect": "\u001b[27;2;13~"
+    }
+  },
+  {
+    "id": "enter-alt",
+    "about": "",
+    "setup": "",
+    "key": "Enter",
+    "code": "Enter",
+    "keyCode": 13,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b\r"
+  },
+  {
+    "id": "enter-ctrl",
+    "about": "",
+    "setup": "",
+    "key": "Enter",
+    "code": "Enter",
+    "keyCode": 13,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\r",
+    "core": {
+      "divergence": [
+        "modified-enter-tab-encoding"
+      ],
+      "expect": "\u001b[27;5;13~"
+    }
+  },
+  {
+    "id": "tab",
+    "about": "",
+    "setup": "",
+    "key": "Tab",
+    "code": "Tab",
+    "keyCode": 9,
+    "mods": [],
+    "expect": "\t"
+  },
+  {
+    "id": "shift-tab",
+    "about": "",
+    "setup": "",
+    "key": "Tab",
+    "code": "Tab",
+    "keyCode": 9,
+    "mods": [
+      "shift"
+    ],
+    "expect": "\u001b[Z"
+  },
+  {
+    "id": "ctrl-tab",
+    "about": "",
+    "setup": "",
+    "key": "Tab",
+    "code": "Tab",
+    "keyCode": 9,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\t",
+    "core": {
+      "divergence": [
+        "modified-enter-tab-encoding"
+      ],
+      "expect": "\u001b[27;5;9~"
+    }
+  },
+  {
+    "id": "backspace",
+    "about": "",
+    "setup": "",
+    "key": "Backspace",
+    "code": "Backspace",
+    "keyCode": 8,
+    "mods": [],
+    "expect": ""
+  },
+  {
+    "id": "ctrl-backspace",
+    "about": "",
+    "setup": "",
+    "key": "Backspace",
+    "code": "Backspace",
+    "keyCode": 8,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\b"
+  },
+  {
+    "id": "alt-backspace",
+    "about": "",
+    "setup": "",
+    "key": "Backspace",
+    "code": "Backspace",
+    "keyCode": 8,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b"
+  },
+  {
+    "id": "escape",
+    "about": "",
+    "setup": "",
+    "key": "Escape",
+    "code": "Escape",
+    "keyCode": 27,
+    "mods": [],
+    "expect": "\u001b"
+  },
+  {
+    "id": "alt-escape",
+    "about": "",
+    "setup": "",
+    "key": "Escape",
+    "code": "Escape",
+    "keyCode": 27,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b\u001b"
+  },
+  {
+    "id": "ctrl-a",
+    "about": "",
+    "setup": "",
+    "key": "a",
+    "code": "KeyA",
+    "keyCode": 65,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u0001"
+  },
+  {
+    "id": "alt-a",
+    "about": "",
+    "setup": "",
+    "key": "a",
+    "code": "KeyA",
+    "keyCode": 65,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001ba"
+  },
+  {
+    "id": "ctrl-c",
+    "about": "",
+    "setup": "",
+    "key": "c",
+    "code": "KeyC",
+    "keyCode": 67,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u0003"
+  },
+  {
+    "id": "alt-c",
+    "about": "",
+    "setup": "",
+    "key": "c",
+    "code": "KeyC",
+    "keyCode": 67,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001bc"
+  },
+  {
+    "id": "ctrl-d",
+    "about": "",
+    "setup": "",
+    "key": "d",
+    "code": "KeyD",
+    "keyCode": 68,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u0004"
+  },
+  {
+    "id": "alt-d",
+    "about": "",
+    "setup": "",
+    "key": "d",
+    "code": "KeyD",
+    "keyCode": 68,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001bd"
+  },
+  {
+    "id": "ctrl-z",
+    "about": "",
+    "setup": "",
+    "key": "z",
+    "code": "KeyZ",
+    "keyCode": 90,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u001a"
+  },
+  {
+    "id": "alt-z",
+    "about": "",
+    "setup": "",
+    "key": "z",
+    "code": "KeyZ",
+    "keyCode": 90,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001bz"
+  },
+  {
+    "id": "ctrl-alt-c",
+    "about": "",
+    "setup": "",
+    "key": "c",
+    "code": "KeyC",
+    "keyCode": 67,
+    "mods": [
+      "ctrl",
+      "alt"
+    ],
+    "expect": "\u001b\u0003"
+  },
+  {
+    "id": "alt-shift-a",
+    "about": "",
+    "setup": "",
+    "key": "A",
+    "code": "KeyA",
+    "keyCode": 65,
+    "mods": [
+      "alt",
+      "shift"
+    ],
+    "expect": "\u001bA"
+  },
+  {
+    "id": "ctrl-space",
+    "about": "",
+    "setup": "",
+    "key": " ",
+    "code": "Space",
+    "keyCode": 32,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u0000"
+  },
+  {
+    "id": "alt-space",
+    "about": "",
+    "setup": "",
+    "key": " ",
+    "code": "Space",
+    "keyCode": 32,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b "
+  },
+  {
+    "id": "ctrl-left-bracket",
+    "about": "",
+    "setup": "",
+    "key": "[",
+    "code": "BracketLeft",
+    "keyCode": 219,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u001b",
+    "core": {
+      "divergence": [
+        "ctrl-left-bracket-csi-u"
+      ],
+      "expect": "\u001b[91;5u"
+    }
+  },
+  {
+    "id": "ctrl-backslash",
+    "about": "",
+    "setup": "",
+    "key": "\\",
+    "code": "Backslash",
+    "keyCode": 220,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "\u001c"
+  },
+  {
+    "id": "ctrl-slash",
+    "about": "",
+    "setup": "",
+    "key": "/",
+    "code": "Slash",
+    "keyCode": 191,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "",
+    "core": {
+      "divergence": [
+        "ctrl-chords-xterm-ignores"
+      ],
+      "expect": "\u001f"
+    }
+  },
+  {
+    "id": "alt-digit-1",
+    "about": "",
+    "setup": "",
+    "key": "1",
+    "code": "Digit1",
+    "keyCode": 49,
+    "mods": [
+      "alt"
+    ],
+    "expect": "\u001b1"
+  },
+  {
+    "id": "ctrl-digit-2",
+    "about": "",
+    "setup": "",
+    "key": "2",
+    "code": "Digit2",
+    "keyCode": 50,
+    "mods": [
+      "ctrl"
+    ],
+    "expect": "",
+    "core": {
+      "divergence": [
+        "ctrl-chords-xterm-ignores"
+      ],
+      "expect": "\u0000"
+    }
+  },
+  {
+    "id": "numpad-enter-normal",
+    "about": "",
+    "setup": "",
+    "key": "Enter",
+    "code": "NumpadEnter",
+    "keyCode": 13,
+    "mods": [],
+    "expect": "\r"
+  },
+  {
+    "id": "numpad-enter-application",
+    "about": "DECKPAM",
+    "setup": "\u001b=",
+    "key": "Enter",
+    "code": "NumpadEnter",
+    "keyCode": 13,
+    "mods": [],
+    "expect": "\r"
+  },
+  {
+    "id": "numpad-5-application",
+    "about": "",
+    "setup": "\u001b=",
+    "key": "5",
+    "code": "Numpad5",
+    "keyCode": 101,
+    "mods": [],
+    "expect": "5"
+  },
+  {
+    "id": "kitty-escape",
+    "about": "Escape after the program pushed the Kitty disambiguate flag (CSI > 1 u)",
+    "setup": "\u001b[>1u",
+    "key": "Escape",
+    "code": "Escape",
+    "keyCode": 27,
+    "mods": [],
+    "expect": "\u001b",
+    "core": {
+      "divergence": [
+        "kitty-keyboard-protocol-honoured"
+      ],
+      "expect": "\u001b[27u"
+    }
+  },
+  {
+    "id": "kitty-shift-enter",
+    "about": "Shift+Enter after CSI > 1 u",
+    "setup": "\u001b[>1u",
+    "key": "Enter",
+    "code": "Enter",
+    "keyCode": 13,
+    "mods": [
+      "shift"
+    ],
+    "expect": "\r",
+    "core": {
+      "divergence": [
+        "kitty-keyboard-protocol-honoured"
+      ],
+      "expect": "\u001b[13;2u"
+    }
+  },
+  {
+    "id": "kitty-plain-letter",
+    "about": "A plain letter is still text after CSI > 1 u",
+    "setup": "\u001b[>1u",
+    "key": "a",
+    "code": "KeyA",
+    "keyCode": 65,
+    "mods": [],
+    "expect": "a"
+  },
+  {
+    "id": "kitty-enter",
+    "about": "Enter stays CR after CSI > 1 u",
+    "setup": "\u001b[>1u",
+    "key": "Enter",
+    "code": "Enter",
+    "keyCode": 13,
+    "mods": [],
+    "expect": "\r"
+  },
+  {
+    "id": "kitty-arrow-up",
+    "about": "Arrow keys keep their legacy form after CSI > 1 u",
+    "setup": "\u001b[>1u",
+    "key": "ArrowUp",
+    "code": "ArrowUp",
+    "keyCode": 38,
+    "mods": [],
+    "expect": "\u001b[A"
+  }
+]

@@ -1,0 +1,242 @@
+[
+  {
+    "id": "modes-reflect-set-and-reset",
+    "about": "DECCKM, bracketed paste, mouse tracking and focus events set and reset",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?1h\u001b[?2004h\u001b[?1000h\u001b[?1006h\u001b[?1004h"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "modes": {
+        "bracketedPaste": true,
+        "applicationCursorKeys": true,
+        "mouseTracking": true,
+        "sendFocus": true
+      },
+      "data": "\u001b[O"
+    },
+    "core": {
+      "divergence": [
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": ""
+      }
+    }
+  },
+  {
+    "id": "modes-reset",
+    "about": "the same modes reset again",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?1h\u001b[?2004h\u001b[?1000h\u001b[?1004h\u001b[?1l\u001b[?2004l\u001b[?1000l\u001b[?1004l"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b[O"
+    },
+    "core": {
+      "divergence": [
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": ""
+      }
+    }
+  },
+  {
+    "id": "mouse-tracking-variants",
+    "about": "X10, normal, button-event and any-event tracking",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?9h"
+      },
+      {
+        "write": "\u001b[?9l\u001b[?1002h"
+      },
+      {
+        "write": "\u001b[?1002l\u001b[?1003h"
+      },
+      {
+        "write": "\u001b[?1003l"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "device-attributes-and-status-reports",
+    "about": "DA1, DA2, DSR operating status and cursor position",
+    "cols": 12,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[2;3H\u001b[c\u001b[>c\u001b[5n\u001b[6n"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 2,
+        "y": 1
+      },
+      "data": "\u001b[?1;2c\u001b[>0;276;0c\u001b[0n\u001b[2;3R"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity"
+      ],
+      "expect": {
+        "data": "\u001b[?62;22c\u001b[>1;0;0c\u001b[0n\u001b[2;3R"
+      }
+    }
+  },
+  {
+    "id": "extended-queries",
+    "about": "DECXCPR, DECRQM for known modes, XTVERSION, window size reports",
+    "cols": 12,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?6n\u001b[?2004$p\u001b[?7$p\u001b[>q\u001b[18t\u001b[14t"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b[?1;1R\u001b[?2004;2$y\u001b[?7;1$y"
+    },
+    "core": {
+      "divergence": [
+        "decxcpr-unanswered",
+        "extra-replies"
+      ],
+      "expect": {
+        "data": "\u001b[?2004;2$y\u001b[?7;1$y\u001bP>|libghostty\u001b\\\u001b[8;4;12t\u001b[4;4;12t"
+      }
+    }
+  },
+  {
+    "id": "color-queries",
+    "about": "OSC 10 and 11 default colour queries and the cursor colour",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]10;?\u001b\\\u001b]11;?\u001b\\"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "color-queries-theme"
+      ],
+      "expect": {
+        "data": ""
+      }
+    }
+  },
+  {
+    "id": "decrqss-and-tertiary-da",
+    "about": "DCS $ q requests and DA3",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001bP$qm\u001b\\\u001bP$qr\u001b\\\u001b[=c"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001bP1$r0m\u001b\\\u001bP1$r1;3r\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "extra-replies"
+      ],
+      "expect": {
+        "data": "\u001bP1$r0m\u001b\\\u001bP1$r1;3r\u001b\\\u001bP!|00000000\u001b\\"
+      }
+    }
+  }
+]
