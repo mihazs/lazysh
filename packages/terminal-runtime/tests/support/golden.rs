@@ -3,7 +3,10 @@
 //! Included with `#[path]` by the test crates that need it, not through `support`, because the
 //! comparison uses `CARGO_TARGET_TMPDIR`, which examples do not have.
 
-use lazysh_terminal_runtime::{Image, Overlay, Selection, SelectionKind};
+use lazysh_terminal_runtime::{
+    Appearance, CellMetrics, CursorVisualStyle, Image, Overlay, Selection, SelectionKind,
+    TerminalRenderer, TerminalRuntime,
+};
 
 /// One golden image: what the core receives, what the host adds on top, and the PNG it must equal.
 pub struct Golden {
@@ -14,6 +17,39 @@ pub struct Golden {
     pub overlay: Overlay,
     /// The cursor shape is forced to the hollow block, which the core never reports by itself.
     pub hollow: bool,
+    /// Display scale: the default cell metrics times this (2 is a 16x32 pixel cell).
+    pub scale: u32,
+}
+
+impl Golden {
+    pub fn appearance(&self) -> Appearance {
+        Appearance {
+            metrics: CellMetrics::default().scaled(self.scale, 1).unwrap(),
+            ..Appearance::default()
+        }
+    }
+
+    /// Show this case on `renderer`: the screen of `core` (which has received the case's bytes),
+    /// the forced cursor shape and the overlay, drawn and presented.
+    pub fn show<R: TerminalRenderer>(&self, renderer: &mut R, core: &mut TerminalRuntime) {
+        let mut frame = core.snapshot().unwrap();
+        if self.hollow {
+            frame.cursor.visual_style = CursorVisualStyle::BlockHollow;
+        }
+        renderer.apply(&frame).unwrap();
+        renderer.set_overlay(self.overlay).unwrap();
+        renderer.draw().unwrap();
+        renderer.present().unwrap();
+    }
+
+    /// The surface size in device pixels.
+    pub fn size(&self) -> (u32, u32) {
+        let m = self.appearance().metrics;
+        (
+            u32::from(self.cols) * m.cell_width,
+            u32::from(self.rows) * m.cell_height,
+        )
+    }
 }
 
 pub fn select(kind: SelectionKind, anchor: (u16, u16), head: (u16, u16)) -> Overlay {
@@ -68,6 +104,7 @@ pub fn goldens() -> Vec<Golden> {
         bytes: format!("{text}{setup}").into_bytes(),
         overlay,
         hollow,
+        scale: 1,
     };
     let (none, hidden) = (Overlay::default(), "\x1b[?25l");
     let linear = |anchor, head| select(SelectionKind::Linear, anchor, head);
@@ -80,6 +117,7 @@ pub fn goldens() -> Vec<Golden> {
             bytes: bytes.to_vec(),
             overlay: none,
             hollow: false,
+            scale: 1,
         })
         .collect();
     all.extend([
@@ -101,6 +139,21 @@ pub fn goldens() -> Vec<Golden> {
             none,
             true,
         ),
+    ]);
+    // The same layout at other display scales: the cell metrics change, nothing else does.
+    let mixed = "Hi 日本 e\u{301} \u{1F600}\r\n\x1b[1mbold\x1b[0m \x1b[4mline\x1b[0m \x1b[9mgone\x1b[0m\r\n\x1b[7minv\x1b[0m\x1b[2 q\x1b[3;2H";
+    let scaled = |name, scale, overlay| Golden {
+        name,
+        cols: 16,
+        rows: 3,
+        bytes: mixed.as_bytes().to_vec(),
+        overlay,
+        hollow: false,
+        scale,
+    };
+    all.extend([
+        scaled("scale2_mixed", 2, none),
+        scaled("scale3_mixed_selection", 3, linear((1, 0), (6, 1))),
     ]);
     all
 }
