@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.50.0
+
+### Minor Changes
+
+- 9d7fb30: Show a failed Claude Code API call (usage limit, unreachable API, refused request) as an error card that says what to do next, from the recorded `isApiErrorMessage` assistant record.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.50.0
+  - @lazysh/common@1.50.0
+  - @lazysh/notification-client@1.50.0
+
 ## 1.49.0
 
 ### Minor Changes
