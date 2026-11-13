@@ -597,7 +597,7 @@ function HostEditor({
           <label>{t('defaultMuxName')}<input required maxLength={200} value={host.defaultMultiplexer.name} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:{...host.defaultMultiplexer!,name:event.target.value}})} autoCapitalize="none" autoCorrect="off" spellCheck={false}/></label>
           <p className="security-note">{t('defaultMuxSsh')}</p><p className="muted">{t('defaultMuxCreate')}</p>
         </>}
-        <label>{t("appPreferredTransport")}<select value={host.transport ?? 'ssh'} disabled={busy} onChange={event=>setHost({...host, transport:event.target.value as TransportMode})}>
+        <label>{t("appPreferredTransport")}<select data-testid="host-transport" value={host.transport ?? 'ssh'} disabled={busy} onChange={event=>setHost({...host, transport:event.target.value as TransportMode})}>
             <option value="auto">{t("appAutoMoshThenETThenSSH")}</option>
             <option value="ssh">SSH</option><option value="mosh">{t("appMoshForced")}</option><option value="et">{t("appEternalTerminalForced")}</option>
           </select>
@@ -914,7 +914,7 @@ export function ConnectDialog({
             </strong>{t("appCheckThisFingerprintAgainstTheServerThroughATrusted")}</p>
           <div className="fingerprint">
             <span>{t("appServerPublicKeySHA256")}</span>
-            <code>{trust}</code>
+            <code data-testid="host-key-fingerprint">{trust}</code>
           </div>
           <p className="muted">{t("appLazyshWillPinThisKeyAndRejectFutureConnections")}</p>
           {error && (

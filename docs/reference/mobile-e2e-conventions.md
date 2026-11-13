@@ -66,7 +66,9 @@ same three steps). One reason to fail per test, no conditionals in the body, no 
 | App WebView | `aria/<accessible name>` or role-and-name, then `[data-testid="..."]` | CSS classes, tag chains, `nth-child` of layout wrappers |
 | Text | last resort, and only in the pinned `en-US` locale | text in a localized string without pinning the locale |
 
-`$` is strict in WebdriverIO 10 and throws on more than one match; fix the selector, do not take `$$[0]`.
+`$` is strict in WebdriverIO 10 and throws on more than one match; fix the selector, do not take `$$[0]`. `aria/` resolves to the
+element a label or `aria-label` names and fails from a scoped element (`el.$('aria/...')`), so start it at the document. A label
+that wraps a `<select>` names the label, not the select (its text includes every option): use the `<select>` itself.
 
 ## Waiting
 
