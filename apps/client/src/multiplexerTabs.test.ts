@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
 import type {TmuxJumpSnapshot} from './bridge';
-import {herdrFocusAction,herdrStrip,tmuxStrip,zellijStrip} from './multiplexerTabs';
+import {herdrFocusAction,herdrStrip,muxEditAction,tmuxStrip,zellijStrip} from './multiplexerTabs';
 import type {HerdrTree} from './useHerdrNavigation';
 
 const tree:HerdrTree={
@@ -43,4 +43,28 @@ it('builds the Herdr focus command only for a workspace, tab or pane that still 
   expect(herdrFocusAction(tree,{kind:'pane',workspace:'w2',tab:'w2:t1',pane:'w2:p1',terminal:'term-1'})).toEqual({type:'focusPane',target:'w2:p1'});
   for(const gone of [{kind:'workspace',workspace:'w9'},{kind:'tab',workspace:'w2',tab:'w1:t1'},{kind:'pane',workspace:'w2',tab:'w2:t1',pane:'w2:p1',terminal:'other'}] as const)
     expect(()=>herdrFocusAction(tree,gone)).toThrow();
+});
+it('offers a rename and a new tab only where the multiplexer layer has the typed command, and starts a Herdr tab where its workspace is working',()=>{
+  const herdr=herdrStrip({...tree,panes:[{...tree.panes[0],cwd:'/srv/app'}]})!;
+  expect(herdr.tabs.map(tab=>tab.rename)).toEqual([{kind:'herdr',type:'renameTab',target:'w2:t1'},{kind:'herdr',type:'renameTab',target:'w2:t2'}]);
+  expect(herdr.group.choices.map(item=>item.rename)).toEqual(['w1','w2','w3'].map(target=>({kind:'herdr',type:'renameWorkspace',target})));
+  expect(herdr.create).toEqual({edit:{kind:'herdr',type:'createTab',workspace:'w2'},directory:'/srv/app'});
+  expect(herdrStrip(tree)!.create?.directory).toBe('.');
+  // Zellij has no rename-tab command: a long press there would have nothing to ask for.
+  const zellij=zellijStrip('build',[{position:0,name:'shell',active:true}]);
+  expect(zellij.tabs[0].rename).toBeUndefined();
+  expect(zellij.create).toEqual({edit:{kind:'zellij',type:'newTab'},directory:'.'});
+  const snapshot:TmuxJumpSnapshot={generation:'g'.repeat(36),current:{sessionId:'$2',windowId:'@5'},sessions:[{id:'$2',name:'work',restoreName:null,windows:[{id:'@5',index:0,name:'vim'}]}]};
+  expect(tmuxStrip(snapshot)!.tabs[0].rename).toEqual({kind:'tmux',type:'renameWindow',target:'@5'});
+  expect(tmuxStrip(snapshot)!.create).toEqual({edit:{kind:'tmux',type:'createWindow',target:'$2'},directory:'.'});
+});
+it("builds each multiplexer's own typed action from a name, and refuses a Herdr workspace or tab that has gone",()=>{
+  expect(muxEditAction({kind:'herdr',type:'renameTab',target:'w2:t2'},'api',"/ignored",tree)).toEqual({type:'renameTab',target:'w2:t2',label:'api'});
+  expect(muxEditAction({kind:'herdr',type:'renameWorkspace',target:'w3'},'docs',"/ignored",tree)).toEqual({type:'renameWorkspace',target:'w3',label:'docs'});
+  expect(muxEditAction({kind:'herdr',type:'createTab',workspace:'w1'},'build','/srv/app',tree)).toEqual({type:'createTab',workspace:'w1',label:'build',directory:'/srv/app'});
+  expect(muxEditAction({kind:'zellij',type:'newTab'},'logs','/srv/app')).toEqual({type:'newTab',name:'logs',directory:'/srv/app'});
+  expect(muxEditAction({kind:'tmux',type:'renameWindow',target:'@5'},'edit','/ignored')).toEqual({type:'renameWindow',target:'@5',name:'edit'});
+  expect(muxEditAction({kind:'tmux',type:'createWindow',target:'$2'},'edit','/srv/app')).toEqual({type:'createWindow',target:'$2',name:'edit',directory:'/srv/app'});
+  for(const gone of [{kind:'herdr',type:'renameTab',target:'w9:t9'},{kind:'herdr',type:'renameWorkspace',target:'w9'},{kind:'herdr',type:'createTab',workspace:'w9'}] as const)
+    expect(()=>muxEditAction(gone,'x','.',tree)).toThrow();
 });

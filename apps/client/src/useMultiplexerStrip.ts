@@ -2,7 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {useMountedAccess,useProtectedApi,useProtectedInvoke} from './access';
 import {api as nativeApi} from './bridge';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
-import {herdrFocusAction,herdrStrip,tmuxStrip,zellijStrip,type MuxRef,type MuxStrip,type ZellijTabRow} from './multiplexerTabs';
+import {herdrFocusAction,herdrStrip,muxEditAction,tmuxStrip,zellijStrip,type MuxEdit,type MuxRef,type MuxStrip,type ZellijTabRow} from './multiplexerTabs';
 import {useHerdrNavigation,type HerdrTree} from './useHerdrNavigation';
 import type {SessionAttachment} from './workspace';
 
@@ -51,24 +51,49 @@ export function useMultiplexerStrip({sessionId,attached,enabled,onError}:{sessio
   const strip=enabled?read??(last.current?.owner===owner?last.current.strip:undefined):undefined;
   const busy=useRef(false);
   const [pending,setPending]=useState(false);
-  async function select(ref:MuxRef) {
-    if(busy.current || !mounted.current || !access.current())return;
+  // One command at a time, each one's host error reported and its multiplexer read again afterwards so the strip shows the result at once.
+  async function guarded(reread:()=>Promise<void>,work:()=>Promise<void>):Promise<boolean> {
+    if(busy.current || !mounted.current || !access.current())return false;
     busy.current=true;setPending(true);
-    const reread=ref.kind==='herdr'?herdr.refresh:ref.kind==='zellij'?zellij.refresh:tmux.refresh;
-    try {
-      if(ref.kind==='herdr') {
-        const server=herdr.data?.server;
-        if(!server)throw new LocalUiError('herdrNavigationChanged');
-        // Checked against a fresh tree: a tab that has gone is refused, never focused by guess.
-        const action=herdrFocusAction(await invoke<HerdrTree>('herdr_tree',{sessionId,name:server}),ref.target);
-        await invoke('herdr_action',{sessionId,name:server,action});
-      } else if(ref.kind==='zellij')await invoke('zellij_action',{sessionId,name,action:{type:'goToTab',index:ref.index}});
-      else await api.tmuxJump(sessionId,ref.generation,ref.session,ref.window);
-    } catch(error) {if(mounted.current && access.current())onError(captureUiError(error));}
+    try {await work();return true;}
+    catch(error) {if(mounted.current && access.current())onError(captureUiError(error));return false;}
     finally {
       busy.current=false;
       if(mounted.current){setPending(false);void reread();}
     }
   }
-  return {strip,pending,select};
+  // Checked against a fresh tree: a workspace or tab that has gone is refused, never acted on by guess.
+  const herdrServer=()=>{
+    const server=herdr.data?.server;
+    if(!server)throw new LocalUiError('herdrNavigationChanged');
+    return server;
+  };
+  const freshTree=(server:string)=>invoke<HerdrTree>('herdr_tree',{sessionId,name:server});
+  const select=(ref:MuxRef)=>guarded(ref.kind==='herdr'?herdr.refresh:ref.kind==='zellij'?zellij.refresh:tmux.refresh,async()=>{
+    if(ref.kind==='herdr') {
+      const server=herdrServer();
+      await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(await freshTree(server),ref.target)});
+    } else if(ref.kind==='zellij')await invoke('zellij_action',{sessionId,name,action:{type:'goToTab',index:ref.index}});
+    else await api.tmuxJump(sessionId,ref.generation,ref.session,ref.window);
+  });
+  /** Resolves true once the command ran. Renames or creates through the multiplexer's typed action; a new tab or window is then switched to, like the multiplexer's own `new-tab`. */
+  const edit=(change:MuxEdit,label:string,directory:string)=>guarded(change.kind==='herdr'?herdr.refresh:change.kind==='zellij'?zellij.refresh:tmux.refresh,async()=>{
+    if(change.kind==='herdr') {
+      const server=herdrServer(),before=await freshTree(server);
+      await invoke('herdr_action',{sessionId,name:server,action:muxEditAction(change,label,directory,before)});
+      if(change.type!=='createTab')return;
+      const after=await freshTree(server),known=new Set(before.tabs.map(tab=>tab.tab_id));
+      const created=after.tabs.filter(tab=>tab.workspace_id===change.workspace && !known.has(tab.tab_id));
+      if(created.length===1)await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(after,{kind:'tab',workspace:change.workspace,tab:created[0].tab_id})});
+    } else if(change.kind==='zellij')await invoke('zellij_action',{sessionId,name,action:muxEditAction(change,label,directory)});
+    else {
+      const before=change.type==='createWindow'?await api.tmuxJumpSnapshot(sessionId):undefined;
+      await invoke('tmux_action',{sessionId,action:muxEditAction(change,label,directory),...(attached?.tmuxServer && attached.tmuxServer!=='default'?{tmuxServer:attached.tmuxServer}:{})});
+      if(!before || change.type!=='createWindow')return;
+      const after=await api.tmuxJumpSnapshot(sessionId),known=new Set(before.sessions.flatMap(session=>session.windows.map(window=>window.id)));
+      const created=after.sessions.find(session=>session.id===change.target)?.windows.filter(window=>!known.has(window.id))??[];
+      if(created.length===1)await api.tmuxJump(sessionId,after.generation,change.target,created[0].id);
+    }
+  });
+  return {strip,pending,select,edit};
 }

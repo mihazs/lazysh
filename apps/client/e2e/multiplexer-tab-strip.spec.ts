@@ -47,13 +47,25 @@ async function open(page:Page,kind:Kind,{width=415,tabs=3,appTheme='forest',tabS
       if(command==='multiplexer_sessions')return [{name:'work'}];
       if(command==='herdr_tree')return herdrTree();
       if(command==='herdr_action'){
-        const action=args.action as {type:string;target:string};
-        if(action.type==='focusWorkspace'){workspace=action.target;focused=0;}
+        const action=args.action as {type:string;target:string;label:string};
+        if(action.type==='renameTab')names[Number(action.target.split(':t')[1])-1]=action.label;
+        else if(action.type==='createTab')names.push(action.label);
+        else if(action.type==='focusWorkspace'){workspace=action.target;focused=0;}
         else focused=Number(action.target.split(':t')[1])-1;
         return;
       }
       if(command==='zellij_tabs')return names.map((name,position)=>({position,name,active:position===focused}));
-      if(command==='zellij_action'){focused=((args.action as {index:number}).index)-1;return;}
+      if(command==='zellij_action'){
+        const action=args.action as {type:string;index:number;name:string};
+        // Zellij focuses the tab it creates.
+        if(action.type==='newTab'){names.push(action.name);focused=names.length-1;}else focused=action.index-1;
+        return;
+      }
+      if(command==='tmux_action'){
+        const action=args.action as {type:string;target:string;name:string};
+        if(action.type==='renameWindow')names[Number(action.target.slice(1))-1]=action.name;else names.push(action.name);
+        return;
+      }
       if(command==='tmux_jump_snapshot')return tmuxSnapshot();
       if(command==='tmux_jump'){focused=Number(String(args.windowId).slice(1))-1;return tmuxSnapshot();}
       throw new Error(`Tab strip fixture does not provide ${command}`);
@@ -179,4 +191,94 @@ for(const [appTheme,mode] of [['forest','dark'],['paper','light']] as const)test
     return (Math.max(a,b)+0.05)/(Math.min(a,b)+0.05);
   });
   expect(ratio).toBeGreaterThanOrEqual(4.5);
+});
+
+const prompt=(page:Page)=>page.getByRole('form');
+const hold=(chip:ReturnType<Page['locator']>)=>chip.dispatchEvent('pointerdown',{pointerType:'touch',button:0,clientX:20,clientY:20});
+
+for(const kind of ['herdr','zellij','tmux'] as const)test(`${kind}: the plus creates a tab through the typed command, switches to it, and only its name prompt opens the keyboard`,async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Phone layout.');
+  await open(page,kind);
+  const terminal=await box(page.locator('.terminal-canvas:visible'));
+  await forgetKeyboardRequests(page);
+  await strip(page,kind).getByRole('button',{name:'New tab',exact:true}).tap();
+  await expect(prompt(page)).toBeVisible();
+  // The prompt drops over the terminal: it takes no layout space.
+  expect((await box(page.locator('.terminal-canvas:visible'))).height).toBe(terminal.height);
+  expect(await keyboardRequests(page)).toEqual(['INPUT']);
+  await prompt(page).getByLabel('Name').fill('release');
+  await prompt(page).getByRole('button',{name:'Save'}).tap();
+  await expect(prompt(page)).toHaveCount(0);
+  await expect(chips(page,kind)).toHaveCount(4);
+  await expect(chips(page,kind).last()).toHaveAttribute('aria-current','true');
+  await expect(chips(page,kind).last()).toHaveAttribute('title','release');
+  const created=await sent(page,kind==='herdr'?'herdr_action':kind==='zellij'?'zellij_action':'tmux_action');
+  expect(created[0].args).toEqual(kind==='herdr'?{sessionId:'strip-display',name:'work',action:{type:'createTab',workspace:'w1',label:'release',directory:'.'}}
+    :kind==='zellij'?{sessionId:'strip-display',name:'work',action:{type:'newTab',name:'release',directory:'.'}}
+    :{sessionId:'strip-display',action:{type:'createWindow',target:'$1',name:'release',directory:'.'}});
+  expect(await sent(page,'write_stdin')).toEqual([]);
+  expect((await box(page.locator('.terminal-canvas:visible'))).height).toBe(terminal.height);
+});
+
+for(const [appTheme,mode] of [['forest','dark'],['paper','light']] as const)test(`Herdr name prompt at 415 px, ${mode}`,async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Phone layout.');
+  await open(page,'herdr',{tabs:5,appTheme});
+  await strip(page,'herdr').getByRole('button',{name:'New tab',exact:true}).tap();
+  await prompt(page).getByLabel('Name').fill('release');
+  await page.waitForTimeout(300);
+  await page.screenshot({path:testInfo.outputPath(`tab-strip-prompt-${mode}.png`),clip:{x:0,y:0,width:415,height:340}});
+  // The plus stays at the end of the row, the prompt fits the screen, and every control is a 44 px target.
+  const row=await box(strip(page,'herdr')),add=await box(strip(page,'herdr').getByRole('button',{name:'New tab',exact:true})),form=await box(prompt(page));
+  expect(add.width).toBeGreaterThanOrEqual(44);
+  expect(add.x+add.width).toBeLessThanOrEqual(row.x+row.width+1);
+  expect(form.x).toBeGreaterThanOrEqual(0);
+  expect(form.x+form.width).toBeLessThanOrEqual(415);
+  for(const control of await prompt(page).locator('input,button').all())expect((await box(control)).height).toBeGreaterThanOrEqual(44);
+});
+
+test('a long press renames a Herdr tab and does not select it; a short tap still selects',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch long press.');
+  await open(page,'herdr');
+  await hold(chips(page,'herdr').nth(1));
+  await expect(prompt(page)).toBeVisible();
+  await expect(prompt(page).getByLabel('Name')).toHaveValue('logs');
+  await prompt(page).getByLabel('Name').fill('api');
+  await page.keyboard.press('Enter');
+  await expect(chips(page,'herdr').nth(1)).toHaveAttribute('title','api');
+  expect((await sent(page,'herdr_action')).map(call=>call.args.action)).toEqual([{type:'renameTab',target:'w1:t2',label:'api'}]);
+  await chips(page,'herdr').nth(2).tap();
+  await expect(chips(page,'herdr').nth(2)).toHaveAttribute('aria-current','true');
+});
+
+test('a Zellij chip has no rename (the multiplexer layer has no command for it), and a tmux window renames from the context menu',async({page,context},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Phone layout.');
+  await open(page,'zellij');
+  await hold(chips(page,'zellij').nth(1));
+  await page.waitForTimeout(700);
+  await expect(prompt(page)).toHaveCount(0);
+  const tmux=await context.newPage();
+  await open(tmux,'tmux');
+  await chips(tmux,'tmux').nth(2).click({button:'right'});
+  await expect(prompt(tmux)).toBeVisible();
+  await tmux.getByRole('button',{name:'Cancel'}).tap();
+  await expect(prompt(tmux)).toHaveCount(0);
+  await chips(tmux,'tmux').nth(2).click({button:'right'});
+  await prompt(tmux).getByLabel('Name').fill('vim');
+  await tmux.getByRole('button',{name:'Save'}).tap();
+  await expect(chips(tmux,'tmux').nth(2)).toHaveAttribute('title','vim');
+  expect((await sent(tmux,'tmux_action')).map(call=>call.args.action)).toEqual([{type:'renameWindow',target:'@3',name:'vim'}]);
+});
+
+test('on desktop a right click renames a Herdr tab and the plus creates one',async({page},testInfo)=>{
+  test.skip(testInfo.project.name==='phone','Desktop pointer.');
+  await open(page,'herdr',{width:1280,tabStrip:'on'});
+  await chips(page,'herdr').nth(1).click({button:'right'});
+  await prompt(page).getByLabel('Name').fill('api');
+  await page.keyboard.press('Enter');
+  await expect(chips(page,'herdr').nth(1)).toHaveAttribute('title','api');
+  await strip(page,'herdr').getByRole('button',{name:'New tab',exact:true}).click();
+  await prompt(page).getByLabel('Name').fill('release');
+  await prompt(page).getByRole('button',{name:'Save'}).click();
+  await expect(chips(page,'herdr')).toHaveCount(4);
+  await expect(chips(page,'herdr').last()).toHaveAttribute('aria-current','true');
 });

@@ -266,7 +266,20 @@ An attached tmux, Herdr or Zellij terminal shows its tabs in one native row abov
 | Zellij | `zellij_tabs` (`zellij action list-tabs --json`, Zellij 0.45 or newer; every 5 s) | The session name | `zellij_action` `goToTab` with the 1-based position |
 | tmux | The Jump To snapshot of the attached control stream (every 5 s) | The session name | `tmux_jump` with the snapshot's generation, so a stale list is refused |
 
-A selection is never typed into the terminal, never focuses an input (the soft keyboard stays as it was) and never resizes the terminal beyond the strip's own row. Chips are buttons in a labelled group, not `role="tab"`: session tabs are the workspace's only tabs. **Preferences > Keyboard and gestures > Show tab strip** (device-local): **Auto** shows the strip on phones when the session has more than one tab (Herdr: more than one tab or workspace) and the key toolbar is shown; **Always** shows it whenever the terminal is attached, on any screen; **Never** removes it and stops the reads. A multiplexer that cannot list its tabs (an older Zellij, a tmux terminal without the control stream) shows no strip. Not in this version: rename and close from a long press (the multiplexer layer has no close command, and rename needs its own prompt), a **+** for new tabs, and the Herdr panes level.
+A selection is never typed into the terminal, never focuses an input (the soft keyboard stays as it was) and never resizes the terminal beyond the strip's own row. Chips are buttons in a labelled group, not `role="tab"`: session tabs are the workspace's only tabs. **Preferences > Keyboard and gestures > Show tab strip** (device-local): **Auto** shows the strip on phones when the session has more than one tab (Herdr: more than one tab or workspace) and the key toolbar is shown; **Always** shows it whenever the terminal is attached, on any screen; **Never** removes it and stops the reads. A multiplexer that cannot list its tabs (an older Zellij, a tmux terminal without the control stream) shows no strip. Not in this version: close, a Zellij rename (the command layer has neither) and the Herdr panes level.
+
+### New tab and rename
+
+The strip also changes tabs, only through the multiplexer's existing typed commands and only where the command layer has them:
+
+| Multiplexer | **+** (end of the row) runs | Long press, right click or the context-menu key runs |
+| --- | --- | --- |
+| Herdr | `herdr_action` `createTab` in the focused workspace, starting in the directory of that workspace's first reported pane (`.` when none is reported); the new tab is then focused | `renameTab` on a tab; `renameWorkspace` on a workspace of the leading chip's list |
+| Zellij | `zellij_action` `newTab` (Zellij focuses the new tab itself) | Nothing: there is no typed `rename-tab` |
+| tmux | `tmux_action` `createWindow` in the attached session, on the attached tmux server; the new window is then selected with `tmux_jump` | `renameWindow` |
+
+Either drops a small prompt over the terminal (it takes no layout space): a name, and for a new tab a directory (`.` is the shell's own start directory, as in the Spaces and tmux panels). The prompt is the one thing in the strip that opens the soft keyboard, on purpose, because the user is typing a name. A Herdr workspace or tab that has gone since the strip last read is refused, as a focus is, never renamed by guess. A failed command is reported and keeps the prompt open. A half-typed name ends only with Escape, Cancel or Save, so a stray tap on the terminal does not lose it. The long press is 0.5 s without moving more than 10 px; the tap that ends it does not also select the chip.
+
 
 ## Native checks
 

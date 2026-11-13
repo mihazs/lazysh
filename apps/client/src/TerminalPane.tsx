@@ -1240,7 +1240,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     {menuEnabled && menuButton && <button type="button" className="icon-button" title={t('bottomMenuOpen')} aria-label={t('bottomMenuOpen')} aria-expanded={menuOpen} onPointerDown={event => event.preventDefault()} onClick={() => setMenuOpen(!menuOpen)}><ChevronsUp size={18} aria-hidden="true" /></button>}
   </div>;
   return <div ref={pane} className={swiping ? "terminal-pane terminal-pane-swiping" : "terminal-pane"} style={{display: active || swiping ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
-    {tabStripShown && tabStrip.strip && <MultiplexerTabStrip strip={tabStrip.strip} onSelect={tabStrip.select} />}
+    {tabStripShown && tabStrip.strip && <MultiplexerTabStrip strip={tabStrip.strip} onSelect={tabStrip.select} onEdit={tabStrip.edit} />}
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>

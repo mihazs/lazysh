@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import {accessSnapshot,applyAccessStatus} from './access';
 import MultiplexerTabStrip from './MultiplexerTabStrip';
@@ -15,8 +15,8 @@ beforeEach(()=>applyAccessStatus({initialized:true,supported:true,enabled:true,l
 afterEach(()=>{cleanup();vi.resetAllMocks();});
 
 function Strip({attached,enabled=true,onError=vi.fn()}:{attached:SessionAttachment;enabled?:boolean;onError?:(cause:unknown)=>void}) {
-  const {strip,select}=useMultiplexerStrip({sessionId:'ssh:1',attached,enabled,onError});
-  return strip?<MultiplexerTabStrip strip={strip} onSelect={select}/>:<p>no strip</p>;
+  const {strip,select,edit}=useMultiplexerStrip({sessionId:'ssh:1',attached,enabled,onError});
+  return strip?<MultiplexerTabStrip strip={strip} onSelect={select} onEdit={edit}/>:<p>no strip</p>;
 }
 const herdrTree=(focused:string)=>({workspaces:[{workspace_id:'w1',label:'Dev',focused:true,agent_status:'idle'}],
   tabs:['t1','t2'].map((tab,index)=>({workspace_id:'w1',tab_id:tab,label:`tab ${index+1}`,number:index+1,focused:tab===focused,agent_status:'idle'})),panes:[],agents:[]});
@@ -74,4 +74,81 @@ it('reads nothing while disabled and shows no strip when the multiplexer cannot 
   view.rerender(<Strip attached={{kind:'zellij',name:'old'}}/>);
   await waitFor(()=>expect(sent('zellij_tabs')).toHaveLength(1));
   expect(screen.getByText('no strip')).toBeTruthy();
+});
+
+const ask=async(chip:HTMLElement|string,name:string,directory?:string)=>{
+  if(typeof chip==='string')fireEvent.click(screen.getByRole('button',{name:chip}));else fireEvent.contextMenu(chip);
+  const form=screen.getByRole('form');
+  fireEvent.change(within(form).getByLabelText('Name'),{target:{value:name}});
+  if(directory!==undefined)fireEvent.change(within(form).getByLabelText('Directory'),{target:{value:directory}});
+  await act(async()=>{fireEvent.submit(form);});
+};
+it('renames a Herdr tab through a fresh tree and the typed action, and shows the new name without a reload',async()=>{
+  let label='tab 2';
+  const tree=()=>({...herdrTree('t1'),tabs:herdrTree('t1').tabs.map(tab=>tab.tab_id==='t2'?{...tab,label}:tab)});
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='multiplexer_sessions')return [{name:'default'}];
+    if(command==='herdr_tree')return tree();
+    if(command==='herdr_action'){label=(args as {action:{label:string}}).action.label;return;}
+  });
+  render(<Strip attached={{kind:'herdr',name:'default'}}/>);
+  await ask(await screen.findByRole('button',{name:/^tab 2/}),'api');
+  await screen.findByRole('button',{name:/^api/});
+  expect(sent('herdr_action')).toEqual([['herdr_action',{sessionId:'ssh:1',name:'default',action:{type:'renameTab',target:'t2',label:'api'}}]]);
+  expect(screen.queryByRole('form')).toBeNull();
+  expect(sent('write_stdin','local_write')).toEqual([]);
+});
+it('refuses to rename a Herdr tab that is gone, reports it, and keeps the prompt for another try',async()=>{
+  const onError=vi.fn();
+  vi.mocked(invoke).mockImplementation(async(command)=>command==='multiplexer_sessions'?[{name:'default'}]:herdrTree('t1'));
+  render(<Strip attached={{kind:'herdr',name:'default'}} onError={onError}/>);
+  const second=await screen.findByRole('button',{name:/^tab 2/});
+  vi.mocked(invoke).mockImplementation(async(command)=>command==='multiplexer_sessions'?[{name:'default'}]:{...herdrTree('t1'),tabs:herdrTree('t1').tabs.slice(0,1)});
+  await ask(second,'api');
+  expect(onError).toHaveBeenCalledOnce();
+  expect(sent('herdr_action')).toEqual([]);
+  expect(screen.getByRole('form')).toBeTruthy();
+});
+it('creates a Herdr tab in the focused workspace and then focuses the tab that appeared',async()=>{
+  let created=false;
+  const tree=()=>{const base=herdrTree('t1');return {...base,tabs:[...base.tabs,...(created?[{workspace_id:'w1',tab_id:'t3',label:'build',number:3,focused:false,agent_status:'idle'}]:[])],
+    panes:[{workspace_id:'w1',tab_id:'t1',pane_id:'p1',cwd:'/srv/app',focused:true,agent_status:'idle'}]};};
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='multiplexer_sessions')return [{name:'default'}];
+    if(command==='herdr_tree')return tree();
+    if(command==='herdr_action' && (args as {action:{type:string}}).action.type==='createTab')created=true;
+  });
+  render(<Strip attached={{kind:'herdr',name:'default'}}/>);
+  await screen.findByRole('button',{name:/^tab 2/});
+  await ask('New tab','build','/srv/app');
+  await waitFor(()=>expect(sent('herdr_action')).toHaveLength(2));
+  expect(sent('herdr_action').map(([,args])=>(args as {action:unknown}).action)).toEqual([{type:'createTab',workspace:'w1',label:'build',directory:'/srv/app'},{type:'focusTab',target:'t3'}]);
+});
+it('creates a Zellij tab with its own new-tab action',async()=>{
+  vi.mocked(invoke).mockImplementation(async(command)=>command==='zellij_tabs'?[{position:0,name:'shell',active:true}]:undefined);
+  render(<Strip attached={{kind:'zellij',name:'build'}}/>);
+  await screen.findByRole('button',{name:/^shell/});
+  await ask('New tab','logs','/srv/app');
+  expect(sent('zellij_action')).toEqual([['zellij_action',{sessionId:'ssh:1',name:'build',action:{type:'newTab',name:'logs',directory:'/srv/app'}}]]);
+});
+it('renames and creates tmux windows in the attached tmux server, then switches to the new window with the fresh generation',async()=>{
+  const first='a'.repeat(36),second='b'.repeat(36);
+  let windows=[{id:'@1',index:0,name:'zsh'}],generation=first;
+  const snapshot=()=>({generation,current:{sessionId:'$1',windowId:'@1'},sessions:[{id:'$1',name:'work',restoreName:null,windows}]});
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='tmux_jump_snapshot')return snapshot();
+    if(command==='tmux_action'){
+      const {action}=args as {action:{type:string;name:string}};
+      windows=action.type==='renameWindow'?windows.map(window=>({...window,name:action.name})):[...windows,{id:'@2',index:1,name:action.name}];generation=second;
+    }
+  });
+  render(<Strip attached={{kind:'tmux',name:'work',tmuxServer:'ops'}}/>);
+  await ask(await screen.findByRole('button',{name:/^zsh/}),'shell');
+  await screen.findByRole('button',{name:/^shell/});
+  await ask('New tab','vim','/srv/app');
+  await waitFor(()=>expect(sent('tmux_jump')).toHaveLength(1));
+  expect(sent('tmux_action')).toEqual([
+    ['tmux_action',{sessionId:'ssh:1',tmuxServer:'ops',action:{type:'renameWindow',target:'@1',name:'shell'}}],
+    ['tmux_action',{sessionId:'ssh:1',tmuxServer:'ops',action:{type:'createWindow',target:'$1',name:'vim',directory:'/srv/app'}}]]);
+  expect(sent('tmux_jump')[0]).toEqual(['tmux_jump',{sessionId:'ssh:1',generation:second,targetSessionId:'$1',windowId:'@2'}]);
 });
