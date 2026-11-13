@@ -7,6 +7,7 @@ mod approvals;
 mod attachment_upload;
 mod auth_browser;
 mod auth_hints;
+mod auth_tunnel;
 mod bindings;
 mod clipboard;
 mod companion;
@@ -124,6 +125,7 @@ pub fn run() {
         .manage(theme_links::ThemeLinks::default())
         .manage(theme_qr::QrState::default())
         .manage(previews::PreviewState::default())
+        .manage(auth_tunnel::AuthTunnelState::default())
         .manage(devices::DeviceStreams::default())
         .manage(transcript_watch::TranscriptWatches::default())
         .manage(share::ShareState::default())
@@ -310,6 +312,9 @@ pub fn run() {
                 previews::stop_preview,
                 previews::list_previews,
                 previews::discover_preview_ports,
+                auth_tunnel::start_auth_tunnel,
+                auth_tunnel::stop_auth_tunnel,
+                auth_tunnel::list_auth_tunnels,
                 ssh::list_hosts,
                 ssh::save_host,
                 ssh::delete_host,

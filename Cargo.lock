@@ -3811,6 +3811,7 @@ dependencies = [
  "futures-util",
  "hound",
  "http-body-util",
+ "httparse",
  "hyper",
  "hyper-util",
  "image",

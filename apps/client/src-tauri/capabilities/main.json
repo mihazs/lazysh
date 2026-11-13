@@ -36,6 +36,7 @@
     "allow-open-web-url",
     "allow-inspect-auth-url",
     "allow-open-auth-url",
+    "allow-start-auth-tunnel", "allow-stop-auth-tunnel", "allow-list-auth-tunnels",
     "allow-list-devices",
     "allow-device-frame",
     "allow-device-action",

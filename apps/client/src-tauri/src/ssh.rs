@@ -766,6 +766,10 @@ impl SshHandle {
     pub(crate) fn agent_forwarding_enabled(&self) -> bool {
         self.forward_agent.enabled()
     }
+    /// The saved host this connection was verified against, when it was opened for one.
+    pub(crate) fn origin(&self) -> Option<&Host> {
+        self.origin.as_ref()
+    }
 }
 impl std::ops::Deref for SshHandle {
     type Target = client::Handle<HostVerifier>;
@@ -800,6 +804,14 @@ pub(crate) struct Session {
     validate_size: fn(u32, u32) -> Result<()>,
 }
 impl Session {
+    /// The SSH connection that host-side tunnels open channels on: the retained control
+    /// connection of a Mosh session (which may have been restored), else the session's own.
+    pub(crate) fn control_handle(&self) -> Result<Arc<SshHandle>> {
+        match &self.file_control {
+            Some(control) => control.current(),
+            None => Ok(self.handle.clone()),
+        }
+    }
     fn ssh_handles(&self) -> Vec<Arc<SshHandle>> {
         let mut handles = vec![self.handle.clone()];
         if let Some(control) = &self.file_control {
@@ -3996,6 +4008,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "agent_board_fixture.rs"]
     mod agent_board_fixture;
+    #[cfg(unix)]
+    #[path = "auth_tunnel_fixture.rs"]
+    mod auth_tunnel_fixture;
     #[cfg(unix)]
     #[path = "client_environment_fixture.rs"]
     mod client_environment_fixture;
@@ -7513,24 +7528,7 @@ mod tests {
         );
         let _sshd = owned_sshd::OwnedSshd::start(dir.path(), port, &key, &settings, &[]).await;
         let state = AppState::new(dir.path().join("config")).unwrap();
-        let host = Host {
-            default_multiplexer: None,
-            default_multiplexer_next: None,
-            transport: None,
-            mosh: None,
-            et: None,
-            id: "openssh".into(),
-            name: "OpenSSH fixture".into(),
-            hostname: "127.0.0.1".into(),
-            port,
-            username: std::env::var("USER").unwrap(),
-            fingerprint: Some(key.public_key().fingerprint(HashAlg::Sha256).to_string()),
-            jump_host_id: None,
-            credentials_stored: false,
-            client_environment: false,
-            biometric_unlock: false,
-            forward_agent: false,
-        };
+        let host = test_support::owned_host("openssh", "OpenSSH fixture", port, &key);
         state.config().unwrap().hosts.push(host.clone());
         let app = tauri::test::mock_app();
         app.manage(state);
@@ -7781,6 +7779,9 @@ mod tests {
             .into_inner()
             .unwrap();
             assert_eq!(fs::read(uploaded.path).unwrap(), screenshot);
+            // A sign-in tunnel rides the same retained SSH control connection.
+            auth_tunnel_fixture::verify_mosh(&app, &mosh_id, auth_tunnel_fixture::MoshStage::Live)
+                .await;
             native_session
                 .handle
                 .disconnect(
@@ -7797,6 +7798,12 @@ mod tests {
             })
             .await
             .unwrap();
+            auth_tunnel_fixture::verify_mosh(
+                &app,
+                &mosh_id,
+                auth_tunnel_fixture::MoshStage::Closed,
+            )
+            .await;
             write_stdin(
                 access_lease(),
                 app.state(),
@@ -8037,6 +8044,13 @@ mod tests {
             );
             assert!(native_session.handle.is_closed());
             assert!(!restored_control.is_closed());
+            // The flow follows the restored control connection, not the closed bootstrap one.
+            auth_tunnel_fixture::verify_mosh(
+                &app,
+                &mosh_id,
+                auth_tunnel_fixture::MoshStage::Restored,
+            )
+            .await;
 
             file_control::restore_for(
                 file_control::Purpose::Commands,
