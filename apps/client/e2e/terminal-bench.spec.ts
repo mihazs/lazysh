@@ -196,3 +196,35 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   await info.attach('terminal-benchmark.json', { path: out });
   expect(results.length).toBeGreaterThan(8);
 });
+
+// A shared host drifts more between two full runs than the adapter's per-chunk Promise can add, so this loads the page once per
+// stream and alternates the two write paths (direct, adapter, adapter, direct, direct, ...): neighbouring streams share the load.
+const pairedRounds = full ? 12 : 1;
+test('terminal write paths, paired streams', async ({ page, browser, browserName }, info) => {
+  test.skip(browserName !== 'chromium', 'Matches the baseline: Chromium only.');
+  test.skip(full && !process.env.LAZYSH_BENCH_PAIRED, 'The full paired comparison is opt-in (LAZYSH_BENCH_PAIRED=1): it adds minutes to bench:terminal.');
+  const atStart = os.loadavg(), kinds = [['plain', scale.plain], ['ansi', scale.ansi], ['redraw', scale.frames]] as const;
+  const streams: Record<string, Record<string, { MiBs: number; ackP99Ms: number }[]>> = {};
+  for (const [kind, size] of kinds) for (let i = 0; i < pairedRounds * 2; i++) {
+    const writePath = (i + (i >> 1)) % 2 === 0 ? 'direct' : 'adapter';
+    await page.goto(`/bench/terminal-bench.html?renderer=${candidate}&write=${writePath}`);
+    await page.waitForFunction(() => !!window.terminalBench);
+    await page.evaluate(async ([k, s]) => { window.terminalBench.open(); await window.terminalBench.calibrate(); await window.terminalBench.prepare(k, s); }, [kind, size] as const);
+    const run = await page.evaluate(() => window.terminalBench.stream()), writes = await page.evaluate(() => window.terminalBench.adapterWrites());
+    expect(run.correct, `${kind} over the ${writePath} write path must end on the expected screen`).toBe(true);
+    expect(writes > 0, `${kind}: ${writes} writes went through the adapter`).toBe(writePath === 'adapter');
+    ((streams[kind] ??= {})[writePath] ??= []).push({ MiBs: run.throughputMiBs, ackP99Ms: run.ackMs.p99 });
+  }
+  const medians = Object.fromEntries(Object.entries(streams).map(([kind, byPath]) => [kind, Object.fromEntries(Object.entries(byPath).map(([writePath, runs]) => [writePath, medianOf(runs)]))]));
+  expect(JSON.stringify(streams), 'metrics must be finite').not.toMatch(/NaN|Infinity/);
+  const document = {
+    schema: 1, kind: 'write-path-paired', candidate: `xterm-${candidate}`, mode: full ? 'full' : 'smoke', order: 'direct, adapter, adapter, direct, repeated; one stream per page load', rounds: pairedRounds,
+    host: { loadAverage: { atStart, atEnd: os.loadavg() }, cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, os: `${os.type()} ${os.release()}`, chromium: browser.version() },
+    source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
+    medians, streams,
+  };
+  const out = process.env.LAZYSH_BENCH_PAIRED_OUT ?? path.resolve(root, `apps/client/bench-results/${full ? 'terminal-write-paired' : 'terminal-write-paired-smoke'}-${info.project.name}.json`);
+  mkdirSync(path.dirname(out), { recursive: true });
+  writeFileSync(out, JSON.stringify(document, null, 2) + '\n');
+  await info.attach('terminal-write-paired.json', { path: out });
+});
