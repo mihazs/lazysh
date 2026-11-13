@@ -1020,6 +1020,27 @@ it('shows a message typed while the agent works as a queued card until the agent
   expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
 });
 
+it('says a message sent while the agent works is waiting in its queue, not missing, until the agent takes it',async()=>{
+  const queued=[{text:'then run the tests'}];
+  const working=page('claude',turn('First prompt','First answer'));
+  host('claude',[row('Claude Code','%3')],'available',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let reply:unknown=working;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'?Promise.resolve(reply):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'then run the tests'}});await advance(0);
+  fireEvent.click(screen.getByRole('button',{name:'Send to the agent'}));await advance(0);
+  // The agent queues it: its card appears and the receipt keeps saying so past the time a missing message would be reported.
+  reply={...working,queued};await advance(2500);await advance(9000);
+  expect(screen.getByText('Sent, waiting in the agent\'s queue')).toBeTruthy();
+  expect(screen.queryByText('Not in the conversation yet. Check the terminal.')).toBeNull();
+  // Taken: the conversation holds it once and the receipt is settled.
+  reply={...page('claude',[...turn('First prompt','First answer'),...turn('then run the tests','Tests pass')]),queued:[]};await advance(2500);
+  expect(screen.getByText('Sent',{selector:'.agent-composer-receipt'})).toBeTruthy();
+  expect(screen.getAllByText('then run the tests')).toHaveLength(1);
+});
+
 it('ignores a malformed queue from the companion and shows no card',async()=>{
   const reply={...page('claude',turn('First prompt','First answer')),queued:[null,{text:''},{text:5},{text:'x'.repeat(5000)},'text']};
   host('claude',[row('Claude Code','%3')],'available',[[]]);

@@ -841,6 +841,23 @@ test('a message queued while the agent works shows as a card between the turns a
   await expect(cards).toHaveCount(0,{timeout:6000});
 });
 
+test('a message sent while the agent works is called queued, not missing, until the agent takes it',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('then run the tests');
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  // The terminal queues it: the companion lists it as queued and the conversation does not hold it yet.
+  await page.evaluate(()=>{window.agentView.turns=window.agentView.turns.filter(turn=>turn.prompt!=='then run the tests');window.agentView.queued=[{text:'then run the tests'}];});
+  const receipt=agent.locator('.agent-composer-receipt');
+  await expect(receipt).toHaveText("Sent, waiting in the agent's queue",{timeout:8000});
+  await expect(agent.getByRole('region',{name:'Queued messages',exact:true})).toBeVisible();
+  expect((await receipt.boundingBox())!.x+(await receipt.boundingBox())!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await page.evaluate(()=>{window.agentView.queued=[];window.agentView.turns.push({prompt:'then run the tests',answer:'Tests pass'});});
+  await expect(receipt).toHaveText('Sent',{timeout:8000});
+  await expect(agent.getByRole('region',{name:'Queued messages',exact:true})).toHaveCount(0);
+});
+
 test('live: a queued message arrives and leaves on stream frames without a poll',async({page})=>{
   const agent=await openLive(page,'stream');
   await expect(watchState(agent)).toHaveAttribute('data-watch','live');

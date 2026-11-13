@@ -217,7 +217,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,onQueued,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;onQueued?:(queued:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -619,6 +619,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     if (messageList.current) messageList.current.scrollTop = saved.list;
   }, [child]);
   useEffect(() => setChild(undefined), [sessionId, path]);
+  // What the agent holds back as queued, for the same receipts: a message sent while it works is queued, not missing.
+  const queuedTexts = useMemo(() => queued.map(entry => entry.text), [queued]);
+  useEffect(() => onQueued?.(queuedTexts), [onQueued, queuedTexts]);
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
   useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);

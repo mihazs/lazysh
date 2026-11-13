@@ -33,11 +33,13 @@ const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kin
 /** The message box of the Agent view: always present under a followed conversation.
  * With a proof the input binds itself to the proven pane and Send goes straight to the agent's terminal; without one
  * the explicit destination confirmation stays. Stage in terminal is the path of a session that takes no confirmed input. */
-export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],cwd,onOpenTerminal}:{
+export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],queued=[],cwd,onOpenTerminal}:{
   sessionId:string;conversation:BoundConversation;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;shown:boolean;
   labels?:TerminalInputLabels;proof?:ComposerProof;stage:boolean;
   /** What the conversation already holds as the person's prompts, so a receipt settles from the transcript. */
   prompts?:readonly string[];
+  /** What the agent holds back as queued: a message there is waiting its turn, not lost. */
+  queued?:readonly string[];
   /** The host folder the agent works in: the root of `@` file mentions. Without it there is no file picker. */
   cwd?:string;
   /** Switches to the terminal view, for a failure that is best looked at there. */
@@ -120,7 +122,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   },[draft]);
   const pick=(command:SlashCommand)=>{edit(slashText(command));field.current?.focus({preventScroll:true});};
   const now=useNow(1000,receipt?.phase==='accepted');
-  const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,prompts,queued:[],elapsedMs:now-receipt.at});
+  const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,prompts,queued,elapsedMs:now-receipt.at});
   const stageable=stage && !!text.trim() && text.length<=LIMIT;
   function stageDraft() {
     window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
