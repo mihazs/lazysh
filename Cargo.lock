@@ -3917,7 +3917,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-companion-release"
-version = "1.55.0"
+version = "1.60.0"
 dependencies = [
  "axum",
  "bytes",
