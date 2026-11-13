@@ -317,6 +317,23 @@ fn incremental_updates_equal_a_full_repaint() {
 }
 
 #[test]
+fn drawing_and_presenting_are_timed_only_when_something_is_drawn() {
+    let (mut rt, mut r) = start(20, 10, b"hello");
+    let drawn = r.stats();
+    assert!(
+        drawn.draw_time > std::time::Duration::ZERO
+            && drawn.present_time > std::time::Duration::ZERO,
+        "the first frame took time to draw and to present"
+    );
+    assert_eq!(tick(&mut rt, &mut r), 0);
+    assert_eq!(r.stats(), drawn, "an idle frame adds no time");
+    feed(&mut rt, b"\x1b[5;1Hmore");
+    tick(&mut rt, &mut r);
+    let after = r.stats();
+    assert!(after.draw_time > drawn.draw_time && after.present_time > drawn.present_time);
+}
+
+#[test]
 fn only_what_changed_is_drawn_and_uploaded() {
     let (mut rt, mut r) = start(20, 10, b"hello");
     let row_bytes = (20 * W * H * 3) as u64;

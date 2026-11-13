@@ -11,6 +11,10 @@ import { medianOf, rng } from '../bench/workloads';
 // Smoke mode (default, runs with the e2e suite) uses tiny workloads and asserts only that every workload completes
 // correctly and reports finite numbers: it has no timing thresholds. `bun run bench:terminal` sets LAZYSH_BENCH=full.
 const full = process.env.LAZYSH_BENCH === 'full';
+// The renderer candidate on the same xterm.js terminal: dom (the baseline), canvas or webgl (the shootout, #1323).
+const candidate = process.env.LAZYSH_BENCH_RENDERER ?? 'dom';
+// Extra Chromium switches, recorded in the environment block (for example to pick a GL backend).
+const launchArgs = (process.env.LAZYSH_BENCH_CHROMIUM_ARGS ?? '').split(/\s+/).filter(Boolean);
 const scale = full
   ? { runs: 5, plain: 4 << 20, ansi: 2 << 20, frames: 1500, shell: 300, idleMs: 10_000, idleRuns: 3, keys: 200, repeat: 150, scrollLines: 20_000, scrollback: 20_000, defaultScrollback: 5000, fillLines: 5000, sessions: [5, 10] }
   : { runs: 1, plain: 64 << 10, ansi: 32 << 10, frames: 30, shell: 12, idleMs: 300, idleRuns: 1, keys: 6, repeat: 6, scrollLines: 400, scrollback: 300, defaultScrollback: 100, fillLines: 120, sessions: [2] };
@@ -63,13 +67,15 @@ let fixtures: Record<string, unknown> = {};
 test('terminal baseline', async ({ page, browser, browserName }, info) => {
   const atStart = os.loadavg();
   test.skip(browserName !== 'chromium', 'CDP process metrics need Chromium.');
-  await page.goto('/bench/terminal-bench.html');
+  await page.goto(`/bench/terminal-bench.html?renderer=${candidate}`);
   await page.waitForFunction(() => !!window.terminalBench);
   const cdp = await page.context().newCDPSession(page), browserCdp = await browser.newBrowserCDPSession();
   await cdp.send('Performance.enable');
   geometry = await page.evaluate(() => window.terminalBench.open());
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
   if (full) expect(geometry.build, 'Release builds only: run through bun run bench:terminal').toBe('production');
+  // The candidate must really be drawing: canvas layers exist for the canvas and WebGL renderers and only for them.
+  expect((geometry.canvases as number) > 0, `renderer ${candidate} must be active`).toBe(candidate !== 'dom');
   const nominal = await page.evaluate(() => window.terminalBench.calibrate());
 
   /** Runs `body` once per run with CDP counters around it; `runs` entries plus their median. */
@@ -159,20 +165,25 @@ test('terminal baseline', async ({ page, browser, browserName }, info) => {
   }
   await page.evaluate(() => window.terminalBench.disposeSessions());
 
+  expect(await page.evaluate(() => window.terminalBench.contextLosses()), 'a lost WebGL context falls back to the DOM renderer and invalidates the run').toBe(0);
+  const seams = await page.evaluate(() => window.terminalBench.seams());
+  if (candidate === 'dom') expect(seams.customBoldColor, 'the baseline renderer supports the custom bold color seam').toBe('applied');
   const loadAfter = os.loadavg();
   const environment = {
     schema: 1,
-    candidate: 'xterm-dom',
+    candidate: `xterm-${candidate}`,
     mode: full ? 'full' : 'smoke',
     host: { loadAverage: { atStart, atEnd: loadAfter }, cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, ramGiB: Math.round(os.totalmem() / 2 ** 30), os: `${os.type()} ${os.release()}`, arch: os.arch(), cpuGovernor: read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor') },
     toolchain: { bun: (() => { try { return execFileSync('bun', ['--version'], { encoding: 'utf8' }).trim(); } catch { return null; } })(), node: process.versions.node, playwright: JSON.parse(readFileSync(require.resolve('@playwright/test/package.json'), 'utf8')).version, chromium: browser.version(), headless: true, xterm: JSON.parse(readFileSync(require.resolve('@xterm/xterm/package.json'), 'utf8')).version },
     source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
     page: { project: info.project.name, ...geometry, refreshNominalMs: nominal },
     fixtures,
-    limits: 'Headless Chromium on a desktop host: not an Android WebView. No GPU, battery or thermal counters.',
+    launchArgs,
+    seams,
+    limits: `Headless Chromium on a desktop host: not an Android WebView. No battery or thermal counters.${geometry.gl ? ` WebGL context: ${JSON.stringify(geometry.gl)}.` : ''}`,
   };
   const document = { ...environment, results };
-  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/${full ? 'terminal-baseline' : 'terminal-smoke'}-${info.project.name}.json`);
+  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/${full ? 'terminal-baseline' : 'terminal-smoke'}${candidate === 'dom' ? '' : `-${candidate}`}-${info.project.name}.json`);
   mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(document, null, 2) + '\n');
   await info.attach('terminal-benchmark.json', { path: out });

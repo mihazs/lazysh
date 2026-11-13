@@ -1,8 +1,14 @@
-// In-page half of the terminal baseline benchmark. It drives the real TerminalPane and createTerminal()
-// (xterm.js 5.5.0 DOM renderer, the app's preferences) and reports what the page can see: apply latency,
+// In-page half of the terminal benchmark. It drives the real TerminalPane and createTerminal()
+// (xterm.js 5.5.0, the app's preferences) and reports what the page can see: apply latency,
 // render callbacks, frame intervals and long tasks. Process CPU and heap come from CDP in the Playwright driver.
+// The renderer under test is the page's `?renderer=` query: the default DOM renderer (the baseline) or the
+// canvas or WebGL addon on the same terminal, for the renderer shootout (#1323).
+import { CanvasAddon } from '@xterm/addon-canvas';
+import { WebglAddon } from '@xterm/addon-webgl';
+import type { Terminal } from '@xterm/xterm';
 import { mountTerminalHistoryHarness } from '../e2e/fixtures/TerminalHistoryHarness';
 import { createTerminal } from '../src/terminal';
+import { configureTerminalBold } from '../src/terminalBold';
 import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
@@ -11,6 +17,28 @@ const yieldTask = () => new Promise<void>(resolve => { const c = new MessageChan
 const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve));
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const digest = async (data: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data as BufferSource)), b => b.toString(16).padStart(2, '0')).join('');
+
+type Candidate = 'dom' | 'canvas' | 'webgl';
+const requested = new URLSearchParams(location.search).get('renderer');
+if (requested !== null && !['dom', 'canvas', 'webgl'].includes(requested)) throw new Error(`Unknown renderer candidate: ${requested}`);
+const candidate = (requested ?? 'dom') as Candidate;
+let contextLosses = 0;
+/** Loads the candidate's renderer addon on an opened terminal; a lost WebGL context falls back to DOM, which would invalidate the numbers, so it is counted. */
+function attach(terminal: Terminal) {
+  if (candidate === 'canvas') terminal.loadAddon(new CanvasAddon());
+  if (candidate === 'webgl') {
+    const addon = new WebglAddon();
+    addon.onContextLoss(() => { contextLosses++; addon.dispose(); });
+    terminal.loadAddon(addon);
+  }
+}
+/** The GPU the WebGL candidate really ran on (software rasterizer or hardware), from the page's own context. */
+function glInfo() {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2'), info = gl?.getExtension('WEBGL_debug_renderer_info');
+    return gl && info ? { vendor: String(gl.getParameter(info.UNMASKED_VENDOR_WEBGL)), renderer: String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) } : null;
+  } catch { return null; }
+}
 
 type Harness = ReturnType<typeof mountTerminalHistoryHarness>;
 let harness: Harness | undefined;
@@ -21,6 +49,7 @@ let echoColumn = 0;
 function open() {
   if (harness) return harness;
   harness = mountTerminalHistoryHarness({ input: data => echo(data) });
+  attach(harness.terminal);
   document.addEventListener('keydown', event => { if (echoMode === 'keydown') pending.push(event.timeStamp); }, true);
   document.addEventListener('compositionend', event => { if (echoMode === 'composition') pending.push(event.timeStamp); }, true);
   return harness;
@@ -106,8 +135,15 @@ async function reset() { harness!.terminal.reset(); await settle(); echoColumn =
 const api = {
   open() {
     const { terminal } = open();
-    return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: 'xterm-dom', domNodes: document.getElementsByTagName('*').length };
+    return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: `xterm-${candidate}`, canvases: terminal.element?.querySelectorAll('canvas').length ?? 0, gl: candidate === 'webgl' ? glInfo() : null, domNodes: document.getElementsByTagName('*').length };
   },
+  /** App features that reach into xterm's DOM renderer: tried on the live terminal, because a different renderer may refuse them. Run after the measurements. */
+  seams() {
+    try { configureTerminalBold(harness!.terminal, '#ff8800'); configureTerminalBold(harness!.terminal, undefined); return { customBoldColor: 'applied' }; }
+    catch (error) { return { customBoldColor: `refused: ${error instanceof Error ? error.message : String(error)}` }; }
+  },
+  /** A lost WebGL context silently reverts to the DOM renderer; the driver rejects a run that saw one. */
+  contextLosses() { return contextLosses; },
   mismatch() { return lastMismatch; },
   async calibrate() { return calibrate(); },
   async prepare(kind: 'plain' | 'ansi' | 'redraw', size: number) {
@@ -198,7 +234,7 @@ const api = {
     const extra = Array.from({ length: Math.max(0, count - 1) }, () => {
       const terminal = createTerminal(), pane = document.createElement('div'), canvas = document.createElement('div');
       pane.className = 'terminal-pane'; pane.style.display = 'none'; canvas.className = 'terminal-canvas';
-      pane.append(canvas); document.body.append(pane); terminal.open(canvas);
+      pane.append(canvas); document.body.append(pane); terminal.open(canvas); attach(terminal);
       panes.push(pane);
       return terminal;
     });

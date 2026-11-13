@@ -1,10 +1,10 @@
 # Terminal benchmarks
 
-Status: **the xterm.js baseline is measured on one desktop host; nothing else is.** No Android, iOS, Windows or macOS device, no emulator and no native candidate has been measured. The measured rows below come from the harness described in [Baseline harness](#baseline-harness-xterm-js-dom-renderer), run in headless desktop Chromium, which is **not an Android WebView**. A number may be quoted elsewhere in `docs/architecture` only if it comes from this suite, with its environment block. Tracking: harness [#1303](https://github.com/mihazs/lazysh/issues/1303), renderer shootout [#1323](https://github.com/mihazs/lazysh/issues/1323), CI regression [#1341](https://github.com/mihazs/lazysh/issues/1341), Android energy [#1340](https://github.com/mihazs/lazysh/issues/1340). Related: [PRD](terminal-performance-prd.md) · [native rendering](native-rendering.md).
+Status: **the xterm.js baseline and the xterm.js canvas and WebGL renderer addons are measured on one desktop host, and the native candidates only by microbenchmarks: a wgpu prototype on the host GPU, the Android Canvas on Waydroid and libghostty-vt as WebAssembly in Node.** No Android, iOS, Windows or macOS device has been measured, none of the native candidates is a complete renderer (no text pipeline, no window surface, no bridge), and none of their figures ranks anything on a device. The measured rows below come from the harness described in [Baseline harness](#baseline-harness-xterm-js-dom-renderer), run in headless desktop Chromium, which is **not an Android WebView**. A number may be quoted elsewhere in `docs/architecture` only if it comes from this suite, with its environment block. Tracking: harness [#1303](https://github.com/mihazs/lazysh/issues/1303), renderer shootout [#1323](https://github.com/mihazs/lazysh/issues/1323), CI regression [#1341](https://github.com/mihazs/lazysh/issues/1341), Android energy [#1340](https://github.com/mihazs/lazysh/issues/1340). Related: [PRD](terminal-performance-prd.md) · [native rendering](native-rendering.md).
 
 ## Principles
 
-1. **Baseline before optimizing.** The first run measures the current xterm.js 5.5.0 DOM renderer and an optimized xterm.js variant (renderer addon and binary IPC); nothing else is compared until those exist.
+1. **Baseline before optimizing.** The first run measures the current xterm.js 5.5.0 DOM renderer and an optimized xterm.js variant (renderer addon and binary IPC); nothing else is compared until those exist. The renderer-addon half is measured ([renderer shootout](#renderer-shootout-xtermjs-renderers-1323)); the binary-IPC half is not built, only its bridge decode stage is measured in the baseline.
 2. **Release builds only**, with the build configuration recorded. Debug builds are rejected by the harness.
 3. **Stages are separated** so a regression can be attributed.
 4. **Physical devices** for latency pacing, energy, thermal and battery. An emulator may be used for functional checks and is labelled as such; it must not be used to claim energy or thermal results.
@@ -94,6 +94,8 @@ LAZYSH_BENCH_OUT=/tmp/run.json bun run bench:terminal -- --project desktop
 ```
 
 `bench:terminal` builds the benchmark page with `vite build -c vite.bench.config.ts` (minified, React production) and serves it with `vite preview`; the run is rejected if the page reports a non-production build. Output defaults to `apps/client/bench-results/terminal-baseline-<viewport>.json` (git-ignored). Results worth keeping are copied to [`benchmarks/`](benchmarks/).
+
+To measure another renderer on the same terminal, fixtures and counters, set `LAZYSH_BENCH_RENDERER=canvas` or `webgl` (default `dom`) and, to choose the GL backend, `LAZYSH_BENCH_CHROMIUM_ARGS`. `bench/compare.ts` prints several result files side by side: `bun bench/compare.ts dom=a.json webgl=b.json`.
 
 The same spec also runs in **smoke mode** inside the normal Playwright suite (`e2e/terminal-bench.spec.ts`, desktop project only, against the dev server). Smoke mode uses tiny fixtures and asserts only that every workload completes, ends on the expected screen, and reports finite numbers. It has **no timing thresholds**, so it cannot flake on a slow runner. The deterministic fixture generators and the statistics helpers have unit tests (`bench/workloads.test.ts`).
 
@@ -231,6 +233,110 @@ Each statement is about this host and these runs.
 
 Not shown by this baseline: anything about Android, WebView, a real GPU, energy, thermal behaviour, a real network, real remote echo, the app's full React tree, or the other workloads listed above.
 
+### Renderer shootout: xterm.js renderers ([#1323](https://github.com/mihazs/lazysh/issues/1323))
+
+The harness above, unchanged, on the same terminal with a different renderer: the DOM renderer (the baseline), the `@xterm/addon-canvas` 0.7.0 renderer and the `@xterm/addon-webgl` 0.18.0 renderer (both devDependencies of the benchmark only; the app does not load them). The driver refuses a run in which the chosen renderer is not drawing (canvas layers must exist for canvas and WebGL and for nothing else) or in which a WebGL context was lost, because a lost context silently falls back to the DOM renderer. WebGL ran twice: with Chromium's default headless backend, which on this host is the SwiftShader software rasterizer, and with `LAZYSH_BENCH_CHROMIUM_ARGS='--use-angle=vulkan --enable-features=Vulkan --ignore-gpu-blocklist --enable-gpu --disable-vulkan-surface'`, which selects the host's AMD Radeon RX 5500 XT through RADV (the GL renderer string is recorded in `page.gl` of each file). The canvas renderer ran with and without those flags. The correctness check (final screen text equal to the fixture's expected text) passed in every run of every candidate.
+
+Environment: the one of the [baseline](#measured-baseline) (AMD Ryzen 9 5900X, 31 GiB, Linux 7.3.3, `powersave` governor, headless Chromium 156.0.8078.4, Playwright 1.64.1, xterm.js 5.5.0, release build of the page, desktop viewport 152 columns by 38 rows at devicePixelRatio 1, 5 runs per workload and 3 for idle), with these differences: the host also ran other builds and agents, so the load average at the start of an invocation was between 2 and 14 on 24 threads (recorded per file), and the GPU was shared with that work. The runs were taken on 2026-11-12 in this order: DOM, canvas, WebGL software GL, WebGL hardware GL, DOM again; then canvas with GPU flags, WebGL hardware GL, DOM a third time, WebGL hardware GL a third time. DOM and WebGL hardware GL were taken three times each, so the cells below give the median of the three invocation medians and, in parentheses, their lowest and highest. The `commit` in each file is the base the working tree was on; `dirty` is true because the harness changes of this change were uncommitted (`a594aa69` for six runs, `9d7fb305` for the three later ones; the commits differ only in chat interaction cards, their i18n strings, agent transcript code and documentation, none of which the benchmark page renders). Raw files: `benchmarks/terminal-shootout-*.json`.
+
+**W2 plain text, 4 MiB**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| MiB/s through `xterm.write` | 36.1 (35.6-36.6) | 37.3 (36.9-40.7) | 0.26 | 1.27 | 2.28 |
+| main thread task ms | 126 (122-127) | 120 (110-121) | 15505 | 3196 | 1815 |
+| renderer process CPU ms | 210 (200-210) | 180 (170-180) | 860 | 3460 | 1970 |
+| GPU process CPU ms | 10.0 (10.0-10.0) | 0.00 (0.00-10.0) | 240570 | 240 | 860 |
+| frame interval p99 ms | 16.7 (16.7-16.7) | 16.7 (16.7-16.7) | 83.4 | 33.3 | 16.8 |
+| dropped frames | 0.00 (0.00-0.00) | 0.00 (0.00-0.00) | 698 | 3.00 | 1.00 |
+
+**W3 ANSI color, 2 MiB**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| MiB/s through `xterm.write` | 2.15 (1.57-2.19) | 6.43 (6.07-7.83) | 0.22 | 0.95 | 1.13 |
+| main thread task ms | 1004 (986-1374) | 346 (292-369) | 9244 | 2321 | 1958 |
+| renderer process CPU ms | 2080 (2060-2850) | 530 (480-580) | 1340 | 3300 | 2410 |
+| GPU process CPU ms | 60.0 (60.0-80.0) | 420 (310-440) | 134950 | 120 | 1990 |
+| frame interval p99 ms | 33.3 (33.3-33.3) | 165 (116-197) | 100 | 33.4 | 133 |
+| dropped frames | 2.00 (2.00-5.00) | 19.0 (13.0-21.0) | 428 | 35.0 | 90.0 |
+
+**W4 full-screen redraw**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| MiB/s through `xterm.write` | 47.0 (43.9-51.0) | 48.6 (46.7-49.9) | 0.24 | 1.67 | 1.02 |
+| main thread task ms | 211 (194-229) | 219 (218-238) | 39836 | 5949 | 9685 |
+| renderer process CPU ms | 270 (240-290) | 330 (320-360) | 2550 | 7290 | 11870 |
+| GPU process CPU ms | 40.0 (40.0-50.0) | 10.0 (10.0-20.0) | 624000 | 340 | 5820 |
+| frame interval p99 ms | 16.7 (16.7-16.7) | 16.7 (16.7-16.7) | 83.4 | 33.4 | 33.4 |
+| dropped frames | 0.00 (0.00-0.00) | 0.00 (0.00-0.00) | 1799 | 23.0 | 67.0 |
+
+**W0 idle, cursor blink on, 10 s**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| main thread task ms | 71.8 (62.3-89.1) | 23.2 (22.1-26.2) | 58.4 | 44.7 | 20.2 |
+| style recalculations | 654 (640-675) | 0.00 (0.00-0.00) | 0.00 | 0.00 | 0.00 |
+| renderer process CPU ms | 160 (120-180) | 70.0 (70.0-80.0) | 60.0 | 80.0 | 60.0 |
+| GPU process CPU ms | 30.0 (20.0-30.0) | 20.0 (20.0-20.0) | 140 | 10.00 | 20.0 |
+
+**W0 idle, cursor blink off, 10 s**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| main thread task ms | 13.2 (11.9-19.3) | 13.3 (13.2-13.3) | 15.4 | 17.3 | 12.5 |
+| style recalculations | 2.00 (2.00-2.00) | 0.00 (0.00-0.00) | 0.00 | 0.00 | 0.00 |
+| renderer process CPU ms | 40.0 (40.0-40.0) | 40.0 (40.0-50.0) | 40.0 | 50.0 | 30.0 |
+| GPU process CPU ms | 10.00 (0.00-10.00) | 0.00 (0.00-10.0) | 20.0 | 10.0 | 0.00 |
+
+**W12 keys during sustained output (echo queues behind the flood)**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| p50 ms | 15.2 (14.7-15.3) | 14.5 (14.3-14.6) | 66.0 | 25.0 | 26.4 |
+| p95 ms | 30.0 (29.9-30.1) | 30.7 (30.7-30.9) | 86.3 | 45.8 | 50.0 |
+| p99 ms | 31.7 (31.6-31.8) | 32.5 (32.5-32.6) | 135 | 56.6 | 59.4 |
+
+**W12 IME composition commit**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| p50 ms | 8.85 (8.75-9.10) | 8.80 (8.70-10.4) | 5.95 | 8.40 | 8.45 |
+| p95 ms | 15.7 (15.7-15.9) | 16.2 (16.2-20.8) | 16.5 | 14.8 | 15.7 |
+| p99 ms | 16.9 (16.9-16.9) | 17.0 (16.8-25.7) | 17.5 | 17.6 | 16.4 |
+
+**W10 scrollback 5000 lines**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| JS heap MiB | 32.1 (31.9-32.1) | 46.1 (45.5-46.2) | 102 | 100 | 95.2 |
+| renderer RSS MiB | 201 (153-202) | 219 (217-225) | 383 | 423 | 285 |
+| scroll frame p99 ms | 16.8 (16.8-16.8) | 16.8 (16.8-16.8) | 33.4 | 16.8 | 16.8 |
+
+**W9 10 sessions, others streaming**
+
+| Metric | DOM (3 invocations) | WebGL, hardware GL (3) | WebGL, software GL (1) | Canvas, default flags (1) | Canvas, GPU flags (1) |
+|---|---|---|---|---|---|
+| p50 ms | 12.0 (11.6-12.2) | 8.15 (8.05-8.20) | 7.30 | 7.95 | 8.25 |
+| p99 ms | 25.4 (25.3-27.7) | 16.2 (16.1-16.2) | 16.3 | 16.1 | 16.0 |
+| renderer RSS per session MiB | 7.64 (7.29-7.67) | 6.75 (6.53-6.81) | 32.1 | 10.4 | 7.26 |
+
+#### What the renderer shootout shows, and what it does not
+
+Each statement is about this host, headless Chromium and these runs.
+
+- **The canvas addon is far slower than the DOM renderer here.** W2 and W4 ran at 1.0 to 2.3 MiB/s (one invocation per flag set) against 36 and 47 MiB/s, with and without GPU flags; echo latency during sustained output had a median of 25 to 26 ms and p99 of 57 to 59 ms against 15 and 32 ms. Its cause was not isolated.
+- **WebGL on a software rasterizer is unusable and costs a great deal of CPU.** At 0.22 to 0.26 MiB/s the GPU process used 135 to 624 s of CPU in the streaming workloads. A device whose WebGL context is backed by software must keep the DOM renderer, which makes capability detection ([#1336](https://github.com/mihazs/lazysh/issues/1336)) a precondition of any WebGL path. Whether Android WebViews on real devices ever report a software context was not measured.
+- **WebGL on a hardware GPU matches the DOM renderer on plain text and redraws, and is much cheaper on style-heavy output.** The median W2 and W4 throughput of the three WebGL invocations is within 4 % of the DOM one. On W3 (ANSI colour at 152 columns) the three DOM invocations ran at 1.6 to 2.2 MiB/s and used 2.1 to 2.9 s of total process CPU; the three WebGL invocations ran at 6.1 to 7.8 MiB/s and used 0.8 to 1.0 s (all processes; computed from the raw files). W3 throughput on WebGL varied between 2.5 and 28 MiB/s across the individual runs of one invocation, so that figure is a median of an unstable quantity.
+- **WebGL's cost is in frame pacing and fixed memory.** The W3 frame interval p99 rose from 33 ms to 116 to 197 ms and dropped frames from 2 to 5 up to 13 to 21; in the first WebGL invocation four of the five runs had a frame interval p99 of 97 ms or more. W4 total process CPU (all processes) was 0.33 to 0.39 s against 0.28 to 0.34 s, about 10 % higher at the median. The JS heap rose by about 14 MiB (46 against 32 MiB at W10) and the renderer resident set by about 8 to 12 % (217 to 225 against 201 to 202 MiB; one DOM invocation reported 153 MiB, which was not investigated). The first WebGL invocation also had a slow IME p95/p99 (20.8 and 25.7 ms against 16.2 and 16.8 to 17.0 ms in the repeats), taken at a load average of 12 to 14.
+- **Idle is cheaper with WebGL and canvas while the cursor blinks.** With blink on, the DOM page performed 640 to 675 style recalculations and 62 to 89 ms of main-thread time per 10 s; WebGL performed none and 22 to 26 ms. With blink off there was no difference in main-thread time or renderer CPU.
+- **Input latency is not worse.** Idle keystrokes and IME commits are within the frame-quantization spread of the DOM runs. During sustained output WebGL's p50 was lower by about 0.7 ms and its p95 and p99 higher by about 0.7 to 0.9 ms (2 to 3 %, the same direction in all three invocations; a frame is 16.7 ms). With ten sessions mounted and streaming, the typing session's echo p50 was 8.1 ms against 12.0 and its p99 16.2 against 25.4 ms, for every non-DOM renderer, which the harness does not explain.
+- **Per-session memory did not grow.** With ten sessions, background sessions (hidden panes) cost 6.5 to 6.8 MiB of renderer resident memory each with WebGL against 7.3 to 7.7 with the DOM renderer (with five, 7.6 to 7.8 against 7.3 to 8.0); the fixed cost above applies once per page.
+- **The custom bold color seam does not survive a renderer change.** `terminalBold.ts` reaches into the DOM renderer's row factory. Run on the live terminal in smoke runs of the same harness (not part of the raw files above, which predate the probe), `configureTerminalBold` applied on the DOM renderer and was refused with "This terminal cannot apply custom bold colors." on both the canvas and the WebGL renderer. Adopting either renderer needs another mechanism for that preference.
+
+Not shown: anything about Android, an Android WebView (which is Chromium, but its GPU, driver, memory pressure and context-loss behaviour are exactly what is unknown), the Linux desktop WebView (WebKitGTK, not Chromium), macOS or iOS (WKWebView), Windows (WebView2), energy, thermal behaviour, a WebGL context loss and recovery, background and resume (W11), accessibility with a canvas renderer, the phone viewport, W5 to W8 and W13. WebGL numbers here come from a discrete desktop GPU shared with other work; they do not transfer to a phone GPU.
+
 ### Android procedure (manual gate, not run)
 
 The harness cannot run on Android in this form: it drives desktop Chromium over CDP. Until an Android runner exists ([#1303](https://github.com/mihazs/lazysh/issues/1303), [#1340](https://github.com/mihazs/lazysh/issues/1340)), the Android measurement is a manual gate with this procedure. **None of it has been executed;** the tools named are standard Android tooling and the steps have not been validated on a device for this app.
@@ -244,11 +350,11 @@ The harness cannot run on Android in this form: it drives desktop Chromium over 
 
 ## Results
 
-| Workload | xterm DOM (desktop Chromium) | xterm optimized | Native candidate(s) | Winner (per device) |
-| --- | --- | --- | --- | --- |
-| W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | not measured | not measured | undecided |
-| W5, W6, W7, W8, W11, W13 | not implemented | not measured | not measured | undecided |
-| All workloads on Android | not measured | not measured | not measured | undecided |
+| Workload | xterm DOM (desktop Chromium) | xterm optimized: WebGL addon, hardware GL | xterm canvas addon; WebGL software GL | Native candidate(s) | Winner (per device) |
+| --- | --- | --- | --- | --- | --- |
+| W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | measured, [shootout](#renderer-shootout-xtermjs-renderers-1323): on par or better except W3 frame pacing, W4 CPU and fixed memory | measured: much slower | host and Waydroid microbenchmarks only: [wgpu prototype](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device), [Android Canvas replay](#android-canvas-drawing-of-the-shared-layout-waydroid-not-a-device), [WebAssembly parse](#webassembly-vt-versus-xtermjs-parse-only-host-microbenchmark-not-a-candidate); no text, no device | undecided; see [ADR 0001, amendments 1 and 2](adr-0001-terminal-runtime.md#amendment-1-2026-11-12-first-renderer-shootout-results) |
+| W5, W6, W7, W8, W11, W13 | not implemented | not measured | not measured | not measured | undecided |
+| All workloads on Android | not measured | not measured | not measured | not measured (the Canvas replay ran on Waydroid, which is not a device) | undecided |
 
 ### Core parse throughput (host microbenchmark, not a device baseline)
 
@@ -321,6 +427,144 @@ What this says, and does not say:
 - IPC calls per MB: the native path issues none per chunk (credits are returned inside Rust after VT processing). The xterm path issues one `ack_output` per `write` callback, so at the 16 KiB maximum chunk that is at most 64 calls per MiB by construction; the actual count depends on how the transports chunk, and was not measured.
 - **The bridge, Rust side only** (`bridge_throughput_channel_versus_core` in `ssh.rs`, run with `cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture`; built with opt-level 3 and no LTO, which is not the release profile). 64 MiB of 80-column text through `send_output` on this host, three runs, load average 3 to 4 at the start. The Channel path with a renderer that acknowledges every chunk the instant it is sent (an upper bound for the xterm path): 154, 151 and 152 MiB/s, 0.42 CPU s per 64 MiB, 64 Channel messages per MiB (the JSON serialization of `SshEvent::Data` is the cost). The core path (real libghostty-vt on the hub's workers, credit returned after VT processing): 666, 658 and 642 MiB/s, 0.11 to 0.12 CPU s per 64 MiB, zero Channel messages. The same test in a debug build ran the Channel path at 8 MiB/s, so a debug figure says nothing. These two are **not like for like**: the core's CPU includes VT parsing, which on the Channel path happens later in the WebView and is absent here, and none of the WebView decode, the xterm parse, the `ack_output` IPC or any rendering is measured. They bound the Rust-side cost of the data path; the comparison with the #1303 baseline needs the renderer wired in and a device.
 - With several sessions the p99 credit latency is 3 to 4 times the p95 (up to 16 ms with 10 sessions on one worker). The cause was not investigated; shared-host scheduling of the producer and worker threads is a candidate, queueing behind other sessions' windows is another.
+
+### Renderer pipeline cost (host microbenchmark, not a candidate)
+
+Measured with `cargo run --release --example render_bench` in `packages/terminal-runtime` ([#1322](https://github.com/mihazs/lazysh/issues/1322)). It adds the stages above the VT, one at a time, to the same kind of 16 KiB feed as the parse benchmark: `take_frame`, the renderer-side `Screen::apply` plus its dirty-row query, and the CPU reference renderer's draw and present. Frames are taken either after every 16 KiB chunk or once per 256 KiB of output (the credit window, the most that can be in flight); the second is what a renderer that draws once per display refresh sees at best. The reference renderer is a correctness vehicle with a dot-pattern glyph and no font; its row is the cost of a software renderer, not of a candidate. Every reference run ends by checking that its incrementally drawn image equals a full repaint of the final screen. No transport, JS bridge, GPU or device is involved, and none of this may be compared with the xterm.js baseline: its generators are not W2 to W4.
+
+Environment: AMD Ryzen 9 5900X (24 threads), Linux 7.3.3, rustc 1.96.1 release profile, libghostty-vt from the vendored Ghostty commit `44f2a44df` built with Zig 0.16.0 `ReleaseFast`, x86_64. Host load average at start 13.3 (1 minute); other agents shared the machine, so absolute figures move between runs: four runs at load averages 1.1, 6.3, 7.7 and 13.3 gave 618, 656, 702 and 680 MiB/s for VT-only plain text at 80x24 (a 14 % spread), and the table is the last one, taken with the final code ([raw output](benchmarks/terminal-render-bench-1.txt)). A fifth run of the same code rebased on a later `main` (load average 14.1, same host and toolchain) is committed as [raw output](benchmarks/terminal-render-bench-2.txt): its cells agree with the table within the run-to-run spread above (for example 80x24 plain text per chunk: 638, 78.0, 66.6 and 14.3 MiB/s against 680, 78.4, 69.6 and 14.8), and its reference stage passed the incremental-equals-full-repaint check. 16 MiB per workload, 5 runs, MiB/s median with minimum and maximum. Grids are 80x24 and 152x38 (the desktop baseline geometry); the redraw fixture repaints 24 rows of 80 columns, so it touches 24 rows on either grid.
+
+| grid | workload | frame cadence | VT only | + take_frame | + Screen::apply | + reference draw and present | frames | rows drawn | MiB uploaded |
+|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | per chunk | 680.1 (457.4 to 690.2) | 78.4 (76.5 to 79.9) | 69.6 (66.6 to 70.8) | 14.8 (14.8 to 15.1) | 1024 | 24576 | 720.0 |
+| 80x24 | plain text | per window | 683.0 (630.9 to 686.5) | 462.0 (452.6 to 470.3) | 439.5 (406.5 to 444.6) | 179.1 (172.6 to 180.9) | 64 | 1536 | 45.0 |
+| 80x24 | ANSI + truecolor | per chunk | 71.8 (70.9 to 73.4) | 44.7 (43.3 to 45.4) | 41.5 (41.1 to 42.2) | 18.9 (18.5 to 19.2) | 1024 | 24576 | 720.0 |
+| 80x24 | ANSI + truecolor | per window | 73.3 (72.1 to 73.4) | 70.8 (69.2 to 71.3) | 69.8 (68.7 to 70.7) | 61.4 (60.7 to 63.4) | 64 | 1536 | 45.0 |
+| 80x24 | full-screen redraw | per chunk | 402.7 (393.3 to 403.4) | 68.2 (66.7 to 68.3) | 61.6 (61.3 to 61.8) | 21.9 (21.7 to 22.0) | 1024 | 24576 | 720.0 |
+| 80x24 | full-screen redraw | per window | 402.3 (395.0 to 404.1) | 303.0 (272.5 to 311.0) | 298.0 (276.1 to 298.7) | 188.5 (187.3 to 191.5) | 64 | 1536 | 45.0 |
+| 80x24 | CJK/emoji/combining | per chunk | 66.6 (62.4 to 71.6) | 42.3 (41.7 to 43.4) | 39.8 (39.3 to 40.4) | 16.0 (15.8 to 16.1) | 1024 | 24576 | 720.0 |
+| 80x24 | CJK/emoji/combining | per window | 70.2 (68.1 to 71.9) | 65.9 (63.6 to 67.1) | 68.0 (66.1 to 68.3) | 54.6 (52.8 to 57.7) | 64 | 1536 | 45.0 |
+| 152x38 | plain text | per chunk | 556.7 (524.9 to 574.1) | 35.1 (34.5 to 35.6) | 30.9 (30.4 to 31.1) | 6.7 (6.2 to 7.0) | 1024 | 38912 | 2166.0 |
+| 152x38 | plain text | per window | 565.9 (505.0 to 613.6) | 304.3 (293.4 to 307.5) | 277.5 (270.8 to 281.8) | 89.5 (86.6 to 92.9) | 64 | 2432 | 135.4 |
+| 152x38 | ANSI + truecolor | per chunk | 47.9 (45.9 to 49.5) | 22.5 (21.7 to 22.9) | 20.8 (20.6 to 21.4) | 7.5 (5.4 to 8.1) | 1024 | 38912 | 2166.0 |
+| 152x38 | ANSI + truecolor | per window | 47.6 (46.3 to 49.5) | 37.9 (29.0 to 43.3) | 36.6 (34.3 to 45.8) | 31.7 (25.3 to 36.1) | 64 | 2432 | 135.4 |
+| 152x38 | full-screen redraw | per chunk | 324.0 (247.7 to 397.4) | 45.5 (37.4 to 48.4) | 41.6 (37.5 to 43.9) | 14.4 (13.7 to 14.4) | 1024 | 24590 | 1368.8 |
+| 152x38 | full-screen redraw | per window | 393.0 (307.1 to 405.4) | 267.3 (230.8 to 274.1) | 259.9 (226.5 to 266.7) | 144.7 (142.7 to 146.1) | 64 | 1550 | 86.3 |
+| 152x38 | CJK/emoji/combining | per chunk | 41.7 (36.2 to 42.6) | 20.7 (19.7 to 21.0) | 19.6 (19.4 to 19.9) | 7.1 (7.0 to 7.2) | 1024 | 38912 | 2166.0 |
+| 152x38 | CJK/emoji/combining | per window | 42.1 (40.6 to 42.4) | 39.0 (37.7 to 39.7) | 39.1 (38.3 to 39.3) | 31.8 (31.7 to 32.3) | 64 | 2432 | 135.4 |
+
+What this says, and does not say:
+
+- **Making a frame costs several times what parsing does.** For plain text on 80x24 the VT alone ran at 680 MiB/s and 78 MiB/s with a frame after every chunk; at 152x38, 557 against 35. Plain text and redraws, which parse fast, lose 83 to 94 % of their throughput; style-heavy and Unicode-heavy output parses slowly (42 to 73 MiB/s) and loses 36 to 53 %. The owned `String` per cell of `Frame` is the likely cause, which this run did not isolate; [#1337](https://github.com/mihazs/lazysh/issues/1337) owns the compact format.
+- **Taking one frame per 256 KiB instead of per 16 KiB recovers most of it** for plain text (78 to 462 MiB/s at 80x24) and redraws (68 to 303). A renderer scheduled once per display refresh therefore matters more than the renderer implementation for output bursts.
+- **`Screen::apply` is a small addition** (from within noise to 12 % below the frame-only figure), but it copies every dirty row's cells once more.
+- **The CPU reference renderer** adds a further factor of 1.1 to 4.7 over `Screen::apply` and uploads (copies) whole pixel rows: with a frame per chunk each of the 1024 frames redraws every row of a scrolling screen, 720 MiB copied for 16 MiB of text at 80x24. It is not a performance candidate and no GPU or font cost is represented.
+- Nothing here says which renderer wins on any device.
+
+### WebAssembly VT versus xterm.js, parse only (host microbenchmark, not a candidate)
+
+Measured with `apps/client/bench/wasmVt.mjs` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): the parse stage of the "WASM terminal" candidate, on the byte fixtures of the Rust benchmarks (`cargo run --release --example dump_workloads -- <dir>` writes them), in Node, so xterm.js and WebAssembly run on the same V8. The WebAssembly module is libghostty-vt built from the vendored, hash-checked source, unmodified, in a copy outside the checkout (`zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Doptimize=ReleaseFast -Dsimd=false`, Zig 0.16.0; 4.5 MiB, no imports); no prebuilt third-party module was used, so [#384](https://github.com/mihazs/lazysh/issues/384) is not affected. xterm.js is `@xterm/headless` 5.5.0, the same parser and buffer as `@xterm/xterm` 5.5.0 without a renderer or DOM, scrollback 5000 lines. The wasm terminal has a 4 MiB scrollback byte budget (the native runtime's default). Each run creates a fresh terminal and feeds 16 MiB in 16 KiB chunks, copied into wasm linear memory the way a WebView bridge would hand over an `ArrayBuffer`; five runs, MiB/s median (min to max).
+
+Environment: AMD Ryzen 9 5900X, Linux 7.3.3, Node v26.6.0 (V8 14.6), host load average at start 4.84 (1 minute) with other agents running. The cursor position after the run must agree between engines and the wasm run fails if its terminal shows no output.
+
+The table is the first run ([raw output](benchmarks/terminal-wasm-vt-bench-1.txt)). A second run of the same script and module on the same host, taken later at a load average of 20.3 with other builds running, is committed as [raw output](benchmarks/terminal-wasm-vt-bench-2.txt): the WebAssembly parser was again faster than `write()` on every fixture, by 6.0, 1.5, 3.0 and 2.0 times in the table's order (460, 73, 206 and 104 MiB/s against 77, 49, 68 and 53), with a wider spread (ANSI + truecolor: 33 to 83 MiB/s for WebAssembly).
+
+| Workload (80x24) | xterm.js `write()` | xterm.js `writeSync` (private, no scheduling) | libghostty-vt wasm | cursor after, xterm / wasm | wasm linear memory MiB |
+| --- | --- | --- | --- | --- | --- |
+| plain text | 84.2 (74.3 to 88.6) | 94.1 (93.2 to 95.7) | 488.3 (477.5 to 499.0) | 10,23 / 10,23 | 5 |
+| ANSI + truecolor | 61.0 (59.6 to 62.1) | 66.8 (63.6 to 67.1) | 81.9 (81.4 to 82.0) | 21,23 / 21,23 | 9 |
+| full-screen redraw | 101.9 (101.1 to 104.1) | 113.3 (112.5 to 113.7) | 281.8 (277.9 to 284.9) | 52,11 / 52,11 | 1 |
+| CJK/emoji/combining | 67.7 (57.5 to 68.9) | 73.2 (72.6 to 74.6) | 118.3 (117.7 to 118.9) | 0,23 / 0,23 | 8 |
+
+What this says, and does not say:
+
+- **On this V8 the WebAssembly parser was faster than xterm.js's JS parser on every fixture**: 5.8 times on plain text (488 against 84 MiB/s through `write()`, 5.2 against the private synchronous call), 2.8 times on redraws, 1.7 times on non-ASCII text and 1.3 times on ANSI-heavy text (82 against 61). Style-heavy output is where every parser is slowest, and the gap is smallest there. `write()` pays xterm.js's own scheduling (it yields between slices), so the synchronous column is the fairer parser-to-parser comparison, which it only narrows.
+- **The two engines agreed on the cursor after every fixture**, so they consumed the same stream. This is not a conformance result: the cursor does not show cell contents, and widths of emoji and combining sequences were not compared cell by cell (the VT conformance corpus in `packages/terminal-runtime/tests/conformance.rs` runs on the native build only).
+- **Native Rust is not faster by construction.** For the same fixtures the native runtime (through `TerminalRuntime::offer` and `pump`, SIMD on) measured 200 to 729, 40 to 75, 216 to 403 and 38 to 74 MiB/s over ten invocations at load 13 to 175 ([above](#core-parse-throughput-host-microbenchmark-not-a-device-baseline)); the wasm figures are inside or above those ranges. The two are not the same harness (the native one adds an ingress copy and runtime bookkeeping, and SIMD is on only there), and why the wasm number for non-ASCII text exceeds the native one was not investigated.
+- **Parsing is not most of what xterm.js costs on this host.** In the [baseline](#measured-baseline) 2 MiB of ANSI colour (W3, desktop viewport) ran at a median 4.3 MiB/s (464 ms of wall time) through `xterm.write` with the DOM renderer, against 61 MiB/s (about 33 ms) for the parser alone here, and plain text (W2) at 40 MiB/s against 84. The generators differ, so these are orders of magnitude, not ratios; the remainder is rendering and layout, which this table does not cover. A WASM terminal still needs a renderer in the WebView (DOM, canvas or WebGL), which is the [xterm.js renderer shootout](#renderer-shootout-xtermjs-renderers-1323) again, plus a JavaScript bridge that carries every byte and every dirty row.
+- Not shown: Chromium or an Android WebView (a different V8 version and flags), WebAssembly SIMD, a worker thread, memory growth under a long session (the linear memory never shrinks), startup time of instantiating a 4.5 MiB module, any rendering, energy, or any device.
+### wgpu prototype against the CPU reference renderer (host GPU, not a device)
+
+Measured with `cargo run --release --example wgpu_bench` in `packages/terminal-runtime/prototypes/wgpu` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): the wgpu candidate, prototype quality, implementing the same `TerminalRenderer` trait as the CPU reference renderer and fed the same `Frame` stream from the real libghostty-vt core. It consumes the shared layout (`layout::row_draws`): each draw becomes one instance of an instanced quad (a solid rectangle, or a glyph mask taken from an atlas), the dirty rows' instances are uploaded once per frame and drawn in one pass into an offscreen `Rgba8Unorm` texture. It is **offscreen and headless**: no window, swapchain or compositor, so `present` waits for the GPU to finish what `draw` submitted (the latest moment a swapchain image could be shown), and what the table calls a frame is draw (instance build, upload, encode, submit) plus that wait. It draws the reference renderer's dot-pattern glyphs, not text: no fonts, shaping, fallback or atlas eviction.
+
+**Correctness against the oracle.** `tests/vs_reference.rs` feeds the same frames to both renderers and requires identical pixels: ASCII, bold, faint, inverse, hidden, every underline style with a colored underline, strike-through, overline, wide, combining and emoji clusters, the four cursor shapes (including on a wide character), linear and block selection, 40 incremental frames against the CPU renderer after each one, and recovery from a destroyed device (`DeviceLost` on every call, `resume`, snapshot). All four pass; the test fails if one color channel is swapped in the shader (checked by hand), and refuses to compare against a blank oracle image. This is the golden-image check of [#1322](https://github.com/mihazs/lazysh/issues/1322) applied to a GPU implementation; it does not show anything about text.
+
+Environment: AMD Radeon RX 5500 XT (RADV NAVI14), Vulkan 1.4, Mesa 26.2.6, wgpu 30.0.2 on the Vulkan backend, discrete GPU; the CPU is the Ryzen 9 5900X host of the other measurements, shared with other builds and agents (load average at start 8.23); Linux 7.3.3, rustc 1.96.1 release profile. 16 MiB per workload, 5 runs, 80x24 and 152x38 grids of 8x16 pixel cells, a frame after every 16 KiB chunk or every 256 KiB. The pipeline column is MiB/s through VT, `take_frame` and the renderer; frame ms is draw plus present per frame, p50 / p99 over all runs.
+
+The table is the first run ([raw output](benchmarks/terminal-wgpu-bench-1.txt)). A second run of the same code on a later `main` (host load average 4.1, a quieter machine) is committed as [raw output](benchmarks/terminal-wgpu-bench-2.txt). It gives the same picture: the wgpu frame was 1.6 to 3.5 times cheaper at the median (0.24 to 0.71 ms against 0.44 to 1.84 ms), the whole pipeline 0.74 to 2.2 times faster (one row was slower than the reference, within the spread of its 5 runs) and the wgpu p99 was higher than the reference's in 6 of the 16 rows. A run taken in between at load 15.8 agreed within the same ranges (frame 1.5 to 4.5 times, p99 higher in 6 rows) and was not kept.
+
+Startup and memory (one run): the first renderer took 271 ms to create (instance, adapter, device, pipeline; 33 ms in an earlier run of the same code before the lifecycle refactor, so one run says little about startup) and added 62,288 KiB to the resident set of the process (the Vulkan driver and shader compiler), four more added 12,804 KiB together (about 3.1 MiB each, 80x24).
+
+| grid | workload | frame cadence | reference MiB/s | reference frame ms | wgpu MiB/s | wgpu frame ms | frames | rows drawn | reference MiB copied | wgpu MiB uploaded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | per chunk | 14.7 (14.4 to 14.8) | 0.815 / 1.305 | 27.7 (26.4 to 28.1) | 0.306 / 0.588 | 1024 | 24576 | 720.0 | 109.96 |
+| 80x24 | plain text | per window | 176.7 (170.5 to 177.6) | 0.816 / 1.373 | 266.6 (260.9 to 269.1) | 0.303 / 1.919 | 64 | 1536 | 45.0 | 6.88 |
+| 80x24 | ANSI + truecolor | per chunk | 18.6 (17.5 to 19.0) | 0.448 / 0.835 | 22.3 (22.1 to 23.0) | 0.258 / 0.508 | 1024 | 24576 | 720.0 | 74.43 |
+| 80x24 | ANSI + truecolor | per window | 59.3 (53.9 to 60.5) | 0.472 / 0.866 | 62.4 (59.0 to 63.1) | 0.289 / 1.747 | 64 | 1536 | 45.0 | 4.65 |
+| 80x24 | full-screen redraw | per chunk | 21.3 (20.9 to 21.3) | 0.461 / 0.669 | 29.2 (28.3 to 29.4) | 0.250 / 0.359 | 1024 | 24576 | 720.0 | 76.97 |
+| 80x24 | full-screen redraw | per window | 180.4 (174.6 to 182.6) | 0.464 / 0.757 | 201.5 (187.5 to 209.5) | 0.288 / 1.731 | 64 | 1536 | 45.0 | 4.81 |
+| 80x24 | CJK/emoji/combining | per chunk | 15.7 (15.4 to 15.8) | 0.584 / 0.898 | 22.7 (22.7 to 23.1) | 0.260 / 0.373 | 1024 | 24576 | 720.0 | 67.27 |
+| 80x24 | CJK/emoji/combining | per window | 59.5 (58.9 to 59.8) | 0.590 / 0.706 | 62.0 (59.2 to 63.1) | 0.298 / 2.041 | 64 | 1536 | 45.0 | 4.21 |
+| 152x38 | plain text | per chunk | 6.9 (6.9 to 6.9) | 1.720 / 2.126 | 15.2 (15.1 to 15.5) | 0.485 / 0.674 | 1024 | 38912 | 2166.0 | 260.21 |
+| 152x38 | plain text | per window | 91.8 (82.8 to 95.1) | 1.723 / 2.880 | 166.6 (161.3 to 170.2) | 0.510 / 2.173 | 64 | 2432 | 135.4 | 16.27 |
+| 152x38 | ANSI + truecolor | per chunk | 8.3 (8.2 to 8.3) | 1.135 / 1.716 | 13.4 (13.2 to 13.5) | 0.403 / 0.551 | 1024 | 38912 | 2166.0 | 203.47 |
+| 152x38 | ANSI + truecolor | per window | 37.0 (36.4 to 38.0) | 1.148 / 1.518 | 42.3 (41.2 to 42.3) | 0.437 / 2.111 | 64 | 2432 | 135.4 | 12.72 |
+| 152x38 | full-screen redraw | per chunk | 14.1 (13.9 to 14.1) | 0.729 / 0.964 | 22.9 (22.8 to 23.2) | 0.295 / 0.392 | 1024 | 24590 | 1368.8 | 131.04 |
+| 152x38 | full-screen redraw | per window | 136.5 (134.5 to 143.7) | 0.732 / 1.429 | 172.6 (164.5 to 178.4) | 0.328 / 1.951 | 64 | 1550 | 86.3 | 8.25 |
+| 152x38 | CJK/emoji/combining | per chunk | 7.2 (7.1 to 7.2) | 1.352 / 1.697 | 12.6 (12.4 to 12.6) | 0.426 / 0.640 | 1024 | 38912 | 2166.0 | 192.15 |
+| 152x38 | CJK/emoji/combining | per window | 32.1 (31.0 to 32.3) | 1.374 / 1.725 | 36.1 (36.0 to 36.6) | 0.451 / 1.963 | 64 | 2432 | 135.4 | 12.01 |
+
+**Full repaint of the Android Canvas harness's screens.** The harness above repaints a whole screen every frame, which the stream table does not (it draws dirty rows). To put the wgpu prototype next to the [Android Canvas replay](#android-canvas-drawing-of-the-shared-layout-waydroid-not-a-device) on the same frames, the bench also shows the 64 screens of each workload (80x24, 8x16 pixel cells, after every 256 KiB of the first 16 MiB, the screens `dump_layout` writes for the Canvas) as full frames, so every row is repainted every frame; 20 passes after a warm-up pass (the glyph atlas), draw plus present in milliseconds, p50 / p99, from the second run:
+
+| workload | CPU reference | wgpu prototype | Android Canvas, tuned, software Bitmap (Waydroid) | Android Canvas, tuned, hardware frame total (Waydroid) |
+|---|---|---|---|---|
+| plain text | 0.812 / 1.373 | 0.312 / 0.580 | 0.687 / 0.925 | 1.194 / 1.883 |
+| ANSI + truecolor | 0.446 / 0.832 | 0.259 / 0.573 | 0.188 / 0.304 | 0.663 / 1.693 |
+| full-screen redraw | 0.466 / 0.913 | 0.241 / 0.548 | 0.535 / 0.608 | 1.095 / 1.621 |
+| CJK/emoji/combining | 0.581 / 1.052 | 0.245 / 0.561 | 0.943 / 1.187 | 1.724 / 2.983 |
+
+The three columns measure different things and the table is a way to see magnitudes side by side, not a ranking: the reference and wgpu figures are draw plus present on this process's own device (offscreen for wgpu, with dot-pattern glyphs and no font), the software Canvas figure is Skia on the CPU drawing real text through the system's monospace and fallback fonts, and the hardware Canvas figure is `FrameMetrics` `TOTAL_DURATION` of a window drawn through the Android pipeline (UI-thread recording, RenderThread command issue and GPU, from the intended vsync). All three ran on the same host and the same discrete GPU (Waydroid's guest uses it through GLES), at different times and load. With those caveats, every figure is far inside a 16.7 ms frame, the wgpu prototype was the cheapest on three of four workloads at the median and Skia on the CPU was cheaper on ANSI-heavy output (0.19 against 0.26 ms), which says that on this host the per-frame cost of any of them is small next to the pipeline above the renderer ([cost above the VT](#renderer-pipeline-cost-host-microbenchmark-not-a-candidate)), and nothing about a phone.
+
+What this says, and does not say:
+
+- **The wgpu frame was 1.6 to 3.6 times cheaper at the median** (0.25 to 0.51 ms against 0.45 to 1.72 ms for draw plus present), and the whole pipeline ran 1.0 to 2.2 times faster. The pipeline gain is small because most of a frame's cost is upstream of any renderer ([renderer pipeline cost](#renderer-pipeline-cost-host-microbenchmark-not-a-candidate)): at one frame per 256 KiB the style-heavy and Unicode workloads gained 4 to 14 % and plain text and redraws 12 to 82 %.
+- **The tail was not better.** The wgpu p99 was higher than the reference's in 7 of the 16 rows, all at one frame per 256 KiB (1.7 to 2.1 ms against 0.7 to 1.7 ms), the cost of waiting on the GPU; over all rows it ranged from 0.36 to 2.17 ms against 0.67 to 2.88 ms. At 60 Hz a 16.7 ms frame budget holds all of these; a 120 Hz device has 8.3 ms and a phone GPU is slower than this one by an unknown factor.
+- **Instances are much smaller than pixels**: the reference copies 6.5 to 11.3 times more bytes per run than the wgpu prototype uploads. Both counters are bytes handed to the presentation target, but they mean different things (pixel rows against instance data), so they say little about energy.
+- **Memory is the cost to look at.** The first GPU context added about 61 MiB resident on this driver, against 7 to 8 MiB of renderer resident memory per background xterm.js session in the [renderer shootout](#renderer-shootout-xtermjs-renderers-1323); the 63 MiB is a Mesa driver on a desktop and is not an Android number. Four more renderers added about 3.1 MiB each (80x24).
+- Not shown: any Android or mobile GPU (driver quality, Vulkan on Android, surface loss in practice), a window surface and compositor, presentation timing and tearing, idle wake-ups and energy, text (glyph rasterization, shaping, font fallback, atlas growth and eviction), selection and cursor behaviour with real fonts, binary size, and Metal or Direct3D 12. CI keeps this crate compiling (`cargo fmt --check` and `cargo clippy` in the `herdr-native` job) but has no GPU to run it, so the parity tests were run locally.
+
+### Android Canvas drawing of the shared layout (Waydroid, not a device)
+
+Measured with the harness in `apps/client/bench/android-canvas` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): a throwaway APK (no Gradle, built by `build.sh` from the Android SDK command-line tools; it is not part of the app and not built by CI) that replays the shared layout of [`layout::row_draws`](native-rendering.md#terminal-renderer-api) with the Android `Canvas` API. The layouts are frames of draws written by `cargo run --release --example dump_layout -- <dir>` (packages/terminal-runtime): the 80x24 screen of each benchmark workload after every 256 KiB of its first 16 MiB (64 frames), 8x16 pixel cells, so the Canvas candidate draws exactly what the CPU reference renderer and the wgpu prototype draw. This is the "native drawing (Skia, Android Canvas)" candidate: the Android Canvas is Skia, so no separate Skia build was made; desktop Skia was not built.
+
+Two paths per workload and two replays. **Software**: the frame is drawn onto a `Bitmap`-backed `Canvas` (Skia on the CPU), wall time of the replay, 3000 frames after 300 warm-up frames. **Hardware**: a full-window `View` invalidated once per `Choreographer` frame, 900 frames with the first 30 dropped, and the per-frame durations the platform reports through `FrameMetrics` (`onDraw` and `DRAW_DURATION` record the display list on the UI thread, `COMMAND_ISSUE_DURATION` is the RenderThread issuing GL commands, `GPU_DURATION` the GPU, `TOTAL_DURATION` from the intended vsync to completion). **As-is** issues one Canvas call per draw of the layout. **Tuned** does what a Canvas terminal does: clears to the theme background, fills only non-default backgrounds with contiguous cells of one color merged, draws runs of ASCII glyphs of one color and weight as a single `drawText` (the paint is scaled so a monospace advance equals the cell width), and draws every other glyph, including wide, combining and emoji clusters, one cell at a time, then the decorations.
+
+Environment: Waydroid ("WayDroid x86_64 Device", Android 13, SDK 33, x86_64 LineageOS guest) on the host of the other measurements (AMD Ryzen 9 5900X, Linux 7.3.3, shared with other builds and agents; the load average was not recorded for this run). The guest's GLES renderer is the host GPU, `AMD Radeon Graphics (radeonsi, navi14, ACO)`, Mesa 26.0.8, OpenGL ES 3.2; the guest reports a 1920x1017 window at a 240 Hz refresh. Fonts are the system monospace family and the system's fallback for everything else, not the app's fonts. One run, no repeats ([raw output](benchmarks/terminal-android-canvas-bench-1.txt), the logcat lines of the harness); the figures are medians, with p99 where shown. Three more runs were attempted at host load averages of 13 to 34 and none is used. The first two showed a harness bug: it started a new run on every `onResume` (waking the screen was enough), so two or three runs overlapped and interleaved in the log, and one failed with "only 0 frames measured". The harness now starts one run per process (`STARTED`), and in the next attempt a second resume logged "run already started: true" and no second worker thread ran. That attempt was then interrupted: the activity was paused and resumed 43 s into the run, by something on the shared guest that was not identified, and the run failed with the same "only 0 frames measured" instead of reporting a number. The recorded run is therefore the only valid one; it has one worker thread and exactly one row per case in its log.
+
+To run it: dump the layouts (`cargo run --release --example dump_layout -- <dir>/layouts`, from a build root laid out as in the crate README), build with `apps/client/bench/android-canvas/build.sh <sdk> <jdk> canvasbench.apk <dir>` (`<dir>` holds `layouts/`; the key is generated per build, so uninstall `app.lazysh.canvasbench` before installing a new build), install with `adb install -t`, start `app.lazysh.canvasbench/.BenchActivity` with the screen on and read `adb logcat -s LazyshCanvasBench`. The software run fails if the bitmap stays blank and the tuned-versus-as-is comparison fails if nothing was painted; uninstall the package afterwards.
+
+Frame cost in milliseconds (the draw count is that of the first frame; Canvas calls are the average over the frames):
+
+| workload | replay | draws in layout | Canvas calls per frame | software Bitmap canvas p50 / p99 ms | hardware: record (`onDraw`) p50 ms | hardware: command issue p50 ms | hardware: GPU p50 ms | hardware: frame total p50 / p99 ms |
+|---|---|---|---|---|---|---|---|---|
+| ANSI + truecolor | as-is | 2328 | 2357 | 1.303 / 1.661 | 0.582 | 1.503 | 0.323 | 2.601 / 4.342 |
+| ANSI + truecolor | tuned | 2328 | 71 | 0.188 / 0.304 | 0.112 | 0.179 | 0.266 | 0.663 / 1.693 |
+| CJK/emoji/combining | as-is | 2127 | 2128 | 1.426 / 1.622 | 0.654 | 1.620 | 0.403 | 2.791 / 3.729 |
+| CJK/emoji/combining | tuned | 2127 | 518 | 0.943 / 1.187 | 0.572 | 0.691 | 0.289 | 1.724 / 2.983 |
+| full-screen redraw | as-is | 2439 | 2439 | 1.440 / 1.790 | 0.818 | 2.023 | 0.535 | 3.500 / 5.224 |
+| full-screen redraw | tuned | 2439 | 289 | 0.535 / 0.608 | 0.331 | 0.396 | 0.273 | 1.095 / 1.621 |
+| plain text | as-is | 3485 | 3493 | 3.196 / 3.922 | 1.779 | 2.726 | 0.319 | 5.051 / 8.088 |
+| plain text | tuned | 3485 | 308 | 0.687 / 0.925 | 0.381 | 0.434 | 0.281 | 1.194 / 1.883 |
+
+Pixel difference of the tuned replay from the as-is one over eight frames: 0.000 % of all pixels for plain text and ANSI, 0.094 % (0.72 % of the non-black pixels) for CJK/emoji/combining and 0.269 % (2.17 %) for the full-screen redraw. The likely cause is draw order rather than text positioning (the tuned replay draws all text after all backgrounds, so a glyph that overhangs its cell is no longer covered by the next cell's background); it was not isolated.
+
+What this says, and does not say:
+
+- **Every frame fit in a 16.7 ms frame**: none of the 870 hardware frames per case took longer than 10.0 ms (that maximum is plain text, as-is; the other maxima are 2.4 to 6.3 ms). Plain text is the most expensive workload for the as-is replay (5.1 ms total at the median, 8.1 ms at p99) because it has the most glyphs.
+- **The cost is the number of Canvas calls, not the GPU.** For plain text the as-is replay spent 1.8 ms recording and 2.7 ms issuing commands against 0.3 ms of GPU time; the tuned replay needs 308 calls instead of 3493 and a median total of 1.2 ms, 1.6 to 4.2 times faster across the workloads (the gain is smallest for CJK/emoji/combining, where most glyphs still go one at a time). The renderer design question on Android is therefore batching and caching display lists, not GPU throughput.
+- **Wide, combining and emoji clusters cannot be batched**: each needs its own placement on the grid, which is also what keeps them from shifting the columns after them ([#1325](https://github.com/mihazs/lazysh/issues/1325)). They are a minority of cells in these fixtures and the whole of the CJK fixture's remaining cost.
+- **Not comparable with the other renderers' tables.** Those draw the dirty rows of a live stream (the CPU reference renderer 0.4 to 1.6 ms per frame, the wgpu prototype 0.2 to 0.5 ms at the median, [wgpu table](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device)) with dot-pattern glyphs and no font; this table repaints the whole screen every frame through a real text stack with font fallback. The [wgpu section](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device) puts the full-repaint figures side by side; a like-for-like incremental Canvas figure needs per-row display lists, which were not built.
+- Not shown: a physical Android device or any phone GPU (Waydroid's GPU is a desktop AMD part, so a phone's driver, memory bandwidth, thermal throttling and power are unmeasured), energy, the app's fonts and CJK fallback behaviour, shaping beyond what `Canvas.drawText` does, a `SurfaceView` with `lockHardwareCanvas` or a Vulkan surface (this is `View.onDraw`), compositing with the WebView, per-row display-list caching (the likely next optimization), and the Rust-to-Kotlin hop: the layouts are replayed from files because libghostty-vt does not build for Android yet ([#1312](https://github.com/mihazs/lazysh/issues/1312)).
 
 ## Acceptance of a candidate
 

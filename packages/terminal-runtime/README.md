@@ -24,6 +24,10 @@ frames in, pixels on an opaque surface out, no graphics type. `Screen` is the sh
 libghostty-vt output; after an intended rendering change run `UPDATE_GOLDEN=1 cargo test --test renderer` and review the
 PNGs as images (the test writes `<name>.actual.png` into the target directory when a golden differs).
 
+## Prototypes
+
+`prototypes/wgpu` is a throwaway wgpu implementation of `TerminalRenderer` for the renderer shootout ([#1323](https://github.com/mihazs/lazysh/issues/1323)); it is a separate nested workspace with its own lock file so wgpu never reaches this crate, the root workspace or the integrity-checked Ghostty sources. It needs a GPU adapter to run its tests; CI only checks that it compiles and lints (the `herdr-native` job). See the "wgpu prototype" section of [terminal benchmarks](../../docs/architecture/terminal-benchmarks.md).
+
 ## One Ghostty dependency
 
 `ghostty-vt` is a path dependency on `../herdr-upstream/crates/ghostty-vt`. Nothing is copied,
