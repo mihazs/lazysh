@@ -31,6 +31,10 @@ Unreleased changes. Every release also includes the exact current native
 acceptance status section from `docs/install-and-update.md`; missing or ambiguous
 status blocks notes generation. Full parity is not claimed.
 
+The `main-verdict` workflow runs before this one: the version PR merges only after the verdict for
+its base commit is green, so a combined type or build break surfaces there within minutes instead
+of in `source-build` ([Main verdict](../CONTRIBUTING.md#main-verdict)).
+
 Both modes build platform assets before the single publication job. Only the existing gate
 creates `vVERSION`; Android, Linux and Windows receipts are required. The dependent
 publication job runs in the same workflow because a tag created with

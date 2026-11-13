@@ -90,6 +90,38 @@ Matrices fail fast on pull requests and keep every verdict on `main`. The script
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
 new input, and map an uncertain path to more jobs, never fewer.
 
+### Main verdict
+
+Two pull requests can each pass `checks` and still break `main` together (the v1.49.0 release failed
+`source-build` when both added the same i18n keys). `checks` and `version` share one concurrency group
+per ref, and GitHub keeps one running and one pending run per group, so on a busy trunk the run of an
+older merge commit is cancelled while pending and never reports. The `main-verdict` workflow closes
+that gap: every push to `main` gets its own run (group `main-verdict-<sha>`, never cancelled) of three
+parallel jobs, `verdict-client` (`moon run client:build`, which is `tsc -b && vite build`),
+`verdict-agent` (`moon run '#companion:check-rust'`) and `verdict-release-tools` (`bun run test:release`).
+It completes within minutes, runs no native, emulator or end-to-end job, and its check names differ
+from the required `client`, `agent` and `release-tools` jobs on purpose: it is not a required status
+check, because it only runs after the merge. `tests/main-verdict.test.ts` pins this behavior.
+
+A red verdict means `main` is broken: fix forward with a PR that restores a green `tsc -b`, and do not
+merge the version PR until the verdict of the new tip is green. **Merge procedure for the version PR
+(`chore(release): version lazysh packages`):** besides its own `release-tools` check, the
+`main-verdict` run for its base commit must have completed with all three jobs green. The base commit
+is the `main` tip the PR was generated from, and it must still be the tip (the `version` workflow
+regenerates the PR after every push to `main`). Check it with
+`gh run list --workflow main-verdict.yml --commit "$(git rev-parse origin/main)"`. A running verdict
+is not green: wait for it.
+
+GitHub's merge queue was evaluated as the alternative and is not enabled. A queue tests every pull
+request on top of the queued commits, which closes the gap before the merge instead of after it, but
+it needs a ruleset change and a `merge_group` trigger on every required workflow, and it would run the
+full native matrix (Android emulators, macOS, Windows, iOS simulator on a few hosted runners) once per
+queue entry, serially. Merge latency would move from minutes to hours, and each known flake ejects an
+entry and requeues the ones behind it. "Require branches to be up to date" has the same cost per pull
+request. `main-verdict` detects the same class of break within minutes and gates the release, so the
+queue stays an option to revisit if post-merge breaks recur; it would then run only the fast verdict
+set on `merge_group`.
+
 ## Conventional Commits
 
 Every commit and PR title must follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)

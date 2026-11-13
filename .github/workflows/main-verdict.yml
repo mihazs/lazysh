@@ -1,0 +1,66 @@
+name: main-verdict
+
+# A fast, per-commit verdict on every commit that lands on main. `checks` and `version` share one
+# concurrency group per ref, and GitHub keeps only one running and one pending run per group, so
+# a busy trunk cancels the pending run of every older commit. A merged result that no single pull
+# request exercised (two PRs adding the same i18n key) then reached the release build without a
+# completed type-check. Only the cheap type-check, build and release-tool jobs repeat here; the
+# native matrix stays in `checks`. A version PR merges only after its base commit's verdict is
+# green (CONTRIBUTING.md, "Main verdict").
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  MOON_TOOLCHAIN_FORCE_GLOBALS: 'true'
+  MOON_BASE: HEAD
+  MOON_HEAD: HEAD
+
+# One group per commit and never cancelled: a newer push cannot supersede an older verdict.
+concurrency:
+  group: main-verdict-${{ github.sha }}
+  cancel-in-progress: false
+
+# Check names must stay distinct from the required `client`, `agent` and `release-tools` jobs.
+jobs:
+  client:
+    name: verdict-client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - run: bun install --frozen-lockfile
+      # client:build is `tsc -b && vite build`.
+      - run: bunx moon run client:build
+
+  agent:
+    name: verdict-agent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@stable
+      # Restores the cache that checks.yml's agent job saves; this job never saves its own.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: agent
+          save-if: false
+      - run: bun install --frozen-lockfile
+      - run: bunx moon run '#companion:check-rust'
+
+  release-tools:
+    name: verdict-release-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-release
+      # The same commands as the release-tools job of version.yml, in one step.
+      - run: |
+          bun install --frozen-lockfile
+          bun run test:release

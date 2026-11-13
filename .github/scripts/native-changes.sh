@@ -62,10 +62,12 @@ classify() {
     tests/android-*.test.ts | tests/support/android*.ts) add android ;;
     # native-desktop runs release consistency and the Windows installer cases.
     tests/release-consistency.test.ts | tests/release-artifacts.test.ts) add client ;;
-    # Checked only by the always-running client and agent jobs, or by fdroid.yml.
+    # Checked only by the always-running client and agent jobs, or by fdroid.yml. main-verdict.yml
+    # runs on pushes to main alone, and tests/main-verdict.test.ts is part of test:ci.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/native-changes.test.ts | \
-      tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs) add none ;;
+      tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
+      .github/workflows/main-verdict.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
     *.md) add docs ;;
     *) add all ;;
