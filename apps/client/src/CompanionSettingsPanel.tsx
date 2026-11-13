@@ -11,9 +11,12 @@ type Channel=typeof channels[number];
 /** What the last scheduled check on the host found. */
 type LastCheck={at:string;latest:string|null;available:boolean};
 /** `channel`, `intervalHours` and `window` come from a companion that has scheduled checks; an older one has only the policy. */
-type AutoUpdate={revision:number;policy:Policy;channel?:Channel;intervalHours?:number;window?:string|null;lastCheck?:LastCheck};
+/** What the host's own timer for the check is, read from the system by the companion. */
+type Timer={supported:boolean;installed:boolean;enabled:boolean;drift:boolean};
+type AutoUpdate={revision:number;policy:Policy;channel?:Channel;intervalHours?:number;window?:string|null;lastCheck?:LastCheck;timer?:Timer};
 type Settings = { schemaVersion:1; revision:number; transcriptDiscoveryEnabled:boolean; recordedUsageEnabled:boolean; deviceToolsEnabled:boolean; autoUpdate?:AutoUpdate };
-const autoUpdateFields=["revision","policy","channel","intervalHours","window","lastCheck"];
+const autoUpdateFields=["revision","policy","channel","intervalHours","window","lastCheck","timer"];
+const timerFields=["supported","installed","enabled","drift"];
 const windowShape=/^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
 const plainText=/^[A-Za-z0-9.:+-]{1,40}$/;
 function validWindow(window:string):boolean{return windowShape.test(window)&&window.slice(0,5)!==window.slice(6);}
@@ -22,6 +25,11 @@ function validLastCheck(check:unknown):check is LastCheck{
   const {at,latest,available}=check as LastCheck;
   return typeof at==="string"&&plainText.test(at)&&typeof available==="boolean"&&(latest===null||(typeof latest==="string"&&plainText.test(latest)));
 }
+function validTimer(timer:unknown):timer is Timer{
+  if(!timer||typeof timer!=="object")return false;
+  const value=timer as Record<string,unknown>;
+  return Object.keys(value).length===timerFields.length&&timerFields.every(key=>typeof value[key]==="boolean");
+}
 function validAutoUpdate(auto:unknown):auto is AutoUpdate{
   if(!auto||typeof auto!=="object")return false;
   const value=auto as AutoUpdate;
@@ -29,7 +37,8 @@ function validAutoUpdate(auto:unknown):auto is AutoUpdate{
     && (value.channel===undefined||channels.includes(value.channel))
     && (value.intervalHours===undefined||(Number.isInteger(value.intervalHours)&&value.intervalHours>=1&&value.intervalHours<=720))
     && (value.window===undefined||value.window===null||(typeof value.window==="string"&&validWindow(value.window)))
-    && (value.lastCheck===undefined||validLastCheck(value.lastCheck));
+    && (value.lastCheck===undefined||validLastCheck(value.lastCheck))
+    && (value.timer===undefined||validTimer(value.timer));
 }
 export function parseCompanionSettings(value:unknown):Settings {
   if (!value || typeof value!=="object") throw new LocalUiError('companionUnsupported');
@@ -43,10 +52,11 @@ const defaultWindow='02:00-05:00';
 /** The `auto-update set` the draft asks for, or nothing when it equals what the host has. A host with scheduled checks is always sent the whole schedule: `set` keeps no setting it is not told. */
 function autoUpdateChange(saved?:AutoUpdate,draft?:AutoUpdate){
   if(!saved||!draft)return {};
-  const same=saved.policy===draft.policy&&saved.channel===draft.channel&&saved.intervalHours===draft.intervalHours&&(saved.window??null)===(draft.window??null);
+  const same=saved.policy===draft.policy&&saved.channel===draft.channel&&saved.intervalHours===draft.intervalHours&&(saved.window??null)===(draft.window??null)&&saved.timer?.enabled===draft.timer?.enabled;
   if(same)return {};
   const schedule=draft.channel===undefined?{}:{schedule:{channel:draft.channel,intervalHours:draft.intervalHours??24,window:draft.window??null}};
-  return {autoUpdate:{expectedRevision:saved.revision,policy:draft.policy,...schedule}};
+  const timer=draft.timer&&draft.timer.enabled!==saved.timer?.enabled?{timer:draft.timer.enabled}:{};
+  return {autoUpdate:{expectedRevision:saved.revision,policy:draft.policy,...schedule,...timer}};
 }
 const scheduleInvalid=(auto?:AutoUpdate)=>!!auto&&auto.channel!==undefined&&(!Number.isInteger(auto.intervalHours)||auto.intervalHours!<1||auto.intervalHours!>720||(typeof auto.window==="string"&&!validWindow(auto.window)));
 const policyLabels={install:'companionAutoUpdateInstall',notify:'companionAutoUpdateNotify',off:'companionAutoUpdateOff'} as const;
@@ -135,6 +145,10 @@ function CompanionUpdateSchedule({auto,onChange}:{auto:AutoUpdate;onChange:(next
       <label>{t('companionAutoUpdateWindowFrom')}<input type="time" value={from} disabled={off} onChange={event=>onChange({...auto,window:`${event.target.value}-${until}`})}/></label>
       <label>{t('companionAutoUpdateWindowUntil')}<input type="time" value={until} disabled={off} onChange={event=>onChange({...auto,window:`${from}-${event.target.value}`})}/></label>
       <p>{t('companionAutoUpdateWindowHint')}</p>
+    </>}
+    {auto.timer?.supported&&<>
+      <label><input type="checkbox" checked={auto.timer.enabled} disabled={off&&!auto.timer.enabled} onChange={event=>onChange({...auto,timer:{...auto.timer!,enabled:event.target.checked}})}/>{t('companionAutoUpdateTimer')}</label>
+      <p>{t(auto.timer.drift?'companionAutoUpdateTimerDrift':'companionAutoUpdateTimerHint')}</p>
     </>}
   </>;
 }

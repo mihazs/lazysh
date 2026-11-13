@@ -62,6 +62,28 @@ it("shows what the last check found and saves the whole schedule only when it ch
   await screen.findByText("Host settings saved for new operations.");
   expect(vi.mocked(invoke).mock.lastCall?.[1]).toEqual({sessionId:"host-b",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:false,deviceToolsEnabled:true}});
 });
+it("turns the host's timer on from the settings only where the host can have one",async()=>{
+  const timer={supported:true,installed:false,enabled:false,drift:false};
+  expect(parseCompanionSettings({...settings,autoUpdate:{...scheduled,timer}}).autoUpdate?.timer).toEqual(timer);
+  for(const bad of [{...timer,enabled:"yes"},{...timer,extra:true},{supported:true},null,"on"])expect(()=>parseCompanionSettings({...settings,autoUpdate:{...scheduled,timer:bad}})).toThrow();
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{...scheduled,timer}}).mockResolvedValueOnce({...settings,revision:1,autoUpdate:{...scheduled,revision:3,timer:{...timer,installed:true,enabled:true}}});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  const toggle=await screen.findByLabelText("Also check every hour from the host's system timer") as HTMLInputElement;
+  expect(toggle.checked).toBe(false);fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
+  await screen.findByText("Host settings saved for new operations.");
+  expect(vi.mocked(invoke).mock.lastCall?.[1]).toMatchObject({settings:{autoUpdate:{expectedRevision:2,policy:"install",schedule:{channel:"stable",intervalHours:24,window:null},timer:true}}});
+  expect(((screen.getByLabelText("Also check every hour from the host's system timer")) as HTMLInputElement).checked).toBe(true);
+  cleanup();
+  // A host with no user manager or scheduler has no such switch; one whose timer drifted says so.
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{...scheduled,timer:{...timer,supported:false}}});
+  render(<CompanionSettingsPanel sessionId="host-b"/>);
+  await screen.findByLabelText("Check every (hours)");expect(screen.queryByLabelText(/system timer/)).toBeNull();
+  cleanup();
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{...scheduled,timer:{supported:true,installed:true,enabled:true,drift:true}}});
+  render(<CompanionSettingsPanel sessionId="host-c"/>);
+  expect(await screen.findByText(/not as it was set up/)).toBeTruthy();
+});
 it("keeps the schedule when only the policy changes",async()=>{
   vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{...scheduled,intervalHours:6,window:"22:00-06:00"}}).mockResolvedValueOnce({...settings,revision:1,autoUpdate:{...scheduled,revision:3,policy:"notify",intervalHours:6,window:"22:00-06:00"}});
   render(<CompanionSettingsPanel sessionId="host-a"/>);

@@ -29,6 +29,14 @@ enum Channel {
     Stable,
     Prerelease,
 }
+/// What the host's own timer for the update check is, read from the system by the companion.
+#[derive(Serialize, Deserialize)]
+struct Timer {
+    supported: bool,
+    installed: bool,
+    enabled: bool,
+    drift: bool,
+}
 /// What the last scheduled check on the host found; the companion records it.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +63,8 @@ struct AutoUpdate {
     window: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_check: Option<LastCheck>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timer: Option<Timer>,
 }
 /// How often, on which releases and when a companion that has scheduled checks updates itself.
 #[derive(Deserialize)]
@@ -71,6 +81,9 @@ pub struct AutoUpdateChange {
     policy: Policy,
     #[serde(default)]
     schedule: Option<Schedule>,
+    /// Turn the host's own timer on or off (`auto-update enable|disable`).
+    #[serde(default)]
+    timer: Option<bool>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -191,6 +204,17 @@ fn auto_update_command(change: &AutoUpdateChange) -> Result<String> {
     }
     Ok(command)
 }
+/// The commands a change asks for, in order: the settings, then the timer.
+fn auto_update_commands(change: &AutoUpdateChange) -> Result<Vec<String>> {
+    let mut commands = vec![auto_update_command(change)?];
+    if let Some(on) = change.timer {
+        commands.push(format!(
+            "lazysh-agent auto-update {}",
+            if on { "enable" } else { "disable" }
+        ));
+    }
+    Ok(commands)
+}
 #[tauri::command]
 pub async fn get_companion_settings(
     state: State<'_, AppState>,
@@ -229,17 +253,25 @@ pub async fn update_companion_settings(
     access
         .run(async {
             let command = update_command(&settings)?;
-            let change = settings
+            let changes = settings
                 .auto_update
                 .as_ref()
-                .map(auto_update_command)
+                .map(auto_update_commands)
                 .transpose()?;
             let session = state.session(&session_id).await?;
             let mut saved = parse(&crate::companion::exec(&session, command, &access).await?)?;
-            saved.auto_update = match change {
-                Some(command) => Some(parse_auto_update(
-                    &crate::companion::exec(&session, command, &access).await?,
-                )?),
+            saved.auto_update = match changes {
+                Some(commands) => {
+                    let mut last = String::new();
+                    for command in commands {
+                        last = crate::companion::exec(&session, command, &access).await?;
+                    }
+                    // The settings reply says nothing of the timer: ask again what the host has now.
+                    match current_auto_update(&session, &access).await {
+                        Some(now) => Some(now),
+                        None => Some(parse_auto_update(&last)?),
+                    }
+                }
                 None => current_auto_update(&session, &access).await,
             };
             Ok(saved)
@@ -264,6 +296,7 @@ mod tests {
             expected_revision: 3,
             policy: Policy::Off,
             schedule: None,
+            timer: None,
         };
         assert_eq!(
             auto_update_command(&change).unwrap(),
@@ -271,7 +304,7 @@ mod tests {
         );
         // A newer companion may report more than the app reads; the app never invents the rest.
         let status = parse_auto_update(
-            r#"{"schemaVersion":1,"revision":4,"policy":"install","appUpdate":null,"timer":{"kind":"systemd"}}"#,
+            r#"{"schemaVersion":1,"revision":4,"policy":"install","appUpdate":null,"nextCheckAt":null}"#,
         )
         .unwrap();
         assert_eq!(
@@ -296,6 +329,7 @@ mod tests {
                 interval_hours,
                 window: window.map(str::to_owned),
             }),
+            timer: None,
         };
         assert_eq!(
             auto_update_command(&scheduled(Policy::Install, Channel::Prerelease, 6, Some("22:00-06:00"))).unwrap(),
@@ -305,6 +339,28 @@ mod tests {
             auto_update_command(&scheduled(Policy::Notify, Channel::Stable, 24, None)).unwrap(),
             "lazysh-agent auto-update set --expected-revision 5 --policy notify --channel stable --interval-hours 24 --window none"
         );
+        // The timer is two fixed commands after the settings, and nothing the app is given is in them.
+        for (on, word) in [(true, "enable"), (false, "disable")] {
+            let change = AutoUpdateChange {
+                timer: Some(on),
+                ..scheduled(Policy::Install, Channel::Stable, 24, None)
+            };
+            let commands = auto_update_commands(&change).unwrap();
+            assert_eq!(commands.len(), 2);
+            assert_eq!(commands[1], format!("lazysh-agent auto-update {word}"));
+        }
+        let status = parse_auto_update(
+            r#"{"schemaVersion":1,"revision":5,"policy":"install","channel":"stable","intervalHours":24,"window":null,"timer":{"kind":"systemd","supported":true,"installed":true,"enabled":true,"drift":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["timer"],
+            serde_json::json!({"supported":true,"installed":true,"enabled":true,"drift":false})
+        );
+        assert!(parse_auto_update(
+            r#"{"schemaVersion":1,"revision":5,"policy":"off","timer":{"supported":"yes"}}"#
+        )
+        .is_err());
         // Nothing but a clock window and a bounded interval reaches the command line.
         for (hours, window) in [
             (0, None),
