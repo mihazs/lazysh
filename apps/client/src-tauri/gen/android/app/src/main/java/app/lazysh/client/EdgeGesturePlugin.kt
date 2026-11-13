@@ -136,8 +136,36 @@ internal object EdgeGestureExclusion {
 
 @TauriPlugin
 class EdgeGesturePlugin(private val owner: Activity) : Plugin(owner) {
+    companion object {
+        private var current = WeakReference<EdgeGesturePlugin>(null)
+
+        /**
+         * Tauri builds each plugin once, with the first activity. A recreated activity (a navigation overlay, locale or theme change) needs its
+         * own, or the insets are read from the destroyed window ("unknown", no zones) and the bands are claimed on its WebView (#1449).
+         */
+        @JvmStatic fun onWebViewCreated(activity: Activity, webView: WebView) {
+            val previous = current.get() ?: return
+            val handle = previous.handle ?: return
+            if (previous.owner === activity) return
+            previous.release()
+            rebindPlugin(webView, handle, EdgeGesturePlugin(activity))
+        }
+    }
+
+    init { current = WeakReference(this) }
+
     private var layout: View.OnLayoutChangeListener? = null
     private var view: View? = null
+
+    /** Gives back whatever this activity had claimed; it is going away. */
+    private fun release() {
+        owner.runOnUiThread {
+            layout?.let { view?.removeOnLayoutChangeListener(it) }
+            layout = null
+            if (Build.VERSION.SDK_INT >= 29) view?.systemGestureExclusionRects = emptyList()
+            view = null
+        }
+    }
 
     /** The live gesture zones, for the renderer's first read; later changes arrive as a window event. */
     @Command fun getInsets(invoke: Invoke) {
