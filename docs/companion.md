@@ -1020,7 +1020,7 @@ installer remains issue #476.
 
 ## Listening ports for sign-in callbacks
 
-`lazysh-agent listeners` prints the TCP sockets that are listening on a loopback or a wildcard address, so the app can confirm that the `http://localhost:PORT` a sign-in command printed is really being served by the host's own process (detection tier 1 of [ADR 0004](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md); nothing is tunnelled by this command). It reads no argument vector or environment and starts nothing.
+`lazysh-agent listeners` prints the TCP sockets that are listening on a loopback or a wildcard address, so the app can confirm that the `http://localhost:PORT` a sign-in command printed is really being served by the host's own process (detection tier 1 of ADR 0004, `docs/architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md`; nothing is tunnelled by this command). It reads no argument vector or environment and starts nothing.
 
 ```sh
 lazysh-agent listeners [--port N]... [--json] [--watch [--interval-ms 250..5000]]
