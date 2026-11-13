@@ -1,0 +1,75 @@
+#!/bin/sh
+# The regression-test rule of AGENTS.md ("Bug fixes") for pull requests.
+#   regression-check pr '<PR title>' '<PR body>' [<base-sha> <head-sha>]
+#       A fix(...) pull request must tick exactly one box of the "Regression test" section of the PR template:
+#       "Added" (with "Test: <path and title>"; given a range, docs/regression-tests.md must change in it) or
+#       "Not applicable" (with "Reason: <why>"). Every other pull request passes.
+#   regression-check index
+#       Lists the Appium regression specs by linked issue (specs/regression/<area>/<issue>-<behaviour>.e2e.ts) and fails
+#       when a spec has no issue number or its issue has no link in docs/regression-tests.md.
+set -eu
+
+specs=apps/client/mobile-e2e/specs/regression
+rows=docs/regression-tests.md
+status=0
+fail() { printf 'regression-check: %s\n' "$1" >&2; status=1; }
+
+# The text after "$2:" on the first ticked checkbox whose bold label is "$1"; empty when missing or too short to be an answer.
+answer() {
+  line=$(printf '%s\n' "$section" | grep -m1 -E "^[[:space:]]*[-*] \[[xX]\] \*\*$1\*\*" || :)
+  case $line in *"$2:"*) ;; *) return 0 ;; esac
+  text=$(printf '%s' "${line#*"$2:"}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [ "${#text}" -ge 5 ]; then printf '%s' "$text"; fi
+}
+
+pull_request() {
+  title=${1?usage: regression-check pr <title> <body> [<base> <head>]}
+  body=${2-}
+  printf '%s\n' "$title" | grep -qE '^fix(\([^)]*\))?!?:' || return 0
+  # Drop CRs and HTML comments (the template's instructions), which may span lines.
+  section=$(printf '%s\n' "$body" | tr -d '\r' | awk '{
+    line = $0; out = ""
+    while (1) {
+      if (open) { i = index(line, "-->"); if (!i) { line = ""; break } line = substr(line, i + 3); open = 0 }
+      i = index(line, "<!--"); if (!i) { out = out line; break }
+      out = out substr(line, 1, i - 1); line = substr(line, i + 4); open = 1
+    }
+    print out }')
+  added=$(printf '%s\n' "$section" | grep -cE '^[[:space:]]*[-*] \[[xX]\] \*\*Added\*\*' || :)
+  not_applicable=$(printf '%s\n' "$section" | grep -cE '^[[:space:]]*[-*] \[[xX]\] \*\*Not applicable\*\*' || :)
+  if [ $((added + not_applicable)) -gt 1 ]; then fail 'tick one box of "Regression test", not several.'
+  elif [ "$added" -eq 1 ]; then
+    [ -n "$(answer Added Test)" ] || fail 'after "Added", write "Test: <path and title of the regression test>".'
+    if [ -n "${3-}" ] && [ -n "${4-}" ]; then
+      git diff --name-only "$(git merge-base "$3" "$4")" "$4" | grep -qx "$rows" ||
+        fail "\"Added\" needs a new or updated row in $rows in this pull request."
+    fi
+  elif [ "$not_applicable" -eq 1 ]; then
+    [ -n "$(answer 'Not applicable' Reason)" ] ||
+      fail 'after "Not applicable", write "Reason: <an existing test that fails on the parent commit, or why no layer can reproduce it>".'
+  else
+    fail 'a fix(...) pull request must tick "Added" or "Not applicable" under "Regression test" in its description.'
+  fi
+  [ "$status" -eq 0 ] || printf '%s\n' 'See "Bug fixes" in AGENTS.md and docs/regression-tests.md.' >&2
+}
+
+index() {
+  [ -d "$specs" ] || return 0
+  listing=
+  for spec in $(find "$specs" -name '*.e2e.ts' | sort); do
+    issue=$(basename "$spec" | sed -n 's/^\([0-9][0-9]*\)-.*/\1/p')
+    if [ -z "$issue" ]; then fail "$spec is not named <issue>-<behaviour>.e2e.ts."; continue; fi
+    note=
+    if ! grep -Eq "/(issues|pull)/$issue\)" "$rows"; then note=' MISSING'; fail "#$issue has no link in $rows ($spec)."; fi
+    listing="$listing#$issue $spec$note
+"
+  done
+  printf '%s' "$listing" | sort -t'#' -k2,2n
+}
+
+case ${1-} in
+  pr) shift; pull_request "$@" ;;
+  index) index ;;
+  *) printf '%s\n' 'usage: regression-check pr <title> <body> [<base> <head>] | regression-check index' >&2; exit 2 ;;
+esac
+exit "$status"
