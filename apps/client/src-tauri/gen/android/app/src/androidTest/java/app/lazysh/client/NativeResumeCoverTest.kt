@@ -2,6 +2,7 @@ package app.lazysh.client
 
 import android.app.Activity
 import android.view.View
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.WebView
@@ -17,6 +18,14 @@ import org.junit.runner.RunWith
 /** Native view/controller fixture only: no vault proof, OS authentication or provider calls. */
 @RunWith(AndroidJUnit4::class)
 class NativeResumeCoverTest {
+    /** While the policy is unknown the page renders under the opaque cover, so the reveal finds a current frame; it must still be inert. */
+    private fun assertHeldBehindCover(type: Class<*>, cover: Any, blank: WebView) {
+        val overlay = type.getDeclaredField("overlay").apply { isAccessible = true }.get(cover) as View
+        assertEquals(View.VISIBLE, overlay.visibility)
+        assertTrue("The cover must take the touches meant for the WebView beneath", overlay.isClickable)
+        assertFalse(blank.isEnabled)
+        assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, blank.importantForAccessibility)
+    }
     @Test fun coverRebindsToRecreatedActivityWithoutReusingOldUnlock() {
         val type = Class.forName("app.lazysh.vault.ResumeCover")
         val load = type.getMethod("load", WebView::class.java, Activity::class.java)
@@ -29,6 +38,7 @@ class NativeResumeCoverTest {
         }, ObjectMapper())
         var controller: Any? = null
         var original: Activity? = null
+        var recreated: WebView? = null
         // Use the existing fixture: closing Tauri's last Activity would terminate AndroidJUnitRunner.
         run { val scenario = NativeActivityFixture.scenario
             scenario.onActivity { activity ->
@@ -40,7 +50,7 @@ class NativeResumeCoverTest {
                 fun coverView(name: String) = type.getDeclaredField(name).apply { isAccessible = true }.get(cover) as View
                 load.invoke(cover, blank, activity)
                 type.getMethod("register", Channel::class.java).invoke(cover, channel)
-                assertEquals(View.INVISIBLE, blank.visibility)
+                assertHeldBehindCover(type, cover, blank)
                 assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
                 assertEquals("Startup remains branded until native policy is known", View.VISIBLE, coverView("logo").visibility)
                 assertEquals(View.GONE, coverView("unlock").visibility)
@@ -51,13 +61,13 @@ class NativeResumeCoverTest {
                 assertTrue(events.count { it.first == "ready" } >= 2)
                 assertEquals(View.VISIBLE, coverView("logo").visibility)
                 assertEquals(View.GONE, coverView("unlock").visibility)
-                assertEquals(View.INVISIBLE, blank.visibility)
+                assertHeldBehindCover(type, cover, blank)
                 assertFalse(blank.isEnabled)
                 assertEquals("A disabled-policy reveal still needs the current native generation",
                     false, apply.invoke(cover, false, false, 1L, 1L))
                 assertEquals(View.VISIBLE, coverView("logo").visibility)
                 assertEquals(View.GONE, coverView("unlock").visibility)
-                assertEquals(View.INVISIBLE, blank.visibility)
+                assertHeldBehindCover(type, cover, blank)
                 assertEquals(true, apply.invoke(cover, true, true, 1L, 0L))
                 assertEquals(View.INVISIBLE, blank.visibility)
                 assertEquals(View.GONE, coverView("logo").visibility)
@@ -75,12 +85,12 @@ class NativeResumeCoverTest {
                 activity.findViewById<ViewGroup>(android.R.id.content).addView(blank)
                 val cover = requireNotNull(controller)
                 load.invoke(cover, blank, activity)
-                assertEquals(View.INVISIBLE, blank.visibility)
+                assertHeldBehindCover(type, cover, blank)
                 assertTrue(events.contains("rebind" to 1L))
                 assertTrue(events.contains("ready" to 1L))
                 assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
                 assertEquals(false, apply.invoke(cover, false, true, 2L, 0L))
-                assertEquals(View.INVISIBLE, blank.visibility)
+                assertHeldBehindCover(type, cover, blank)
                 val logo = type.getDeclaredField("logo").apply { isAccessible = true }.get(cover) as View
                 val unlock = type.getDeclaredField("unlock").apply { isAccessible = true }.get(cover) as View
                 assertEquals(View.VISIBLE, logo.visibility)
@@ -89,6 +99,20 @@ class NativeResumeCoverTest {
                 assertEquals(true, apply.invoke(cover, false, true, 4L, 1L))
                 assertEquals(View.VISIBLE, blank.visibility)
                 assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+                recreated = blank
+            }
+            // A reveal keeps the cover above the visible WebView until its DOM state is painted, so the pre-ready placeholder never
+            // shows; the wait is bounded, so the cover must still end whatever the WebView does. The main thread must stay free for it.
+            val deadline = SystemClock.uptimeMillis() + 3_000
+            var covering = true
+            while (covering && SystemClock.uptimeMillis() < deadline) {
+                scenario.onActivity { covering = (type.getDeclaredField("overlay").apply { isAccessible = true }.get(requireNotNull(controller)) as View).visibility == View.VISIBLE }
+                if (covering) Thread.sleep(50)
+            }
+            assertFalse("The cover must leave a revealed WebView", covering)
+            scenario.onActivity { activity ->
+                val cover = requireNotNull(controller)
+                val blank = requireNotNull(recreated)
                 assertEquals(true, apply.invoke(cover, false, false, 5L, 1L))
                 assertTrue("Disabling policy restores normal screenshot behavior",
                     activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE == 0)
