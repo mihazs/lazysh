@@ -1197,6 +1197,7 @@ const translations = {
   validationTheFontCouldNotBeDeleted: ['Não foi possível excluir a fonte.', 'No se pudo eliminar la fuente.'],
   validationImportedFontsCouldNotBeDeleted: ['Não foi possível excluir as fontes importadas.', 'No se pudieron eliminar las fuentes importadas.'],
   appConnectionClosed: ['Conexão encerrada', 'Conexión cerrada'],
+  appNativeTerminalUnavailable: ['O motor de terminal nativo não pode ser usado ({{reason}}); esta sessão usa o xterm.js.', 'El motor de terminal nativo no se puede usar ({{reason}}); esta sesión usa xterm.js.'],
   recoveryLost: ["Conexão perdida.", "Conexión perdida."],
   recoveryLostLabel: ["Conexão perdida com {{value1}}", "Conexión perdida con {{value1}}"],
   recoveryAnnounceReconnecting: ["Conexão perdida. Reconectando.", "Conexión perdida. Reconectando."],

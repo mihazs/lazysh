@@ -41,6 +41,7 @@ mod ssh;
 mod sync;
 mod terminal_core;
 mod terminal_input;
+mod terminal_native;
 mod theme_links;
 mod theme_qr;
 mod tmux_jump;
@@ -168,6 +169,7 @@ pub fn run() {
                 terminal_core::terminal_core_open,
                 terminal_core::terminal_core_text,
                 terminal_core::terminal_core_close,
+                terminal_native::terminal_native_probe,
                 local::local_disconnect,
                 apple_status::apple_status_capability,
                 apple_status::apple_status_configure,

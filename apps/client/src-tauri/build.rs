@@ -35,6 +35,7 @@ fn main() {
         "terminal_core_open",
         "terminal_core_text",
         "terminal_core_close",
+        "terminal_native_probe",
         "local_disconnect",
         "app_icon_status",
         "set_app_icon",

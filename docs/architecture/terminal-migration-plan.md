@@ -45,7 +45,7 @@ Released so far, with the first release that contains each pull request (from th
 
 Also released in v1.61.0: the core lifecycle ([#1501](https://github.com/mihazs/lazysh/pull/1501)) and the renderer shootout ([#1479](https://github.com/mihazs/lazysh/pull/1479)). Released in v1.62.0 (tagged and published on 2026-11-14): every other consumer behind the adapter ([#1500](https://github.com/mihazs/lazysh/pull/1500), closing [#1307](https://github.com/mihazs/lazysh/issues/1307) and [#1308](https://github.com/mihazs/lazysh/issues/1308)). Merged and waiting for the next version: the core's Mosh display frames as a top-anchored resize without reflow ([#1453](https://github.com/mihazs/lazysh/pull/1453)) and the write-path measurement ([#1306](https://github.com/mihazs/lazysh/issues/1306), [benchmarks](terminal-benchmarks.md#write-path-xterm-write-directly-versus-xtermterminaladapterwrite-1306)).
 
-**Release stage reached: step 2 complete, no rollout stage (S0 to S5) entered.** The TypeScript half of the S0 entry gate ([#1321](https://github.com/mihazs/lazysh/issues/1321): the native adapter passes the contract suite, over a stand-in core) is in; its Rust commands, registration and the kill switch are not, so no user can select native yet. Nothing outside the xterm backend imports `@xterm/*` (an import-graph test enforces it), the adapter's write path costs nothing measurable on the desktop harness, and the first end-to-end native path (core, renderer and input on Linux desktop and Android) is the next thing to ship; it ships behind the opt-in the day it works, not after the other platforms.
+**Release stage reached: step 2 complete, no rollout stage (S0 to S5) entered.** The TypeScript half of the S0 entry gate ([#1321](https://github.com/mihazs/lazysh/issues/1321): the native adapter passes the contract suite, over a stand-in core) is in; its Rust commands are not, and the registration behind a capability probe, the developer override and the build-time kill switch are in the next slice, so no user can select native yet: the probe fails in every build because the app has no renderer. Nothing outside the xterm backend imports `@xterm/*` (an import-graph test enforces it), the adapter's write path costs nothing measurable on the desktop harness, and the first end-to-end native path (core, renderer and input on Linux desktop and Android) is the next thing to ship; it ships behind the opt-in the day it works, not after the other platforms.
 
 ## Rollout stages
 
@@ -74,12 +74,12 @@ Every stage is reversible by the user-visible preference and a build-time kill s
 xterm and Ghostty state are not losslessly transferable. Therefore:
 
 - The backend is chosen when a session is created.
-- A mid-session switch (for example after a native failure the user chooses to leave) builds the new backend from a snapshot of the visible screen and cursor (`read_ansi_screen` exists in the ghostty-vt binding), declares that scrollback is not carried over, and is covered by tests for screen, cursor and mode restoration ([#1342](https://github.com/mihazs/lazysh/issues/1342)).
+- A mid-session switch (for example after a native failure the user chooses to leave) builds the new backend from a snapshot of the visible screen and cursor (`read_ansi_screen` exists in the ghostty-vt binding), declares that scrollback is not carried over, and is covered by tests for screen, cursor and mode restoration ([#1342](https://github.com/mihazs/lazysh/issues/1342)). `switchTerminal` implements this from the adapter's text rows today and a test covers screen, cursor, size and mode restoration, with the loss listed in [the adapter document](terminal-adapter.md#backend-registry-and-selection); the styled snapshot from `read_ansi_screen` and the Rust re-routing of a runtime-owned transport come with the native session path.
 - A renderer or surface failure inside the native backend does not change backend: the surface is recreated from core state and the session continues.
 
 ## Rollback
 
-Switching the preference to xterm.js (or the kill switch) returns to the unchanged backend for new sessions. Steps 2 and 3 add code paths but do not alter the xterm path, so reverting a native slice does not affect users who never enabled it. User data and host state are untouched by any slice.
+Switching the preference to xterm.js (or the kill switch, a build made with `VITE_LAZYSH_DISABLE_NATIVE_TERMINAL=1`) returns to the unchanged backend for new sessions. Steps 2 and 3 add code paths but do not alter the xterm path, so reverting a native slice does not affect users who never enabled it. User data and host state are untouched by any slice.
 
 ## Release policy
 

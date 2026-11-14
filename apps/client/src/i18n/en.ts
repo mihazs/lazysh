@@ -1170,6 +1170,7 @@ export const english = {
   "validationTheFontCouldNotBeDeleted": "The font could not be deleted.",
   "validationImportedFontsCouldNotBeDeleted": "Imported fonts could not be deleted.",
   "appConnectionClosed": "Connection closed",
+  "appNativeTerminalUnavailable": "The native terminal engine cannot be used ({{reason}}) so this session uses xterm.js.",
   recoveryLost: "Connection lost.",
   recoveryLostLabel: "Connection lost for {{value1}}",
   recoveryAnnounceReconnecting: "Connection lost. Reconnecting.",
