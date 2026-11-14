@@ -40,8 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: blacksmith-4vcpu-ubuntu-2404, target: linux-x64, bundles: 'deb,appimage'}
-          - {os: blacksmith-4vcpu-windows-2025, target: windows-x64, bundles: nsis}
+          - {os: ubuntu-24.04, target: linux-x64, bundles: 'deb,appimage'}
+          - {os: windows-2025, target: windows-x64, bundles: nsis}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -91,7 +91,7 @@ jobs:
   # build, so each validated APK is that build's own output. Cargo keeps per-feature artifacts.
   android:
     if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'android')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 120
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -143,7 +143,7 @@ jobs:
 
   ios:
     if: github.ref == 'refs/heads/main' && inputs.platform == 'ios'
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
@@ -181,7 +181,7 @@ jobs:
   aggregate:
     needs: [desktop, android, companion]
     if: inputs.platform == 'all'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 15
     steps:
       - *checkout
