@@ -458,6 +458,35 @@ creates no Aider session rows and cannot change another agent's state. The
 the supported command; its [embedding API](https://aider.chat/docs/scripting.html)
 is explicitly unsupported and is not used as a lifecycle substitute.
 
+## Native runtime qualification status
+
+Fixture and contract coverage is not native acceptance. This table lists only
+what an unchanged official CLI was observed to do, with a private HOME and a
+loopback-only endpoint, and what no run has established yet. Every claim is bound
+to the CLI version named; the run receipts are issue comments on
+[#603](https://github.com/mihazs/lazysh/issues/603),
+[#704](https://github.com/mihazs/lazysh/issues/704) and
+[#624](https://github.com/mihazs/lazysh/issues/624). Where a vendor login is
+required, the case is documented as blocked and is not simulated. Remaining work
+is tracked in [#1527](https://github.com/mihazs/lazysh/issues/1527).
+
+| Agent | Observed natively | Not established | Blocked on |
+| --- | --- | --- | --- |
+| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done` | Tool, permission and child events in a normal interactive session | Nothing account-bound: a loopback provider is enough, the case is not yet run |
+| Codex | 0.166.0, normal TUI with ordinary hook review: nothing delivered before review, `working` then `done` after it, nothing when disabled or after a changed definition, one parent with one child that kept the parent `working` until its own `Stop` | A permission wait in an interactive session | Nothing account-bound |
+| OpenCode | 1.19.5 and 2.2 loaders, root and child session deletion, and an attributed attention report | A full provider turn and an authenticated session | A provider account for the authenticated session |
+| Gemini CLI | 0.66.0, headless with a loopback endpoint: `working` then `done`; nothing when hooks are disabled or the folder is untrusted | Interactive readiness (the owned terminal stalled at theme selection), root and child attribution, authenticated Google behaviour | A Google account for the authenticated part |
+| Cursor CLI | Nothing: fixture and documented-contract coverage only | Authenticated execution and neutral-output acceptance | A Cursor account |
+| Droid | 1.1.0, accountless `exec` with a custom loopback model: `Stop` then `SessionEnd`, one `done` row | Prompt-start and `working` delivery; the interactive UI stops at the Factory login | A Factory account |
+| Amp | Nothing: the plugin runs against the generated API types and documented shapes only | Native plugin loading, ordering, and root and child attribution | An Amp account |
+| GitHub Copilot CLI | 1.0.105 on Linux, manual and managed hooks: root `working` then `done`, an unanswered elicitation as `needs_attention`, a no-tools child | Other child configurations; a real provider | A GitHub Copilot account for a real provider |
+| Cline CLI | 3.0.74 on Linux: two root turns, a managed binding, a disabled plugin | Child directory binding; a real provider | A Cline provider account |
+| Aider | 0.86.0: the notification callback was counted once, with no session row | Anything beyond callback health, by design | Not applicable |
+| Kimi CLI | Fixtures against the 1.52.0 contract | Native lifecycle of 1.52.0 and of Kimi Code 2.4.1 ([#696](https://github.com/mihazs/lazysh/issues/696)) | Tracked in #696 |
+
+Managed setup has its own platform qualification, described at the top of this
+guide. A row above says nothing about it.
+
 ## Broader CLI coverage
 
 This compatibility cohort covers ten native lifecycle integrations plus Aider
