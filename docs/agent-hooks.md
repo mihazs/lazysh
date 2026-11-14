@@ -255,11 +255,40 @@ does not execute Kimi, open/create configuration, migrate profiles, or identify
 the installed version. Kimi remains manual-only in discovery schema 1; the seven
 managed providers and existing printer/ingestion behavior are unchanged.
 
-Kimi Code 2.4.1 native lifecycle remains unqualified. Its external hooks omit
-agent identity from several turn/tool events; blockable `Stop` is not successful
-turn completion, and `PermissionRequest` is an observation that approval was
-requested, not proof it is still waiting. Metadata presence does not establish
-hook loading, current root state or per-turn completion. See [#696](https://github.com/mihazs/lazysh/issues/696).
+Kimi Code 2.4.1 hooks were observed natively, but lazysh does not ingest or
+install them. The official Linux x64 release (SHA-256 `f4a225fb...d738de`) ran in a
+network-less sandbox against a synthetic OpenAI-compatible endpoint with recording
+hooks; the [harness and redacted receipts](reference/kimi-code-qualification/README.md)
+repeat it. Observed:
+
+- A strict `[[hooks]]` entry loads and records `SessionStart`. An unknown field, an
+  unknown event or a `timeout` above 600 makes Kimi ignore the **whole** `hooks`
+  section with a warning, foreign hooks included, while the CLI keeps running.
+- `kimi -p` runs in Auto permission mode: tool events, no approval events and no
+  `SessionEnd`. Interactive manual mode adds `PermissionRequest` and
+  `PermissionResult` (`decision` approved or rejected, same `id`, `turn_id` and
+  `tool_call_id`) and a `SessionEnd` with reason `exit`. A rejected tool gives
+  `PostToolUseFailure` and the turn still ends with `Stop`.
+- `PermissionRequest` and `PermissionResult` carry `agent_id`: `main` for the root,
+  `agent-0` for a sub-agent. `TurnStarted`, the tool events, `Stop`, `StopFailure` and
+  `Interrupt` carried none. A sub-agent's turn start has `origin_kind=system_trigger`,
+  `origin_name=subagent` and reuses `turn_id` 0; its `Stop` is identical to the
+  root's and arrives before `SubagentStop`.
+- With a background sub-agent (slowed by the mock) the root's `Stop` came before the
+  child's tool use and approval, so a `Stop` cannot mean that everything finished.
+- A foreign `Stop` hook that blocks once continues the turn with a second model call
+  and no further `Stop`: `Stop` is not completion, and a blocked turn has no
+  completion event at all. `Interrupt` and `StopFailure` replace `Stop`;
+  `StopFailure` carries the raw provider error text.
+
+So a root `Working`/`Done` from identity-less events, `Stop` as completion and a
+request as confirmed waiting stay unsupported until a contract decides them;
+`PermissionRequest` only observes that approval was requested. Not covered: lazysh
+ingestion of these payloads, receipt ordering (observers are fire-and-forget; a
+result arriving before its request was not exercised), a real provider, macOS and
+Windows, and later releases (2.6.2 delivered no `Stop` in the same harness, cause not
+diagnosed). Metadata presence alone still does not establish hook loading. See
+[#696](https://github.com/mihazs/lazysh/issues/696).
 The path contracts are pinned to [Kimi Code 2.4.1](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/apps/kimi-code/src/utils/paths.ts#L35)
 and [Kimi CLI 1.52.0](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/share.py#L7);
 the current event limits follow the [2.4.1 emitters](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts#L178).
