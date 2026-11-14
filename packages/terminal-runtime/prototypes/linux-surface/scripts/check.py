@@ -11,7 +11,18 @@ mode, order, out = sys.argv[1:4]
 probe = sys.argv[sys.argv.index("--probe") + 1] if "--probe" in sys.argv else os.path.join(HERE, "..", "target", "debug", "surface-poc")
 os.makedirs(out, exist_ok=True)
 env = dict(os.environ, POC_MODE=mode, POC_ORDER=order, WAYLAND_DISPLAY="kwin-poc")
-xserver = None
+scale = int(os.environ.get("POC_SCALE", "1"))
+xserver = niri = None
+if os.environ.get("POC_COMPOSITOR") == "niri":  # a second compositor, nested in KWin: niri draws into one KWin window that the screenshot sees
+    config = os.path.join(os.environ["XDG_RUNTIME_DIR"], "niri.kdl")
+    open(config, "w").write(f'xwayland-satellite {{ off; }}\nhotkey-overlay {{ skip-at-startup; }}\nlayout {{\n  gaps 0\n  default-column-width {{ proportion 1.0; }}\n}}\noutput "winit" {{ scale {scale}; }}\n')
+    niri = subprocess.Popen(["niri", "-c", config], env=env, stdout=open(f"{out}/niri.log", "w"), stderr=subprocess.STDOUT)
+    for _ in range(50):
+        if os.path.exists(os.path.join(os.environ["XDG_RUNTIME_DIR"], "wayland-1")):
+            break
+        time.sleep(0.2)
+    env["WAYLAND_DISPLAY"] = "wayland-1"
+    time.sleep(2.0)
 if mode == "x11":  # a real X server on the same compositor: an X11 client sees it exactly as on Xvfb
     xserver = subprocess.Popen(["Xwayland", ":9", "-geometry", "1280x800", "-noreset"], env=env, stderr=subprocess.DEVNULL)
     for _ in range(50):
@@ -80,12 +91,17 @@ def check(name, ok, detail):
 GREEN, BLUE, RED = (0, 200, 0), (0x33, 0x66, 0xFF), (255, 0, 0)
 
 
+def want(x, y, w, h):
+    """The expected region in device pixels for a rectangle in the page's logical pixels."""
+    return {"x": x * scale, "y": y * scale, "w": w * scale, "h": h * scale}
+
+
 def measure(step, color):
-    """Page origin from the DOM box's right and bottom edges, which no surface ever covers: the page paints it at (380,300) 200x120."""
+    """Page origin from the DOM box's right and bottom edges, which no surface ever covers: the page paints it at (200,120) 140x100."""
     img = shot(step)
     dom, surface = region(img, RED), region(img, color)
-    ox, oy = (dom["x"] + dom["w"] - 580, dom["y"] + dom["h"] - 420) if dom else (None, None)
-    rel = None if not (surface and dom) else {"x": surface["x"] - ox, "y": surface["y"] - oy, "w": surface["w"], "h": surface["h"]}
+    ox, oy = (dom["x"] + dom["w"] - 340 * scale, dom["y"] + dom["h"] - 220 * scale) if dom else (None, None)
+    rel = None if not (surface and dom) else {"x": surface["x"] - ox, "y": surface["y"] - oy, "w": surface["w"], "h": surface["h"]}  # device pixels
     return img, surface, dom, (ox, oy), rel
 
 
@@ -93,21 +109,21 @@ time.sleep(5)  # the page loads and reports its anchor
 command("create")
 time.sleep(1.2)
 img, surface, dom, (ox, oy), rel = measure("1-placed", GREEN)
-check("placement matches the DOM anchor (400x300 at 100,80)", rel == {"x": 100, "y": 80, "w": 400, "h": 300}, rel)
+check("placement matches the DOM anchor (240x160 at 60,40)", rel == want(60, 40, 240, 160), rel)
 if os.environ.get("POC_RENDER") == "vulkan":
     check("the surface is presented by a wgpu Vulkan swapchain", "vulkan target on the subsurface" in open(f"{out}/app.err").read(), open(f"{out}/app.err").read()[-200:])
-covered = tuple(int(v) for v in img[oy + 340, ox + 440]) if dom else None  # inside both the anchor and the DOM box
+covered = tuple(int(v) for v in img[oy + 160 * scale, ox + 250 * scale]) if dom else None  # inside both the anchor and the DOM box
 dom_above = covered == RED
 check("a DOM box that overlaps the pane is drawn " + ("over" if order == "below" and mode == "wayland" else "under") + " the surface",
       dom_above == (order == "below" and mode == "wayland"), {"pixel_in_overlap": covered})
-command("anchor 220 150 300 200")
+command("anchor 110 70 150 100")
 time.sleep(1.2)
 _, _, _, _, rel = measure("2-moved", GREEN)
-check("the surface follows a changed anchor (300x200 at 220,150)", rel == {"x": 220, "y": 150, "w": 300, "h": 200}, rel)
-command("resize 1200 800")
+check("the surface follows a changed anchor (150x100 at 110,70)", rel == want(110, 70, 150, 100), rel)
+command("resize 1100 650")
 time.sleep(1.5)
 _, _, _, _, rel = measure("3-resized", GREEN)
-check("a window resize keeps the surface at its anchor", rel == {"x": 220, "y": 150, "w": 300, "h": 200}, rel)
+check("a window resize keeps the surface at its anchor", rel == want(110, 70, 150, 100), rel)
 command("destroy")
 time.sleep(1.0)
 _, surface, dom, _, _ = measure("4-destroyed", GREEN)
@@ -116,10 +132,10 @@ command("color 3366ff")
 command("create")
 time.sleep(1.2)
 _, _, _, (ox, oy), rel = measure("5-recreated", BLUE)
-check("a recreated surface shows the new colour exactly, at the anchor", rel == {"x": 220, "y": 150, "w": 300, "h": 200}, rel)
+check("a recreated surface shows the new colour exactly, at the anchor", rel == want(110, 70, 150, 100), rel)
 if mode == "x11":
     command("focus")
-    for name, (x, y) in {"on the surface": (rel["x"] + 20, rel["y"] + 20), "on a DOM field": (700, 100)}.items():
+    for name, (x, y) in {"on the surface": (rel["x"] + 20, rel["y"] + 20), "on a DOM field": (400, 50)}.items():
         page_log.clear()
         subprocess.check_call(["xdotool", "mousemove", str(ox + x), str(oy + y), "click", "1"], env=env)
         list(lines(0.6))
@@ -134,8 +150,9 @@ try:
     app.wait(5)
 except subprocess.TimeoutExpired:
     app.kill()
-if xserver:
-    xserver.terminate()
+for proc in (xserver, niri):
+    if proc:
+        proc.terminate()
 json.dump({"mode": mode, "order": order, "results": results}, open(f"{out}/report.json", "w"), indent=1)
 for r in results:
     print("PASS" if r["ok"] else "FAIL", f"[{mode} {order}]", r["check"], "" if r["ok"] else r["detail"])

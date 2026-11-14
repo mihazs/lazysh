@@ -9,7 +9,7 @@ use tao::{
     platform::unix::WindowExtUnix,
     window::WindowBuilder,
 };
-use wry::{WebViewBuilder, WebViewBuilderExtUnix};
+use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
 mod gpu;
 mod wl;
@@ -20,6 +20,8 @@ enum Msg {
     Anchor([f64; 4]),
     Cmd(String),
     Log(String),
+    /// The web view's allocation changed: its offset inside the toplevel may have too.
+    Moved,
 }
 
 pub trait Surface {
@@ -27,10 +29,10 @@ pub trait Surface {
 }
 
 const HTML: &str = r##"<!doctype html><html><body style="margin:0;background:transparent;font:14px sans-serif">
-<div id="anchor" style="position:absolute;left:100px;top:80px;width:400px;height:300px;outline:1px dashed #888"></div>
-<div id="overlay" style="position:absolute;left:380px;top:300px;width:200px;height:120px;background:#f00;color:#fff">DOM overlay</div>
-<input id="field" style="position:absolute;left:620px;top:80px;width:150px" autofocus>
-<div id="log" style="position:absolute;left:620px;top:140px;width:300px">no events</div>
+<div id="anchor" style="position:absolute;left:60px;top:40px;width:240px;height:160px;outline:1px dashed #888"></div>
+<div id="overlay" style="position:absolute;left:200px;top:120px;width:140px;height:100px;background:#f00;color:#fff">DOM overlay</div>
+<input id="field" style="position:absolute;left:360px;top:40px;width:150px" autofocus>
+<div id="log" style="position:absolute;left:360px;top:80px;width:200px">no events</div>
 <script>
 let n = 0;
 function report() { const r = document.getElementById('anchor').getBoundingClientRect(); window.ipc.postMessage(JSON.stringify([r.x, r.y, r.width, r.height])); }
@@ -71,6 +73,10 @@ fn main() {
         })
         .build_gtk(vbox)
         .unwrap();
+    let moved = proxy.clone();
+    webview.webview().connect_size_allocate(move |_, _| {
+        let _ = moved.send_event(Msg::Moved);
+    });
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines().map_while(Result::ok) {
             let _ = proxy.send_event(Msg::Cmd(line));
@@ -82,10 +88,15 @@ fn main() {
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         match event {
+            Event::UserEvent(Msg::Moved) => {
+                if let Some(s) = surface.as_mut() {
+                    place_at(s.as_mut(), &window, &webview, anchor);
+                }
+            }
             Event::UserEvent(Msg::Anchor(a)) => {
                 anchor = a;
                 if let Some(s) = surface.as_mut() {
-                    s.place(a[0] as i32, a[1] as i32, a[2] as i32, a[3] as i32);
+                    place_at(s.as_mut(), &window, &webview, a);
                 }
             }
             Event::UserEvent(Msg::Log(m)) => println!("LOG {m}"),
@@ -94,12 +105,11 @@ fn main() {
                 match it.next() {
                     Some("create") => {
                         surface = Some(make(&window, &mode, surface_color, below));
-                        let a = anchor;
-                        surface.as_mut().unwrap().place(
-                            a[0] as i32,
-                            a[1] as i32,
-                            a[2] as i32,
-                            a[3] as i32,
+                        place_at(
+                            surface.as_mut().unwrap().as_mut(),
+                            &window,
+                            &webview,
+                            anchor,
                         );
                         println!("DONE create anchor={:?}", anchor);
                     }
@@ -172,4 +182,19 @@ fn make(window: &tao::window::Window, mode: &str, color: u32, below: bool) -> Bo
     } else {
         Box::new(wl::WlSurfaceChild::new(&gdk, color, below))
     }
+}
+
+/// Places the surface at an anchor given in the web view's coordinates. The toplevel's `wl_surface` (or X window) also holds
+/// the client-side decoration (title bar, shadow) GTK draws when the compositor offers none, so the web view is not at its origin.
+fn place_at(
+    surface: &mut dyn Surface,
+    window: &tao::window::Window,
+    webview: &WebView,
+    a: [f64; 4],
+) {
+    let (dx, dy) = webview
+        .webview()
+        .translate_coordinates(window.gtk_window(), 0, 0)
+        .unwrap_or((0, 0));
+    surface.place(a[0] as i32 + dx, a[1] as i32 + dy, a[2] as i32, a[3] as i32);
 }
