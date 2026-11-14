@@ -62,6 +62,20 @@ pub fn account_usage_worker() -> Option<std::process::ExitCode> {
     None
 }
 
+/// A window created from its config cannot ask for page clipboard access, and WebKitGTK then refuses
+/// `navigator.clipboard.readText()`, which the toolbar Paste button uses. `tauri.linux.conf.json` leaves
+/// the window uncreated (`"create": false`); it is built here from the same config with that access.
+#[cfg(target_os = "linux")]
+fn build_unspawned_windows(app: &tauri::App) -> tauri::Result<()> {
+    let config = app.config();
+    for window in config.app.windows.iter().filter(|window| !window.create) {
+        tauri::WebviewWindowBuilder::from_config(app.handle(), window)?
+            .enable_clipboard_access()
+            .build()?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(desktop)]
@@ -114,6 +128,8 @@ pub fn run() {
         .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
+            #[cfg(target_os = "linux")]
+            build_unspawned_windows(app)?;
             let mut state = ssh::AppState::new(app.path().app_config_dir()?)?;
             state.background = app
                 .state::<session_background::Controller>()

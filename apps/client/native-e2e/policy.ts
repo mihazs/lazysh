@@ -8,7 +8,8 @@ export function guiEnvironment(directory:string,bus:string,display?:number):Node
   if(!path.isAbsolute(directory) || !/^unix:path=\/[A-Za-z0-9_./-]+$/.test(bus) || bus!==`unix:path=${path.join(directory,'runtime/bus')}`
     || (display!==undefined && (!Number.isInteger(display) || display<1000 || display>9999)))throw new Error('Invalid owned GUI environment');
   return {
-    PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C',SHELL:'/bin/sh',GDK_BACKEND:'x11',
+    // The private bin directory is first so a case can put a recording stub (xdg-open) ahead of the system tools.
+    PATH:`${path.join(directory,'bin')}:/usr/bin:/bin`,LANG:'C',LC_ALL:'C',SHELL:'/bin/sh',GDK_BACKEND:'x11',
     HOME:path.join(directory,'home'),XDG_CONFIG_HOME:path.join(directory,'config'),XDG_CONFIG_DIRS:path.join(directory,'config'),
     XDG_DATA_HOME:path.join(directory,'data'),XDG_DATA_DIRS:path.join(directory,'data'),XDG_CACHE_HOME:path.join(directory,'cache'),
     XDG_RUNTIME_DIR:path.join(directory,'runtime'),TMPDIR:path.join(directory,'runtime'),
