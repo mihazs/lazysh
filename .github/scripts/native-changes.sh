@@ -4,6 +4,9 @@
 # Pushes, manual runs, an empty or unreadable range, workflow, script, manifest and lockfile
 # changes, and any unrecognised path select every job and the full matrix. When a path's
 # consumers are uncertain it must select more jobs, never fewer.
+# Exception: a pull request never selects the jobs that are not required to merge (companion
+# candidates, macOS and Windows desktop, iOS simulator, Mosh, Herdr navigation, auxiliary
+# Android, ntfy). They run on pushes to main, where main-verdict.yml reports their verdict.
 set -u
 
 areas=' '
@@ -104,6 +107,9 @@ herdr=$(flag any herdr terminal_runtime)
 case "$linux$linux_runtimes$android_runtime$android_herdr$android_appium" in *true*) herdr=true ;; esac
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
+# Outputs of jobs that are not required to merge: pull requests skip them, pushes keep them.
+main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios '
+
 native=false
 for output in \
   "companion=$(flag has agent)" \
@@ -120,8 +126,11 @@ for output in \
   "android_auxiliary=$(flag any android agent push)" \
   "android_ntfy=$(flag any android push)" \
   "ios=$(flag has ios)"; do
-  echo "$output"
+  # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
+  name=${output%%=*}
+  if [ "${EVENT-}" = pull_request ]; then case "$main_only" in *" $name "*) output="$name=false" ;; esac; fi
+  echo "$output"
 done
 echo "ntfy_variants=$variants"
 echo "native=$native"

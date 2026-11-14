@@ -74,6 +74,12 @@ hook and CI structure tests, client type check); every native job waits for it, 
 PR that fails the gate never queues emulator, macOS or Windows work. Pushes to `main`
 skip the gate and run every job with the full matrix, which is the parity evidence.
 
+Jobs that are not required to merge never run on a pull request, whatever its paths:
+companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Herdr navigation,
+auxiliary and ntfy. They run on pushes to `main`, and `main-verdict.yml` reports them there; the
+table below lists what a change can affect, and a pull request runs only the required jobs of
+that list.
+
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
 | Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |

@@ -15,6 +15,12 @@ const jobOutputs = ['companion', 'herdr', 'linux', 'linux_runtimes', 'desktop', 
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
+// Jobs that are not required to merge: pull requests never select them, pushes to main always do.
+const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios'];
+const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-mosh', 'native-android-herdr-navigation',
+  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator'];
+const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
+const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
 const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false',
   ntfy_variants: '["google"]', native: 'false' };
 
@@ -120,10 +126,10 @@ test.each([
   ['a shared test helper', ['tests/support/ownedProcess.ts']],
   ['documentation plus a workflow', ['docs/ci.md', '.github/workflows/checks.yml']],
   ['an empty range', []],
-] as const)('%s selects every job and the full matrix', async (_, paths) => {
+] as const)('%s selects every required job and the full matrix', async (_, paths) => {
   const outputs = await classify([...paths]);
-  expect(outputs).toEqual(everything);
-  expect(await runningJobs(outputs)).toEqual(fullRun);
+  expect(outputs).toEqual(pullRequestEverything);
+  expect(await runningJobs(outputs)).toEqual(onPullRequest(fullRun));
 });
 
 test('pushes and manual runs always select every job and the full matrix, even for documentation', async () => {
@@ -131,11 +137,25 @@ test('pushes and manual runs always select every job and the full matrix, even f
   expect(await classify(['docs/connections.md'], { event: 'workflow_dispatch' })).toEqual(everything);
 });
 
-test('an unreadable range fails toward every job', async () => {
+test('an unreadable range fails toward every required job', async () => {
   const { root, env } = await roots.create();
   const result = await run(root, ['sh', script], { ...env, EVENT: 'pull_request', BASE: 'deadbeef', HEAD: 'feedface' });
   expect(result.code).toBe(0);
-  expect(parse(result.stdout)).toEqual(everything);
+  expect(parse(result.stdout)).toEqual(pullRequestEverything);
+});
+
+test('a pull request never runs the jobs that are not required to merge, whatever its paths; main runs them all', async () => {
+  for (const paths of [['apps/agent/src/main.rs'], ['apps/client/src-tauri/apple/project.yml.hbs'], ['packages/mosh-transport/src/lib.rs'],
+    ['packages/push-registration/src/lib.rs'], ['apps/client/src/App.tsx'], ['.github/workflows/checks.yml']]) {
+    const outputs = await classify(paths);
+    for (const name of mainOnlyOutputs) expect(outputs[name], `${paths} ${name}`).toBe('false');
+    for (const id of Object.keys(await runningJobs(outputs))) expect(mainOnlyJobs, `${paths} ${id}`).not.toContain(id);
+    expect(outputs.native, `${paths} still reaches the fast gate`).toBe('true');
+  }
+  for (const event of ['push', 'workflow_dispatch']) {
+    const jobs = await runningJobs(await classify(['docs/connections.md'], { event }));
+    for (const id of mainOnlyJobs) expect(jobs[id], `${event} ${id}`).toBeGreaterThan(0);
+  }
 });
 
 test.each([
@@ -171,7 +191,7 @@ test.each([
   const outputs = await classify([...paths]);
   expect(outputs.docs_only).toBe('false');
   expect(outputs.native).toBe(Object.keys(expected).length > 3 ? 'true' : 'false');
-  expect(await runningJobs(outputs)).toEqual(expected);
+  expect(await runningJobs(outputs)).toEqual(onPullRequest(expected));
 });
 
 test('the nightly runs the Appium suite and the Herdr it needs, and nothing else', async () => {
@@ -197,7 +217,7 @@ test('quarantined Appium specs get their own job on main and the nightly, never 
 test('renaming a source file into documentation still selects the source jobs', async () => {
   const outputs = await classify([], { seed: ['apps/agent/src/notes.rs'], moves: [['apps/agent/src/notes.rs', 'docs/notes.rs']] });
   expect(outputs.docs_only).toBe('false');
-  expect(await runningJobs(outputs)).toEqual(agentRun);
+  expect(await runningJobs(outputs)).toEqual(onPullRequest(agentRun));
 });
 
 test('every native job waits only for the gate and same-run Herdr bytes, and every selector is a classifier output', async () => {
