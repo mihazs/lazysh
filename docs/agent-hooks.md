@@ -280,13 +280,15 @@ repeat it. Observed:
   and no further `Stop`: `Stop` is not completion, and a blocked turn has no
   completion event at all. `Interrupt` and `StopFailure` replace `Stop`;
   `StopFailure` carries the raw provider error text.
+- Observers are fire-and-forget and unordered: with only the `PermissionRequest`
+  observer delayed two seconds, `PermissionResult`, `PostToolUse` and `Stop` were
+  recorded before the request.
 
 So a root `Working`/`Done` from identity-less events, `Stop` as completion and a
 request as confirmed waiting stay unsupported until a contract decides them;
 `PermissionRequest` only observes that approval was requested. Not covered: lazysh
-ingestion of these payloads, receipt ordering (observers are fire-and-forget; a
-result arriving before its request was not exercised), a real provider, macOS and
-Windows, and later releases (2.6.2 delivered no `Stop` in the same harness, cause not
+ingestion of these payloads (so how it must treat a late request is still open), a
+real provider, macOS and Windows, and later releases (2.6.2 delivered no `Stop` in the same harness, cause not
 diagnosed). Metadata presence alone still does not establish hook loading. See
 [#696](https://github.com/mihazs/lazysh/issues/696).
 The path contracts are pinned to [Kimi Code 2.4.1](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/apps/kimi-code/src/utils/paths.ts#L35)

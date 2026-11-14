@@ -19,8 +19,8 @@ IDENTITYLESS = ("TurnStarted", "PreToolUse", "PostToolUse", "PostToolUseFailure"
 T = ["tmux", "-S", "/tmp/qualify.sock"]
 
 
-def hook(name, event, extra="timeout = 10\n"):
-    return f'\n[[hooks]]\nevent = "{event}"\ncommand = "cat > /tmp/h-{name}/rcpt/$(date +%s%N)-$$.{event}.json"\n{extra}'
+def hook(name, event, extra="timeout = 10\n", delay=0):
+    return f'\n[[hooks]]\nevent = "{event}"\ncommand = "sleep {delay}; cat > /tmp/h-{name}/rcpt/$(date +%s%N)-$$.{event}.json"\n{extra}'
 
 # ---------------------------------------------------------------- mock endpoint
 REQS = []
@@ -100,12 +100,12 @@ def sh(*cmd, env=None, timeout=60):
 class Profile:
     """A disposable KIMI_CODE_HOME with a strict synthetic config and recording hooks."""
 
-    def __init__(self, name, mode="manual", hooks=None, extra="", foreign=""):
+    def __init__(self, name, mode="manual", hooks=None, extra="", foreign="", slow={}):
         self.home = f"/tmp/h-{name}"
         shutil.rmtree(self.home, ignore_errors=True)
         os.makedirs(f"{self.home}/rcpt")
         self.env = {"HOME": self.home, "KIMI_CODE_HOME": f"{self.home}/.kimi-code", "PATH": os.environ["PATH"], "TERM": "xterm-256color"}
-        hooks = (hooks if hooks is not None else "".join(hook(name, e) for e in EVENTS)) + foreign
+        hooks = (hooks if hooks is not None else "".join(hook(name, e, delay=slow.get(e, 0)) for e in EVENTS)) + foreign
         os.makedirs(self.env["KIMI_CODE_HOME"])
         open(f"{self.env['KIMI_CODE_HOME']}/config.toml", "w").write(
             f'default_model = "mock"\ndefault_permission_mode = "{mode}"\ntelemetry = false\n\n'
@@ -193,6 +193,16 @@ def drive_approve(p, key="1", prompt="RUN-TOOL go"):
     p.quit()
 
 
+def drive_reordered(p):  # one slow observer: delivery order is not event order
+    p.tui()
+    p.say("RUN-TOOL go")
+    p.until("Approve once")
+    p.keys("1")
+    p.wait("PermissionRequest")
+    p.wait("Stop")
+    p.quit()
+
+
 def drive_interrupt(p):
     p.tui()
     p.say("RUN-SLOW go")
@@ -257,10 +267,12 @@ def main(out):
         ("unknown_event", hook("strict", "NotAnEvent")), ("timeout_601", hook("strict", "SessionStart", "timeout = 601\n")))}
     scen = {"prompt_auto": drive_prompt, "approve": drive_approve, "reject": lambda p: drive_approve(p, "3"),
             "interrupt": drive_interrupt, "upstream_failure": drive_fail, "stop_blocked_once": drive_stop_block,
+            "result_before_request": drive_reordered,
             "subagent_foreground": drive_agent, "subagent_background": lambda p: drive_agent(p, "RUN-AGENT-BG go", 3)}
     R = {}
     for n, d in scen.items():
-        R[n] = run(n, d, mode="manual", foreign=STOP_ONCE if n == "stop_blocked_once" else "")
+        R[n] = run(n, d, mode="manual", foreign=STOP_ONCE if n == "stop_blocked_once" else "",
+                   slow={"PermissionRequest": 2} if n == "result_before_request" else {})
         print(f"ran {n}: {[r['event'] for r in R[n][0]]}", flush=True)
     ev = lambda n: [r["event"] for r in R[n][0]]  # noqa: E731
     fg, bg = R["subagent_foreground"][0], R["subagent_background"][0]
@@ -281,6 +293,8 @@ def main(out):
             by(R["reject"][0], "PermissionResult")[0]["decision"] != "approved" and "PostToolUseFailure" in ev("reject") and ev("reject").count("Stop") == 1,
         "a blocked Stop continues the turn with a second model call and emits no later Stop":
             ev("stop_blocked_once").count("Stop") == 1 and R["stop_blocked_once"][1] == ["text", "text"],
+        "a slow observer delivers PermissionResult before its PermissionRequest":
+            [e for e in ev("result_before_request") if e.startswith("Permission")] == ["PermissionResult", "PermissionRequest"],
         "interrupt fires Interrupt in place of Stop": "Interrupt" in ev("interrupt") and "Stop" not in ev("interrupt"),
         "upstream failure fires StopFailure in place of Stop": "StopFailure" in ev("upstream_failure") and "Stop" not in ev("upstream_failure"),
         "SessionEnd reports reason exit in every interactive scenario": all(by(R[n][0], "SessionEnd")[0]["reason"] == "exit" for n in R if n != "prompt_auto"),

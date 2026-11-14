@@ -17,8 +17,9 @@ host environment, empty `HOME`, read-only `/usr`, private tmux server and `/tmp`
 CLI and its recording hooks (`cat > receipt`) share that one namespace. It needs `bwrap`, `tmux`, `python3`
 and a glibc Linux x64 host. `telemetry = false`; no credential, profile or model call leaves the sandbox.
 
-`qualify.py` runs a strict synthetic `config.toml` through eight scenarios (prompt mode, approve, reject,
-interrupt, upstream failure, a once-blocked `Stop`, and a foreground and a background sub-agent) plus four
+`qualify.py` runs a strict synthetic `config.toml` through nine scenarios (prompt mode, approve, reject,
+interrupt, upstream failure, a once-blocked `Stop`, a slowed approval observer, and a foreground and a
+background sub-agent) plus four
 configuration checks, then asserts each documented claim. `receipts-2.4.1.json` is the retained, redacted
 result for 2.4.1 (official SHA-256 `f4a225fb8afe0394151e721bc3cd94d71e314fbea7f75900453556da7d8738de`):
 structural fields only, no session or approval ids, no paths, no prompt text.

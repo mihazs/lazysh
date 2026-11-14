@@ -7,6 +7,7 @@
   "approved turn: PermissionRequest and PermissionResult share id, turn_id and tool_call_id and name root as main": true,
   "rejected turn: result is not approved, the tool fails and the turn still ends with Stop": true,
   "a blocked Stop continues the turn with a second model call and emits no later Stop": true,
+  "a slow observer delivers PermissionResult before its PermissionRequest": true,
   "interrupt fires Interrupt in place of Stop": true,
   "upstream failure fires StopFailure in place of Stop": true,
   "SessionEnd reports reason exit in every interactive scenario": true,
@@ -45,6 +46,7 @@
   "interrupt": "SessionStart source=startup profile=agent > UserPromptSubmit is_steer=False > TurnStarted turn_id=0 origin_kind=user > Interrupt turn_id=0 reason=cancelled > SessionEnd reason=exit  [provider: slow]",
   "upstream_failure": "SessionStart source=startup profile=agent > UserPromptSubmit is_steer=False > TurnStarted turn_id=0 origin_kind=user > StopFailure error_type=APIStatusError > SessionEnd reason=exit  [provider: fail]",
   "stop_blocked_once": "SessionStart source=startup profile=agent > UserPromptSubmit is_steer=False > TurnStarted turn_id=0 origin_kind=user > Stop stop_hook_active=False > SessionEnd reason=exit  [provider: text text]",
+  "result_before_request": "SessionStart source=startup profile=agent > UserPromptSubmit is_steer=False > TurnStarted turn_id=0 origin_kind=user > PreToolUse > PermissionResult agent_id=main turn_id=0 decision=approved > PostToolUse > Stop stop_hook_active=False > PermissionRequest agent_id=main turn_id=0 > SessionEnd reason=exit  [provider: tool:Bash text]",
   "subagent_foreground": "SessionStart source=startup profile=agent > UserPromptSubmit is_steer=False > TurnStarted turn_id=0 origin_kind=user > PreToolUse > TurnStarted turn_id=0 origin_kind=system_trigger origin_name=subagent > SubagentStart agent_name=coder > PreToolUse > PermissionRequest agent_id=agent-0 turn_id=0 > PermissionResult agent_id=agent-0 turn_id=0 decision=approved > PostToolUse > Stop stop_hook_active=False > SubagentStop agent_name=coder > PostToolUse > Stop stop_hook_active=False > SessionEnd reason=exit  [provider: tool:Agent tool:Bash text text]",
   "subagent_background": "SessionStart source=startup profile=agent > UserPromptSubmit is_steer=False > TurnStarted turn_id=0 origin_kind=user > PreToolUse > TurnStarted turn_id=0 origin_kind=system_trigger origin_name=subagent > SubagentStart agent_name=coder > PostToolUse > Stop stop_hook_active=False > PreToolUse > PermissionRequest agent_id=agent-0 turn_id=0 > PermissionResult agent_id=agent-0 turn_id=0 decision=approved > PostToolUse > Stop stop_hook_active=False > SubagentStop agent_name=coder > TurnStarted turn_id=1 origin_kind=task > Stop stop_hook_active=False > SessionEnd reason=exit  [provider: tool:Agent tool:Bash text text text]"
  }
