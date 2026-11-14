@@ -28,10 +28,10 @@ concurrency:
 jobs:
   client:
     name: verdict-client
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
       - uses: ./.github/actions/setup-bun
       - run: bun install --frozen-lockfile
       # client:build is `tsc -b && vite build`.
@@ -39,10 +39,10 @@ jobs:
 
   agent:
     name: verdict-agent
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
       - uses: ./.github/actions/setup-bun
       - uses: dtolnay/rust-toolchain@stable
       # Restores the cache that checks.yml's agent job saves; this job never saves its own.
@@ -55,10 +55,10 @@ jobs:
 
   release-tools:
     name: verdict-release-tools
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
       - uses: ./.github/actions/setup-release
       # The same commands as the release-tools job of version.yml, in one step.
       - run: |
