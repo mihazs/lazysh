@@ -7,6 +7,8 @@ import { mountTerminalHistoryHarness } from '../e2e/fixtures/TerminalHistoryHarn
 import { createTerminal } from '../src/xterm/terminal';
 import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/rendererCandidates';
 import { configureTerminalBold } from '../src/xterm/terminalBold';
+import { XtermTerminalAdapter } from '../src/xtermTerminalAdapter';
+import type { TerminalAdapter } from '../src/terminalAdapter';
 import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
@@ -31,6 +33,19 @@ function glInfo() {
 }
 
 type Harness = ReturnType<typeof mountTerminalHistoryHarness>;
+type Term = Harness['terminal'];
+/** `?write=adapter` feeds every byte through XtermTerminalAdapter.write(bytes, onApplied), as App.tsx does; the default calls xterm's write, as the recorded baseline did. */
+const viaAdapter = new URLSearchParams(location.search).get('write') === 'adapter';
+const adapters = new WeakMap<Term, TerminalAdapter>(), encoder = new TextEncoder();
+let adapterWrites = 0;
+function put(terminal: Term, data: string | Uint8Array, applied?: () => void) {
+  if (!viaAdapter) return terminal.write(data, applied);
+  let adapter = terminal === harness?.terminal ? harness.session.adapter : adapters.get(terminal);
+  if (!adapter) adapters.set(terminal, adapter = new XtermTerminalAdapter(terminal));
+  adapterWrites++;
+  void adapter.write!(typeof data === 'string' ? encoder.encode(data) : data, applied);
+}
+const putAndWait = (terminal: Term, data: string | Uint8Array) => new Promise<void>(resolve => put(terminal, data, resolve));
 let harness: Harness | undefined;
 const pending: number[] = [], latencies: number[] = [];
 let echoMode: 'keydown' | 'composition' = 'keydown', echoed = 0, typed = 0, writesAtBegin = 0;
@@ -53,7 +68,7 @@ function echo(data: string) {
   echoColumn = text === '\r\n' ? 0 : echoColumn + text.length;
   if (echoColumn > terminal.cols - 4) { text += '\r\n'; echoColumn = 0; }
   // Listen only once the echo is applied: a render already scheduled by the keystroke itself must not count.
-  terminal.write(text, () => {
+  put(terminal, text, () => {
     const render = terminal.onRender(() => { render.dispose(); if (started !== undefined) latencies.push(performance.now() - started); echoed++; });
   });
 }
@@ -112,20 +127,20 @@ async function drain(json: string[], until?: () => boolean) {
     while (inflight + data.length > WINDOW) await new Promise<void>(resolve => { waiter = resolve; });
     inflight += data.length; bytes += data.length;
     const written = performance.now();
-    terminal.write(data, () => { inflight -= data.length; ack.push(performance.now() - written); waiter?.(); waiter = undefined; });
+    put(terminal, data, () => { inflight -= data.length; ack.push(performance.now() - written); waiter?.(); waiter = undefined; });
     await yieldTask();
   }
   while (inflight > 0) await new Promise<void>(resolve => { waiter = resolve; });
   return { bytes, decodeMs, ackMs: ack };
 }
 
-async function settle() { await new Promise<void>(resolve => harness!.terminal.write('', () => resolve())); await frame(); await frame(); }
+async function settle() { await putAndWait(harness!.terminal, ''); await frame(); await frame(); }
 async function reset() { harness!.terminal.reset(); await settle(); echoColumn = 0; }
 
 const api = {
   open() {
     const { terminal } = open();
-    return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: `xterm-${candidate}`, canvases: terminal.element?.querySelectorAll('canvas').length ?? 0, gl: candidate === 'webgl' ? glInfo() : null, domNodes: document.getElementsByTagName('*').length };
+    return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: `xterm-${candidate}`, writePath: viaAdapter ? 'adapter' : 'direct', canvases: terminal.element?.querySelectorAll('canvas').length ?? 0, gl: candidate === 'webgl' ? glInfo() : null, domNodes: document.getElementsByTagName('*').length };
   },
   /** App features that reach into xterm's DOM renderer: tried on the live terminal, because a different renderer may refuse them. Run after the measurements. */
   seams() {
@@ -135,6 +150,8 @@ const api = {
   /** A lost WebGL context silently reverts to the DOM renderer; the driver rejects a run that saw one. */
   contextLosses() { return contextLosses; },
   mismatch() { return lastMismatch; },
+  /** Writes that went through XtermTerminalAdapter.write: zero unless the page was opened with ?write=adapter. */
+  adapterWrites() { return adapterWrites; },
   async calibrate() { return calibrate(); },
   async prepare(kind: 'plain' | 'ansi' | 'redraw', size: number) {
     const { cols, rows } = open().terminal;
@@ -156,10 +173,10 @@ const api = {
     await reset();
     const { terminal } = harness!, { bursts, screen } = shellSession(interactions, terminal, 10);
     const applied: number[] = [], rendered: number[] = [];
-    await new Promise<void>(resolve => terminal.write('$ ', resolve));
+    await putAndWait(terminal, '$ ');
     for (const burst of bursts) {
       const written = performance.now();
-      const render = new Promise<void>(resolve => terminal.write(burst, () => {
+      const render = new Promise<void>(resolve => put(terminal, burst, () => {
         applied.push(performance.now() - written);
         const d = terminal.onRender(() => { d.dispose(); rendered.push(performance.now() - written); resolve(); });
       }));
@@ -208,7 +225,7 @@ const api = {
     await reset();
     const data = new TextEncoder().encode(Array.from({ length: lines }, (_, i) => `scrollback line ${String(i).padStart(6, '0')} ${'x'.repeat(40)}`).join('\r\n') + '\r\n');
     const started = performance.now();
-    for (const part of chunks(data)) await new Promise<void>(resolve => terminal.write(part, resolve));
+    for (const part of chunks(data)) await putAndWait(terminal, part);
     const fillMs = performance.now() - started;
     await settle();
     const retained = terminal.buffer.active.length;
@@ -231,7 +248,7 @@ const api = {
     sessions.push(...extra);
     const data = new TextEncoder().encode(Array.from({ length: lines }, (_, i) => `background session line ${String(i).padStart(6, '0')} ${'y'.repeat(30)}`).join('\r\n') + '\r\n');
     const all = [harness!.terminal, ...extra];
-    await Promise.all(all.map(async terminal => { for (const part of chunks(data)) await new Promise<void>(resolve => terminal.write(part, resolve)); }));
+    await Promise.all(all.map(async terminal => { for (const part of chunks(data)) await putAndWait(terminal, part); }));
     await settle();
     const retained = all.map(terminal => terminal.buffer.active.length);
     return { sessions: all.length, linesPerSession: lines, retainedLines: Math.min(...retained), correct: retained.every(length => length >= Math.min(lines, all[0].options.scrollback ?? 0)) };
@@ -243,7 +260,7 @@ const api = {
     for (const terminal of sessions.slice(0, streams)) {
       background.done.push((async () => {
         const data = new Uint8Array(JSON.parse(prepare.json[0]));
-        while (!background!.stop) { await new Promise<void>(resolve => terminal.write(data, resolve)); await yieldTask(); }
+        while (!background!.stop) { await putAndWait(terminal, data); await yieldTask(); }
       })());
     }
   },
