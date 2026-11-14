@@ -149,6 +149,8 @@ enables the multiplexer toolbar, gestures, Jump To and confirmed Chat input. Loc
 sessions get a stable host key and label (`local:<target>`, **This device** or
 **This device · Ubuntu (WSL)**) so the board groups and archives them like a host.
 
+Shipped in #1667 (part of #1132): the host key is `local:default` and the label **This device**; the Agents, Transcript and Apple status views, the usage reports and the notification inbox follow the default target's `tools.companion` (hidden, with a reason in the session details, when it is not true); `NotificationMonitor` polls once per host key; the companion hook helpers in `bridge.ts` accept `local:` ids. Still to come: the **Bundled** / **Managed copy** / **On PATH** line in the companion panel and the Linux native GUI case.
+
 ## Capability table
 
 `yes` works as on a remote host. `n/a` is not applicable, with the reason.

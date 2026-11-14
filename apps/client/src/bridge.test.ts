@@ -106,3 +106,15 @@ it('preserves native discovery rejection identity through both guarded layers an
   reject(failure);await pending;
   applyAccessStatus({...unlocked,generation:String(generation+2n)});
 });
+it('sends hook discovery and setup for a local session to the native companion while keeping its SSH-only helpers rejected',async()=>{
+  const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
+  await api.companionHookDiscovery(id,3);
+  await api.companionHooks(id,{agent:'claude',action:'status',profileRoot:'/home/user/.claude'});
+  expect(invoke.mock.calls.map(([command,args])=>[command,args])).toEqual([
+    ['companion_hook_discovery',{sessionId:id,schemaVersion:3}],
+    ['companion_hooks',{sessionId:id,request:{agent:'claude',action:'status',profileRoot:'/home/user/.claude'}}],
+  ]);
+  invoke.mockClear();
+  for(const operation of [()=>api.connectMosh(id,{},()=>{}),()=>api.connectEt(id,{},()=>{})])await expect(operation()).rejects.toThrow('requires an SSH connection');
+  expect(invoke).not.toHaveBeenCalled();
+});

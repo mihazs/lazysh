@@ -8,6 +8,7 @@ import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {formatNumber, t, useUi} from './i18n/core';
 import {appVersion} from './version';
+import {localHostKey,localHostLabel} from './localHost';
 import {onBackButtonPress} from '@tauri-apps/api/app';
 import bedModeMark from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {useClientLocale} from './i18n/useClientLocale';
@@ -305,13 +306,15 @@ type View =
   | "voice"
   | "devices"
   | "apple";
-type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:{files?:boolean;repository?:boolean}}[]};
-const localViewTools:Partial<Record<View,'files'|'repository'>>={files:'files',diff:'repository'};
+type LocalTool='files'|'repository'|'companion';
+type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:Partial<Record<LocalTool,boolean>>}[]};
+const localViewTools:Partial<Record<View,LocalTool>>={files:'files',diff:'repository',agents:'companion',chat:'companion',apple:'companion'};
 /** A local session offers its terminal tools plus the host tools its default target reports. */
+function localTool(capability:LocalCapability,tool:LocalTool) {return capability.targets?.find(target=>target.id==='default')?.tools?.[tool];}
 function localView(capability:LocalCapability,id:View) {
   if(id==='terminal' || id==='voice' || id==='usage')return true;
   const tool=localViewTools[id];
-  return !!tool && capability.targets?.find(target=>target.id==='default')?.tools?.[tool]===true;
+  return !!tool && localTool(capability,tool)===true;
 }
 const views = () => [
   { id: "terminal" as const, label: t("appTerminal"), Icon: TerminalSquare },
@@ -1464,8 +1467,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const accountUsage=useAccountUsage(active?.connected ? active.id : null,usageItem!=='hidden'||view==='usage',usageTarget(usageItem,usageProvider,paneAgent));
   const navigationState=useRef(navigation);navigationState.current=navigation;
   const remoteActive=!!active?.connected && !active.local;
+  /** The Agents board, transcripts and usage run through the companion: the host's for a remote session, this device's for a local one that has it. */
+  const companionActive=!!active?.connected && (!active.local || localView(localCapability,'agents'));
+  /** The inbox follows every connected session that has a companion; one poll serves all sessions of a host key. */
+  const inboxSessions=sessions.filter(session=>!session.local || localView(localCapability,'agents'));
   // A connected remote session on a phone lists Agents, Workspaces, Connections and opens on Agents; with no such connection Connections leads.
-  const agentsFirst=remoteActive && !wideSidebar;
+  const agentsFirst=companionActive && !wideSidebar;
   const navigationEntry=navigation[activeId??'']??{mode:agentsFirst?'agents' as const:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
@@ -1492,7 +1499,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   // A dialog over the page takes the swipes, so a drag never moves the page under it.
   useSideMenuGestures({shell,menu:navigationRef,enabled:sideMenuMode && !navigationCovered,open:sidebar,onOpen:openNavigation,onClose:()=>setSidebar(false)});
   const agentSection=agentSections[activeId??'']??'live';
-  const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
+  const agentsVisible=sidebarShown && !navigationCovered && companionActive && navigationEntry.mode==='agents';
   const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
   const savedAgentOffset=agentDrawerOffset.current;
   if(savedAgentOffset && (!lease.current() || savedAgentOffset.source!==active || savedAgentOffset.mode!==navigationEntry.mode || (!savedAgentOffset.returning && savedAgentOffset.entry!==navigationEntry)
@@ -1530,7 +1537,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function showNavigation(mode:NavigationMode):boolean {
     agentDrawerOffset.current=undefined;
     if(mode!=='connections' && pendingMuxRequest)return false;
-    if(mode==='agents' && !remoteActive)return false;
+    if(mode==='agents' && !companionActive)return false;
     const id=activeId??'';
     setNavigation(previous=>({...previous,[id]:{mode,agents:mode==='agents'||previous[id]?.agents===true}}));
     if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
@@ -1694,7 +1701,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     let pending:Prepared|undefined;
     const ownership = new PendingSessions();
     try {
-      pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);
+      pending=await prepareSession(localHostKey(), t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);
       pending.session.local=true;
       const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt).catch(error=>{throw captureLaunchError(error);}) : api.connectLocal(pending.onEvent));
       pending.establish(result.sessionId);
@@ -1775,7 +1782,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         let pending:Prepared|undefined;
         try {
           if(!localCapability.available)throw new Error(localCapability.reason);
-          pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);pending.session.local=true;
+          pending=await prepareSession(localHostKey(), t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);pending.session.local=true;
           const result=await api.connectLocal(pending.onEvent);pending.establish(result.sessionId);
           restoringSessions.current.add(result.sessionId);
           if(!mounted.current)throw new Error(t("appLocalRestorationCancelled"));
@@ -2240,7 +2247,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </SideMenuChoices>
         </section>}
         <nav className="workspace-navigation-modes" aria-label={t('navigationTitle')}>
-          {(agentsFirst?['agents','workspaces','connections'] as const:['connections','workspaces','agents'] as const).map(mode=><button key={mode} data-workspace-mode={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{mode==='connections'?<Server size={18} aria-hidden="true"/>:mode==='workspaces'?<Layers size={18} aria-hidden="true"/>:<Bot size={18} aria-hidden="true"/>}<span>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</span></button>)}
+          {(agentsFirst?['agents','workspaces','connections'] as const:['connections','workspaces','agents'] as const).map(mode=><button key={mode} data-workspace-mode={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !companionActive)} onClick={()=>showNavigation(mode)}>{mode==='connections'?<Server size={18} aria-hidden="true"/>:mode==='workspaces'?<Layers size={18} aria-hidden="true"/>:<Bot size={18} aria-hidden="true"/>}<span>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</span></button>)}
         </nav>
         <div className="navigation-connections" hidden={navigationEntry.mode!=='connections'}>
         <button className="search-button" onClick={() => setPalette(true)}>
@@ -2330,13 +2337,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           {endConnection}
         </>}
         </div>
-        <nav className="agent-section-jumps" hidden={!agentsVisible} aria-label={t('agentsSections')}>
+        <nav className="agent-section-jumps" hidden={!agentsVisible || !remoteActive} aria-label={t('agentsSections')}>
           <button type="button" className="subtle-button" aria-label={t('herdrAgentsTitle')} aria-controls={`${agentContentId}-live`} aria-pressed={agentSection==='live'} onClick={()=>jumpAgentContent('live')}>{t('agentsJumpLive')}</button>
           <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} aria-pressed={agentSection==='activity'} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
         </nav>
         <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
         <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>{remoteActive && active?.attached && !muxTools[active.id] && <p role="status">{t('muxVersionUnknown')}</p>}
-        {remoteActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+        {companionActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={active.local?localHostLabel():hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} local={active.local} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={active.local?undefined:reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
@@ -2512,7 +2519,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )}
         {active ? (
           <>
-            {active.local && <p className="security-note">{t("appLocalShellOnThisDeviceSSHHostToolsRemote")}</p>}
+            {active.local && <p className="security-note">{t(localTool(localCapability,'companion')===undefined?"appLocalShellOnThisDeviceSSHHostToolsRemote":companionActive?"appLocalShellOnThisDeviceCompanion":"appLocalShellOnThisDeviceNoCompanion")}</p>}
             {active.attached?.restoreName === null && <p className="security-note" role="status">{t("appUnsupportedTmuxRestoreName")}</p>}
             {view!=='terminal' && <nav className="context-navigation" aria-label={t('navigationContext')}>
               <button type="button" className="subtle-button" disabled={pendingMuxRequest} onClick={()=>returnToContext()}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
@@ -2550,11 +2557,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
-                  {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={companionActive ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  {companionActive && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
-                {active.connected && !active.local && (view === "chat" || keptChat?.sessionId === active.id) && (
+                {companionActive && (view === "chat" || keptChat?.sessionId === active.id) && (
                   <ChatPanel
                     key={`${active.id}:${keptChat?.sessionId === active.id ? keptChat.generation : (keptChat?.generation ?? 0) + 1}`}
                     sessionId={active.id}
@@ -2582,7 +2589,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.connected && (!active.local || localView(localCapability,'diff')) && view === "diff" && (
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && !active.local && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>showNavigation('agents')} /></div>}
+                {companionActive && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>showNavigation('agents')} /></div>}
                 {active.connected && !active.local && view === "sessions" && (
                   <MuxPanel
                     key={active.id}
@@ -2713,7 +2720,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </section>}]:[]),
             {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),value:t('appRemotePushSettings'),onSelect:()=>{setPreferences(false);setPushSettings(true);}},
             {id:'inbox',section:'agents',title:t('appNotificationInbox'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setInbox(true);}},
-            {id:'agents',section:'agents',title:t('appAgents'),disabled:!remoteActive||pendingMuxRequest,value:remoteActive?active?.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);showNavigation('agents');}},
+            {id:'agents',section:'agents',title:t('appAgents'),disabled:!companionActive||pendingMuxRequest,value:companionActive?active?.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);showNavigation('agents');}},
             {id:'voice',section:'agents',title:t('appDictate'),disabled:!voiceReady,value:voiceReady?active?.name:active?t('settingsVoiceUnavailable'):t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
             {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},
@@ -2734,10 +2741,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           {!sessions.length && <p>{t("appNoTerminalSessionsAreOpen")}</p>}
         </div>
       </Dialog>}
-      {native && <NotificationMonitor sessions={sessions.filter(session=>!session.local)} />}
+      {native && <NotificationMonitor sessions={inboxSessions} />}
       {inbox && (
         <Dialog mobilePresentation="page" title={t("appNotificationInbox")} close={() => setInbox(false)}>
-          <NotificationPanel sessions={sessions.filter(session=>!session.local)} />
+          <NotificationPanel sessions={inboxSessions} />
         </Dialog>
       )}
       {about && (

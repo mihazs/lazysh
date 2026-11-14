@@ -1,8 +1,9 @@
 import {t} from './i18n/core';
 import { useSyncExternalStore } from 'react';
 import { parseSnapshot } from './AgentPanel';
+import { localHostLabel } from './localHost';
 
-export type InboxSession = { id: string; hostId: string; name: string; connected: boolean };
+export type InboxSession = { id: string; hostId: string; name: string; connected: boolean; local?: boolean };
 export type InboxRow = { id: string; eventId: string; sessionId: string; hostId: string; hostName: string; agent: string; project: string; agentSessionId: string; state: 'working' | 'needs_attention' | 'done'; updatedAt: string; paneId: string | null };
 type InboxState = { version: 1; monitoring: boolean; notifications: boolean; rows: InboxRow[]; latest: Record<string, string>; error: string };
 const storageKey = 'lazysh.inbox.v1';
@@ -53,7 +54,7 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
   const events = await Promise.all(reported.map(async row => {
     const id = await hash([session.hostId, row.agent, row.sessionId]);
     const eventId = await hash([id, row.eventCount, row.updatedAt, row.state]);
-    const event: InboxRow = { id, eventId, sessionId: session.id, hostId: session.hostId, hostName: summaryText(session.name, 80), agent: summaryText(row.agent, 80), project: summaryText(row.project, 200), agentSessionId: row.sessionId, state: row.state, updatedAt: new Date(row.updatedAt).toISOString(), paneId: row.paneId?.slice(0, 256) || null };
+    const event: InboxRow = { id, eventId, sessionId: session.id, hostId: session.hostId, hostName: summaryText(session.local ? localHostLabel() : session.name, 80), agent: summaryText(row.agent, 80), project: summaryText(row.project, 200), agentSessionId: row.sessionId, state: row.state, updatedAt: new Date(row.updatedAt).toISOString(), paneId: row.paneId?.slice(0, 256) || null };
     return event;
   }));
   if (!canCommit()) return [];
