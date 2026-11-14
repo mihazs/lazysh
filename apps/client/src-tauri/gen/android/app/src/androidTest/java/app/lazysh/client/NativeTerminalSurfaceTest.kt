@@ -103,7 +103,14 @@ class NativeTerminalSurfaceTest {
         return bitmap.getPixel(view.width / 2, view.height / 2)
     }
 
-    private fun awaitBackground() = PageDriver.poll("the background on the surface") { surfaceView()?.let { if (centreOfSurface(it) == opaque) true else null } }
+    private fun awaitBackground() {
+        var seen = "no surface"
+        try {
+            PageDriver.poll("the background on the surface") { surfaceView()?.let { view -> runCatching { centreOfSurface(view) }.onSuccess { seen = "#%08x".format(it) }.onFailure { seen = "PixelCopy failed: $it" }.getOrNull()?.let { if (it == opaque) true else null } } }
+        } catch (error: AssertionError) {
+            throw AssertionError("${error.message}: wanted #${"%08x".format(opaque)}, last read from the surface: $seen", error)
+        }
+    }
 
     private fun awaitReady(generation: Int) = PageDriver.poll("a ready surface of generation $generation") {
         state().takeIf { it.getBoolean("ready") && it.getInt("generation") == generation }
