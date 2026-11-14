@@ -589,7 +589,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   const collapsed=(await startup.boundingBox())!.height;
   expect(await startup.locator('.workspace-restore-help').count()).toBe(0);
   await startupRow.getByRole('button',{name:'Workspace details',exact:true}).click();
-  await expect(startup.getByText('Uses saved credentials; tmux and Herdr reattach. Open Zellij sessions from Sessions.',{exact:true})).toBeVisible();
+  await expect(startup.getByText('Uses saved credentials; tmux, Herdr and Zellij reattach to their sessions.',{exact:true})).toBeVisible();
   expect((await startup.boundingBox())!.height).toBeGreaterThan(collapsed);
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath('restore-details.png')});

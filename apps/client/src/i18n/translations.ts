@@ -898,7 +898,7 @@ const translations = {
   appToConnect: ['para conectar.', 'para conectar.'],
   appRestoring: ['Restaurando…', 'Restaurando…'],
   appRestorePreviousWorkspace: ['Restaurar espaço de trabalho anterior', 'Restaurar espacio de trabajo anterior'],
-  appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij: ['Usa credenciais salvas; tmux e Herdr reconectam às sessões. Abra sessões Zellij em Sessões.', 'Usa credenciales guardadas; tmux y Herdr se reconectan a las sesiones. Abre sesiones de Zellij desde Sesiones.'],
+  appUsesSavedCredentialsMultiplexersReattach: ['Usa credenciais salvas; tmux, Herdr e Zellij reconectam às suas sessões.', 'Usa credenciales guardadas; tmux, Herdr y Zellij se reconectan a sus sesiones.'],
   appDismiss: ['Dispensar', 'Descartar'],
   appDismissError: ['Dispensar erro', 'Descartar error'],
   appTerminalConnections: ['Conexões do terminal', 'Conexiones del terminal'],

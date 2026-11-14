@@ -47,16 +47,16 @@ async function relaunchOffer(page:Page) {
   expect(await page.evaluate(()=>window.relaunchCalls.filter(call=>call.command==='write_stdin'))).toEqual([]);
 }
 
-test('relaunch offers the previous workspace and reattaches tmux and Herdr only after explicit restore',async({page},testInfo)=>{
+test('relaunch offers the previous workspace and reattaches tmux, Herdr and Zellij only after explicit restore',async({page})=>{
   await page.goto('/');
   await relaunchOffer(page);
   await expect(page.locator('.terminal-canvas')).toHaveCount(0);
 
   await restoreButton(page).click();
-  await expect.poll(async()=>(await remoteCalls(page)).length).toBe(5);
+  await expect.poll(async()=>(await remoteCalls(page)).length).toBe(7);
   const calls=await remoteCalls(page);
   const connects=calls.filter(call=>call.command==='connect');
-  expect(connects).toHaveLength(3);
+  expect(connects).toHaveLength(4);
   for(const {args} of connects) {
     expect(args).toMatchObject({hostId:'box',useSavedCredentials:true});
     // Restoration supplies no credential material of its own.
@@ -65,27 +65,28 @@ test('relaunch offers the previous workspace and reattaches tmux and Herdr only 
   const tmux=calls.find(call=>call.command==='attach_tmux')!.args;
   expect({name:tmux.name,tmuxServer:tmux.tmuxServer}).toEqual({name:'agents',tmuxServer:'work'});
   const multiplexers=calls.filter(call=>call.command==='attach_multiplexer').map(({args})=>({kind:args.kind,name:args.name,createIfMissing:args.createIfMissing}));
-  // Herdr reattaches by name without creating; Zellij has no automatic restoration.
-  expect(multiplexers).toEqual([{kind:'herdr',name:'fleet',createIfMissing:undefined}]);
+  // Restore never creates: Zellij attaches to its existing session, and an unlisted one fails instead of starting empty.
+  expect(multiplexers).toEqual([{kind:'herdr',name:'fleet',createIfMissing:false},{kind:'zellij',name:'notes',createIfMissing:false}]);
   expect(await page.evaluate(()=>window.relaunchCalls.filter(call=>call.command==='write_stdin'))).toEqual([]);
 
-  await expect(page.getByRole('tab')).toHaveCount(3);
+  await expect(page.getByRole('tab')).toHaveCount(4);
   await expect(page.getByRole('tab',{name:'Agent box / agents',exact:true})).toBeAttached();
   await expect(page.getByRole('tab',{name:'Agent box / fleet',exact:true})).toBeAttached();
-  // Restored sessions are saved again; the unrestored Zellij descriptor stays offered.
-  expect(await saved(page)).toEqual([previous[0],previous[1],previous[3],previous[2]]);
-  // Phone terminals keep the offer in Workspace tools; the next test reloads to show it again.
-  if(testInfo.project.name==='desktop')await expect(restoreButton(page)).toBeVisible();
+  await expect(page.getByRole('tab',{name:'Agent box / notes',exact:true})).toBeAttached();
+  // Restored sessions are saved again.
+  expect(await saved(page)).toEqual(previous);
+  // Everything restored, so nothing is left to offer until the next launch.
+  await expect(restoreButton(page)).toHaveCount(0);
 });
 
 test('every relaunch waits for consent again and Dismiss forgets the descriptors',async({page})=>{
   await page.goto('/');
   await restoreButton(page).click();
-  await expect.poll(async()=>(await remoteCalls(page)).length).toBe(5);
+  await expect.poll(async()=>(await remoteCalls(page)).length).toBe(7);
 
   await page.reload();
   await relaunchOffer(page);
-  expect(await saved(page)).toEqual([previous[0],previous[1],previous[3],previous[2]]);
+  expect(await saved(page)).toEqual(previous);
   await page.locator('.workspace-restore').getByRole('button',{name:'Dismiss',exact:true}).click();
   await expect(restoreButton(page)).toHaveCount(0);
   expect(await saved(page)).toEqual([]);
