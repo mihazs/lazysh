@@ -3,6 +3,7 @@ import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/
 import { useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import DeviceAccessibility from "./DeviceAccessibility";
 import { useDeviceStream } from "./useDeviceStream";
 type Device = {
   id: string;
@@ -546,6 +547,14 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           onPointerCancel={() => {
             start.current = undefined;
           }}
+        />
+      )}
+      {platform === "android" && device?.capabilities.tap && (
+        <DeviceAccessibility
+          key={selected}
+          sessionId={sessionId}
+          id={selected}
+          inputEnabled={input}
         />
       )}
       {avds.length > 0 && (

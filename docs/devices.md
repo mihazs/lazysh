@@ -34,6 +34,8 @@ lazysh-agent devices key --platform android --id emulator-5554 --key home
 lazysh-agent devices boot --platform android --id Pixel_API_36
 lazysh-agent devices android --id emulator-5554 probe
 lazysh-agent devices android --id emulator-5554 stream
+lazysh-agent devices android --id emulator-5554 ui tree
+lazysh-agent devices android --id emulator-5554 ui act --kind click --resource-id=com.example:id/ok --text=OK --content-desc= --occurrence 0
 lazysh-agent devices list --platform ios
 lazysh-agent devices screenshot --platform ios --id 9C405382-203A-4DC0-A11B-B2FC37EBA881
 ```
@@ -59,6 +61,16 @@ This preview is **view-only**: Android's documented recording behavior does not 
 Cancellation, SSH stdin EOF/disconnect, output backpressure timeout, and failure kill and reap both owned host children. AOSP's shell-v2 daemon sends SIGHUP to its subprocess on protocol disconnect and waits for its exit; the explicit 180-second recording limit also bounds incompatible vendor behavior. Lazysh never kills unrelated screenrecord processes or restarts the shared adb server. Source contracts: [AOSP recording implementation](https://android.googlesource.com/platform/frameworks/av/+/refs/heads/main/cmds/screenrecord/screenrecord.cpp), [adb subprocess lifecycle](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/daemon/shell_service.cpp), [FFmpeg multipart JPEG framing](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/mpjpeg.c), and [Android recording limitations](https://developer.android.com/tools/adb#screenrecord).
 
 The real Cargo codec fixture has executed an installed FFmpeg 9.0.2 H.264-to-JPEG pipeline, cancellation after a validated frame, and malformed-input failure. Other native tests reject missing device protocol/decoder capabilities and oversized/truncated multipart data. This does not verify a device AVC encoder, vendor adb lifecycle, rotation behavior, actual frame rate, or battery cost; Android emulator/device acceptance remains pending.
+
+## Android accessibility tree and actions
+
+**Inspect screen elements** in the Android device controls (and `devices android --id ID ui tree`) lists what Android's accessibility service reports on the foreground screen, read with `adb exec-out uiautomator dump /dev/stdout`. Each element has its class, package, `resourceId`, `text`, `contentDescription`, pixel `bounds`, nesting `depth`, the `clickable`/`longClickable`/`scrollable`/`checkable`/`checked`/`enabled`/`focusable` flags, and an `occurrence`: its position among the elements that share the same resource id, text and description, in tree order. The result also has the display `rotation` and `truncated`. Only elements that have a label, a resource id or an actionable flag, and an area, are listed, at most 300; texts are cut at 256 characters. The dump is limited to 2 MiB, 5,000 elements and 64 levels, and anything that is not a well-formed hierarchy (for example `could not get idle state` while another automation client holds the accessibility connection) fails instead of returning a partial tree.
+
+**Tap** and **Long press** (`ui act --kind click|long-click`) are the actions. `uiautomator` cannot run an accessibility action, so the host re-reads the tree, finds the one enabled element with the identity (resource id, text, description and occurrence) the panel showed, and sends `input tap`, or a 700 ms `input swipe` that starts and ends at the same point, to the centre of its bounds. If the screen no longer has such an element it fails with `AccessibilityNodeNotFound`, or `AccessibilityNodeUnavailable` for a disabled or off-screen one, and touches nothing. The buttons need **Enable device input**, like every other control. Scrolling, text entry and iOS accessibility are not provided.
+
+A run of the real binary against a Waydroid Android 13 x86_64 guest (2026-11-14) read the launcher's tree (20 listed elements, rotation 0), clicked the Digital clock widget by the identity the tree gave (`android:id/background`, occurrence 0) and the Clock app came to the foreground, and an identity the screen did not have failed with `AccessibilityNodeNotFound` without touching the device. The tree reader and the matching are otherwise covered by fixture tests; the published CI emulator has not run this path.
+
+An element that is only drawn, or whose accessibility label is empty, has no identity to match, so it cannot be acted on this way; a custom view that draws everything itself may expose no children at all. Reading the tree can take a few seconds on an animating screen and each read is subject to the ten-second command limit.
 
 ## Optional continuous iOS preview
 
