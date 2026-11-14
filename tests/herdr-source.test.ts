@@ -228,3 +228,130 @@ test('every Herdr consumer downloads the producer artifact by immutable ID behin
     }
   }
 });
+
+const herdrStep = async (select: (step: any) => boolean) => {
+  const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/checks.yml')).text()) as any;
+  return workflow.jobs['herdr-native'].steps.find(select);
+};
+const execute = async (argv: string[], cwd: string, env: Record<string, string> = {}) => {
+  const child = Bun.spawn(argv, { cwd, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe', timeout: 30_000 });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { exit, stdout, stderr };
+};
+
+/** Run `argv` with a fake `name` build whose Nth run prints and exits as `plan[N - 1]` ("status:output"). */
+async function runFakeBuild(plan: string[], name: string, argv: (build: string) => string[], env: Record<string, string> = {}) {
+  const fixture = await mkdtemp(join(tmpdir(), 'lazysh-retry-zig-fetch-')), bin = join(fixture, 'bin'), build = join(bin, name);
+  try {
+    await mkdir(bin);
+    await writeFile(build, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$0.calls"\nstep=$(printf "%s\\n" "$PLAN" | sed -n "$(wc -l < "$0.calls")p")\nprintf "%s\\n" "${step#*:}" >&2\nexit "${step%%:*}"\n', { mode: 0o700 });
+    const result = await execute(argv(build, bin), fixture, { PLAN: plan.join('\n'), LAZYSH_FETCH_DELAY: '0', ...env, PATH: `${bin}:${process.env.PATH}` });
+    return { ...result, calls: (await Bun.file(build + '.calls').text()).trim().split('\n') };
+  } finally { await rm(fixture, { recursive: true, force: true }); }
+}
+const retried = (plan: string[], env?: Record<string, string>) =>
+  runFakeBuild(plan, 'build', build => ['sh', join(root, '.github/scripts/retry-zig-fetch.sh'), build, '--locked'], env);
+
+test.each([
+  "HTTP response read failure: ConnectionResetByPeer", 'invalid HTTP response: HttpConnectionClosing',
+  'unable to unpack tarball to temporary directory: ReadFailed', 'unable to connect to server: ConnectionTimedOut',
+  "bad HTTP response code: '503 Service Unavailable'",
+])('a Zig dependency download failure (%s) is retried, keeping the original failure in the log', async failure => {
+  const result = await retried([`101:error: ${failure}`, '0:built']);
+  expect(result).toMatchObject({ exit: 0, calls: ['--locked', '--locked'] });
+  expect(result.stdout).toContain(failure);
+  expect(result.stdout).toContain('::warning::Zig dependency download failed on attempt 1 of 3');
+});
+
+test('retries are bounded and report the build exit status', async () => {
+  const failure = '101:error: invalid HTTP response: HttpConnectionClosing';
+  expect(await retried([failure, failure, failure, '0:never reached'])).toMatchObject({ exit: 101, calls: ['--locked', '--locked', '--locked'] });
+  expect(await retried([failure, '0:never reached'], { LAZYSH_FETCH_ATTEMPTS: '1' })).toMatchObject({ exit: 101, calls: ['--locked'] });
+});
+
+test.each([
+  ['a compile error', '101:error[E0425]: cannot find value `missing` in this scope'],
+  ['a pinned package hash mismatch', '101:error: hash mismatch: manifest declares uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA but the fetched package has other'],
+  ['a missing archive', "101:error: bad HTTP response code: '404 Not Found'"],
+])('%s is never retried', async (_, failure) => {
+  expect(await retried([failure, '0:never reached'])).toMatchObject({ exit: 101, calls: ['--locked'] });
+});
+
+test('a clean build runs once without a warning', async () => {
+  const result = await retried(['0:built']);
+  expect(result).toMatchObject({ exit: 0, calls: ['--locked'] });
+  expect(result.stdout).not.toContain('::warning::');
+});
+
+test('the guarded Herdr build retries a Zig dependency download failure with the same Cargo arguments', async () => {
+  const step = await herdrStep(candidate => candidate.name === 'Build the real optional Herdr binary');
+  const result = await runFakeBuild(['101:error: invalid HTTP response: HttpConnectionClosing', '0:built'], 'cargo',
+    () => ['bash', '-e', '-c', step.run], { GITHUB_WORKSPACE: root });
+  expect(result).toMatchObject({ exit: 0, calls: ['+1.96.1 build --locked', '+1.96.1 build --locked'] });
+});
+
+const zigCacheFixtures = process.env.LAZYSH_HERDR_ARCHIVE_FIXTURES === '1';
+const scrubZigPackages = async (global: string) => {
+  const step = await herdrStep(candidate => candidate.id === 'zig-package-scrub');
+  expect((await execute(['bash', '-e', '-c', step.run], global, { ZIG_GLOBAL_CACHE_DIR: global })).exit).toBe(0);
+};
+
+test('the scrub drops only unreadable Zig package tarballs and tolerates an empty or missing cache', async () => {
+  const global = await mkdtemp(join(tmpdir(), 'lazysh-zig-package-scrub-'));
+  try {
+    await scrubZigPackages(global);
+    await mkdir(join(global, 'p'));
+    await scrubZigPackages(global);
+    const readable = Bun.gzipSync(Buffer.from('package bytes'));
+    await writeFile(join(global, 'p', 'readable.tar.gz'), readable);
+    await writeFile(join(global, 'p', 'truncated.tar.gz'), readable.subarray(0, 8));
+    await scrubZigPackages(global);
+    expect((await Array.fromAsync(new Bun.Glob('*').scan(join(global, 'p')))).sort()).toEqual(['readable.tar.gz']);
+  } finally { await rm(global, { recursive: true, force: true }); }
+});
+
+// Opted in by herdr-native with its checksum-verified Zig. A tiny hash-pinned package stands
+// in for Ghostty's: the build must unpack a restored tarball without the network, reject a
+// changed one rather than trust the cache, and fetch again once the scrub drops an unreadable one.
+test.skipIf(!zigCacheFixtures)('restored Zig package tarballs unpack offline, a changed one fails the build and an unreadable one is downloaded again', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'lazysh-zig-package-cache-')), app = join(fixture, 'app'), zigPackage = join(fixture, 'dep');
+  const env = { ZIG_GLOBAL_CACHE_DIR: join(fixture, 'global'), ZIG_LOCAL_CACHE_DIR: join(fixture, 'local') };
+  const stub = 'const std = @import("std");\npub fn build(b: *std.Build) void {\n    _ = b;\n}\n';
+  const manifest = (name: string, fingerprint: string, extra = '') =>
+    `.{\n    .name = .${name},\n    .version = "0.0.1",\n    .minimum_zig_version = "0.16.0",\n    .paths = .{""},\n    .fingerprint = ${fingerprint},\n${extra}}\n`;
+  const pack = async (data: string) => {
+    await writeFile(join(zigPackage, 'data.txt'), data);
+    expect((await execute(['tar', '-czf', join(fixture, 'dep.tar.gz'), '-C', zigPackage, '.'], fixture)).exit).toBe(0);
+    return join(fixture, 'dep.tar.gz');
+  };
+  try {
+    await mkdir(app); await mkdir(zigPackage);
+    for (const directory of [app, zigPackage]) await writeFile(join(directory, 'build.zig'), stub);
+    await writeFile(join(zigPackage, 'build.zig.zon'), manifest('dep', '0xf8105430d79e91ea'));
+    await writeFile(join(app, 'build.zig.zon'), manifest('app', '0xc96e70cf96940692'));
+    // `zig fetch` of a local archive stores the compressed package in the global cache, as the admission steps do.
+    const hash = (await execute([process.env.ZIG!, 'fetch', await pack('pinned bytes')], app, env)).stdout.trim();
+    expect(hash).toMatch(/^dep-0\.0\.1-/);
+    // Port 9 refuses at once: any attempted download fails instead of silently succeeding.
+    await writeFile(join(app, 'build.zig.zon'), manifest('app', '0xc96e70cf96940692', `    .dependencies = .{ .dep = .{ .url = "http://127.0.0.1:9/dep.tar.gz", .hash = "${hash}" } },\n`));
+    const cached = join(fixture, 'global', 'p', hash + '.tar.gz'), good = Buffer.from(await Bun.file(cached).arrayBuffer());
+    const build = async () => {
+      await rm(join(app, 'zig-pkg'), { recursive: true, force: true });
+      const result = await execute([process.env.ZIG!, 'build', '--fetch'], app, env);
+      return { ...result, unpacked: await stat(join(app, 'zig-pkg', hash)).then(value => value.isDirectory(), () => false) };
+    };
+    await scrubZigPackages(join(fixture, 'global'));
+    expect(await build()).toMatchObject({ exit: 0, unpacked: true });
+    await writeFile(cached, Buffer.from(await Bun.file(await pack('changed bytes')).arrayBuffer()));
+    const changed = await build();
+    expect(changed).toMatchObject({ unpacked: false });
+    expect(changed.exit).not.toBe(0);
+    expect(changed.stderr).toContain('hash mismatch');
+    // Zig 0.16.0 never falls back to the network for an unreadable entry: it fails with ReadFailed or stalls.
+    await writeFile(cached, good.subarray(0, 50));
+    await scrubZigPackages(join(fixture, 'global'));
+    const downloaded = await build();
+    expect(downloaded).toMatchObject({ unpacked: false });
+    expect(downloaded.stderr).toContain('unable to connect to server');
+  } finally { await rm(fixture, { recursive: true, force: true }); }
+}, 100_000);

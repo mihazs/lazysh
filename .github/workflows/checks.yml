@@ -251,6 +251,20 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: herdr-cargo-downloads-${{ runner.os }}-${{ hashFiles('packages/herdr-upstream/Cargo.lock') }}
+      # Only Zig's compressed package tarballs (zig-global/p), never compiled objects. Zig checks
+      # every package against its pinned hash each time it unpacks one, so a changed entry fails
+      # the build, and an unreadable one is dropped here so Zig downloads it again.
+      - name: Restore Herdr's hash-addressed Zig package downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lazysh-herdr-native/zig-global/p
+          key: herdr-zig-packages-v1-${{ runner.os }}-zig0.16.0-${{ hashFiles('packages/herdr-upstream/vendor/libghostty-vt/build.zig.zon', 'packages/herdr-upstream/vendor/libghostty-vt/pkg/*/build.zig.zon') }}
+      - name: Drop unreadable cached Zig packages
+        id: zig-package-scrub
+        run: |
+          for package in "$ZIG_GLOBAL_CACHE_DIR"/p/*; do
+            if [ -e "$package" ] && ! gzip --test "$package" 2>/dev/null; then rm -f "$package"; fi
+          done
       # Restored files are reused only when they match their pin, and each step still checks it.
       - &pinned-download-cache
         name: Restore pinned fixture downloads
@@ -319,7 +333,7 @@ jobs:
         run: bun test tests/herdr-source.test.ts
       - name: Build the real optional Herdr binary
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
-        run: cargo +1.96.1 build --locked
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked
       - name: Exercise guarded protocol, API ownership and runtime identity
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: |
@@ -410,7 +424,7 @@ jobs:
           ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/lazysh-herdr-native/stock-target/zig-global
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/stock-source
         run: |
-          cargo +1.96.1 build --locked --bin herdr
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --bin herdr
           manifest="$GITHUB_WORKSPACE/packages/herdr-upstream/SOURCE-MANIFEST.sha256"
           printf '%s  %s\n' 'c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a' "$manifest" | sha256sum --check --strict
           test "$(wc -l < "$manifest")" -eq 1843
