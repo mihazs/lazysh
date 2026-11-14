@@ -4,6 +4,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 import ChatPanel from './ChatPanel';
+import {opencodeDatabase,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn(),Channel:class{onmessage:((event:unknown)=>void)|undefined;}}));
 
 // Counts how often each message body is rendered: an update must not re-render the unchanged ones.
@@ -132,6 +133,29 @@ describe('a bound conversation with a live watch',()=>{
     expect(sessions.at(-1)).toEqual({model:'claude-opus-5-5',mode:'auto'});
     await send(delta(1,4,[],{session:null}));
     expect(sessions.at(-1)).toBeUndefined();
+  });
+  it('streams a recorded OpenCode session from its database and session, with its footer facts, and no longer polls',async()=>{
+    const sessions:unknown[]=[];
+    poll=opencodeToolPage;
+    render(<ChatPanel sessionId="host" shown bound={{agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeToolSession}} timeline onSession={session=>sessions.push(session)}/>);
+    await advance(0);
+    expect(starts).toEqual([{sessionId:'host',target:{kind:'path',agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeToolSession},events:expect.anything()}]);
+    const entries=opencodeToolPage.messages.map(message=>({id:message.id,rev:1,message}));
+    await send({...hello,agent:'opencode'});await send({...snapshot(1,1,entries),session:opencodeToolPage.session});
+    expect(screen.getByText('shell')).toBeTruthy();
+    expect(sessions.at(-1)).toEqual(opencodeToolPage.session);
+    // The reply that was still running when the window opened grows over the stream.
+    const reply=entries.at(-1)!;
+    await send(delta(1,2,[{...reply,rev:2,message:{...reply.message,blocks:[{type:'text',text:'hello, done'}]}}]));
+    expect(screen.getByText('hello, done')).toBeTruthy();
+    await advance(20_000);expect(calls('agent_transcript')).toHaveLength(1);
+    expect(document.querySelector('section.chat-panel')!.getAttribute('data-watch')).toBe('live');
+  });
+  it('does not stream an OpenCode session of a Herdr pane, which has no database session to name',async()=>{
+    poll=opencodePage;
+    render(<ChatPanel sessionId="host" shown bound={{agent:'opencode',path:opencodeSession,transcriptSessionId:opencodeSession,herdr:{herdrSession:'s',paneId:'p',terminalId:'t'}}} timeline/>);
+    await advance(0);
+    expect(starts).toEqual([]);
   });
   it('closes the channel when the view is hidden and opens a new one when it is shown again',async()=>{
     const view=render_();await advance(0);await goLive();

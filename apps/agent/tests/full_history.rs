@@ -3,14 +3,13 @@
 #[path = "support/jsonl.rs"]
 mod jsonl;
 #[path = "support/recorded_conversations.rs"]
-#[allow(dead_code)]
 mod recorded_conversations;
 use jsonl::write;
 use lazysh_agent::transcript::{
     conversation_window, opencode_conversation_window, window::Window, TranscriptAgent,
     TranscriptPage,
 };
-use rusqlite::{params, Connection};
+use rusqlite::params;
 use serde_json::{json, Value};
 use std::{path::Path, process::Command};
 
@@ -134,13 +133,7 @@ fn codex_reads_back_to_the_first_message() {
 fn opencode_reads_back_to_the_first_message() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().canonicalize().unwrap().join("opencode.db");
-    let db = Connection::open(&path).unwrap();
-    db.execute_batch(
-        recorded_conversations::specification()["opencodeSchemas"]["v1"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
+    let db = recorded_conversations::opencode_database(&path, "v1");
     db.execute_batch("BEGIN").unwrap();
     for n in 0..RECORDS {
         let role = if n % 2 == 0 { "user" } else { "assistant" };

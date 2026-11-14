@@ -1,4 +1,4 @@
-//! `transcript-watch`: one long-lived stream of upserts for a Claude Code or Codex conversation.
+//! `transcript-watch`: one long-lived stream of upserts for a Claude Code, Codex or OpenCode conversation.
 //!
 //! The watcher never tails the file itself. A change of the file's identity, length or
 //! modification time re-projects the conversation with the same bounded readers the paged
@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     time::{Duration, Instant, SystemTime},
 };
@@ -30,12 +30,16 @@ pub enum Source {
     Path(PathBuf),
     /// A provider session id resolved inside the agent's own data root, as `herdr-conversation`.
     Session(String),
+    /// One session of an OpenCode database, as `transcript --view conversation --session-id` reads it.
+    Database { path: PathBuf, session: String },
 }
 
 pub struct Options {
     pub agent: TranscriptAgent,
     pub path: Option<PathBuf>,
     pub session_id: Option<String>,
+    /// The OpenCode session to read from `path`, which then names the database.
+    pub database_session: Option<String>,
     pub limit: u8,
     pub interval: Duration,
     /// Previews of the user's attached images, as `transcript --view conversation --inline-images`.
@@ -53,6 +57,8 @@ struct Fingerprint {
     len: u64,
     modified: Option<SystemTime>,
     identity: Option<(u64, u64)>,
+    /// A write-ahead log holds a database's newest rows until a checkpoint moves them into the file.
+    wal: Option<(u64, Option<SystemTime>)>,
 }
 
 impl Fingerprint {
@@ -69,7 +75,18 @@ impl Fingerprint {
             len: metadata.len(),
             modified: metadata.modified().ok(),
             identity,
+            wal: None,
         })
+    }
+
+    fn of_database(path: &Path) -> Result<Self> {
+        let mut seen = Self::of(&super::open_transcript(path)?)?;
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        seen.wal = std::fs::metadata(wal)
+            .ok()
+            .map(|wal| (wal.len(), wal.modified().ok()));
+        Ok(seen)
     }
 }
 
@@ -114,8 +131,12 @@ fn evicted(old: &[Entry], incoming: &[(String, Value)]) -> Option<usize> {
 
 impl Watcher {
     pub fn new(agent: TranscriptAgent, source: Source, limit: u8) -> Result<Self> {
-        if !matches!(agent, TranscriptAgent::Claude | TranscriptAgent::Codex)
-            || !(1..=100).contains(&limit)
+        let database = matches!(source, Source::Database { .. });
+        if !match agent {
+            TranscriptAgent::Claude | TranscriptAgent::Codex => !database,
+            TranscriptAgent::Opencode => database,
+            _ => false,
+        } || !(1..=100).contains(&limit)
         {
             return Err(Error::InvalidArgument);
         }
@@ -148,6 +169,7 @@ impl Watcher {
 
     fn fingerprint(&mut self) -> Result<Fingerprint> {
         let path = match (&self.source, &self.located) {
+            (Source::Database { path, .. }, _) => return Fingerprint::of_database(path),
             (Source::Path(path), _) | (Source::Session(_), Some(path)) => path.clone(),
             (Source::Session(id), None) => {
                 let path = herdr_session::locate(self.agent, id)?;
@@ -174,6 +196,9 @@ impl Watcher {
                 super::claude_conversation_images(path, self.limit)
             }
             Source::Path(path) => super::conversation(path, self.agent, self.limit),
+            Source::Database { path, session } => {
+                super::opencode_conversation(path, session, self.limit)
+            }
             Source::Session(id) => {
                 herdr_session::read_herdr_conversation(self.agent, id, self.limit)
             }
@@ -349,9 +374,10 @@ pub fn run(
 /// The command entry point: stdout carries the frames and a closed stdin (the SSH channel going
 /// away) ends the watch.
 pub fn run_stdio(options: Options) -> Result<()> {
-    let source = match (options.path, options.session_id) {
-        (Some(path), None) => Source::Path(path),
-        (None, Some(id)) => Source::Session(id),
+    let source = match (options.path, options.session_id, options.database_session) {
+        (Some(path), None, None) => Source::Path(path),
+        (Some(path), None, Some(session)) => Source::Database { path, session },
+        (None, Some(id), None) => Source::Session(id),
         _ => return Err(Error::InvalidArgument),
     };
     let watcher =
