@@ -1334,6 +1334,24 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      # Official Gotify 3.1.1 Linux release; the archive is pinned by its release asset digest
+      # (https://api.github.com/repos/gotify/server/releases/tags/v3.1.1) and the case itself
+      # rechecks the extracted binary. It serves only the case's owned TLS loopback listener.
+      - name: Deliver relay events to the pinned official Gotify server over verified TLS
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          CASE_NAME: tests::gotify_server::real_gotify_server_stores_all_finite_relay_states_over_verified_tls
+        run: |
+          gotify_root=$(mktemp -d "$RUNNER_TEMP/lazysh-gotify-3.1.1-XXXXXX")
+          sh .github/scripts/pinned-download.sh d452faad071981d191d5c95f70d0f9520dc2ef2336b2b03055e12cfabfbae2d2 "$gotify_root/gotify.zip" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 15552390 https://github.com/gotify/server/releases/download/v3.1.1/gotify-linux-amd64.zip
+          printf '%s  %s\n' 'd452faad071981d191d5c95f70d0f9520dc2ef2336b2b03055e12cfabfbae2d2' "$gotify_root/gotify.zip" | sha256sum --check --strict
+          unzip -q "$gotify_root/gotify.zip" gotify-linux-amd64 -d "$gotify_root"
+          chmod 0500 "$gotify_root/gotify-linux-amd64"
+          export LAZYSH_GOTIFY_SERVER="$gotify_root/gotify-linux-amd64"
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
 
   native-android-auxiliary:
     needs: changes
