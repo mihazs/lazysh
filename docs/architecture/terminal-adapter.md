@@ -124,5 +124,5 @@ The contract lives in `apps/client/src/terminalAdapter.ts`, the xterm backend in
 ## Unresolved questions
 
 - Whether `sendInput` should return a promise to surface the `backpressure` error that `write_stdin` can raise today (`TerminalPane.tsx:186-200`; related #661).
-- Whether the IME bridge on a native surface is a hidden DOM editor or a native input connection ([native rendering](native-rendering.md#input-and-ime)).
+- Whether the IME bridge on a native surface is a hidden DOM editor or a native input connection ([native rendering](native-rendering.md#input-and-ime)). Android has a native input connection implemented and tested in developer builds ([Android native input](android-native-input.md)); it stays open until a device with Gboard and SwiftKey and a renderer confirm it.
 - Whether a screen reader reads the hidden row mirror of a native surface well on each platform; the shape is decided ([native rendering](native-rendering.md#accessibility)), the device evidence is not.
