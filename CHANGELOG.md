@@ -943,6 +943,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   explicitly changed; QR scanning and OS theme links remain unavailable.
 
 - Remembered list or cards layout for the active-session switcher. Existing
+- Send what the shared Rust terminal core encodes (keys, mouse reports, bracketed paste, focus events and its answers to terminal queries) to the SSH, Mosh, Eternal Terminal or local terminal as bytes, under the same lock, background and renderer-replacement checks as typed input (#1316). The core is not wired to a renderer and no setting offers it, xterm.js stays the only engine and the default, so terminal behaviour does not change and no defaults change.
   installations retain the list default; switching layout never reconnects sessions.
 
 - Explicit-file `antigravity-jsonl` step-record snapshots with append-safe

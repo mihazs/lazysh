@@ -12,19 +12,27 @@ pub(crate) struct InputSequence {
     admitted_at: Instant,
 }
 
-impl From<String> for InputSequence {
-    fn from(data: String) -> Self {
+/// Bytes as they are: encoded input and terminal replies are not text (an X10 mouse report carries
+/// bytes above 0x7f), so they must not pass through a `String`.
+impl From<Vec<u8>> for InputSequence {
+    fn from(data: Vec<u8>) -> Self {
         let now = Instant::now();
         Self {
             steps: if data.is_empty() {
                 VecDeque::new()
             } else {
-                [data.into_bytes()].into()
+                [data].into()
             },
             offset: 0,
             ready_at: now,
             admitted_at: now,
         }
+    }
+}
+
+impl From<String> for InputSequence {
+    fn from(data: String) -> Self {
+        data.into_bytes().into()
     }
 }
 
@@ -119,6 +127,16 @@ mod tests {
         assert_eq!(literal.bytes(), text.as_bytes());
         literal.advance(text.len());
         assert!(literal.is_empty());
+    }
+    #[test]
+    fn encoded_input_that_is_not_text_keeps_every_byte() {
+        // An X10 mouse report: bytes above 0x7f, a NUL and a byte no UTF-8 sequence starts with.
+        let report = vec![0x1b, b'[', b'M', 0x20, 0xe8, 0x00, 0xff];
+        let mut input = InputSequence::from(report.clone());
+        assert_eq!(input.bytes(), report);
+        input.advance(report.len());
+        assert!(input.is_empty());
+        assert!(InputSequence::from(Vec::new()).is_empty());
     }
     #[test]
     fn sequence_limits_preserve_one_queue_items_existing_byte_budget() {
