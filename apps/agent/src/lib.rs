@@ -6,6 +6,7 @@ pub mod devices;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod directory_listing;
 pub mod herdr;
+pub mod herdr_pane_input;
 pub mod hook_setup;
 pub mod hooks;
 pub mod host_browser;

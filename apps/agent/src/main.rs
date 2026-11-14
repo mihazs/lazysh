@@ -103,6 +103,11 @@ enum Command {
         #[arg(long)]
         pane: String,
     },
+    /// Type into one named stock Herdr pane through a retained, pinned server epoch; JSON lines on stdin and stdout.
+    HerdrPaneInput {
+        #[arg(long)]
+        session: String,
+    },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -415,6 +420,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         }
         Command::HerdrFocusPane { session, pane } => {
             Some(lazysh_agent::herdr::focus_pane(&session, &pane)?)
+        }
+        Command::HerdrPaneInput { session } => {
+            lazysh_agent::herdr_pane_input::run_stdio(&session)?;
+            None
         }
         Command::Licenses => Some(serde_json::json!({
             "schemaVersion": 1,
