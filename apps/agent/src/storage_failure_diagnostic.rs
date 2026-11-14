@@ -28,6 +28,7 @@ fn describe(phase: Phase, error: &Error) -> Failure {
         Error::Relay(_)
         | Error::Browser(_)
         | Error::Listeners(_)
+        | Error::Review(_)
         | Error::Settings(_)
         | Error::Device(_)
         | Error::Herdr(_)

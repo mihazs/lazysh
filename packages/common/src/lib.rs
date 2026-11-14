@@ -2,6 +2,8 @@ pub mod audio;
 pub mod fs;
 pub mod private_state;
 pub mod record_checkpoint;
+#[cfg(feature = "repository-review")]
+pub mod repository_review;
 #[cfg(feature = "service")]
 pub mod server;
 #[cfg(feature = "secrets")]

@@ -28,7 +28,7 @@ lazysh-account-usage = { path = "../../packages/account-usage", features = ["col
 lazysh-companion-release = { path = "../../packages/companion-release" }
 lazysh-notification-client = { path = "../../packages/notification-client" }
 tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "io-std", "io-util"] }
-lazysh-common = { path = "../../packages/common" }
+lazysh-common = { path = "../../packages/common", features = ["repository-review"] }
 clap = { version = "4.6", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"

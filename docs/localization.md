@@ -124,6 +124,14 @@ first-upgrade behavior follow the native-language document. Reset preferences
 restores System. No language
 resources are fetched remotely.
 
+## Host companion help
+
+The help of `lazysh-agent review` and its `status` and `diff` commands is
+available in the same three languages, chosen by the host's `LC_ALL`,
+`LC_MESSAGES` or `LANG` rather than by the app preference. The command's output,
+its failure classes and the usage errors of the argument parser stay English.
+See [Repository review](repository-review.md#review-from-the-hosts-terminal).
+
 ## Adding interface text
 
 Keep app-local English keys in `apps/client/src/i18n/en.ts`. Supply Brazilian

@@ -30,6 +30,55 @@ are shown only as an image resource from a local blob URL, so their scripts,
 event handlers and external references do not run or load; **Show source**
 displays the markup as text. Video, audio and PDF are not previewed.
 
+## Review from the host's terminal
+
+The host companion reads the same changes and diffs in a terminal on the host,
+without the app. It needs only `git` and the companion.
+
+```sh
+lazysh-agent review status [--json] DIRECTORY
+lazysh-agent review diff [--json] [--staged] DIRECTORY [--] FILE
+```
+
+`status` prints the root of the repository that contains `DIRECTORY` (a
+subdirectory is enough), then one line per changed file in the format of
+`git status --short`: two state letters, a space and the path, or `old -> new` for
+a rename. Staged, unstaged, untracked and renamed files are listed; a repository
+without changes prints only its root. `diff` prints the unified patch of `FILE`, a
+path relative to the repository root as `status` prints it: the unstaged changes,
+or the staged ones with `--staged`. A file without changes prints nothing, and a
+binary file prints Git's `Binary files ... differ` line. Put `--` before a file
+name that starts with `-`; the name is always one literal path, never a pattern.
+
+`--json` prints one line instead, with the fields the app reads from the same
+commands and `"schemaVersion": 1`: `path` and `changes` (each with `path`,
+`originalPath`, `index` and `worktree`) for `status`, and `patch` and `binary` for
+`diff`. Plain text shows a control character of a file name or of the file's own
+contents as an escape such as `\u{1b}`, so a repository cannot drive your terminal;
+`--json` keeps the exact text.
+
+The command changes nothing: Git does not refresh the index, run an external diff
+or text conversion helper, or take a lock, and `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE` and `GIT_COMMON_DIR` from the environment never replace the
+repository you name. The [bounds](reference/repository-review.md#bounds) are the
+app's: 1 MiB of Git output, 10,000 changed files and 10,000 diff lines, and each
+Git command has 30 seconds. The app and the command build their Git commands in
+one shared module, so they report the same changes and the same patches.
+
+Exit status 0 means the output is complete. A refusal exits with status 1, prints
+nothing on standard output and one line `lazysh-agent: CLASS: operation failed` on
+standard error; the class is `ReviewNotARepository`, `ReviewInvalidDirectory`,
+`ReviewInvalidFilePath`, `ReviewTooManyChanges`, `ReviewDiffTooLarge`,
+`ReviewOutputTooLarge`, `ReviewTimeout`, `ReviewGitUnavailable`, `ReviewGitFailed`,
+`ReviewInvalidOutput` or `ReviewCancelled`. A usage error exits with status 2.
+
+`lazysh-agent review --help` and the help of `status` and `diff` are written in
+English, Brazilian Portuguese or Spanish, chosen by the first of `LC_ALL`,
+`LC_MESSAGES` and `LANG` that is set (`pt...` and `es...`; any other language is
+English). The output, the failure classes and the parser's usage errors are not
+translated. The tests drive real Git on Linux and macOS hosts; no Windows host was
+available, so the Windows build of the command is untested.
+
 ## Bounds
 
 See [bounds](reference/repository-review.md#bounds) for details.

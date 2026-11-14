@@ -20,6 +20,7 @@ pub use pane_server::pane_server;
 mod private_json;
 pub mod relay;
 pub mod reported_history;
+pub mod review;
 pub mod settings;
 pub mod skills;
 #[cfg(feature = "storage-observation")]
@@ -100,6 +101,7 @@ pub enum Error {
     Relay(&'static str),
     Browser(&'static str),
     Listeners(&'static str),
+    Review(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -114,7 +116,7 @@ impl Error {
             Self::Device(kind) | Self::Herdr(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
-            Self::Browser(kind) | Self::Listeners(kind) => kind,
+            Self::Browser(kind) | Self::Listeners(kind) | Self::Review(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
         }
