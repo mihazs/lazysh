@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ansiColor, chunks, fullScreenRedraw, medianOf, plainText, screenOf, shellSession, summarize } from './workloads';
+import { ansiColor, chunks, fullScreenRedraw, medianOf, plainText, screenOf, shellSession, STYLE_FAMILIES, styledText, summarize } from './workloads';
 
 const geometry = { cols: 80, rows: 24 };
 const text = (data: Uint8Array) => new TextDecoder().decode(data);
@@ -22,6 +22,24 @@ describe('terminal benchmark workloads', () => {
     const raw = text(colored.data);
     for (const sequence of [/\x1b\[3[0-7]m/, /\x1b\[9[0-7];4[0-7]m/, /\x1b\[38;5;\d+m/, /\x1b\[38;2;\d+;\d+;\d+;48;5;\d+m/, /\x1b\[1;4;3\dm/]) expect(raw).toMatch(sequence);
     expect(colored.screen).toEqual(screenOf(raw, geometry.rows));
+  });
+
+  it('styled text uses at most the requested styles, counts the glyph-style pairs it draws and replays for a seed', () => {
+    const one = styledText({ ...geometry, bytes: 40000, seed: 8, styles: 1 }), many = styledText({ ...geometry, bytes: 40000, seed: 8, styles: 200 });
+    const colors = (w: Uint8Array) => new Set(text(w).match(/\x1b\[38;2;\d+;\d+;\d+m/g));
+    expect(colors(one.data).size).toBe(1);
+    expect(colors(many.data).size).toBeGreaterThan(150);
+    expect(colors(many.data).size).toBeLessThanOrEqual(200);
+    // One style cannot need more glyphs than the letters of the words.
+    expect(one.distinctGlyphs).toBeLessThanOrEqual(26);
+    expect(many.distinctGlyphs).toBeGreaterThan(one.distinctGlyphs * 100);
+    expect(many.screen).toEqual(screenOf(text(many.data), geometry.rows));
+    expect(styledText({ ...geometry, bytes: 40000, seed: 8, styles: 200 }).data).toEqual(many.data);
+  });
+
+  it('every style family is injective, so the requested number of styles is the number of distinct SGR sequences', () => {
+    for (const [name, { limit, params }] of Object.entries(STYLE_FAMILIES)) expect(new Set(Array.from({ length: limit }, (_, i) => params(i))).size, name).toBe(limit);
+    expect(() => styledText({ ...geometry, bytes: 1000, seed: 1, styles: 257, family: 'indexed' })).toThrow(/only 256 styles/);
   });
 
   it('full-screen redraws end on the last frame and place each row absolutely', () => {
