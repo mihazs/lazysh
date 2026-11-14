@@ -14,12 +14,16 @@ pub enum MultiplexerKind {
 pub struct PersistentSession {
     name: String,
 }
-pub(crate) fn tmux_arg(value: &str) -> String {
-    // tmux parses a trailing semicolon again after the remote shell has parsed argv.
+/// One tmux argument word. tmux parses a trailing semicolon again after the shell, or the
+/// process launcher, has split argv.
+pub(crate) fn tmux_word(value: &str) -> String {
     match value.strip_suffix(';') {
-        Some(prefix) => quote(&format!("{prefix}\\;")),
-        None => quote(value),
+        Some(prefix) => format!("{prefix}\\;"),
+        None => value.to_owned(),
     }
+}
+pub(crate) fn tmux_arg(value: &str) -> String {
+    quote(&tmux_word(value))
 }
 
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {
@@ -86,6 +90,42 @@ impl Entry {
             return Err(SshError::new("invalid_target", "Herdr session names need 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding . and .."));
         }
         Ok(())
+    }
+    /// The attach command as argv, for a local PTY to execute with no shell in between.
+    pub(crate) fn argv(&self) -> Result<Vec<String>> {
+        self.validate()?;
+        let server = self.server()?;
+        let (name, target) = (tmux_word(&self.name), tmux_word(&format!("={}", self.name)));
+        let words = match (self.kind, self.create_if_missing) {
+            // `-A` attaches the session when it exists and creates it otherwise.
+            (MultiplexerKind::Tmux, true) => {
+                vec![
+                    "tmux",
+                    "-u",
+                    "-L",
+                    server.name(),
+                    "new-session",
+                    "-A",
+                    "-s",
+                    &name,
+                ]
+            }
+            (MultiplexerKind::Tmux, false) => {
+                vec![
+                    "tmux",
+                    "-u",
+                    "-L",
+                    server.name(),
+                    "attach-session",
+                    "-t",
+                    &target,
+                ]
+            }
+            (MultiplexerKind::Herdr, _) => vec!["herdr", "--session", &self.name],
+            (MultiplexerKind::Zellij, true) => vec!["zellij", "attach", "--create", &self.name],
+            (MultiplexerKind::Zellij, false) => vec!["zellij", "attach", &self.name],
+        };
+        Ok(words.into_iter().map(str::to_owned).collect())
     }
     pub(crate) fn command(&self) -> Result<String> {
         self.validate()?;
@@ -685,9 +725,9 @@ pub async fn multiplexer_tree(
 ) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let server =
-                crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
+            let (session, server) =
+                crate::tmux_server::TmuxServer::for_id(&state, &session_id, tmux_server.as_deref())
+                    .await?;
             let output = crate::ssh::exec_for_access(
                 &session,
                 discovery_command(&server, crate::herdr_path::admit(&session, &access).await?),
@@ -722,9 +762,9 @@ pub async fn tmux_action(
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let server =
-                crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
+            let (session, server) =
+                crate::tmux_server::TmuxServer::for_id(&state, &session_id, tmux_server.as_deref())
+                    .await?;
             let command = action_command_for(&action, &server)?;
             crate::ssh::exec_for_access(&session, command, &access).await?;
             Ok(())

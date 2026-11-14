@@ -20,6 +20,7 @@ async fn clipboard_peer(
     let (state, directory, _host, server, task, session) = auxiliary_fixture(lease.clone()).await;
     server.clipboard_mode.store(mode, Ordering::SeqCst);
     session
+        .bindings
         .clipboard
         .publish(UPLOAD.into(), RAW.into(), lease.clone());
     (state, directory, server, task, session, authority, lease)
@@ -77,10 +78,14 @@ async fn host_clipboard_lost_ownership_after_delivered_bytes_is_unconfirmed_and_
         );
         match reason {
             "cancel" => {
-                assert!(session.clipboard.cancel(UPLOAD, lease.generation()));
+                assert!(session
+                    .bindings
+                    .clipboard
+                    .cancel(UPLOAD, lease.generation()));
             }
             "supersede" => {
                 session
+                    .bindings
                     .clipboard
                     .publish("newer".into(), "/newer".into(), lease.clone())
             }
@@ -101,7 +106,10 @@ async fn host_clipboard_lost_ownership_after_delivered_bytes_is_unconfirmed_and_
         assert_eq!(*peer.input_data.lock().unwrap(), RAW.as_bytes());
         assert_eq!(peer.commands.lock().unwrap().len(), 1);
         if reason == "supersede" {
-            assert!(!session.clipboard.cancel(UPLOAD, lease.generation()));
+            assert!(!session
+                .bindings
+                .clipboard
+                .cancel(UPLOAD, lease.generation()));
             peer.clipboard_mode.store(1, Ordering::SeqCst);
             confirm_followup(&session, &lease, "newer", &peer).await;
         }
@@ -122,7 +130,7 @@ async fn host_clipboard_helper_failures_never_echo_output_or_remove_completed_pa
 
 async fn wait_retired(session: &Session) {
     timeout(Duration::from_secs(3), async {
-        while !session.clipboard.available() {
+        while !session.bindings.clipboard.available() {
             tokio::task::yield_now().await;
         }
     })
@@ -156,7 +164,10 @@ async fn retained_open(expire: bool) {
         tokio::time::advance(Duration::from_secs(6)).await;
         tokio::time::resume();
     } else {
-        assert!(session.clipboard.cancel(UPLOAD, lease.generation()));
+        assert!(session
+            .bindings
+            .clipboard
+            .cancel(UPLOAD, lease.generation()));
     }
     assert!(timeout(Duration::from_secs(3), pending)
         .await
@@ -164,6 +175,7 @@ async fn retained_open(expire: bool) {
         .unwrap()
         .is_err());
     session
+        .bindings
         .clipboard
         .publish("successor".into(), "/successor".into(), lease.clone());
     // Poll a successor once: it must reject busy synchronously, not admit a
