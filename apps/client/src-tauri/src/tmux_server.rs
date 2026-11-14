@@ -1,9 +1,9 @@
 //! Public tmux named-socket selection, never an arbitrary socket path.
 use crate::{
     bindings::Bindings,
-    ssh::{quote, AppState, Result, Session, SshError},
+    host::Cmd,
+    ssh::{quote, Result, SshError},
 };
-use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TmuxServer {
     #[default]
@@ -28,30 +28,31 @@ impl TmuxServer {
     pub(crate) fn prefix(&self) -> String {
         format!("tmux -u -L {}", quote(self.name()))
     }
-    /// The session an SSH id names and the server its commands address.
-    pub(crate) async fn for_id(
-        state: &AppState,
-        id: &str,
-        requested: Option<&str>,
-    ) -> Result<(Arc<Session>, Self)> {
-        let session = state.session(id).await?;
-        let server = Self::for_session(&session.bindings, requested)?;
-        Ok((session, server))
+    /// `tmux -u -L <server> <args>` as argv, for a local host to run and a remote one to quote.
+    pub(crate) fn cmd(&self, args: &[&str]) -> Cmd {
+        let mut argv = vec!["tmux", "-u", "-L", self.name()];
+        argv.extend_from_slice(args);
+        Cmd::new(&[], &argv)
     }
     /// The server a terminal is attached to, else the requested one.
     pub(crate) fn for_session(bindings: &Bindings, requested: Option<&str>) -> Result<Self> {
         let attached = bindings
             .tmux_server
             .lock()
-            .map_err(|_| SshError::new("tmux_unavailable", "Cannot read tmux server context"))?;
-        if let Some(bound) = attached.as_ref() {
-            if requested.is_some() && Self::parse(requested)? != *bound {
+            .map_err(|_| SshError::new("tmux_unavailable", "Cannot read tmux server context"))?
+            .clone();
+        Self::attached_or(attached, requested)
+    }
+    /// The attached server, which a request naming another one is refused for, else the requested one.
+    pub(crate) fn attached_or(attached: Option<Self>, requested: Option<&str>) -> Result<Self> {
+        if let Some(bound) = attached {
+            if requested.is_some() && Self::parse(requested)? != bound {
                 return Err(SshError::new(
                     "tmux_server_mismatch",
                     "This terminal is attached to a different tmux server",
                 ));
             }
-            return Ok(bound.clone());
+            return Ok(bound);
         }
         Self::parse(requested)
     }
@@ -90,5 +91,18 @@ mod tests {
             TmuxServer::parse(Some("a'b")).unwrap().prefix(),
             "tmux -u -L 'a'\\''b'"
         );
+    }
+    #[test]
+    fn an_attached_server_wins_and_refuses_a_request_for_another() {
+        let work = || Some(TmuxServer::Named("work".into()));
+        let pick = TmuxServer::attached_or;
+        assert_eq!(pick(work(), None).unwrap(), work().unwrap());
+        assert_eq!(pick(work(), Some("work")).unwrap(), work().unwrap());
+        assert_eq!(
+            pick(work(), Some("other")).unwrap_err().kind(),
+            "tmux_server_mismatch"
+        );
+        assert_eq!(pick(None, Some("other")).unwrap().name(), "other");
+        assert_eq!(pick(None, None).unwrap(), TmuxServer::Default);
     }
 }

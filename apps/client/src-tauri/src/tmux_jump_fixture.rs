@@ -1863,19 +1863,20 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         ("default", "same"),
     ] {
         if name == hostile {
-            multiplexer::tmux_action(
-                app.state(),
-                child.session_id.clone(),
+            tmux_act(
+                &app,
+                &child.session_id,
                 TmuxAction::RenameSession {
                     target: "$0".into(),
                     name: "selected".into(),
                 },
                 None,
-                lease.clone(),
+                &lease,
             )
             .await
             .unwrap();
             multiplexer::tmux_action(
+                app.state(),
                 app.state(),
                 child.session_id.clone(),
                 TmuxAction::SplitPane {
@@ -1904,17 +1905,23 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
             if name == hostile { 2 } else { 1 }
         );
     }
-    let tree =
-        multiplexer::multiplexer_tree(app.state(), child.session_id.clone(), None, lease.clone())
-            .await
-            .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
-            .into_inner()
-            .unwrap();
+    let tree = multiplexer::multiplexer_tree(
+        app.state(),
+        app.state(),
+        child.session_id.clone(),
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
+    .into_inner()
+    .unwrap();
     assert_eq!(
         serde_json::to_value(tree).unwrap()["sessions"][0]["name"],
         "selected"
     );
     assert!(multiplexer::tmux_action(
+        app.state(),
         app.state(),
         child.session_id.clone(),
         TmuxAction::SelectPane {
@@ -1927,28 +1934,28 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     .is_err());
     let snapshot = snapshot_value(&app, &lease, &child.session_id).await;
     assert_eq!(snapshot["sessions"][0]["name"], "selected");
-    multiplexer::tmux_action(
-        app.state(),
-        child.session_id.clone(),
+    tmux_act(
+        &app,
+        &child.session_id,
         TmuxAction::CreateWindow {
             target: "$0".into(),
             name: "added".into(),
             directory: f.dir.path().to_str().unwrap().into(),
         },
         None,
-        lease.clone(),
+        &lease,
     )
     .await
     .unwrap();
-    multiplexer::tmux_action(
-        app.state(),
-        child.session_id.clone(),
+    tmux_act(
+        &app,
+        &child.session_id,
         TmuxAction::CreateSession {
             name: "destination".into(),
             directory: f.dir.path().to_str().unwrap().into(),
         },
         None,
-        lease.clone(),
+        &lease,
     )
     .await
     .unwrap();
@@ -3213,6 +3220,42 @@ async fn herdr_source_probe(
         "attachment command reached source foreground"
     );
 }
+/// The tmux action command, as the renderer invokes it.
+async fn tmux_act(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session: &str,
+    action: crate::multiplexer::TmuxAction,
+    server: Option<&str>,
+    lease: &AccessLease,
+) -> crate::ssh::AccessResult<()> {
+    crate::multiplexer::tmux_action(
+        app.state(),
+        app.state(),
+        session.to_owned(),
+        action,
+        server.map(str::to_owned),
+        lease.clone(),
+    )
+    .await
+}
+/// Discovery of the default tmux server, plus Herdr and Zellij, as the renderer asks for it.
+async fn discover(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session: &str,
+    lease: &AccessLease,
+) -> crate::multiplexer::MultiplexerTree {
+    crate::multiplexer::multiplexer_tree(
+        app.state(),
+        app.state(),
+        session.to_owned(),
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap()
+}
 fn herdr_native_app(fixture: &Fixture) -> (tauri::App<tauri::test::MockRuntime>, AppState) {
     let state = AppState::new(fixture.dir.path().join("herdr-hosts")).unwrap();
     state.config().unwrap().hosts.push(fixture.host.clone());
@@ -3426,11 +3469,17 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     .unwrap();
     herdr_source_probe(&app, &lease, &source, &mut source_events, "SOURCE_BEFORE").await;
     let rows = serde_json::to_value(
-        multiplexer_sessions(app.state(), source.session_id.clone(), kind, lease.clone())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap(),
+        multiplexer_sessions(
+            app.state(),
+            app.state(),
+            source.session_id.clone(),
+            kind,
+            lease.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap(),
     )
     .unwrap();
     let rows = rows.as_array().unwrap();
@@ -3653,7 +3702,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
 #[tokio::test]
 #[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR_STOCK binary"]
 async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
-    use crate::multiplexer::{multiplexer_sessions, multiplexer_tree, MultiplexerKind};
+    use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap());
     let f = Fixture::with_mosh_mode_and_user_install(Some(&binary), false, true).await;
     owned_herdr_shell_config(&f);
@@ -3682,16 +3731,13 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
     let parent = state.session(&source.session_id).await.unwrap();
     assert_eq!(crate::herdr_path::cached(&parent.handle), None);
-    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let discovery = discover(&app, &source.session_id, &lease).await;
     assert_eq!(
         serde_json::to_value(discovery).unwrap()["herdrAvailable"],
         true
     );
     let rows = multiplexer_sessions(
+        app.state(),
         app.state(),
         source.session_id.clone(),
         MultiplexerKind::Herdr,
@@ -3751,7 +3797,6 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
 #[tokio::test]
 #[ignore = "requires owned OpenSSH, LAZYSH_TEST_TMUX and LAZYSH_EXPECT_MUX_SUPPORT; optional LAZYSH_TEST_ZELLIJ and LAZYSH_TEST_HERDR_STOCK"]
 async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
-    use crate::multiplexer::multiplexer_tree;
     // For example `tmux=full zellij=full herdr=full`; each named tool must be supplied.
     let expected = std::env::var("LAZYSH_EXPECT_MUX_SUPPORT").unwrap();
     let tools = tempfile::tempdir().unwrap();
@@ -3782,11 +3827,7 @@ async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
     let (_authority, lease) = unlocked_authority();
     let (app, state) = herdr_native_app(&f);
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
-    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let discovery = discover(&app, &source.session_id, &lease).await;
     let discovery = serde_json::to_value(discovery).unwrap();
     eprintln!("owned discovery tools: {}", discovery["tools"]);
     for pair in expected.split_whitespace() {
