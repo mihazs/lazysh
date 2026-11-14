@@ -100,6 +100,8 @@ test('CI seals guarded bytes before compiling independently admitted original st
   const guardedUpload=steps.findIndex((step:any)=>step.with?.name==='guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
   expect(index('guarded-artifact')).toBeLessThan(guardedUpload);
   expect(guardedUpload).toBeLessThan(index('stock-source-download'));
+  // The managed-feature build overwrites target/debug/herdr, so it must come after the guarded artifact is sealed.
+  expect(guardedUpload).toBeLessThan(index('managed-namespace'));
   expect(index('stock-source')).toBeLessThan(index('stock-build'));
   expect(index('stock-build')).toBeLessThan(index('stock-artifact'));
   const download=steps[index('stock-source-download')];

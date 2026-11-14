@@ -18,6 +18,18 @@ const BOUND: Duration = Duration::from_secs(5);
 const SOURCE: &str = "abababababababababababababababababababababababababababababababab";
 const PREFIX: &[u8] = b"\x1eLAZYSH-GUARD-1:";
 
+/// The application directory the built server uses under every XDG root; it mirrors
+/// `config::io::app_dir_name`, and the server's own socket proves the two agree.
+fn app_dir_name() -> &'static str {
+    if cfg!(feature = "lazysh-managed") {
+        "lazysh-herdr"
+    } else if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    }
+}
+
 struct Fixture {
     base: PathBuf,
     executable: PathBuf,
@@ -48,7 +60,7 @@ impl Fixture {
             "ssh://owned-fixture@127.0.0.1:{}",
             endpoint.local_addr().unwrap().port()
         );
-        let client = self.base.join("state/herdr-dev/client");
+        let client = self.base.join("state").join(app_dir_name()).join("client");
         fs::create_dir_all(&client).unwrap();
         fs::write(client.join("endpoints.json"), serde_json::to_vec(&json!({"version":1,"ssh":[{"id":"ab".repeat(16),"label":"Owned forbidden catalog","target":target,"session":"unused","enabled":true}]})).unwrap()).unwrap();
         let bin = self.base.join("bin");
@@ -118,11 +130,7 @@ impl Fixture {
     fn data(&self, session: &str) -> PathBuf {
         self.base
             .join("config")
-            .join(if cfg!(debug_assertions) {
-                "herdr-dev"
-            } else {
-                "herdr"
-            })
+            .join(app_dir_name())
             .join("sessions")
             .join(session)
     }
@@ -491,6 +499,51 @@ fn wait_bytes(fixture: &Fixture, session: &str, expected: &[u8]) {
         thread::sleep(Duration::from_millis(10));
     }
     panic!("owned pane byte deadline");
+}
+
+/// Names below `root`, without following symlinks.
+#[cfg(feature = "lazysh-managed")]
+fn names_below(root: &std::path::Path, names: &mut Vec<String>) {
+    for entry in fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        names.push(entry.file_name().to_string_lossy().into_owned());
+        if entry.file_type().unwrap().is_dir() {
+            names_below(&entry.path(), names);
+        }
+    }
+}
+
+/// A stock Herdr on the same host shares HOME and the XDG roots, so every socket, config,
+/// state and log file of the managed build must sit under its own application directory.
+#[cfg(feature = "lazysh-managed")]
+#[test]
+fn managed_build_keeps_sockets_config_and_state_in_its_own_namespace() {
+    let mut fixture = Fixture::new();
+    fixture.start("managed");
+    let peer = Peer::attach(&fixture, "managed", &"77".repeat(32));
+    drop(peer);
+    let config = fixture.base.join("config");
+    let namespaces: Vec<_> = fs::read_dir(&config)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        namespaces,
+        ["lazysh-herdr"],
+        "server wrote outside its namespace"
+    );
+    assert!(config
+        .join("lazysh-herdr/sessions/managed/herdr.sock")
+        .exists());
+    let mut names = Vec::new();
+    for root in fixture.environment().into_iter().map(|(_, path)| path) {
+        names_below(&root, &mut names);
+    }
+    let stock: Vec<_> = names
+        .iter()
+        .filter(|name| matches!(name.as_str(), "herdr" | "herdr-dev") || name.starts_with(".herdr"))
+        .collect();
+    assert!(stock.is_empty(), "stock Herdr names created: {stock:?}");
 }
 
 #[test]
