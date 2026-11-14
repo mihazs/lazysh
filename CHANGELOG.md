@@ -939,6 +939,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   saving Advanced text on blur. Building and saving never send terminal input.
 
 - Default-off combined Whisper/Parakeet native acceptance tasks, with fixed
+- Record whether a native terminal surface can sit next to the app's web view on Linux, as evidence for the terminal engine decision (#1331, part of #1302). On a virtual KWin session, a Wayland subsurface placed below a transparent window and web view stays at its page anchor through anchor changes, window resizes, removal and re-creation, with exact pixels, keeps DOM overlays on top and takes a wgpu Vulkan swapchain on an AMD GPU; an X11 child window does the same except that it covers DOM overlays, so X11 sessions are to keep xterm.js. Only a prototype under `packages/terminal-runtime/prototypes` and its measurements: the app is unchanged, xterm.js stays the only engine and no setting or default changes.
   public speech inputs and separate processes for both initialization orders.
   Linux archive-specific symbol isolation prevents private ORT protobuf symbols
   from overriding Mosh's system protobuf library; no client engine is enabled.
