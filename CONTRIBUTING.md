@@ -76,7 +76,7 @@ skip the gate and run every job with the full matrix, which is the parity eviden
 
 Jobs that are not required to merge never run on a pull request, whatever its paths:
 companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Herdr navigation,
-auxiliary and ntfy. They run on pushes to `main`, and `main-verdict.yml` reports them there; the
+auxiliary, ntfy and the terminal performance gate (`terminal-perf`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there; the
 table below lists what a change can affect, and a pull request runs only the required jobs of
 that list.
 
