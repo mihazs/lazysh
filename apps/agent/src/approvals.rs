@@ -25,9 +25,31 @@ const DESTINATIONS: [&str; 4] = [
 /// `bypassPermissions` is never offered from a phone.
 const MODES: [&str; 5] = ["default", "auto", "acceptEdits", "dontAsk", "plan"];
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
 pub enum ApprovalAgent {
     Claude,
+    Codex,
+}
+impl ApprovalAgent {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+    fn lifecycle(self) -> crate::Agent {
+        match self {
+            Self::Claude => crate::Agent::Claude,
+            Self::Codex => crate::Agent::Codex,
+        }
+    }
+    /// A stored name; a row written before `agent` existed is Claude's.
+    fn stored(name: Option<&str>) -> Option<Self> {
+        Self::value_variants()
+            .iter()
+            .copied()
+            .find(|agent| agent.name() == name.unwrap_or("claude"))
+    }
 }
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Decision {
@@ -88,13 +110,18 @@ impl ApprovalStore {
                 project TEXT NOT NULL, pane_id TEXT, tool_name TEXT NOT NULL,
                 tool_input TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL,
                 decision TEXT CHECK(decision IN ('allow','deny')),
-                options TEXT, option INTEGER, message TEXT);",
+                options TEXT, option INTEGER, message TEXT, agent TEXT);",
         )?;
         // One immediate transaction, so a hook and a list opening the old store together add each column once.
         let transaction = store
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for column in ["options TEXT", "option INTEGER", "message TEXT"] {
+        for column in [
+            "options TEXT",
+            "option INTEGER",
+            "message TEXT",
+            "agent TEXT",
+        ] {
             let name = column.split(' ').next().unwrap_or_default();
             let present: i64 = transaction.query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('approvals') WHERE name=?1",
@@ -235,7 +262,12 @@ fn suggestion(entry: &Value) -> Option<Value> {
         _ => None,
     }
 }
-fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Request> {
+fn hook_request(
+    input: impl Read,
+    agent: ApprovalAgent,
+    pane: Option<&str>,
+    timeout: u16,
+) -> Result<Request> {
     if !(1..=600).contains(&timeout) {
         return Err(Error::InvalidArgument);
     }
@@ -258,9 +290,11 @@ fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Re
     {
         return Err(Error::InvalidEvent);
     }
+    // Only Claude suggests permission updates; Codex refuses a decision that carries one.
     let options = payload
         .get("permission_suggestions")
         .and_then(Value::as_array)
+        .filter(|_| agent == ApprovalAgent::Claude)
         .map(|entries| {
             entries
                 .iter()
@@ -282,7 +316,7 @@ fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Re
     let mut request = Request {
         id: uuid::Uuid::new_v4().to_string(),
         expected_hash: String::new(),
-        agent: "claude",
+        agent: agent.name(),
         session_id,
         project,
         pane_id,
@@ -314,14 +348,15 @@ impl Drop for Pending {
     }
 }
 
+/// The hook's answer, or `None` when it gives no decision: Codex then asks in its own terminal prompt.
 pub fn request(
     directory: &Path,
     input: impl Read,
-    _agent: ApprovalAgent,
+    agent: ApprovalAgent,
     pane: Option<&str>,
     timeout: u16,
-) -> Result<Value> {
-    let request = hook_request(input, pane, timeout)?;
+) -> Result<Option<Value>> {
+    let request = hook_request(input, agent, pane, timeout)?;
     let mut store = ApprovalStore::open(directory)?;
     store.clean()?;
     let lease = lease_options(true).open(store.lease_path(&request.id))?;
@@ -353,7 +388,7 @@ pub fn request(
         .map_err(|_| Error::InvalidEvent)?
         .timestamp_millis();
     transaction.execute(
-        "INSERT INTO approvals(id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires,options) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        "INSERT INTO approvals(id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires,options,agent) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
             request.id,
             request.expected_hash,
@@ -367,13 +402,13 @@ pub fn request(
             (!request.options.is_empty())
                 .then(|| serde_json::to_string(&request.options))
                 .transpose()
-                .map_err(|_| Error::InvalidEvent)?
+                .map_err(|_| Error::InvalidEvent)?,
+            request.agent
         ],
     )?;
     transaction.commit()?;
     let payload = json!({"session_id":request.session_id,"cwd":request.project,"hook_event_name":"PermissionRequest","tool_name":request.tool_name});
-    if let Some(event) =
-        crate::normalize(&payload, crate::Agent::Claude, request.pane_id.as_deref())?
+    if let Some(event) = crate::normalize(&payload, agent.lifecycle(), request.pane_id.as_deref())?
     {
         Store::open(directory)?.ingest(&event, Utc::now())?;
     }
@@ -414,9 +449,13 @@ pub fn request(
             }
         }
         Some((_, _, Some(message))) => json!({"behavior":"deny","message":message}),
+        // Codex runs its terminal prompt only after the hook returns, so an expired request must not hide it behind a denial.
+        None if agent == ApprovalAgent::Codex => return Ok(None),
         _ => json!({"behavior":"deny","message":"Permission denied or expired in lazysh."}),
     };
-    Ok(json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}}))
+    Ok(Some(
+        json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}}),
+    ))
 }
 
 pub fn list(directory: &Path, limit: u8) -> Result<Value> {
@@ -425,16 +464,19 @@ pub fn list(directory: &Path, limit: u8) -> Result<Value> {
     }
     let mut store = ApprovalStore::open(directory)?;
     store.clean()?;
-    let mut statement = store.store.connection.prepare("SELECT id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires,options FROM approvals WHERE decision IS NULL AND expires>?1 ORDER BY created,id LIMIT ?2")?;
+    let mut statement = store.store.connection.prepare("SELECT id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires,options,agent FROM approvals WHERE decision IS NULL AND expires>?1 ORDER BY created,id LIMIT ?2")?;
     let rows = statement.query_map(params![Utc::now().timestamp_millis(), limit], |row| {
         let created: i64 = row.get(7)?;
         let expires: i64 = row.get(8)?;
         let tool_input: String = row.get(6)?;
         let options: Option<String> = row.get(9)?;
+        let agent: Option<String> = row.get(10)?;
         let request = Request {
             id: row.get(0)?,
             expected_hash: row.get(1)?,
-            agent: "claude",
+            agent: ApprovalAgent::stored(agent.as_deref())
+                .ok_or(rusqlite::Error::InvalidQuery)?
+                .name(),
             session_id: row.get(2)?,
             project: row.get(3)?,
             pane_id: row.get(4)?,
@@ -522,6 +564,16 @@ pub fn resolve(
     Ok(json!({"schemaVersion":1,"accepted":true}))
 }
 
-pub fn config() -> Value {
-    json!({"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":"lazysh-agent approval-request --agent claude --timeout-seconds 300","timeout":310}]}]}})
+pub fn config(agent: ApprovalAgent) -> Value {
+    // Codex holds its terminal prompt until the hook returns, so it waits less than Claude (which shows both at once).
+    let seconds = if agent == ApprovalAgent::Codex {
+        120
+    } else {
+        300
+    };
+    let command = format!(
+        "lazysh-agent approval-request --agent {} --timeout-seconds {seconds}",
+        agent.name()
+    );
+    json!({"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":command,"timeout":seconds + 10}]}]}})
 }

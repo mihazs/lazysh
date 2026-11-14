@@ -152,6 +152,10 @@ SubagentStart and SubagentStop are deliberately ignored so child completion
 cannot finish the parent's row. A Stop report is an observation; another hook can
 continue the turn and subsequent activity updates its state again.
 
+Answering a Codex permission request from the app is a separate, opt-in hook,
+`lazysh-agent approval-config --agent codex`; see [Remote decisions](approvals.md#codex).
+The `ingest` hook above only observes the request.
+
 OpenCode reports busy/retry as working, permission/question requests and identified
 session errors as needing attention, and idle/deletion as completed. Replies to
 questions or permissions do not imply completion. The plugin listens to

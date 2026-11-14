@@ -175,9 +175,10 @@ it('offers no message form to an older companion that does not list options',asy
   await screen.findByRole('button',{name:'Deny request'});
   expect(screen.queryByRole('button',{name:'Deny with a message'})).toBeNull();
 });
-it('denies with a trimmed message and sends nothing for a blank one',async()=>{
-  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[{...request,options:[]}]}:{schemaVersion:1,accepted:true});
+it.each(['claude','codex'])('denies a %s request with a trimmed message and sends nothing for a blank one',async agent=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[{...request,agent,options:[]}]}:{schemaVersion:1,accepted:true});
   render(<ApprovalPanel sessionId="ssh1"/>);
+  expect(await screen.findByRole('heading',{name:`${agent} · Bash`})).toBeTruthy();
   fireEvent.click(await screen.findByRole('button',{name:'Deny with a message'}));
   const send=screen.getByRole('button',{name:'Deny and send message'});
   fireEvent.change(screen.getByLabelText('Message the agent will read'),{target:{value:'   '}});
