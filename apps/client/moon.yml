@@ -83,14 +83,15 @@ tasks:
     options: *local
   # tauri android/ios builds. Inline env prefixes became env + envOverride because moon
   # lets the process environment win over task env otherwise.
+  # The Google build links Parakeet's pinned ONNX Runtime (`parakeet-android`); the F-Droid variants below must not.
   build-android:
     type: build
-    command: tauri android build --target aarch64 --debug --apk --ci
+    command: tauri android build --target aarch64 --debug --apk --ci --features parakeet-android
     env: &androidBuildEnv {WHISPER_DONT_GENERATE_BINDINGS: '1', CMAKE_ANDROID_NDK: '${NDK_HOME}'}
     options: &envLocal {cache: false, envOverride: true}
   build-android-emulator:
     type: build
-    command: tauri android build --target x86_64 --debug --apk --ci
+    command: tauri android build --target x86_64 --debug --apk --ci --features parakeet-android
     env: *androidBuildEnv
     options: *envLocal
   build-android-fdroid:

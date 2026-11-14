@@ -44,19 +44,20 @@ fn acceptance_metric_counts_substitution_deletion_and_insertion() {
 }
 
 #[test]
-#[ignore = "requires explicit LAZYSH_PARAKEET_TEST_ARCHIVE and Linux native acceptance; never downloads weights"]
+#[ignore = "requires explicit LAZYSH_PARAKEET_TEST_ARCHIVE and Linux or Android native acceptance; never downloads weights"]
 fn offline_public_speech_with_reused_recognizer() {
     run_inference_acceptance();
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn run_inference_acceptance() {
     panic!(
-        "this acceptance fixture requires Linux; platform storage/runtime acceptance is pending"
+        "this acceptance fixture requires Linux or Android; platform storage/runtime acceptance is pending"
     );
 }
 
-#[cfg(target_os = "linux")]
+// Android shares the Linux /proc and getrusage counters; run its test executable through `adb shell`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn run_inference_acceptance() {
     use lazysh_parakeet_runtime::{version, Recognizer, VerifiedBundle};
     use std::{fs, os::unix::fs::PermissionsExt, time::Instant};

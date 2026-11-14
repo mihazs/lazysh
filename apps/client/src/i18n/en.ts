@@ -1739,7 +1739,7 @@ export const english = {
   voiceParakeetOption: "Parakeet · local",
   voiceCloudOption: "Cloud",
   voiceEngineReason: "{{engine}}: {{reason}}",
-  voiceParakeetInitial: "Parakeet requires a supported Linux x86_64 desktop.",
+  voiceParakeetInitial: "Parakeet requires a supported Linux x86_64 desktop or the Google build of the Android app.",
   voiceAppleInitial: "Apple SpeechAnalyzer requires a supported iOS device.",
   voiceWhisperHint: "Whisper runs on this device. Audio stays on this device. Downloads use Hugging Face; import only trusted GGML files.",
   voiceWhisperAbout: "About Whisper models",

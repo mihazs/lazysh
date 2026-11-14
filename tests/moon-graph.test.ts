@@ -101,7 +101,8 @@ test('release builds, ordering and inline environment survive the port', async (
   const android = await moonTask('client:build-android-emulator');
   expect(android.options.envOverride).toBe(true);
   expect(android.env).toEqual({ WHISPER_DONT_GENERATE_BINDINGS: '1', CMAKE_ANDROID_NDK: expect.any(String) });
-  expect(commandLine(android)).toBe('tauri android build --target x86_64 --debug --apk --ci');
+  expect(commandLine(android)).toBe('tauri android build --target x86_64 --debug --apk --ci --features parakeet-android');
+  expect(commandLine(await moonTask('client:build-android-fdroid-emulator'))).not.toContain('parakeet-android');
   const fdroid = await moonTask('client:test-android-fdroid');
   expect(fdroid.deps!.map(dependency => dependency.target)).toEqual(['client:build-android-fdroid-emulator']);
   expect((await moonTask('client:test-android-ssh')).deps!.map(dependency => dependency.target)).toEqual(['client:test-android']);
