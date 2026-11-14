@@ -524,6 +524,7 @@
 - Use the Bed Mode SVG mark in the existing app sidebar, keeping the visible lazysh name and accessible text singular. Connection behavior and responsive drawer controls are unchanged.
 
 - Add an opt-in authenticated encrypted Web Push server foundation with private single-device enrollment, challenge confirmation and pinned HTTPS delivery. Existing webhook defaults are unchanged; Android enrollment and actual remote notification delivery remain incomplete.
+- Measure the cold start of the WebAssembly build of the terminal core (libghostty-vt) against xterm.js in Node, as evidence for the terminal engine decision (#1323, part of #1302). From a fresh process the module compiled, instantiated and parsed its first 16 KiB in about 8 ms against about 21 ms for xterm.js headless, and held about 4.7 to 4.9 MiB more resident memory. Benchmark script and raw result files only: the terminal engine is unchanged, xterm.js stays the only engine, and no setting or default changes.
 
 - Replace the default lazysh app, browser, Android and iOS launcher artwork with the original Bed Mode sloth-and-mobile-terminal mark, and add transparent SVG brand variants. The default visual identity changes; app features, connection security and the existing Amber alternate icon are unchanged.
 
