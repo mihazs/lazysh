@@ -1018,6 +1018,34 @@ remain supported. Native SID/DACL ownership, busy-executable replacement and a
 Windows OpenSSH shell adapter remain tracked in issue #490; the complete in-app
 installer remains issue #476.
 
+## Listening ports for sign-in callbacks
+
+`lazysh-agent listeners` prints the TCP sockets that are listening on a loopback or a wildcard address, so the app can confirm that the `http://localhost:PORT` a sign-in command printed is really being served by the host's own process (detection tier 1 of ADR 0004, `docs/architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md`; nothing is tunnelled by this command). It reads no argument vector or environment and starts nothing.
+
+```sh
+lazysh-agent listeners [--port N]... [--json] [--watch [--interval-ms 250..5000]]
+```
+
+One JSON object per line, `"schemaVersion": 1`; the app ignores fields it does not know.
+
+```json
+{"schemaVersion":1,"event":"snapshot","listeners":[
+  {"family":"tcp4","address":"0.0.0.0","bind":"wildcard","port":36871,"uid":1000,"ownedBySessionUser":true,"pid":4029144,"comm":"aws","startedAt":"2026-11-13T10:00:01Z","ageSeconds":2}
+]}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `family`, `address`, `bind` | `tcp4` or `tcp6`; the bound address; `loopback` (`127.0.0.1`, `::1`, an IPv4-mapped loopback) or `wildcard` (`0.0.0.0`, `::`). A socket on any other address, including `127.0.0.2` and an interface address, is not listed. |
+| `port` | 1 to 65535. `--port` may be repeated to report only those ports. |
+| `uid`, `ownedBySessionUser` | The socket's user id (Unix) and whether it is the user running the command. Windows reports no user id; `ownedBySessionUser` there means the owning process runs in the same logon session. |
+| `pid`, `comm` | The owning process id and its kernel name (`comm`, at most 15 bytes on Linux). Absent when the owner cannot be read, which is the case for another user's process (the NetBird daemon, for example); `ownedBySessionUser` is then false. |
+| `startedAt`, `ageSeconds` | UTC start time of the owning process, not of the socket (a long-lived process that opens a new port looks old), and how long that process had run at the read. `ageSeconds` is measured on the host's own clock, so it does not depend on the clocks of the host and the device agreeing. Linux and macOS (through `ps`); Windows omits them, and the app then relies on seeing the listener appear. |
+
+At most 256 entries are printed, sorted by port; when more exist the snapshot carries `"truncated": true`. Linux reads `/proc/net/tcp`, `/proc/net/tcp6` and `/proc/PID/fd`; macOS and other Unix systems parse `lsof -F`; Windows parses `Get-NetTCPConnection` through PowerShell. A host where that tool is missing or too slow fails with exit status 1 and a fixed `ListenersUnavailable` message.
+
+With `--watch` the command prints the snapshot, then one `{"event":"listen","listener":{...}}` or `"close"` line each time a listener appears or disappears (polled every `--interval-ms`, default 1000), and `{"event":"heartbeat"}` after 5 seconds without another line. It ends when its standard input closes. A companion that predates the command answers with exit status 2; the app then falls back to the `ss` or `lsof` discovery that Previews uses.
+
 ## Live Herdr discovery
 
 The Agents view also reads live agent metadata directly from Herdr through the

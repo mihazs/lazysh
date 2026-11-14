@@ -9,6 +9,7 @@ pub mod hook_setup;
 pub mod hooks;
 pub mod host_browser;
 pub mod installation;
+pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
 mod private_json;
@@ -91,6 +92,7 @@ pub enum Error {
     Settings(&'static str),
     Relay(&'static str),
     Browser(&'static str),
+    Listeners(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -104,7 +106,7 @@ impl Error {
             Self::Device(kind) | Self::Herdr(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
-            Self::Browser(kind) => kind,
+            Self::Browser(kind) | Self::Listeners(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
         }
