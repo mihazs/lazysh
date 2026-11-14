@@ -406,7 +406,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             &lazysh_agent::state_directory()?,
             io::stdin().lock(),
             agent,
-            std::env::var("TMUX_PANE").ok().as_deref(),
+            lazysh_agent::approval_pane_identity().as_deref(),
             timeout_seconds,
         )?),
         Command::ApprovalList { limit } => Some(lazysh_agent::approvals::list(
