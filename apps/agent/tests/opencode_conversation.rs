@@ -261,6 +261,50 @@ fn symlink_sources_are_rejected() {
 }
 
 #[test]
+fn a_tool_output_of_megabytes_is_cut_so_the_session_still_opens() {
+    // SQLite refused a value over 512 KiB, which hid the whole session; a part is now read whole and its text cut to fit a page.
+    let big = "o".repeat(2_000_000);
+    let call = |name: &str, state: Value| json!({"type":"tool","id":"call","callID":"call","name":name,"tool":name,"state":state});
+    for v2 in [true, false] {
+        let f = Fixture::new(v2);
+        f.message(
+            "msg_a",
+            1,
+            "user",
+            if v2 {
+                json!({"text":"read the log"})
+            } else {
+                json!({})
+            },
+        );
+        f.message("msg_b", 2, "assistant", json!({"content":[]}));
+        f.message(
+            "msg_c",
+            3,
+            "user",
+            if v2 {
+                json!({"text":"after the big output"})
+            } else {
+                json!({})
+            },
+        );
+        if !v2 {
+            f.part("msg_a", 0, json!({"type":"text","text":"read the log"}));
+            f.part(
+                "msg_c",
+                2,
+                json!({"type":"text","text":"after the big output"}),
+            );
+        }
+        f.part("msg_b", 1, call("read", json!({"status":"completed","input":{"file":"log"},"output":big,"content":[{"type":"text","text":big}]})));
+        let page = f.page(50);
+        assert!(texts(&page).contains(&"after the big output"), "v2={v2}");
+        assert!(page.to_string().contains("more bytes not shown"), "v2={v2}");
+        assert!(page.to_string().len() < 512 * 1024, "v2={v2}");
+    }
+}
+
+#[test]
 fn tool_failures_with_only_files_keep_error_on_a_result_and_private_error_opaque() {
     let f = Fixture::new(true);
     f.message("msg_a", 1, "assistant", json!({"content":[]}));
