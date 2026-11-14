@@ -63,6 +63,9 @@ export type TmuxJumpSnapshot = {
   sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string }[] }[];
 };
 
+/** What to show before a sign-in page opens on this device: the host, never the query. */
+export type AuthUrlInspection = {host: string; warnings: ('insecure' | 'punycode')[]; callbackPorts: number[]};
+export type AuthUrlOutcome = 'opened' | 'notified';
 export type HostFileAction = 'save' | 'open' | 'share';
 export type HostFileStat = {path: string; name: string; kind: 'file' | 'directory' | 'other'; size: number; link: string | null; actions: HostFileAction[]};
 export type HostFileProgress = {bytes: number; total: number | null};
@@ -106,6 +109,9 @@ export const api = {
     return createRemoteSession("connect_mosh", {sessionId, options, cols:100, rows:30,...(entry?{entry}:{})},onEvent);
   },
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
+  inspectAuthUrl: (url: string) => invoke<AuthUrlInspection>("inspect_auth_url", { url }),
+  /** Opens a sign-in page on this device once the tunnel its redirect needs listens; a phone uses an in-app tab unless told otherwise. */
+  openAuthUrl: (url: string, browser?: 'inApp' | 'system') => invoke<AuthUrlOutcome>("open_auth_url", { url, browser }),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {

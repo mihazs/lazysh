@@ -6,4 +6,7 @@
         <item quantity="many">%d de sesiones activas</item>
         <item quantity="other">%d sesiones activas</item>
     </plurals>
+    <string name="auth_notification_channel">Solicitudes de inicio de sesión</string>
+    <string name="auth_notification_title">El inicio de sesión está esperando</string>
+    <string name="auth_notification_text">Abrir la página de inicio de sesión de %1$s en este dispositivo</string>
 </resources>

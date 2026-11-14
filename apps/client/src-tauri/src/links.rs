@@ -1,7 +1,7 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use tauri_plugin_opener::OpenerExt;
 
-fn web_url(value: &str) -> Result<String, String> {
+pub(crate) fn web_url(value: &str) -> Result<String, String> {
     if value.len() > 4096
         || value.chars().any(|c| c.is_control() || c.is_whitespace())
         || value.contains('\\')

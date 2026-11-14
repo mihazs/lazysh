@@ -11,6 +11,15 @@ it('passes typed Mosh entry separately from transport options on the owned nativ
   await api.connectMosh('entry-parent',{},()=>{},entry);
   expect(invoke).toHaveBeenLastCalledWith('connect_mosh',{sessionId:'entry-parent',options:{},cols:100,rows:30,events:expect.any(Object),entry},expect.anything());
 });
+it('asks the native side to inspect and open a sign-in page, which checks the tunnel itself',async()=>{
+  invoke.mockResolvedValueOnce({host:'idp.example',warnings:[],callbackPorts:[8085]}).mockResolvedValueOnce('notified');
+  expect(await api.inspectAuthUrl('https://idp.example/a')).toEqual({host:'idp.example',warnings:[],callbackPorts:[8085]});
+  expect(await api.openAuthUrl('https://idp.example/a','system')).toBe('notified');
+  expect(invoke.mock.calls.map(([command,args])=>[command,args])).toEqual([
+    ['inspect_auth_url',{url:'https://idp.example/a'}],
+    ['open_auth_url',{url:'https://idp.example/a',browser:'system'}],
+  ]);
+});
 it('sends installation through one protected native command with no renderer URL or binary data',async()=>{
   const progress=vi.fn();
   await api.installCompanion('ssh-installer',progress);
