@@ -6,16 +6,29 @@ use tauri::State;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ZellijAction {
-    NewTab { name: String, directory: String },
-    GoToTab { index: u32 },
+    NewTab {
+        name: String,
+        directory: String,
+    },
+    GoToTab {
+        index: u32,
+    },
     /// By the tab's stable id from `list-tabs`, never by position: a tab that moved or went since the strip read is refused, not guessed.
-    CloseTab { id: u32 },
-    RenameTab { id: u32, name: String },
+    CloseTab {
+        id: u32,
+    },
+    RenameTab {
+        id: u32,
+        name: String,
+    },
     NextTab,
     PreviousTab,
     NextPane,
     PreviousPane,
-    NewPane { horizontal: bool, directory: String },
+    NewPane {
+        horizontal: bool,
+        directory: String,
+    },
     ZoomPane,
 }
 fn text(value: &str, max: usize) -> Result<String> {
@@ -41,7 +54,9 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
         }
         ZellijAction::CloseTab { id } => format!("close-tab-by-id {id}"),
         // `--` keeps a name that starts with a dash a name, not an option.
-        ZellijAction::RenameTab { id, name } => format!("rename-tab-by-id {id} -- {}", text(name, 200)?),
+        ZellijAction::RenameTab { id, name } => {
+            format!("rename-tab-by-id {id} -- {}", text(name, 200)?)
+        }
         ZellijAction::NextTab => "go-to-next-tab".into(),
         ZellijAction::PreviousTab => "go-to-previous-tab".into(),
         ZellijAction::NextPane => "focus-next-pane".into(),
@@ -151,12 +166,31 @@ mod tests {
             "zellij --session='work' action close-tab-by-id 7"
         );
         assert_eq!(
-            command("work", &ZellijAction::RenameTab { id: 7, name: "-x';$(touch nope)".into() }).unwrap(),
+            command(
+                "work",
+                &ZellijAction::RenameTab {
+                    id: 7,
+                    name: "-x';$(touch nope)".into()
+                }
+            )
+            .unwrap(),
             "zellij --session='work' action rename-tab-by-id 7 -- '-x'\\'';$(touch nope)'"
         );
-        assert!(command("work", &ZellijAction::RenameTab { id: 7, name: "a\nb".into() }).is_err());
+        assert!(command(
+            "work",
+            &ZellijAction::RenameTab {
+                id: 7,
+                name: "a\nb".into()
+            }
+        )
+        .is_err());
         // A negative or fractional id is not a tab id: the command layer takes only an unsigned integer.
-        for bad in [r#"{"type":"closeTab","id":-1}"#, r#"{"type":"closeTab","id":"1;id"}"#, r#"{"type":"closeTab"}"#, r#"{"type":"closeTab","id":1,"extra":true}"#] {
+        for bad in [
+            r#"{"type":"closeTab","id":-1}"#,
+            r#"{"type":"closeTab","id":"1;id"}"#,
+            r#"{"type":"closeTab"}"#,
+            r#"{"type":"closeTab","id":1,"extra":true}"#,
+        ] {
             assert!(serde_json::from_str::<ZellijAction>(bad).is_err(), "{bad}");
         }
     }
@@ -473,16 +507,20 @@ mod tests {
         .unwrap());
         let renamed_second = || {
             let tabs = query("list-tabs")?;
-            Ok(u64::from(
-                tabs.as_array()
-                    .is_some_and(|tabs| tabs.iter().any(|tab| tab["tab_id"] == second && tab["name"] == "-renamed';$(touch nope)")),
-            ))
+            Ok(u64::from(tabs.as_array().is_some_and(|tabs| {
+                tabs.iter()
+                    .any(|tab| tab["tab_id"] == second && tab["name"] == "-renamed';$(touch nope)")
+            })))
         };
         wait("renamed tab by id", &renamed_second, &|found| found == 1);
         // Rename and close act on the tab they name, not the focused one: the first tab is still active.
         assert_eq!(wait("first tab still focused", &active_tab, &|_| true), 0);
         run(command(&name, &ZellijAction::CloseTab { id: second }).unwrap());
-        let tab_count = || Ok(query("list-tabs")?.as_array().map_or(0, |tabs| tabs.len() as u64));
+        let tab_count = || {
+            Ok(query("list-tabs")?
+                .as_array()
+                .map_or(0, |tabs| tabs.len() as u64))
+        };
         wait("closed tab by id", &tab_count, &|count| count == 1);
         assert_eq!(wait("first tab kept", &active_tab, &|_| true), 0);
         // The tab is gone: Zellij ignores its stable id (it never falls back to a position), so the remaining tab is untouched.

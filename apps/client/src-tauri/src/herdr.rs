@@ -812,7 +812,13 @@ mod tests {
     #[test]
     fn closes_a_tab_by_exact_id_and_refuses_a_workspace_pane_or_injected_id() {
         assert_eq!(
-            action_command("owned", &HerdrAction::CloseTab { target: "w1:t2".into() }).unwrap(),
+            action_command(
+                "owned",
+                &HerdrAction::CloseTab {
+                    target: "w1:t2".into()
+                }
+            )
+            .unwrap(),
             "herdr --session 'owned' tab close 'w1:t2'"
         );
         for bad in ["", "w1", "w1:p2", "w1:t", "t2", "w1:t2;id", "-a"] {
@@ -1132,7 +1138,13 @@ mod tests {
             },
         )
         .unwrap());
-        run(action_command(session, &HerdrAction::FocusTab { target: tab.clone() }).unwrap());
+        run(action_command(
+            session,
+            &HerdrAction::FocusTab {
+                target: tab.clone(),
+            },
+        )
+        .unwrap());
         run(action_command(session, &HerdrAction::FocusWorkspace { target: workspace }).unwrap());
         // Closing the second tab leaves the workspace's first tab and its panes untouched.
         let before = snapshot();

@@ -997,9 +997,8 @@ mod tests {
             process.arg("-c").arg(command).env_remove("TMUX");
             process
         };
-        let run = |command: String| {
-            lazysh_common::test_support::successful_output(&mut scoped(command))
-        };
+        let run =
+            |command: String| lazysh_common::test_support::successful_output(&mut scoped(command));
         let read_tree = || {
             let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
             parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
@@ -1082,7 +1081,14 @@ mod tests {
             vec![first]
         );
         // The window is gone: closing it again fails and takes nothing else with it.
-        let again = scoped(action_command(&TmuxAction::CloseWindow { target: window.clone() }).unwrap()).output().unwrap();
+        let again = scoped(
+            action_command(&TmuxAction::CloseWindow {
+                target: window.clone(),
+            })
+            .unwrap(),
+        )
+        .output()
+        .unwrap();
         assert!(!again.status.success());
         assert_eq!(read_tree().sessions[0].windows.len(), 1);
     }
@@ -1090,7 +1096,10 @@ mod tests {
     #[test]
     fn closes_a_window_by_exact_id_and_refuses_anything_else() {
         assert_eq!(
-            action_command(&TmuxAction::CloseWindow { target: "@12".into() }).unwrap(),
+            action_command(&TmuxAction::CloseWindow {
+                target: "@12".into()
+            })
+            .unwrap(),
             "tmux -u -L 'default' kill-window -t '@12'"
         );
         for bad in ["", "12", "@", "@1;kill-server", "$1", "%1", "@1 @2", "-a"] {
