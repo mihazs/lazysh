@@ -1,0 +1,6 @@
+Terraform must now open a web browser to the login page for app.terraform.io.
+
+If a browser does not open this automatically, open the following URL to proceed:
+    https://app.terraform.io/app/oauth2/authorize?client_id=cf0c0a4b-8c4b-4a2b-9b9b-000000000000&code_challenge=CHALLENGE&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A10000%2Flogin&response_type=code&state=STATE
+
+Terraform will now wait for the host to signal that login was successful.

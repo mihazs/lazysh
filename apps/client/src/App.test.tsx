@@ -14,6 +14,8 @@ import {tmuxJumpSnapshot as navigationSnapshot} from './test/tmuxJumpData';
 import {tmuxChatReply,tmuxChatReaderSource,tmuxChatReaderPage} from './test/tmuxChat';
 vi.mock('../package.json',()=>({default:{version:'2.3.4'}}));
 
+import {onAuthHint, type AuthHint} from './authHints';
+const authHint:AuthHint={id:'hint-1',source:'url',host:'localhost',port:8085,path:'/',idpHost:'accounts.google.com',pkce:true,sensitive:false,firstSeenAt:'2026-11-13T10:00:00Z'};
 const mocks = vi.hoisted(() => ({
   api: {
     listHosts: vi.fn(),
@@ -2417,6 +2419,22 @@ it.each(['closed','invalid'] as const)('keeps Mosh parser drain separate from te
     await act(async()=>receive({type:'data',data:[6]}));
     expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(1);
   } else expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(0);
+});
+
+it('announces a sign-in hint with its session and keeps the connection open (a non-data event used to close it)',async()=>{
+  verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{
+    // Before the session has an id: held and announced once there is one.
+    onEvent({type:'authHint',hint:{...authHint,id:'early'}});receive=onEvent;return {sessionId:'hinted-mosh'};
+  });
+  const heard:import('./authHints').AuthHintDetail[]=[];const stop=onAuthHint(detail=>heard.push(detail));
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const session=mocks.terminalPaneProps.mock.lastCall?.[0].session;
+  await act(async()=>{receive({type:'authHint',hint:authHint});});
+  stop();
+  expect(heard.map(detail=>[detail.sessionId,detail.hint.id])).toEqual([['hinted-mosh','early'],['hinted-mosh',authHint.id]]);
+  expect(session.connected).toBe(true);expect(mocks.api.disconnect).not.toHaveBeenCalledWith('hinted-mosh');
+  expect(heard[1].hint).not.toHaveProperty('query');
 });
 
 it('rejects unsupported canonical rendering before starting forced Mosh',async()=>{
