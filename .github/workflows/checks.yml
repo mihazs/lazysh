@@ -1301,6 +1301,12 @@ jobs:
           CASE_NAME: ssh::tmux_jump_fixture::real_ssh_user_installed_herdr_discovers_and_attaches_exact_default
           LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
         run: *exact-ignored-case
+      - name: Exercise the saved Zellij default entry and product session listing against the pinned Zellij over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap
+        run: *exact-ignored-case
       - name: Report tmux 3.4, Zellij 0.45.1 and stock Herdr versions as supported through product discovery over owned OpenSSH
         if: ${{ !cancelled() }}
         shell: bash

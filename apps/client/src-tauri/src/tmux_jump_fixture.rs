@@ -1656,16 +1656,17 @@ fn owned_zellij_layout(f: &Fixture) {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned local OpenSSH sshd and installed Zellij; saved default first-entry acceptance"]
+#[ignore = "requires owned local OpenSSH sshd and Zellij (LAZYSH_TEST_ZELLIJ or /usr/bin/zellij); saved default first-entry acceptance"]
 async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
-    let f = Fixture::with_herdr(Some(std::path::Path::new("/usr/bin/zellij"))).await;
+    let zellij = std::env::var("LAZYSH_TEST_ZELLIJ").unwrap_or_else(|_| "/usr/bin/zellij".into());
+    let f = Fixture::with_herdr(Some(std::path::Path::new(&zellij))).await;
     owned_zellij_layout(&f);
     let name = "direct-zellij-literal";
-    struct OwnedZellij<'a>(&'a Fixture, &'a str);
+    struct OwnedZellij<'a>(&'a Fixture, &'a str, &'a str);
     impl Drop for OwnedZellij<'_> {
         fn drop(&mut self) {
             // Exact name in fresh private socket/storage roots, including on panic.
-            let command = Command::new("/usr/bin/zellij")
+            let command = Command::new(self.2)
                 .args(["kill-session", "--", self.1])
                 .env_clear()
                 .envs(self.0.environment.iter().map(|(key, value)| (*key, value)))
@@ -1680,7 +1681,7 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
             }
         }
     }
-    let owned = OwnedZellij(&f, name);
+    let owned = OwnedZellij(&f, name, &zellij);
     let (app, state) = herdr_native_app(&f);
     let (_authority, lease) = unlocked_authority();
     let (mut source, _) = herdr_echo_source(&f, &state, &lease).await;
@@ -1727,14 +1728,21 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
         } else {
             shell_pid = Some(pane_pid);
         }
-        let names = exec_for_access(
-            &native,
-            "zellij list-sessions --short --no-formatting".into(),
-            &lease,
+        // The product listing (not the `zellij` CLI) reports the one live session.
+        let listed = crate::multiplexer::multiplexer_sessions(
+            app.state(),
+            child.session_id.clone(),
+            kind,
+            lease.clone(),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
-        assert_eq!(names.trim(), name);
+        assert_eq!(
+            serde_json::to_value(listed).unwrap(),
+            serde_json::json!([{ "name": name }])
+        );
         let socket = f
             .dir
             .path()
