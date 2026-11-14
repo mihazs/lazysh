@@ -1,0 +1,62 @@
+name: Exercise the installed Windows application GUI
+description: Drive the packaged NSIS application's real WebView2 window through pinned tauri-driver and the official Microsoft EdgeDriver
+inputs:
+  revision:
+    description: Source revision embedded in the packaged application; defaults to this job's commit
+    default: ''
+runs:
+  using: composite
+  steps:
+    # Saved right after the install, not after the job, so a failed acceptance never rebuilds the driver.
+    - name: Restore the pinned Windows GUI protocol driver
+      id: driver-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-native-driver
+        key: tauri-driver-2.1.0-locked-windows-${{ runner.arch }}
+    - name: Install the pinned Windows GUI protocol driver
+      shell: bash
+      run: cargo install --locked --version 2.1.0 tauri-driver --root "$RUNNER_TEMP/lazysh-native-driver"
+    - name: Save the pinned Windows GUI protocol driver
+      if: steps.driver-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-native-driver
+        key: tauri-driver-2.1.0-locked-windows-${{ runner.arch }}
+    # The driver must be the exact build of the WebView2 runtime the application loads; the runtime
+    # moves with the runner image, so the version is read from it and the Microsoft signature is checked.
+    - name: Install the official EdgeDriver for the installed WebView2 runtime
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        $webview = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+        $runtime = @(foreach ($hive in 'HKLM:\SOFTWARE\WOW6432Node', 'HKCU:\SOFTWARE') {
+          (Get-ItemProperty -LiteralPath "$hive\Microsoft\EdgeUpdate\Clients\$webview" -ErrorAction SilentlyContinue).pv
+        }) | Where-Object { $_ } | Select-Object -First 1
+        if ($runtime -notmatch '^(\d+\.){3}\d+$') { throw 'The WebView2 runtime is not installed' }
+        $directory = Join-Path $env:RUNNER_TEMP 'lazysh-edgedriver'
+        $null = New-Item -ItemType Directory -Path $directory
+        $archive = Join-Path $directory 'edgedriver_win64.zip'
+        Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$runtime/edgedriver_win64.zip" -OutFile $archive
+        Expand-Archive -LiteralPath $archive -DestinationPath $directory
+        $driver = Join-Path $directory 'msedgedriver.exe'
+        $signature = Get-AuthenticodeSignature -LiteralPath $driver
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'EdgeDriver is not signed by Microsoft' }
+        Write-Host "WebView2 runtime $runtime; EdgeDriver sha256 $((Get-FileHash -LiteralPath $driver -Algorithm SHA256).Hash)"
+        "LAZYSH_WINDOWS_GUI_EDGEDRIVER=$driver" >> $env:GITHUB_ENV
+        "LAZYSH_WINDOWS_GUI_DRIVER=$env:RUNNER_TEMP\lazysh-native-driver\bin\tauri-driver.exe" >> $env:GITHUB_ENV
+    - name: Install, drive and uninstall the packaged application
+      shell: bash
+      timeout-minutes: 15
+      env:
+        LAZYSH_TEST_WINDOWS_GUI: '1'
+        LAZYSH_EXPECTED_SOURCE_REVISION: ${{ inputs.revision || github.sha }}
+      run: bun test tests/windows-installed-gui.test.ts --test-name-pattern 'actual Windows installed GUI'
+    - name: Retain only the owned synthetic application window
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: lazysh-windows-installed-gui
+        path: test-results/windows-gui
+        if-no-files-found: ignore
