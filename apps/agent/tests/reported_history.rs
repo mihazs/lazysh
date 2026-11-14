@@ -145,3 +145,60 @@ fn codex_opt_in_reports_its_transcript_with_the_pane_of_its_lifecycle_row() {
     let plain: Value = serde_json::from_slice(&output(&["codex-config"], &Value::Null)).unwrap();
     assert_eq!(plain, lazysh_agent::hooks::codex_config());
 }
+
+#[test]
+fn gemini_reports_its_session_file_on_the_prompt_event_only_when_opted_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory
+        .path()
+        .join("chats/session-2026-11-13T01-00-abcd1234.jsonl");
+    let hook = |event: &str| json!({"hook_event_name":event,"session_id":"gem-1","cwd":"/owned","transcript_path":file,"timestamp":"2026-11-13T01:00:00Z"});
+    let lookup = || {
+        let output = run(
+            directory.path(),
+            &["reported-history", "--session-id=gem-1"],
+            &Value::Null,
+        );
+        assert!(output.status.success());
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let ingest = |payload: &Value, flag: bool| {
+        let mut args = vec!["ingest", "--agent", "gemini"];
+        args.extend(flag.then_some("--reported-history"));
+        let output = run(directory.path(), &args, payload);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    ingest(&hook("BeforeAgent"), false);
+    assert_eq!(lookup()["status"], "missing");
+    // Only the prompt event names the session file; a tool event leaves the record alone.
+    ingest(&hook("BeforeTool"), true);
+    assert_eq!(lookup()["status"], "missing");
+    ingest(&hook("BeforeAgent"), true);
+    let source = lookup();
+    assert_eq!(
+        (
+            source["status"].as_str(),
+            source["path"].as_str(),
+            source["paneId"].as_str()
+        ),
+        (Some("available"), file.to_str(), Some("%7"))
+    );
+    let config = run(
+        directory.path(),
+        &["gemini-config", "--reported-history"],
+        &Value::Null,
+    );
+    let config: Value = serde_json::from_slice(&config.stdout).unwrap();
+    assert_eq!(
+        config["hooks"]["BeforeAgent"][0]["hooks"][0]["command"],
+        "lazysh-agent ingest --agent gemini --reported-history"
+    );
+    assert_eq!(
+        run(directory.path(), &["gemini-config"], &Value::Null).stdout,
+        format!("{}\n", lazysh_agent::hooks::gemini_config()).as_bytes()
+    );
+}

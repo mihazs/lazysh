@@ -17,6 +17,7 @@ export const usageAgents = {
 } as const;
 export const transcriptAgents = {
   ...usageAgents,
+  gemini: "Gemini CLI",
   "grok-acp": "Grok ACP records",
   "antigravity-jsonl": "Antigravity step records (explicit file)",
 } as const;

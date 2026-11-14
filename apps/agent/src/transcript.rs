@@ -21,6 +21,7 @@ mod discovery;
 mod droid;
 mod event_adapters;
 mod events;
+mod gemini_conversation;
 mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
@@ -128,6 +129,7 @@ pub enum TranscriptAgent {
     Kimi,
     Jcode,
     Droid,
+    Gemini,
     Cursor,
     Omo,
     #[value(name = "devin-atif")]
@@ -274,7 +276,10 @@ fn read_page_options(
         return jcode::read_page(path, offset, limit);
     }
     if !(1..=100).contains(&limit)
-        || matches!(agent, TranscriptAgent::Hermes | TranscriptAgent::Opencode)
+        || matches!(
+            agent,
+            TranscriptAgent::Hermes | TranscriptAgent::Opencode | TranscriptAgent::Gemini
+        )
     {
         return Err(Error::InvalidArgument);
     }
@@ -717,6 +722,7 @@ fn normalize_options(
         TranscriptAgent::DevinAtif => return None,
         TranscriptAgent::AmpJson => return None,
         TranscriptAgent::GrokAcp | TranscriptAgent::AntigravityJsonl => return None,
+        TranscriptAgent::Gemini => return None,
     };
     if blocks.is_empty() {
         return None;

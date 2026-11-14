@@ -19,6 +19,12 @@ export const slashCommands: Record<Agent, readonly SlashCommand[]> = {
   ],
   // No command is offered that nothing here could verify; a prompt that starts with / is sent as typed.
   opencode: [],
+  gemini: [
+    {name: 'about'}, {name: 'clear'}, {name: 'compress'}, {name: 'copy'}, {name: 'help'}, {name: 'init'}, {name: 'mcp'}, {name: 'plan'},
+    {name: 'stats'}, {name: 'tools'}, {name: 'auth', picker: true}, {name: 'memory', picker: true}, {name: 'model', picker: true},
+    {name: 'permissions', picker: true}, {name: 'resume', picker: true}, {name: 'rewind', picker: true}, {name: 'settings', picker: true},
+    {name: 'theme', picker: true},
+  ],
 };
 
 /** The commands a draft is asking for: only while the first word is being typed, never inside a longer prompt. */

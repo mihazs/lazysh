@@ -538,6 +538,43 @@ The reader supports main-thread user/assistant text, plaintext thinking, tool ca
 
 Primary evidence: [official thread export documentation](https://ampcode.com/docs/threads) and the [versioned official npm artifact](https://registry.npmjs.org/@sourcegraph/amp/-/amp-0.0.1778732631-gc5875c.tgz), inspected as inert JavaScript on 2026-10-24. Archive SHA-256 `c64e86edecde79e659914df30dad4060c8d7dd2d91a884e2b94b4262d0f8c911`; `dist/main.js` SHA-256 `458435712c9c4e222822847fc9e70080cdf023ffb3c820e959a30425a22a5836`. The full-thread JSON export function occupies bundle byte range `[8692546,8692830)` (selected-span SHA-256 `46f08280586103e38944b2a4cfefb09b10e026002b9265ab2b9cb06b9a167470`); its message projection occupies `[2355907,2356741)` (SHA-256 `69cf3797d4147e3603ae5ce8290abb57a30a9e2b1d17b70b6fdd9327d86c5b5e`). REA parsed both selected spans with zero parse failures; relationship analysis remained partial. No Amp code was executed or copied into lazysh, and no private account data was read. Native Cargo fixtures independently recreate the observed envelope and content shapes; real exported files remain untested.
 
+### Gemini CLI conversations
+
+`lazysh-agent transcript --agent gemini --view conversation --path /absolute/path/session-....jsonl` reads a Gemini CLI
+session file and replays it the way the CLI does: the file is an append-only log, a message line whose `id` is known replaces
+that message in place, `$patch` lines set tool results and edit, remove or reorder messages, `$rewindTo` drops a message and
+everything after it, and the metadata lines (`sessionId`, `$set`) show nothing. A legacy single-object `.json` session reads
+the same way. There is no Records view: `--view records` is refused. Only complete lines count, so a line still being written
+is ignored. Messages of type `info`, `warning` and `error` are not mapped.
+
+`discover --agent gemini` lists `chats/session-*.jsonl` under `$GEMINI_CLI_HOME/.gemini/tmp/<project>/` (the user's home when
+the variable is unset). A sub-agent's own file, one folder deeper under the parent session id, is not listed and not read.
+
+A hook-reported path: `lazysh-agent gemini-config --reported-history` prints the Gemini hook fragment with each ingest command
+opted in, and the prompt event (`BeforeAgent`) then reports the `transcript_path` Gemini passes to its hooks, so the Agent
+view follows the session of the pane. Without that opt-in the Agent view cannot find the file by itself.
+
+What a message becomes: `thoughts` are `thinking` blocks, `content` a text block (for a prompt, the `displayContent` the user
+typed, never the file text `@path` expanded into it), each `toolCalls` entry a `tool_use` block (status `executing` and the
+like carry no result yet) and, once the call is `success`, `error` or `cancelled`, a `tool_result` block in a `tool` message
+with `isError` set for `error`. The shared cards come from this table, and a tool name or argument shape not in it stays an
+ordinary tool block:
+
+| Gemini record | Shared kind |
+| --- | --- |
+| `write_todos` (`todos[].description`, `status` of `pending`, `in_progress`, `completed`, `cancelled` or `blocked`) | plan card |
+| `invoke_agent` (`agent_name`, `prompt`) | `agent` work item; running until its call is `success`, `error` or `cancelled` |
+| `run_shell_command` with `is_background: true` | `shell` work item; it ends at no recorded event, so it stays `running` |
+
+`activity` is `waiting` while a call awaits approval, `working` while a call runs or after the user's prompt or a finished
+call that the model has not answered, `stopped` after a cancelled call and `idle` after an answer. `session` carries the last
+recorded `model` and the prompt size (`tokens.input`) as `usage.usedTokens`; the context window is not recorded. The Agent
+view's tool cards know Gemini's tool names: `run_shell_command` is a command, `read_file` and `read_many_files` reads,
+`grep_search`, `glob` and `list_directory` searches, `web_fetch` and `google_web_search` fetches, and `replace` and
+`write_file` are edits shown as diff cards. Sending from the Agent view works
+on tmux only: Herdr and Zellij sends are Claude Code and Codex only. Fixtures are synthetic, built from the upstream
+`chatRecordingTypes.ts`; no real session was read: `apps/agent/tests/gemini_conversation.rs`.
+
 ### Grok ACP records
 
 `--agent grok-acp` reads an explicitly selected modern `updates.jsonl` file:

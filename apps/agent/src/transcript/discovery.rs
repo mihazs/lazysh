@@ -40,6 +40,9 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     let root = match root {
         Some(path) => path.to_path_buf(),
         None if matches!(agent, TranscriptAgent::GrokAcp) => grok_sessions_root()?,
+        None if matches!(agent, TranscriptAgent::Gemini) => {
+            super::gemini_conversation::sessions_root()?
+        }
         None if matches!(agent, TranscriptAgent::DevinAtif) => std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
@@ -106,6 +109,8 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
         TranscriptAgent::Copilot | TranscriptAgent::Droid => 1,
         TranscriptAgent::QoderIde | TranscriptAgent::Kimi | TranscriptAgent::GrokAcp => 2,
         TranscriptAgent::Cursor => 3,
+        // tmp/<project>/chats/session-*.jsonl; a sub-agent's file sits one level deeper and is not listed.
+        TranscriptAgent::Gemini => 2,
         TranscriptAgent::Jcode | TranscriptAgent::DevinAtif | TranscriptAgent::AmpJson => 0,
         _ => return Err(Error::InvalidArgument),
     };
@@ -160,6 +165,7 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
                 }
                 TranscriptAgent::Droid => super::droid::session_filename(&path),
                 TranscriptAgent::Cursor => super::cursor::session_path(&path),
+                TranscriptAgent::Gemini => super::gemini_conversation::session_path(&path),
                 _ => true,
             };
             if !expected {

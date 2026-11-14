@@ -132,8 +132,24 @@ screen-reading command: the terminal snapshot of the confirmed input
 | Codex | Footer: model and effort, context left, approval policy, sandbox | `turn_context` and `token_count` records, read by [#1224](https://github.com/mihazs/lazysh/issues/1224) as the session `model`, `effort`, `approval`, `sandbox` and `usage` | In flight with #1224 (header pills and options sheet) |
 | Codex | Background terminals count (`/ps`), sub-agent threads | `exec_command` sessions and `spawn_agent` calls; their record shapes are not yet confirmed against a real session, so no fixture exists | Gap: tracked in [#1285](https://github.com/mihazs/lazysh/issues/1285); the panel's derivation is Claude-only until synthetic fixtures exist |
 | OpenCode | Footer: model, agent (build or plan), context used, cost | The OpenCode database messages (model, tokens, cost) | Partial ([#1125](https://github.com/mihazs/lazysh/issues/1125)): on tmux the Agent view binds the pane's OpenCode session through the database and reads it (messages, usage). Send and Stop work through the confirmed terminal input with an OpenCode key profile (see below). Tool calls draw as tool cards (checked with a recorded `shell` call), and the companion reads the model, agent (`build` or `plan`), tokens of the last reply (context in use, no limit: the catalog is not read), cost and folder into the `session` object for the header and options sheet. Not yet: the context limit, plan cards, live updates (it polls), background work |
-| Gemini CLI | Footer: folder, sandbox state, model, context left, approval mode (default, auto-edit, YOLO) | No transcript reader; hook events carry none of it | Gap: [#1125](https://github.com/mihazs/lazysh/issues/1125); the footer is on screen only |
+| Gemini CLI | Footer: folder, sandbox state, model, context left, approval mode (default, auto-edit, YOLO) | The session file (`chats/session-*.jsonl`): the last recorded `model` and the prompt size. Folder, sandbox, approval mode and the window are not recorded | Partial: the model and tokens used show; the rest is on screen only ([#1125](https://github.com/mihazs/lazysh/issues/1125)) |
 
 ### OpenCode input
 
 OpenCode's prompt box was checked on 2.2.7 in a real tmux pane (an isolated profile, one short prompt to its free model). The confirmed `send` writes a short prompt as one burst of keys (`send-keys -H`) and presses Enter; the box drops such a burst, so the send would have reported a prompt as delivered that never arrived. Characters typed one at a time reach it, and so does a bracketed paste (`paste-buffer -p`, the way `send_long` writes a prompt over 4 KiB) followed by a raw Enter, which submits it. The key profile for OpenCode is therefore: every prompt is one paste then Enter (`pasted` in `tmux_chat.rs`; the client still sends `send` or `send_long` by size), and Stop is two Escapes about 0.4 s apart as separate sends (one `send-keys Escape Escape` is read as one key and interrupts nothing; one Escape shows "esc again to interrupt"; two on an idle prompt leave the typed text alone). The Agent view sends to OpenCode on tmux only, offers no slash palette, no `!` or `#` mode name and no `@` file picker for it (nothing here has checked what they mean in its prompt), and no permission-mode switch. The transcript session for a pane is the database session id its hook reports.
+
+## Work tracking per agent
+
+Tracked by [#1285](https://github.com/mihazs/lazysh/issues/1285). Each cell is what the agent records and what lazysh
+reads from it; "not mapped" means lazysh does not read that record, either because it was not verified or because the work
+is not done yet. Nothing is guessed: the element is absent, or an ordinary tool block. The mapping table itself
+lives in the companion (`apps/agent/src/transcript/interaction.rs` for plans and questions, `work.rs`, `opencode_work.rs` and
+`gemini_conversation.rs` for work items).
+
+| Element | Claude Code | Codex | OpenCode | Gemini CLI | Grok Build |
+| --- | --- | --- | --- | --- | --- |
+| Plan or todo list | `TodoWrite` | `update_plan` | `todowrite` | `write_todos` (also `blocked`) | ACP `plan` updates read as labeled text, not a card |
+| Sub-agent | `Agent` or `Task` calls | `SubAgentActivity` items | `task` calls (V1 and V2) | `invoke_agent` calls | No verified record shape: not mapped |
+| Background job | `Bash` with `run_in_background`, `Monitor` | Background terminals: not mapped | A background `task` only | `run_shell_command` with `is_background` (no recorded end) | No verified record shape: not mapped |
+| File edit as a diff | `Edit`, `Write` | `apply_patch` (`FileChange` items) | `patch` parts: not mapped | `replace`, `write_file` | Recorded diffs show as tool output |
+| Compaction, goal, retry events | `compact_boundary` and others | `compacted`, `thread_goal_updated` | `compaction`, `retry` parts: not mapped | `info` messages: not mapped | No verified record shape: not mapped |

@@ -44,13 +44,13 @@ pub fn validate_session_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Claude and Codex both report `session_id` with `transcript_path` in their common hook input.
+/// Claude, Codex and Gemini CLI all report `session_id` with `transcript_path` in their common hook input.
 pub fn read_hook(
     input: impl Read,
     agent: Agent,
     pane: Option<&str>,
 ) -> Result<(Option<Event>, Option<ReportedSource>)> {
-    if !matches!(agent, Agent::Claude | Agent::Codex) {
+    if !matches!(agent, Agent::Claude | Agent::Codex | Agent::Gemini) {
         return Err(Error::InvalidArgument);
     }
     let payload = read_bounded_json(input, MAX_INPUT)?;
@@ -60,7 +60,8 @@ pub fn read_hook(
     let source = if top_level
         && matches!(
             payload["hook_event_name"].as_str(),
-            Some("SessionStart" | "UserPromptSubmit")
+            // `BeforeAgent` is Gemini CLI's prompt event.
+            Some("SessionStart" | "UserPromptSubmit" | "BeforeAgent")
         ) {
         payload["session_id"]
             .as_str()
@@ -148,6 +149,11 @@ pub fn claude_config() -> Value {
 /// The Codex fragment with each ingest command opted in to reported history.
 pub fn codex_config() -> Value {
     flag_reported_history(super::hooks::codex_config(), "codex")
+}
+
+/// The Gemini CLI fragment with each ingest command opted in to reported history.
+pub fn gemini_config() -> Value {
+    flag_reported_history(super::hooks::gemini_config(), "gemini")
 }
 
 fn flag_reported_history(mut config: Value, agent: &str) -> Value {

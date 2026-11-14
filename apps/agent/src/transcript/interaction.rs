@@ -13,6 +13,13 @@ const MAX_OPTIONS: usize = 20;
 const MAX_TEXT: usize = 16 * 1024;
 const PLAN_STATUSES: [&str; 3] = ["pending", "in_progress", "completed"];
 const OPENCODE_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "cancelled"];
+const GEMINI_STATUSES: [&str; 5] = [
+    "pending",
+    "in_progress",
+    "completed",
+    "cancelled",
+    "blocked",
+];
 
 fn bounded(value: &Value) -> Option<&str> {
     value
@@ -101,6 +108,9 @@ pub(super) fn card(agent: TranscriptAgent, name: &str, input: &Value) -> Option<
         (TranscriptAgent::Claude, "TodoWrite") => plan(&input["todos"], "content", &PLAN_STATUSES),
         (TranscriptAgent::Opencode, "todowrite") => {
             plan(&input["todos"], "content", &OPENCODE_STATUSES)
+        }
+        (TranscriptAgent::Gemini, "write_todos") => {
+            plan(&input["todos"], "description", &GEMINI_STATUSES)
         }
         (TranscriptAgent::Codex, "update_plan") => {
             let mut card = plan(&input["plan"], "step", &PLAN_STATUSES)?;

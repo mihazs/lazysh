@@ -14,10 +14,12 @@ export function tmuxChatReply(_command:string,args:unknown) {
 }
 
 export function tmuxChatReaderSource(agent:TranscriptAgentId,selector='database-session') {
-  return agent==='hermes'||agent==='opencode'?{...tmuxChatSource,agent,transcriptSessionId:selector}:{...tmuxChatSource,agent};
+  // Gemini CLI has only a conversation view.
+  return agent==='hermes'||agent==='opencode'?{...tmuxChatSource,agent,transcriptSessionId:selector}:{...tmuxChatSource,agent,...(agent==='gemini'?{view:'conversation' as const}:{})};
 }
 export function tmuxChatReaderPage(agent:TranscriptAgentId) {
   return {schemaVersion:1,agent,messages:[],nextOffset:0,hasMore:false,
     ...(['grok-acp','antigravity-jsonl'].includes(agent)?{view:'record_stream'}:{}),
+    ...(agent==='gemini'?{view:'active_branch',truncated:false}:{}),
     ...(agent==='antigravity-jsonl'?{checkpoint:`v1:0:${'a'.repeat(64)}`}:{})};
 }

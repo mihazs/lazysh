@@ -341,7 +341,7 @@ it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>([
   if('transcriptSessionId' in source)await user.type(screen.getByLabelText('Transcript session ID'),source.transcriptSessionId);
   await user.click(screen.getByRole('button',{name:'Open transcript'}));
   await screen.findByRole('button',{name:t('chatRefreshMessages')});
-  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind!=='plain'?'retained-display':'plain-control',agent,path:source.path,offset:0,...('transcriptSessionId' in source?{transcriptSessionId:source.transcriptSessionId}:{})},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind!=='plain'?'retained-display':'plain-control',agent,path:source.path,offset:0,...(agent==='gemini'?{view:'conversation'}:{}),...('transcriptSessionId' in source?{transcriptSessionId:source.transcriptSessionId}:{})},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
   async function stage(text:string){
     const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
     try {await user.type(screen.getByLabelText('Draft for this terminal'),text);await user.click(screen.getByRole('button',{name:'Stage in terminal'}));}

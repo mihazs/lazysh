@@ -74,7 +74,7 @@ export function validTerminalSource(value:unknown):value is TerminalSource {
   if(Object.keys(value).length!==keys.length || keys.some(key=>!Object.hasOwn(value,key))
     || typeof source.path!=='string' || !source.path || !wellFormed(source.path) || utf8(source.path)>4096 || /[\x00-\x1f\x7f-\x9f]/.test(source.path)
     || (source.view!=='records' && source.view!=='conversation') || typeof source.inlineImages!=='boolean')return false;
-  if(source.view==='conversation' && source.agent!=='claude' && source.agent!=='grok-acp' && source.agent!=='opencode' && source.agent!=='codex')return false;
+  if(source.view==='conversation' && source.agent!=='claude' && source.agent!=='grok-acp' && source.agent!=='opencode' && source.agent!=='codex' && source.agent!=='gemini')return false;
   if(source.inlineImages && !(source.agent==='claude' || (source.view==='records' && (source.agent==='codex'||source.agent==='grok-acp'))))return false;
   return !database || (typeof source.transcriptSessionId==='string' && !!source.transcriptSessionId && wellFormed(source.transcriptSessionId)
     && utf8(source.transcriptSessionId)<=256 && !/[\x00-\x1f\x7f-\x9f]/.test(source.transcriptSessionId));

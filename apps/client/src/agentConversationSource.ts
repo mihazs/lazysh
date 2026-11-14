@@ -7,7 +7,7 @@ type Invoke = ReturnType<typeof bindProtectedInvoke>;
 export type ConversationSource = Readonly<{path: string; transcriptSessionId?: string; paneId?: string | null}>;
 
 /** The agents whose conversation the Agent view reads, by the name their hook reports use. */
-export const conversationAgents = {'Claude Code': 'claude', Codex: 'codex', OpenCode: 'opencode'} as const;
+export const conversationAgents = {'Claude Code': 'claude', Codex: 'codex', OpenCode: 'opencode', 'Gemini CLI': 'gemini'} as const;
 export type ConversationAgent = (typeof conversationAgents)[keyof typeof conversationAgents];
 
 /** Claude Code and Codex report the transcript file with their first hook; OpenCode keeps every session in one database,

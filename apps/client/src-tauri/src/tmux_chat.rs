@@ -38,6 +38,7 @@ enum Agent {
     Kimi,
     Jcode,
     Droid,
+    Gemini,
     Cursor,
     Omo,
     #[serde(rename = "devin-atif")]
@@ -69,7 +70,7 @@ impl Source {
             || (self.view == View::Conversation
                 && !matches!(
                     &self.agent,
-                    Agent::Claude | Agent::GrokAcp | Agent::Opencode | Agent::Codex
+                    Agent::Claude | Agent::GrokAcp | Agent::Opencode | Agent::Codex | Agent::Gemini
                 ))
             || (self.inline_images
                 && !(matches!(&self.agent, Agent::Claude)
@@ -863,6 +864,7 @@ pub(crate) const READER_FIXTURE_IDS: &[&str] = &[
     "kimi",
     "jcode",
     "droid",
+    "gemini",
     "cursor",
     "omo",
     "devin-atif",
@@ -1298,7 +1300,10 @@ mod tests {
                     }
                     let source: Source = serde_json::from_value(value.clone()).unwrap();
                     let expected = (view == "records"
-                        || matches!(agent, "claude" | "grok-acp" | "opencode" | "codex"))
+                        || matches!(
+                            agent,
+                            "claude" | "grok-acp" | "opencode" | "codex" | "gemini"
+                        ))
                         && (!images
                             || agent == "claude"
                             || (view == "records" && matches!(agent, "codex" | "grok-acp")));
@@ -1360,7 +1365,7 @@ mod tests {
                 assert!(other != serde_json::from_value::<Source>(context).unwrap());
             }
         }
-        for agent in ["gemini", "qwen", "future", "constructor", "qoder_ide"] {
+        for agent in ["qwen", "future", "constructor", "qoder_ide"] {
             assert!(serde_json::from_value::<Source>(serde_json::json!({"agent":agent,"path":"/owned","view":"records","inlineImages":false})).is_err());
         }
     }
