@@ -1648,6 +1648,7 @@ button svg {
 .multiplexer-panel .mux-row { flex-wrap: wrap; min-width: 0; }
 .multiplexer-panel .mux-row > div { min-width: 0; }
 .multiplexer-panel .mux-row small { overflow-wrap: anywhere; }
+.mux-history { max-height: 50vh; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font: 12px/1.45 "SFMono-Regular", Consolas, "Liberation Mono", monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
 .mux-layout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; align-items: start; }
 .mux-layout-list, .mux-layout-accordion { display: grid; gap: 10px; }
 .mux-shortcuts { margin-top: 12px; }

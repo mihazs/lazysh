@@ -27,6 +27,7 @@ mod links;
 mod local;
 mod mosh;
 mod multiplexer;
+mod multiplexer_history;
 mod notifications;
 mod previews;
 mod private_keyboard;
@@ -258,6 +259,7 @@ pub fn run() {
                 repository::repository_image,
                 repository::repository_diff,
                 multiplexer::multiplexer_tree,
+                multiplexer_history::multiplexer_history,
                 tmux_jump::tmux_jump_snapshot,
                 tmux_jump::tmux_jump,
                 tmux_jump::chat::tmux_chat,

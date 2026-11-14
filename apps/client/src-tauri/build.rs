@@ -128,6 +128,7 @@ fn main() {
         "repository_image",
         "repository_diff",
         "multiplexer_tree",
+        "multiplexer_history",
         "tmux_jump_snapshot",
         "tmux_jump",
         "tmux_chat",

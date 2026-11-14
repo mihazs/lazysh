@@ -131,7 +131,7 @@ implemented without full evidence, *part* means partial.
 | Close | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
 | Split, zoom | yes | yes | yes | no → #1140 |
 | Resize | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
-| History | prefix+[ only → #1147 | no → #1147 | no → #1147 | no → #1147 |
+| History | yes | yes | part: Herdr serves the newest 1000 lines | no → #1147, #1140 |
 | OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |

@@ -331,11 +331,41 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
     };
     command(session, args)
 }
+/// The newest `lines` rows of one pane (soft wraps joined); Herdr serves at most 1000 of them.
+fn history_command(session: &str, pane: &str, lines: usize) -> Result<String> {
+    target(pane, Some('p'))?;
+    command(
+        session,
+        format!(
+            "pane read {} --source recent-unwrapped --lines {lines}",
+            quote(pane)
+        ),
+    )
+}
+fn focused_pane(tree: &HerdrTree) -> Result<&Pane> {
+    tree.panes
+        .iter()
+        .find(|pane| pane.focused)
+        .ok_or_else(|| SshError::new("herdr_target_missing", "Herdr has no focused pane to read"))
+}
+/// The command that reads the pane Herdr focuses now, resolved from a fresh snapshot of the session.
+pub(crate) async fn focused_history_command(
+    session: &crate::ssh::Session,
+    name: &str,
+    lines: usize,
+    access: &AccessLease,
+) -> Result<String> {
+    let tree = read_tree(session, name, access).await?;
+    Ok(crate::herdr_path::select(
+        &history_command(name, &focused_pane(&tree)?.pane_id, lines)?,
+        crate::herdr_path::admit(session, access).await?,
+    ))
+}
 /// Herdr reports a stale exact target as one JSON error line on stderr. Both
 /// 0.9.3 and 0.9.5 use these codes; 0.9.4+ also returns them for out-of-range
 /// workspace numbers instead of crashing the server. Exact pane focus goes
 /// through the companion, which reports Herdr's `pane_not_found` as its own class.
-fn missing_target(error: SshError) -> SshError {
+pub(crate) fn missing_target(error: SshError) -> SshError {
     #[derive(Deserialize)]
     struct Failure {
         error: Code,
@@ -1298,6 +1328,58 @@ mod tests {
             let kind = kept.kind();
             assert_eq!(missing_target(kept).kind(), kind);
         }
+    }
+    #[test]
+    fn history_reads_one_exact_pane_of_a_literal_session() {
+        assert_eq!(
+            history_command("a'$(touch nope)", "w1:p2", 1000).unwrap(),
+            "herdr --session 'a'\\''$(touch nope)' pane read 'w1:p2' --source recent-unwrapped --lines 1000"
+        );
+        for pane in ["", "p1; touch nope", "w1:t2", "$(touch nope)"] {
+            assert!(history_command("s", pane, 1).is_err(), "{pane:?}");
+        }
+    }
+    #[test]
+    fn history_reads_the_one_focused_pane_and_refuses_a_session_with_none() {
+        let mut source = reported_snapshot();
+        let tree = parse(&source.to_string()).unwrap();
+        assert_eq!(focused_pane(&tree).unwrap().pane_id, "w1:p3");
+        source["result"]["snapshot"]["panes"][0]["focused"] = false.into();
+        let tree = parse(&source.to_string()).unwrap();
+        assert_eq!(
+            focused_pane(&tree).unwrap_err().kind(),
+            "herdr_target_missing"
+        );
+    }
+    #[test]
+    #[ignore = "requires herdr on PATH; runs an isolated headless server"]
+    fn real_herdr_history_serves_the_newest_1000_lines_of_the_focused_pane() {
+        use crate::multiplexer_history::{read_numbered_5000, HERDR_LINES};
+        let herdr = RealHerdr::start();
+        let session = "default";
+        herdr.run(
+            action_command(
+                session,
+                &HerdrAction::CreateWorkspace {
+                    label: "history".into(),
+                    directory: herdr.path().to_str().unwrap().into(),
+                },
+            )
+            .unwrap(),
+        );
+        let tree = parse(&herdr.run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let pane = focused_pane(&tree).unwrap().pane_id.clone();
+        herdr.run(command(session, format!("pane run {} 'seq 1 5000'", quote(&pane))).unwrap());
+        let history = read_numbered_5000(
+            || herdr.run(history_command(session, &pane, HERDR_LINES).unwrap()),
+            Some(HERDR_LINES),
+        );
+        // Herdr caps `pane read` at 1000 lines, so the view is the newest ones and says it was cut.
+        assert!(history.truncated);
+        assert!(history.lines <= HERDR_LINES);
+        assert!(history.text.lines().any(|line| line == "4999"));
+        assert!(!history.text.lines().any(|line| line == "1"));
+        herdr.run(command(session, "server stop".into()).unwrap());
     }
     #[test]
     fn rejects_nonexact_targets_and_quotes_session_and_labels() {

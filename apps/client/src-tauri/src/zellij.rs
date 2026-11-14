@@ -52,6 +52,13 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
     };
     Ok(format!("zellij --session={session} action {args}"))
 }
+/// The whole scrollback of the session's focused pane on stdout; Zellij bounds it with `scroll_buffer_size`.
+pub(crate) fn history_command(session: &str) -> Result<String> {
+    Ok(format!(
+        "zellij --session={} action dump-screen --full",
+        text(session, 200)?
+    ))
+}
 /// One tab of a session as `zellij action list-tabs --json` reports it; the strip shows only these three facts.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct ZellijTab {
@@ -134,6 +141,14 @@ mod tests {
         assert!(command("test", &ZellijAction::GoToTab { index: 0 }).is_err());
         assert!(command("test", &ZellijAction::GoToTab { index: 1001 }).is_err());
         assert_eq!(command("a'$(echo x)", &ZellijAction::NewTab { name: "title;$(echo no)".into(), directory: "/a b".into() }).unwrap(), "zellij --session='a'\\''$(echo x)' action new-tab --name='title;$(echo no)' --cwd='/a b'");
+    }
+    #[test]
+    fn history_dumps_the_focused_panes_full_scrollback_of_a_literal_session() {
+        assert_eq!(
+            history_command("a'$(touch nope);x").unwrap(),
+            "zellij --session='a'\\''$(touch nope);x' action dump-screen --full"
+        );
+        assert!(history_command("").is_err());
     }
     #[test]
     fn lists_tabs_from_the_json_the_cli_prints_and_refuses_anything_else() {
@@ -433,6 +448,16 @@ mod tests {
         );
         assert_eq!(listed[1].name, "literal'$(touch nope)");
         assert!(!temp.path().join("nope").exists());
+        // History: the focused pane's scrollback comes from Zellij, so line 1 survives 5000 lines.
+        for input in ["write-chars 'seq 1 5000'", "write 10"] {
+            run(format!("zellij --session={} action {input}", quote(&name)));
+        }
+        let history = crate::multiplexer_history::read_numbered_5000(
+            || run(history_command(&name).unwrap()),
+            None,
+        );
+        assert!(!history.truncated);
+        assert!(history.text.lines().any(|line| line == "1"));
         run(format!("zellij kill-session -- {}", quote(&name)));
     }
 }

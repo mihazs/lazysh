@@ -182,3 +182,20 @@ it('explains why a requested limited Herdr session cannot be attached', async ()
   expect(await screen.findByText('Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.')).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
 });
+
+it('offers History for the attached multiplexer only while discovery does not mark it missing', async () => {
+  const attached = { kind: 'herdr', name: 'work' } as const;
+  const tools = (missing: string[]) => ({ ...tree, herdrAvailable: true, tools: [{ kind: 'herdr', version: '0.9.5', support: 'full', missing }] });
+  vi.mocked(invoke).mockResolvedValue(tools([]));
+  const full = render(<MuxPanel sessionId="ssh1" attached={attached} onAttach={vi.fn()} />);
+  expect(await screen.findByRole('button', { name: 'Read history' })).toBeTruthy();
+  full.unmount();
+  vi.mocked(invoke).mockResolvedValue(tools(['history']));
+  const limited = render(<MuxPanel sessionId="ssh1" attached={attached} onAttach={vi.fn()} />);
+  await screen.findByText('Herdr 0.9.5 (Supported)', { exact: false });
+  expect(screen.queryByRole('button', { name: 'Read history' })).toBeNull();
+  limited.unmount();
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
+  await screen.findByRole('button', { name: 'Attach work' });
+  expect(screen.queryByRole('button', { name: 'Read history' })).toBeNull();
+});

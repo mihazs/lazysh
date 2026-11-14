@@ -11,6 +11,7 @@ import type { MultiplexerKind, MultiplexerTool } from './bridge';
 import HerdrPanel from './HerdrPanel';
 import ZellijPanel from './ZellijPanel';
 import MultiplexerShortcuts from './MultiplexerShortcuts';
+import MultiplexerHistory from './MultiplexerHistory';
 import { parseSnapshot } from './AgentPanel';
 
 type Pane = { id: string; index: number; active: boolean; command: string; path: string };
@@ -137,6 +138,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
     {projects.length > 0 && <label>{t('muxRecentDirectory')}<select value={projects.includes(directory) ? directory : ''} onChange={e => setDirectory(e.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{projects.map(project => <option key={project} value={project}>{project}</option>)}</select></label>}
     {projectsLoaded && projects.length === 0 && <p>{t('muxNoProjects')}</p>}
     {attached && attached.kind !== 'zellij' && !(attached.kind==='herdr' && tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')) && <MultiplexerShortcuts key={`${sessionId}:${attached.kind}`} sessionId={sessionId} kind={attached.kind} />}
+    {attached && !requested && tree && !tree.tools?.some(tool => tool.kind === attached.kind && tool.missing.includes('history')) && <MultiplexerHistory key={`${sessionId}:${attached.kind}:${attached.name}:${attached.tmuxServer ?? ''}`} sessionId={sessionId} attached={attached} />}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {busy && <p className="loading" role="status">{t('muxReading')}</p>}
     {requested && tree && !(requestedHerdr ? tree.herdrAvailable : tree.tmuxAvailable) && <p role="status">{t('desktopLaunchMuxUnavailable',{kind:requested.mux.kind})}</p>}

@@ -328,19 +328,40 @@ fn numbers(value: &str) -> Option<Vec<u32>> {
 }
 /// The one table from `(kind, version line)` to support; untested versions stay degraded.
 fn tool(kind: MultiplexerKind, line: &str) -> Tool {
-    let (name, missing): (_, &'static [&'static str]) = match kind {
-        MultiplexerKind::Tmux => ("tmux", &["jump", "confirmedInput"]),
-        // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
-        MultiplexerKind::Zellij => (
-            "zellij",
-            &["tree", "close", "resize", "launch", "confirmedInput"],
-        ),
-        MultiplexerKind::Herdr => (
-            "herdr",
-            &["create", "launch", "rename", "confirmedInput", "restore"],
-        ),
+    let name = match kind {
+        MultiplexerKind::Tmux => "tmux",
+        MultiplexerKind::Zellij => "zellij",
+        MultiplexerKind::Herdr => "herdr",
     };
     let version = line.trim().strip_prefix(name).map(str::trim);
+    let missing: &'static [&'static str] = match kind {
+        MultiplexerKind::Tmux => &["jump", "confirmedInput"],
+        // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
+        // `dump-screen --path` (stdout when omitted) exists from 0.45; older Zellij takes a positional path.
+        MultiplexerKind::Zellij
+            if version
+                .and_then(numbers)
+                .is_some_and(|v| v.as_slice() >= [0, 45].as_slice()) =>
+        {
+            &["tree", "close", "resize", "launch", "confirmedInput"]
+        }
+        MultiplexerKind::Zellij => &[
+            "tree",
+            "close",
+            "resize",
+            "launch",
+            "confirmedInput",
+            "history",
+        ],
+        MultiplexerKind::Herdr => &[
+            "create",
+            "launch",
+            "rename",
+            "confirmedInput",
+            "restore",
+            "history",
+        ],
+    };
     let full = version.is_some_and(|version| match kind {
         // `next-3.6` is a tmux development build; a letter suffix is a patch release.
         MultiplexerKind::Tmux => numbers(
@@ -676,6 +697,20 @@ pub(crate) fn action_command_for(
     Ok(format!("{} {command}", server.prefix()))
 }
 
+/// The current pane of the exact session (`=name:`), wrapped lines joined, newest `lines` of its history.
+pub(crate) fn history_command(
+    session: &str,
+    server: &crate::tmux_server::TmuxServer,
+    lines: usize,
+) -> Result<String> {
+    name(session)?;
+    Ok(format!(
+        "{} capture-pane -p -J -S -{lines} -t {}",
+        server.prefix(),
+        tmux_arg(&format!("={session}:"))
+    ))
+}
+
 #[tauri::command]
 pub async fn multiplexer_tree(
     state: State<'_, AppState>,
@@ -975,6 +1010,36 @@ mod tests {
         );
     }
     #[test]
+    fn history_reads_the_exact_sessions_current_pane_with_every_name_literal() {
+        let server = crate::tmux_server::TmuxServer::parse(Some("named 'server")).unwrap();
+        assert_eq!(
+            history_command("work'$(touch nope);", &server, 20000).unwrap(),
+            "tmux -u -L 'named '\\''server' capture-pane -p -J -S -20000 -t '=work'\\''$(touch nope);:'"
+        );
+        for invalid in ["", "a:b", "a.b", "a\nb"] {
+            assert!(history_command(invalid, &server, 1).is_err(), "{invalid:?}");
+        }
+    }
+    #[test]
+    fn history_is_missing_only_where_the_cli_is_untested_or_older() {
+        use MultiplexerKind::*;
+        for (kind, line, missing) in [
+            (Tmux, "tmux 3.2a", false),
+            (Zellij, "zellij 0.45.1", false),
+            (Zellij, "zellij 0.46.0", false),
+            (Zellij, "zellij 0.44.3", true),
+            (Zellij, "zellij", true),
+            (Herdr, "herdr 0.9.5", false),
+            (Herdr, "herdr 0.8.2", true),
+        ] {
+            assert_eq!(
+                tool(kind, line).missing.contains(&"history"),
+                missing,
+                "{line}"
+            );
+        }
+    }
+    #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
     fn real_tmux_lifecycle_and_literal_names() {
         use std::process::Command;
@@ -1057,5 +1122,26 @@ mod tests {
             tree.sessions[0].windows[1].name,
             "new #{session_name} title;"
         );
+        // History reads the pane's scrollback from tmux, not from a client: line 1 survives 5000 lines.
+        run("tmux set-option -g history-limit 50000".into());
+        let server = crate::tmux_server::TmuxServer::Default;
+        run(action_command(&TmuxAction::CreateSession {
+            name: "history".into(),
+            directory: temp.path().to_str().unwrap().to_owned(),
+        })
+        .unwrap());
+        run("tmux send-keys -t '=history:' 'seq 1 5000' Enter".into());
+        let history = crate::multiplexer_history::read_numbered_5000(
+            || {
+                run(
+                    history_command("history", &server, crate::multiplexer_history::MAX_LINES)
+                        .unwrap(),
+                )
+            },
+            None,
+        );
+        assert!(!history.truncated);
+        assert!(history.text.lines().any(|line| line == "1"));
+        assert!(history.lines >= 5000);
     }
 }
