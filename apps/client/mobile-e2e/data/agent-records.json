@@ -1,0 +1,8 @@
+{
+  "herdrAgent": {
+    "agent": "codex",
+    "state": "unknown",
+    "workspaceLabel": "HERDR_{nonce}",
+    "transcriptRecord": "OWNED_HERDR_RECORD_{nonce}"
+  }
+}
