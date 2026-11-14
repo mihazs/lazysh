@@ -32,6 +32,8 @@ async function open(page:Page,kind:Kind,{width=415,tabs=3,appTheme='forest',tabS
       tabs:names.map((label,index)=>({workspace_id:workspace,tab_id:`${workspace}:t${index+1}`,label,number:index+1,focused:index===focused,agent_status:index===0?'working':index===1?'blocked':index===2?'done':'idle'})),
       panes:[]});
     const tmuxSnapshot=()=>({generation:'g'.repeat(36),current:{sessionId:'$1',windowId:`@${focused+1}`},sessions:[{id:'$1',name:'work',restoreName:'work',windows:names.map((name,index)=>({id:`@${index+1}`,index,name}))}]});
+    // Closing a tab removes it; the multiplexer keeps the focus on the same tab, or on the one before it when the focused tab itself went.
+    const closeAt=(index:number)=>{names.splice(index,1);if(focused>index || focused>=names.length)focused=Math.max(0,focused-1);};
     const screen=(args:Record<string,unknown>)=>{(args.events as {onmessage:(event:unknown)=>void}).onmessage({type:'data',data:Array.from(new TextEncoder().encode('dev@box:~$ '))});};
     window.nativeFixtureInvoke=async(command,args={})=>{
       const answers:Record<string,unknown>={
@@ -49,21 +51,28 @@ async function open(page:Page,kind:Kind,{width=415,tabs=3,appTheme='forest',tabS
       if(command==='herdr_action'){
         const action=args.action as {type:string;target:string;label:string};
         if(action.type==='renameTab')names[Number(action.target.split(':t')[1])-1]=action.label;
+        else if(action.type==='closeTab')closeAt(Number(action.target.split(':t')[1])-1);
         else if(action.type==='createTab')names.push(action.label);
         else if(action.type==='focusWorkspace'){workspace=action.target;focused=0;}
         else focused=Number(action.target.split(':t')[1])-1;
         return;
       }
-      if(command==='zellij_tabs')return names.map((name,position)=>({position,name,active:position===focused}));
+      // Zellij's stable tab id is not its position: the fixture offsets it, so a command that confused the two would change the wrong tab.
+      if(command==='zellij_tabs')return names.map((name,position)=>({position,name,active:position===focused,id:position+10}));
       if(command==='zellij_action'){
-        const action=args.action as {type:string;index:number;name:string};
+        const action=args.action as {type:string;index:number;name:string;id:number};
         // Zellij focuses the tab it creates.
-        if(action.type==='newTab'){names.push(action.name);focused=names.length-1;}else focused=action.index-1;
+        if(action.type==='newTab'){names.push(action.name);focused=names.length-1;}
+        else if(action.type==='renameTab')names[action.id-10]=action.name;
+        else if(action.type==='closeTab')closeAt(action.id-10);
+        else focused=action.index-1;
         return;
       }
       if(command==='tmux_action'){
         const action=args.action as {type:string;target:string;name:string};
-        if(action.type==='renameWindow')names[Number(action.target.slice(1))-1]=action.name;else names.push(action.name);
+        if(action.type==='renameWindow')names[Number(action.target.slice(1))-1]=action.name;
+        else if(action.type==='closeWindow')closeAt(Number(action.target.slice(1))-1);
+        else names.push(action.name);
         return;
       }
       if(command==='tmux_jump_snapshot')return tmuxSnapshot();
@@ -236,12 +245,24 @@ for(const [appTheme,mode] of [['forest','dark'],['paper','light']] as const)test
   for(const control of await prompt(page).locator('input,button').all())expect((await box(control)).height).toBeGreaterThanOrEqual(44);
 });
 
-test('a long press renames a Herdr tab and does not select it; a short tap still selects',async({page},testInfo)=>{
+const menu=(page:Page,title:string)=>page.getByRole('group',{name:title,exact:true});
+const typed={herdr:'herdr_action',zellij:'zellij_action',tmux:'tmux_action'} as const;
+
+test('a long press offers Rename and Close on a Herdr tab and does not select it; Rename prompts, and a short tap still selects',async({page},testInfo)=>{
   test.skip(testInfo.project.name!=='phone','Touch long press.');
   await open(page,'herdr');
+  const terminal=await box(page.locator('.terminal-canvas:visible'));
+  await forgetKeyboardRequests(page);
   await hold(chips(page,'herdr').nth(1));
+  await expect(menu(page,'logs').getByRole('button')).toHaveText(['Rename','Close']);
+  // The menu drops over the terminal and opens no keyboard: only the name prompt does.
+  expect((await box(page.locator('.terminal-canvas:visible'))).height).toBe(terminal.height);
+  expect(await keyboardRequests(page)).toEqual([]);
+  for(const item of await menu(page,'logs').getByRole('button').all())expect((await box(item)).height).toBeGreaterThanOrEqual(44);
+  await menu(page,'logs').getByRole('button',{name:'Rename',exact:true}).tap();
   await expect(prompt(page)).toBeVisible();
   await expect(prompt(page).getByLabel('Name')).toHaveValue('logs');
+  expect(await keyboardRequests(page)).toEqual(['INPUT']);
   await prompt(page).getByLabel('Name').fill('api');
   await page.keyboard.press('Enter');
   await expect(chips(page,'herdr').nth(1)).toHaveAttribute('title','api');
@@ -250,35 +271,90 @@ test('a long press renames a Herdr tab and does not select it; a short tap still
   await expect(chips(page,'herdr').nth(2)).toHaveAttribute('aria-current','true');
 });
 
-test('a Zellij chip has no rename (the multiplexer layer has no command for it), and a tmux window renames from the context menu',async({page,context},testInfo)=>{
+for(const kind of ['herdr','zellij','tmux'] as const)test(`${kind}: Close asks first, names the tab, sends one typed command by exact id on confirmation, and never opens the keyboard`,async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch long press.');
+  await open(page,kind);
+  const terminal=await box(page.locator('.terminal-canvas:visible'));
+  await forgetKeyboardRequests(page);
+  await hold(chips(page,kind).nth(1));
+  await expect(menu(page,'logs')).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath(`tab-strip-menu-${kind}.png`),clip:{x:0,y:0,width:415,height:300}});
+  await menu(page,'logs').getByRole('button',{name:'Close',exact:true}).tap();
+  const dialog=page.getByRole('alertdialog',{name:'Close logs',exact:true});
+  await expect(dialog).toContainText('Close \u201clogs\u201d?');
+  await page.screenshot({path:testInfo.outputPath(`tab-strip-close-${kind}.png`),clip:{x:0,y:0,width:415,height:300}});
+  expect((await box(page.locator('.terminal-canvas:visible'))).height).toBe(terminal.height);
+  for(const control of await dialog.getByRole('button').all())expect((await box(control)).height).toBeGreaterThanOrEqual(44);
+  // Cancel sends nothing and leaves the tab.
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).tap();
+  await expect(dialog).toHaveCount(0);
+  expect(await sent(page,typed[kind])).toEqual([]);
+  await expect(chips(page,kind)).toHaveCount(3);
+  await hold(chips(page,kind).nth(1));
+  await menu(page,'logs').getByRole('button',{name:'Close',exact:true}).tap();
+  await dialog.getByRole('button',{name:'Close',exact:true}).tap();
+  // The strip shows the result at once, without waiting for the next poll.
+  await expect(dialog).toHaveCount(0);
+  await expect(chips(page,kind)).toHaveCount(2);
+  await expect(chips(page,kind).nth(1)).toHaveAttribute('title','editor');
+  expect((await sent(page,typed[kind])).map(call=>call.args)).toEqual([kind==='herdr'?{sessionId:'strip-display',name:'work',action:{type:'closeTab',target:'w1:t2'}}
+    :kind==='zellij'?{sessionId:'strip-display',name:'work',action:{type:'closeTab',id:11}}
+    :{sessionId:'strip-display',action:{type:'closeWindow',target:'@2'}}]);
+  expect(await keyboardRequests(page)).toEqual([]);
+  expect(await sent(page,'write_stdin')).toEqual([]);
+  expect((await box(page.locator('.terminal-canvas:visible'))).height).toBe(terminal.height);
+});
+
+test('Zellij renames a tab by its stable id from the same menu, and a tmux window renames from the context menu',async({page,context},testInfo)=>{
   test.skip(testInfo.project.name!=='phone','Phone layout.');
   await open(page,'zellij');
   await hold(chips(page,'zellij').nth(1));
-  await page.waitForTimeout(700);
-  await expect(prompt(page)).toHaveCount(0);
+  await menu(page,'logs').getByRole('button',{name:'Rename',exact:true}).tap();
+  await prompt(page).getByLabel('Name').fill('api');
+  await page.keyboard.press('Enter');
+  await expect(chips(page,'zellij').nth(1)).toHaveAttribute('title','api');
+  expect((await sent(page,'zellij_action')).map(call=>call.args.action)).toEqual([{type:'renameTab',id:11,name:'api'}]);
   const tmux=await context.newPage();
   await open(tmux,'tmux');
   await chips(tmux,'tmux').nth(2).click({button:'right'});
+  await menu(tmux,'editor').getByRole('button',{name:'Rename',exact:true}).tap();
   await expect(prompt(tmux)).toBeVisible();
   await tmux.getByRole('button',{name:'Cancel'}).tap();
   await expect(prompt(tmux)).toHaveCount(0);
   await chips(tmux,'tmux').nth(2).click({button:'right'});
+  await menu(tmux,'editor').getByRole('button',{name:'Rename',exact:true}).tap();
   await prompt(tmux).getByLabel('Name').fill('vim');
   await tmux.getByRole('button',{name:'Save'}).tap();
   await expect(chips(tmux,'tmux').nth(2)).toHaveAttribute('title','vim');
   expect((await sent(tmux,'tmux_action')).map(call=>call.args.action)).toEqual([{type:'renameWindow',target:'@3',name:'vim'}]);
 });
 
-test('on desktop a right click renames a Herdr tab and the plus creates one',async({page},testInfo)=>{
+test('the only tab is never offered for closing: a long press goes straight to its rename prompt',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch long press.');
+  await open(page,'tmux',{tabs:1,tabStrip:'on'});
+  await hold(chips(page,'tmux').first());
+  await expect(prompt(page)).toBeVisible();
+  await expect(page.getByRole('button',{name:'Close',exact:true})).toHaveCount(0);
+});
+
+test('on desktop a right click offers Rename and Close on a Herdr tab and the plus creates one',async({page},testInfo)=>{
   test.skip(testInfo.project.name==='phone','Desktop pointer.');
   await open(page,'herdr',{width:1280,tabStrip:'on'});
   await chips(page,'herdr').nth(1).click({button:'right'});
+  await menu(page,'logs').getByRole('button',{name:'Rename',exact:true}).click();
   await prompt(page).getByLabel('Name').fill('api');
   await page.keyboard.press('Enter');
   await expect(chips(page,'herdr').nth(1)).toHaveAttribute('title','api');
+  await chips(page,'herdr').nth(1).click({button:'right'});
+  await page.keyboard.press('Escape');
+  await expect(menu(page,'api')).toHaveCount(0);
+  await chips(page,'herdr').nth(1).click({button:'right'});
+  await menu(page,'api').getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('alertdialog',{name:'Close api',exact:true}).getByRole('button',{name:'Close',exact:true}).click();
+  await expect(chips(page,'herdr')).toHaveCount(2);
   await strip(page,'herdr').getByRole('button',{name:'New tab',exact:true}).click();
   await prompt(page).getByLabel('Name').fill('release');
   await prompt(page).getByRole('button',{name:'Save'}).click();
-  await expect(chips(page,'herdr')).toHaveCount(4);
+  await expect(chips(page,'herdr')).toHaveCount(3);
   await expect(chips(page,'herdr').last()).toHaveAttribute('aria-current','true');
 });

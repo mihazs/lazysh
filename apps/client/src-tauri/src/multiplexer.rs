@@ -581,6 +581,9 @@ pub enum TmuxAction {
         target: String,
         name: String,
     },
+    CloseWindow {
+        target: String,
+    },
     SelectWindow {
         target: String,
     },
@@ -646,6 +649,10 @@ pub(crate) fn action_command_for(
             id(target, '@')?;
             text(value, 200)?;
             format!("rename-window -t {} {}", quote(target), quote(value))
+        }
+        TmuxAction::CloseWindow { target } => {
+            id(target, '@')?;
+            format!("kill-window -t {}", quote(target))
         }
         TmuxAction::SelectWindow { target } => {
             id(target, '@')?;
@@ -980,15 +987,18 @@ mod tests {
         use std::process::Command;
         let temp = tempfile::tempdir().unwrap();
         let socket = temp.path().join("tmux.sock");
-        let run = |command: String| {
+        let scoped = |command: String| {
             let command = command.replacen(
                 "tmux ",
                 &format!("tmux -f /dev/null -S {} ", quote(socket.to_str().unwrap())),
                 1,
             );
-            lazysh_common::test_support::successful_output(
-                Command::new("sh").arg("-c").arg(command).env_remove("TMUX"),
-            )
+            let mut process = Command::new("sh");
+            process.arg("-c").arg(command).env_remove("TMUX");
+            process
+        };
+        let run = |command: String| {
+            lazysh_common::test_support::successful_output(&mut scoped(command))
         };
         let read_tree = || {
             let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
@@ -1057,5 +1067,37 @@ mod tests {
             tree.sessions[0].windows[1].name,
             "new #{session_name} title;"
         );
+        let first = tree.sessions[0].windows[0].id.clone();
+        run(action_command(&TmuxAction::CloseWindow {
+            target: window.clone(),
+        })
+        .unwrap());
+        let tree = read_tree();
+        assert_eq!(
+            tree.sessions[0]
+                .windows
+                .iter()
+                .map(|w| w.id.clone())
+                .collect::<Vec<_>>(),
+            vec![first]
+        );
+        // The window is gone: closing it again fails and takes nothing else with it.
+        let again = scoped(action_command(&TmuxAction::CloseWindow { target: window.clone() }).unwrap()).output().unwrap();
+        assert!(!again.status.success());
+        assert_eq!(read_tree().sessions[0].windows.len(), 1);
+    }
+
+    #[test]
+    fn closes_a_window_by_exact_id_and_refuses_anything_else() {
+        assert_eq!(
+            action_command(&TmuxAction::CloseWindow { target: "@12".into() }).unwrap(),
+            "tmux -u -L 'default' kill-window -t '@12'"
+        );
+        for bad in ["", "12", "@", "@1;kill-server", "$1", "%1", "@1 @2", "-a"] {
+            assert!(
+                action_command(&TmuxAction::CloseWindow { target: bad.into() }).is_err(),
+                "{bad}"
+            );
+        }
     }
 }

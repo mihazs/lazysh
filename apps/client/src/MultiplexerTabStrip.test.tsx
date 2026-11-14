@@ -67,18 +67,24 @@ it('keeps the active chip in view when the multiplexer moves focus to a tab outs
 });
 
 const hold=(element:Element,ms:number,at={clientX:10,clientY:10})=>{fireEvent.pointerDown(element,{pointerType:'touch',...at});act(()=>{vi.advanceTimersByTime(ms);});};
-it('asks for a new name after a long press, without selecting the chip it was held on',()=>{
+it('offers Rename and Close after a long press, without selecting the chip it was held on, and renames from the menu',()=>{
   vi.useFakeTimers();
   const select=vi.fn(),edit=vi.fn(async()=>true);
   render(<MultiplexerTabStrip strip={herdr} onSelect={select} onEdit={edit}/>);
   const logs=screen.getByRole('button',{name:/^logs/});
   hold(logs,600);
+  expect(screen.queryByRole('form')).toBeNull();
+  const menu=screen.getByRole('group',{name:'logs'});
+  expect(within(menu).getAllByRole('button').map(button=>button.textContent)).toEqual(['Rename','Close']);
+  // The menu is pressed without taking focus, so an open soft keyboard stays open and the terminal grid does not move.
+  expect(fireEvent.pointerDown(within(menu).getByRole('button',{name:'Rename'}))).toBe(false);
+  fireEvent.pointerUp(logs);fireEvent.click(logs);
+  expect(select).not.toHaveBeenCalled();
+  fireEvent.click(within(menu).getByRole('button',{name:'Rename'}));
+  expect(screen.queryByRole('group',{name:'logs'})).toBeNull();
   const form=screen.getByRole('form',{name:'Rename logs'});
   const name=within(form).getByLabelText('Name') as HTMLInputElement;
   expect(name.value).toBe('logs');
-  // The tap that ends the hold is not a selection.
-  fireEvent.pointerUp(logs);fireEvent.click(logs);
-  expect(select).not.toHaveBeenCalled();
   expect(within(form).queryByLabelText('Directory')).toBeNull();
   fireEvent.change(name,{target:{value:'  api  '}});
   fireEvent.submit(form);
@@ -100,16 +106,85 @@ it('does not rename on a short tap, on a hold that turns into a scroll, or on a 
   hold(screen.getByRole('button',{name:/^shell/}),900);
   expect(screen.queryByRole('form')).toBeNull();
 });
-it('renames from the keyboard through the context menu and offers no prompt without a handler',()=>{
+it('renames from the keyboard through the context menu and offers nothing without a handler',()=>{
   const edit=vi.fn(async()=>true);
   const view=render(<MultiplexerTabStrip strip={herdr} onSelect={vi.fn()} onEdit={edit}/>);
   expect(fireEvent.contextMenu(screen.getByRole('button',{name:/^notes/}))).toBe(false);
+  fireEvent.click(screen.getByRole('button',{name:'Rename'}));
   expect(screen.getByRole('form',{name:'Rename notes'})).toBeTruthy();
   view.unmount();
   render(<MultiplexerTabStrip strip={herdr} onSelect={vi.fn()}/>);
   fireEvent.contextMenu(screen.getByRole('button',{name:/^notes/}));
   expect(screen.queryByRole('form')).toBeNull();
+  expect(screen.queryByRole('group',{name:'notes'})).toBeNull();
   expect(screen.queryByRole('button',{name:'New tab'})).toBeNull();
+});
+it('moves focus into the menu only for a keyboard user, never for a touch or mouse hold',()=>{
+  vi.useFakeTimers();
+  render(<MultiplexerTabStrip strip={herdr} onSelect={vi.fn()} onEdit={vi.fn(async()=>true)}/>);
+  const logs=screen.getByRole('button',{name:/^logs/});
+  hold(logs,600);
+  expect(screen.getByRole('group',{name:'logs'})).toBeTruthy();
+  expect(document.activeElement).toBe(document.body);
+  fireEvent.keyDown(document.body,{key:'Escape'});
+  expect(screen.queryByRole('group',{name:'logs'})).toBeNull();
+  logs.focus();
+  fireEvent.contextMenu(logs);
+  expect(document.activeElement).toBe(within(screen.getByRole('group',{name:'logs'})).getByRole('button',{name:'Rename'}));
+});
+it('dismisses the menu on Escape or a press anywhere else and keeps the chips as they were',()=>{
+  vi.useFakeTimers();
+  const select=vi.fn();
+  render(<><MultiplexerTabStrip strip={herdr} onSelect={select} onEdit={vi.fn(async()=>true)}/><button>outside</button></>);
+  hold(screen.getByRole('button',{name:/^logs/}),600);
+  fireEvent.pointerDown(screen.getByText('outside'));
+  expect(screen.queryByRole('group',{name:'logs'})).toBeNull();
+  hold(screen.getByRole('button',{name:/^logs/}),600);
+  fireEvent.pointerDown(screen.getByRole('button',{name:/^notes/}));
+  expect(screen.queryByRole('group',{name:'logs'})).toBeNull();
+  expect(select).not.toHaveBeenCalled();
+});
+it('asks before closing, names the tab, and closes only on confirmation',async()=>{
+  vi.useFakeTimers();
+  const edit=vi.fn(async()=>false);
+  render(<MultiplexerTabStrip strip={herdr} onSelect={vi.fn()} onEdit={edit}/>);
+  hold(screen.getByRole('button',{name:/^logs/}),600);
+  fireEvent.click(screen.getByRole('button',{name:'Close'}));
+  const dialog=screen.getByRole('alertdialog',{name:'Close logs'});
+  expect(within(dialog).getByText('Close \u201clogs\u201d? Programs running in it will end.')).toBeTruthy();
+  // A confirmation has no name field, so it never opens the soft keyboard, and nothing has been sent yet.
+  expect(within(dialog).queryByRole('textbox')).toBeNull();
+  expect(edit).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole('button',{name:'Cancel'}));
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  expect(edit).not.toHaveBeenCalled();
+  hold(screen.getByRole('button',{name:/^logs/}),600);
+  fireEvent.click(screen.getByRole('button',{name:'Close'}));
+  await act(async()=>{fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button',{name:'Close'}));});
+  expect(edit).toHaveBeenCalledExactlyOnceWith({kind:'herdr',type:'closeTab',target:'t2'},'','.');
+  // The command failed: the confirmation stays for another try, and a success dismisses it.
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  edit.mockResolvedValue(true);
+  await act(async()=>{fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button',{name:'Close'}));});
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+});
+it('never offers to close the only tab, and a long press on it goes straight to the rename prompt',()=>{
+  vi.useFakeTimers();
+  const only=herdrStrip({workspaces:[{workspace_id:'w1',label:'Dev',focused:true,agent_status:'idle'}],tabs:[{workspace_id:'w1',tab_id:'t1',label:'solo',number:1,focused:true,agent_status:'idle'}],panes:[]})!;
+  render(<MultiplexerTabStrip strip={only} onSelect={vi.fn()} onEdit={vi.fn(async()=>true)}/>);
+  hold(screen.getByRole('button',{name:/^solo/}),600);
+  expect(screen.getByRole('form',{name:'Rename solo'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Close'})).toBeNull();
+});
+it('offers a Zellij tab the same menu once Zellij reports its stable id',()=>{
+  vi.useFakeTimers();
+  const edit=vi.fn(async()=>true);
+  render(<MultiplexerTabStrip strip={zellijStrip('s',[{position:0,name:'shell',active:true,id:4},{position:1,name:'logs',active:false,id:9}])} onSelect={vi.fn()} onEdit={edit}/>);
+  hold(screen.getByRole('button',{name:/^logs/}),600);
+  fireEvent.click(screen.getByRole('button',{name:'Rename'}));
+  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'api'}});
+  fireEvent.submit(screen.getByRole('form',{name:'Rename logs'}));
+  expect(edit).toHaveBeenCalledExactlyOnceWith({kind:'zellij',type:'renameTab',id:9},'api','.');
 });
 it('creates a tab from the plus with a name and a directory, and keeps the prompt open when the command fails',async()=>{
   const edit=vi.fn(async()=>false);

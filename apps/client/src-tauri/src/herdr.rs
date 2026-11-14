@@ -230,6 +230,9 @@ pub enum HerdrAction {
         target: String,
         label: String,
     },
+    CloseTab {
+        target: String,
+    },
     FocusTab {
         target: String,
     },
@@ -293,6 +296,10 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
         } => {
             target(value, Some('t'))?;
             format!("tab rename {} {}", quote(value), text_arg(label, 200)?)
+        }
+        HerdrAction::CloseTab { target: value } => {
+            target(value, Some('t'))?;
+            format!("tab close {}", quote(value))
         }
         HerdrAction::FocusTab { target: value } => {
             target(value, Some('t'))?;
@@ -548,14 +555,16 @@ pub async fn herdr_action(
                 command
             };
             let command = crate::herdr_path::select(&command, crate::herdr_path::admit(&session, &access).await?);
-            let focus = matches!(
+            // Closing a tab moves the view like a focus does, so the input turn bound to the old view is retired first.
+            let moves_view = matches!(
                 action,
                 HerdrAction::FocusWorkspace { .. }
                     | HerdrAction::FocusTab { .. }
                     | HerdrAction::FocusPane { .. }
                     | HerdrAction::FocusAgent { .. }
+                    | HerdrAction::CloseTab { .. }
             );
-            let retained = if focus {
+            let retained = if moves_view {
                 crate::herdr_guard::retire_for_view(&session, &access)
                     .await?
                     .map(|permit| permit as std::sync::Arc<dyn Send + Sync>)
@@ -798,6 +807,19 @@ mod tests {
         for suffix in ["I", "L", "O", "U", "a", "é", "-", "_", "1;id", "1:2", ""] {
             assert!(target(&format!("w{suffix}"), None).is_err());
             assert!(target(&format!("w1:p{suffix}"), Some('p')).is_err());
+        }
+    }
+    #[test]
+    fn closes_a_tab_by_exact_id_and_refuses_a_workspace_pane_or_injected_id() {
+        assert_eq!(
+            action_command("owned", &HerdrAction::CloseTab { target: "w1:t2".into() }).unwrap(),
+            "herdr --session 'owned' tab close 'w1:t2'"
+        );
+        for bad in ["", "w1", "w1:p2", "w1:t", "t2", "w1:t2;id", "-a"] {
+            assert!(
+                action_command("owned", &HerdrAction::CloseTab { target: bad.into() }).is_err(),
+                "{bad}"
+            );
         }
     }
     #[test]
@@ -1110,8 +1132,15 @@ mod tests {
             },
         )
         .unwrap());
-        run(action_command(session, &HerdrAction::FocusTab { target: tab }).unwrap());
+        run(action_command(session, &HerdrAction::FocusTab { target: tab.clone() }).unwrap());
         run(action_command(session, &HerdrAction::FocusWorkspace { target: workspace }).unwrap());
+        // Closing the second tab leaves the workspace's first tab and its panes untouched.
+        let before = snapshot();
+        run(action_command(session, &HerdrAction::CloseTab { target: tab }).unwrap());
+        let closed = snapshot();
+        assert_eq!(closed.tabs.len(), 1);
+        assert_eq!(closed.tabs[0].tab_id, before.tabs[0].tab_id);
+        assert_eq!(closed.panes.len(), 2);
         run(action_command(
             session,
             &HerdrAction::CreateWorkspace {
@@ -1129,6 +1158,7 @@ mod tests {
                 target: "w999".into(),
             },
             HerdrAction::FocusTab { target: gone('t') },
+            HerdrAction::CloseTab { target: gone('t') },
             HerdrAction::FocusPane { target: gone('p') },
             HerdrAction::FocusAgent { target: gone('p') },
             HerdrAction::ZoomPane { target: gone('p') },

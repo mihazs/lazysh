@@ -77,7 +77,13 @@ it('reads nothing while disabled and shows no strip when the multiplexer cannot 
 });
 
 const ask=async(chip:HTMLElement|string,name:string,directory?:string)=>{
-  if(typeof chip==='string')fireEvent.click(screen.getByRole('button',{name:chip}));else fireEvent.contextMenu(chip);
+  if(typeof chip==='string')fireEvent.click(screen.getByRole('button',{name:chip}));
+  else {
+    // A chip with both Rename and Close opens a menu; one with only Rename goes straight to its prompt.
+    fireEvent.contextMenu(chip);
+    const rename=screen.queryByRole('button',{name:'Rename'});
+    if(rename)fireEvent.click(rename);
+  }
   const form=screen.getByRole('form');
   fireEvent.change(within(form).getByLabelText('Name'),{target:{value:name}});
   if(directory!==undefined)fireEvent.change(within(form).getByLabelText('Directory'),{target:{value:directory}});
@@ -98,14 +104,18 @@ it('renames a Herdr tab through a fresh tree and the typed action, and shows the
   expect(screen.queryByRole('form')).toBeNull();
   expect(sent('write_stdin','local_write')).toEqual([]);
 });
-it('refuses to rename a Herdr tab that is gone, reports it, and keeps the prompt for another try',async()=>{
+// Renders the strip, then drops the second tab from what the multiplexer reports before `act` runs on it: a tab that went since the strip last read.
+const actOnGoneSecondTab=async(act:(chip:HTMLElement)=>Promise<void>)=>{
   const onError=vi.fn();
   vi.mocked(invoke).mockImplementation(async(command)=>command==='multiplexer_sessions'?[{name:'default'}]:herdrTree('t1'));
   render(<Strip attached={{kind:'herdr',name:'default'}} onError={onError}/>);
   const second=await screen.findByRole('button',{name:/^tab 2/});
   vi.mocked(invoke).mockImplementation(async(command)=>command==='multiplexer_sessions'?[{name:'default'}]:{...herdrTree('t1'),tabs:herdrTree('t1').tabs.slice(0,1)});
-  await ask(second,'api');
+  await act(second);
   expect(onError).toHaveBeenCalledOnce();
+};
+it('refuses to rename a Herdr tab that is gone, reports it, and keeps the prompt for another try',async()=>{
+  await actOnGoneSecondTab(chip=>ask(chip,'api'));
   expect(sent('herdr_action')).toEqual([]);
   expect(screen.getByRole('form')).toBeTruthy();
 });
@@ -170,4 +180,61 @@ it('does not report a created tab as failed when only the switch to it fails, so
   expect(onError).not.toHaveBeenCalled();
   expect(screen.queryByRole('form')).toBeNull();
   await screen.findByRole('button',{name:/^build/});
+});
+
+const closeTab=async(chip:HTMLElement)=>{
+  fireEvent.contextMenu(chip);
+  fireEvent.click(screen.getByRole('button',{name:'Close'}));
+  await act(async()=>{fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button',{name:'Close'}));});
+};
+it('closes a Herdr tab through a fresh tree and the typed action, and drops it from the strip without a reload',async()=>{
+  let closed=false;
+  const tree=()=>({...herdrTree('t1'),tabs:herdrTree('t1').tabs.filter(tab=>!closed || tab.tab_id!=='t2')});
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='multiplexer_sessions')return [{name:'default'}];
+    if(command==='herdr_tree')return tree();
+    if(command==='herdr_action'){closed=(args as {action:{type:string}}).action.type==='closeTab';return;}
+  });
+  render(<Strip attached={{kind:'herdr',name:'default'}}/>);
+  await closeTab(await screen.findByRole('button',{name:/^tab 2/}));
+  await waitFor(()=>expect(screen.queryByRole('button',{name:/^tab 2/})).toBeNull());
+  expect(sent('herdr_action')).toEqual([['herdr_action',{sessionId:'ssh:1',name:'default',action:{type:'closeTab',target:'t2'}}]]);
+  expect(sent('write_stdin','local_write')).toEqual([]);
+  // Only one tab is left: it is never offered for closing.
+  fireEvent.contextMenu(screen.getByRole('button',{name:/^tab 1/}));
+  expect(screen.queryByRole('button',{name:'Close'})).toBeNull();
+});
+it('refuses to close a Herdr tab that is gone, reports it, and sends nothing',async()=>{
+  await actOnGoneSecondTab(closeTab);
+  expect(sent('herdr_action')).toEqual([]);
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+});
+it('renames and closes a Zellij tab by its stable id, never by its position',async()=>{
+  let rows=[{position:0,name:'shell',active:true,id:4},{position:1,name:'logs',active:false,id:9}];
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='zellij_tabs')return rows;
+    if(command==='zellij_action'){
+      const {action}=args as {action:{type:string;id:number;name?:string}};
+      rows=action.type==='closeTab'?rows.filter(row=>row.id!==action.id):rows.map(row=>row.id===action.id?{...row,name:action.name!}:row);
+    }
+  });
+  render(<Strip attached={{kind:'zellij',name:'build'}}/>);
+  await ask(await screen.findByRole('button',{name:/^logs/}),'api');
+  await screen.findByRole('button',{name:/^api/});
+  await closeTab(screen.getByRole('button',{name:/^api/}));
+  await waitFor(()=>expect(screen.queryByRole('button',{name:/^api/})).toBeNull());
+  expect(sent('zellij_action').map(([,args])=>(args as {action:unknown}).action)).toEqual([{type:'renameTab',id:9,name:'api'},{type:'closeTab',id:9}]);
+});
+it('closes a tmux window in the attached tmux server and shows the remaining windows',async()=>{
+  let windows=[{id:'@1',index:0,name:'zsh'},{id:'@2',index:1,name:'vim'}];
+  const snapshot=()=>({generation:'a'.repeat(36),current:{sessionId:'$1',windowId:'@1'},sessions:[{id:'$1',name:'work',restoreName:null,windows}]});
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='tmux_jump_snapshot')return snapshot();
+    if(command==='tmux_action')windows=windows.filter(window=>window.id!==(args as {action:{target:string}}).action.target);
+  });
+  render(<Strip attached={{kind:'tmux',name:'work',tmuxServer:'ops'}}/>);
+  await closeTab(await screen.findByRole('button',{name:/^vim/}));
+  await waitFor(()=>expect(screen.queryByRole('button',{name:/^vim/})).toBeNull());
+  expect(sent('tmux_action')).toEqual([['tmux_action',{sessionId:'ssh:1',tmuxServer:'ops',action:{type:'closeWindow',target:'@2'}}]]);
+  expect(sent('tmux_jump')).toEqual([]);
 });

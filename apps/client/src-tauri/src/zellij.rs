@@ -8,6 +8,9 @@ use tauri::State;
 pub enum ZellijAction {
     NewTab { name: String, directory: String },
     GoToTab { index: u32 },
+    /// By the tab's stable id from `list-tabs`, never by position: a tab that moved or went since the strip read is refused, not guessed.
+    CloseTab { id: u32 },
+    RenameTab { id: u32, name: String },
     NextTab,
     PreviousTab,
     NextPane,
@@ -36,6 +39,9 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
             }
             format!("go-to-tab {index}")
         }
+        ZellijAction::CloseTab { id } => format!("close-tab-by-id {id}"),
+        // `--` keeps a name that starts with a dash a name, not an option.
+        ZellijAction::RenameTab { id, name } => format!("rename-tab-by-id {id} -- {}", text(name, 200)?),
         ZellijAction::NextTab => "go-to-next-tab".into(),
         ZellijAction::PreviousTab => "go-to-previous-tab".into(),
         ZellijAction::NextPane => "focus-next-pane".into(),
@@ -52,12 +58,14 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
     };
     Ok(format!("zellij --session={session} action {args}"))
 }
-/// One tab of a session as `zellij action list-tabs --json` reports it; the strip shows only these three facts.
+/// One tab of a session as `zellij action list-tabs --json` reports it. `id` is the stable `tab_id` that close and rename address; a Zellij that does not report one leaves it out and the tab can still be selected.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct ZellijTab {
     position: u32,
     name: String,
     active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
 }
 const MAX_TABS: usize = 1000;
 fn tabs_command(session: &str) -> Result<String> {
@@ -89,6 +97,7 @@ fn parse_tabs(output: &str) -> Result<Vec<ZellijTab>> {
                     .take(200)
                     .collect(),
                 active: row["active"].as_bool().ok_or_else(invalid)?,
+                id: row["tab_id"].as_u64().and_then(|id| u32::try_from(id).ok()),
             })
         })
         .collect()
@@ -136,20 +145,39 @@ mod tests {
         assert_eq!(command("a'$(echo x)", &ZellijAction::NewTab { name: "title;$(echo no)".into(), directory: "/a b".into() }).unwrap(), "zellij --session='a'\\''$(echo x)' action new-tab --name='title;$(echo no)' --cwd='/a b'");
     }
     #[test]
+    fn closes_and_renames_a_tab_by_stable_id_with_a_literal_name() {
+        assert_eq!(
+            command("work", &ZellijAction::CloseTab { id: 7 }).unwrap(),
+            "zellij --session='work' action close-tab-by-id 7"
+        );
+        assert_eq!(
+            command("work", &ZellijAction::RenameTab { id: 7, name: "-x';$(touch nope)".into() }).unwrap(),
+            "zellij --session='work' action rename-tab-by-id 7 -- '-x'\\'';$(touch nope)'"
+        );
+        assert!(command("work", &ZellijAction::RenameTab { id: 7, name: "a\nb".into() }).is_err());
+        // A negative or fractional id is not a tab id: the command layer takes only an unsigned integer.
+        for bad in [r#"{"type":"closeTab","id":-1}"#, r#"{"type":"closeTab","id":"1;id"}"#, r#"{"type":"closeTab"}"#, r#"{"type":"closeTab","id":1,"extra":true}"#] {
+            assert!(serde_json::from_str::<ZellijAction>(bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
     fn lists_tabs_from_the_json_the_cli_prints_and_refuses_anything_else() {
-        let tabs = parse_tabs(r#"[{"position":0,"name":"one\u001b[31m","active":false,"viewport_rows":9},{"position":1,"name":"two","active":true}]"#).unwrap();
+        let tabs = parse_tabs(r#"[{"position":0,"name":"one\u001b[31m","active":false,"viewport_rows":9,"tab_id":4},{"position":1,"name":"two","active":true}]"#).unwrap();
         assert_eq!(
             tabs,
             vec![
                 ZellijTab {
                     position: 0,
                     name: "one[31m".into(),
-                    active: false
+                    active: false,
+                    id: Some(4)
                 },
+                // A Zellij that reports no `tab_id` still lists the tab, which can then be selected but not closed or renamed.
                 ZellijTab {
                     position: 1,
                     name: "two".into(),
-                    active: true
+                    active: true,
+                    id: None
                 },
             ]
         );
@@ -432,6 +460,36 @@ mod tests {
             vec![(0, true), (1, false)]
         );
         assert_eq!(listed[1].name, "literal'$(touch nope)");
+        // Real Zellij reports the stable id that rename and close address, so the strip can offer both.
+        let second = listed[1].id.expect("Zellij lists a stable tab_id");
+        assert_ne!(listed[0].id, listed[1].id);
+        run(command(
+            &name,
+            &ZellijAction::RenameTab {
+                id: second,
+                name: "-renamed';$(touch nope)".into(),
+            },
+        )
+        .unwrap());
+        let renamed_second = || {
+            let tabs = query("list-tabs")?;
+            Ok(u64::from(
+                tabs.as_array()
+                    .is_some_and(|tabs| tabs.iter().any(|tab| tab["tab_id"] == second && tab["name"] == "-renamed';$(touch nope)")),
+            ))
+        };
+        wait("renamed tab by id", &renamed_second, &|found| found == 1);
+        // Rename and close act on the tab they name, not the focused one: the first tab is still active.
+        assert_eq!(wait("first tab still focused", &active_tab, &|_| true), 0);
+        run(command(&name, &ZellijAction::CloseTab { id: second }).unwrap());
+        let tab_count = || Ok(query("list-tabs")?.as_array().map_or(0, |tabs| tabs.len() as u64));
+        wait("closed tab by id", &tab_count, &|count| count == 1);
+        assert_eq!(wait("first tab kept", &active_tab, &|_| true), 0);
+        // The tab is gone: Zellij ignores its stable id (it never falls back to a position), so the remaining tab is untouched.
+        execute(command(&name, &ZellijAction::CloseTab { id: second }).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(tab_count().unwrap(), 1);
+        assert_eq!(active_tab().unwrap(), 0);
         assert!(!temp.path().join("nope").exists());
         run(format!("zellij kill-session -- {}", quote(&name)));
     }

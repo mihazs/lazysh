@@ -6,10 +6,10 @@
   border-bottom: 1px solid var(--ui-hairline, var(--theme-border, var(--border)));
   background: var(--theme-panel, var(--panel)); color: var(--theme-text, var(--text)); font-size: 13px;
 }
-.mux-strip :is(.mux-group, .mux-chip, .mux-choice, .mux-add) { margin: 0; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 0; touch-action: manipulation; }
+.mux-strip :is(.mux-group, .mux-chip, .mux-choice, .mux-add, .mux-menu-item) { margin: 0; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 0; touch-action: manipulation; }
 .mux-group, .mux-chip, .mux-add { min-height: 0; }
 /* A long press is how a chip is renamed: neither the text-selection callout nor the browser's own context menu may start on it. */
-.mux-chip, .mux-choice { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.mux-chip, .mux-choice, .mux-menu-item { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
 .mux-group {
   display: flex; align-items: center; flex: 0 1 auto; gap: 6px; min-width: 0; max-width: 48%; padding: 0 8px; font-weight: 650;
   border-inline-end: 1px solid var(--ui-hairline, var(--theme-border, var(--border)));
@@ -44,11 +44,19 @@
 .mux-choice[data-attention] > span:last-child { color: var(--status-attention); }
 /* The `+` is a fixed 44 px target at the end of the row, outside the scrolling chips so it never scrolls away. */
 .mux-add { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 44px; color: var(--theme-muted, var(--muted)); border-inline-start: 1px solid var(--ui-hairline, var(--theme-border, var(--border))); }
-/* The name prompt drops over the terminal like the workspace list, so it takes no layout space. */
+/* The long-press menu is a short column dropped from the strip like the workspace list, so it takes no layout space; its items are 44 px targets. */
+.mux-menu {
+  position: absolute; z-index: 2; inset: 100% auto auto max(4px, env(safe-area-inset-left)); display: flex; flex-direction: column; min-width: 180px; max-width: calc(100% - 8px);
+  border: 1px solid var(--ui-hairline-strong, var(--theme-border, var(--border))); border-radius: 0 0 12px 12px; background: var(--theme-panel, var(--panel)); box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+}
+.mux-menu-item { display: flex; align-items: center; min-height: 44px; padding: 0 14px; text-align: start; }
+.mux-menu-item[data-danger] { color: var(--danger); }
+/* The name prompt and the close confirmation drop over the terminal like the workspace list, so they take no layout space. */
 .mux-prompt {
   position: absolute; z-index: 2; inset: 100% auto auto 0; width: min(100%, 480px); box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
   border: 1px solid var(--ui-hairline-strong, var(--theme-border, var(--border))); border-top: 0; border-radius: 0 0 12px 12px; background: var(--theme-panel, var(--panel)); box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
 }
+.mux-prompt p { margin: 0; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
 .mux-prompt label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--theme-muted, var(--muted)); }
 .mux-prompt input { min-height: 44px; margin: 0; font-size: 16px; }
 .mux-prompt > div { display: flex; justify-content: flex-end; gap: 8px; }
