@@ -1,5 +1,5 @@
 //! URL and host-path detection of the core against what `terminalLinks.ts` finds on the same
-//! bytes in xterm.js 5.5.0 (`fixtures/links.json`; `apps/client/src/linksFixture.test.ts` replays
+//! bytes in xterm.js 5.5.0 (`fixtures/links.json`; `apps/client/src/xterm/linksFixture.test.ts` replays
 //! them through the TypeScript code and fails if the recorded results drift).
 
 mod support;
@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use support::*;
 
 /// Per-row results folded into links in reading order, each with every row it is reported on,
-/// as `apps/client/src/linksFixture.test.ts` records them.
+/// as `apps/client/src/xterm/linksFixture.test.ts` records them.
 fn fold(per_row: Vec<Vec<Value>>) -> Vec<Value> {
     let mut links: Vec<Value> = Vec::new();
     for (row, found) in per_row.into_iter().enumerate() {
