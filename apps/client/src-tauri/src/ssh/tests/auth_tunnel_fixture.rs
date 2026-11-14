@@ -404,6 +404,7 @@ async fn a_port_the_device_cannot_give_fails_closed_and_says_who_holds_it() {
         access_lease(),
         fixture.app.state(),
         fixture.app.state(),
+        fixture.app.state(),
         fixture.session.clone(),
         free_port(),
         None,

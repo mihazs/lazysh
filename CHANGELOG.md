@@ -551,6 +551,8 @@
 
 - Clarify the project agent workflow so continuation requests proceed from recovered history into implementation and keep working across the requested roadmap scope without requiring Codex `/goal`. Application defaults are unchanged.
 
+- Attach files and open previews from a local desktop session on Linux, Windows and macOS (#1134, part of #1129). **Attach** (the workspace tool, the terminal's Attach key and the composer's Attach action) saves the file on this device and pastes or stages its local path: by default a private, uniquely named `lazysh-<random>-<name>` file in `/tmp` (owner-only, `0600`) or the per-user `%TEMP%` folder on Windows, with the same 10 MiB limit, and never over an existing file or link. There is no host clipboard to copy to in a local session, so that action is hidden and **Copy host path** uses this device's clipboard. **Preview** discovers local listeners with `ss` (or `lsof`) on Linux and macOS and `netstat -ano` on Windows, and opens a development server through a fresh `127.0.0.1` port without ever rebinding the server's own; closing the session stops the proxy. Devices and workspace restore for local sessions follow separately. SSH sessions are unchanged. No defaults change.
+
 - Add a localized Named key shortcut builder for toolbar and gesture bindings, including F1–F12 and optional modifiers. Drafts remain separate between builder modes; Advanced stays the default, and saving never sends terminal input.
 
 - Remove reference-vendor names and URLs from the current source and documentation. Theme import now accepts only `lazysh-theme:` share codes and raw JSON; third-party-prefixed share codes must be converted to JSON before import. Stored themes and existing defaults are unchanged.
