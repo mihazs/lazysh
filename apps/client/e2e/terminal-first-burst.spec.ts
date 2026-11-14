@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { androidDevice, androidFocused, androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
+import { selfTimeByFunction, type CpuProfile } from '../bench/cpuProfile';
 import { summarize, type StyleFamily } from '../bench/workloads';
 
 // What the first appearance of a glyph in a style costs, with the xterm.js DOM renderer and the WebGL addon (#1323,
@@ -19,6 +20,8 @@ const scale: { bytes: number; passes: number; rows: Row[] } = full
   ? { bytes: 1 << 20, passes: 3, rows: [['truecolor', 1], ['truecolor', 32], ['truecolor', 256], ['truecolor', 2048], ['indexed', 256], ['background', 256], ['background', 2048], ['attributes', 8], ['attributes', 256], ['palette16', 8], ['brightOnBackground', 64], ['truecolorOnBackground', 256], ['boldUnderline', 8],
     ['w3', 0.5], ['w3', 1], ['w3', 2], ['w3', 4], ['truecolor', 1, true], ['truecolor', 256, true], ['truecolor', 2048, true], ['w3', 1, true], ['w3', 2, true]] }
   : { bytes: 64 << 10, passes: 2, rows: [['truecolor', 1], ['attributes', 8], ['w3', 1 / 32], ['truecolor', 32, true]] };
+// LAZYSH_BENCH_PROFILE=1 samples the page's main thread during the cold pass (Profiler domain, 1 ms) and records the largest self times next to it. Sampling slows that pass, so a profiled run is a separate invocation and its timings are not comparable with the unprofiled files.
+const profiling = process.env.LAZYSH_BENCH_PROFILE === '1' && !androidSerial;
 const launchArgs = (process.env.LAZYSH_BENCH_CHROMIUM_ARGS ?? '').split(/\s+/).filter(Boolean);
 test.use({ launchOptions: { args: launchArgs } });
 test.describe.configure({ mode: 'serial' });
@@ -47,9 +50,13 @@ for (const renderer of renderers)
         : await page.evaluate(([name, n, bytes]) => window.terminalBench.prepareStyled(name, n, bytes), [family, styles, scale.bytes] as const);
 
       const passes: Array<Record<string, unknown> & { wallMs: number; totalCpuMs: number | null }> = [];
+      let coldProfile: ReturnType<typeof selfTimeByFunction> | null = null;
+      if (profiling) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 1000 }); }
       for (let pass = 1; pass <= scale.passes; pass++) {
         const before = await snapshot(cdp, browserCdp);
+        if (profiling && pass === 1) await cdp.send('Profiler.start');
         const run = await page.evaluate(wait => window.terminalBench.stream(wait), paced);
+        if (profiling && pass === 1) { coldProfile = selfTimeByFunction((await cdp.send('Profiler.stop')).profile as CpuProfile); expect(coldProfile.top.length, 'the profiler must have sampled the cold pass').toBeGreaterThan(0); }
         const spent = cost(before, await snapshot(cdp, browserCdp));
         const cpus = Object.values(spent.processCpuMs), totalCpuMs = cpus.length ? cpus.reduce((a, b) => a + b, 0) : null;
         passes.push({ pass, renders: run.renders, wallMsPerRender: run.wallMs / Math.max(1, run.renders), wallMs: run.wallMs, throughputMiBs: run.throughputMiBs, totalCpuMs, mainThreadTaskMs: spent.mainThreadMs.task, rendererCpuMs: spent.processCpuMs.renderer ?? null, gpuCpuMs: spent.processCpuMs.GPU ?? null, droppedFrames: run.pacing.dropped, frameP99Ms: run.pacing.frameMs?.p99 ?? null, longTasks: run.longTasks, correct: run.correct });
@@ -59,7 +66,7 @@ for (const renderer of renderers)
       expect(await page.evaluate(() => window.terminalBench.contextLosses()), 'a lost WebGL context falls back to the DOM renderer and invalidates the run').toBe(0);
       const warm = passes.slice(1), warmWall = summarize(warm.map(p => p.wallMs))!.p50, warmCpu = passes[0].totalCpuMs === null ? null : summarize(warm.map(p => p.totalCpuMs!))!.p50;
       const extraWallMs = passes[0].wallMs - warmWall, extraCpuMs = passes[0].totalCpuMs === null || warmCpu === null ? null : passes[0].totalCpuMs - warmCpu;
-      results.push({ renderer, family, styles, paced, bytes: fixture.bytes, distinctGlyphs: fixture.distinctGlyphs, sha256: fixture.sha256, passes, warmWallMs: warmWall, coldExtraWallMs: extraWallMs, coldExtraCpuMs: extraCpuMs, coldExtraWallMsPerGlyph: fixture.distinctGlyphs && extraWallMs / fixture.distinctGlyphs, coldExtraCpuMsPerGlyph: fixture.distinctGlyphs && extraCpuMs !== null ? extraCpuMs / fixture.distinctGlyphs : null, refreshNominalMs, geometry: { cols: geometry.cols, rows: geometry.rows, gl: geometry.gl, devicePixelRatio: geometry.devicePixelRatio, viewport: geometry.viewport, userAgent: geometry.userAgent }, project: info.project.name });
+      results.push({ renderer, family, styles, paced, profiled: profiling, coldProfile, bytes: fixture.bytes, distinctGlyphs: fixture.distinctGlyphs, sha256: fixture.sha256, passes, warmWallMs: warmWall, coldExtraWallMs: extraWallMs, coldExtraCpuMs: extraCpuMs, coldExtraWallMsPerGlyph: fixture.distinctGlyphs && extraWallMs / fixture.distinctGlyphs, coldExtraCpuMsPerGlyph: fixture.distinctGlyphs && extraCpuMs !== null ? extraCpuMs / fixture.distinctGlyphs : null, refreshNominalMs, geometry: { cols: geometry.cols, rows: geometry.rows, gl: geometry.gl, devicePixelRatio: geometry.devicePixelRatio, viewport: geometry.viewport, userAgent: geometry.userAgent }, project: info.project.name });
     });
 
 test.afterAll(async ({ browser }, info) => {
