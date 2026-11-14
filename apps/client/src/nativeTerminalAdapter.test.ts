@@ -136,6 +136,56 @@ describe('native backend specifics', () => {
   });
 });
 
+describe('native geometry over a laid-out anchor', () => {
+  /** jsdom lays nothing out, so the anchor reports the rectangle a real layout would: 200x100 at (10, 20), 20x5 cells of 10x20. */
+  async function laidOut(options: HeadlessCoreOptions = {}) {
+    const opened = await open(options);
+    const [target] = [document.getElementById(`native-anchor-${anchors - 1}`)!];
+    target.getBoundingClientRect = () => ({left: 10, top: 20, width: 200, height: 100, right: 210, bottom: 120, x: 10, y: 20, toJSON() {}});
+    return opened;
+  }
+
+  it('reports the screen rectangle and the cell size drawn into it', async () => {
+    const {adapter} = await laidOut();
+    expect(adapter.screenBounds()).toEqual({left: 10, top: 20, width: 200, height: 100});
+    expect(adapter.metrics()).toMatchObject({columns: 20, rows: 5, cellWidth: 10, cellHeight: 20, scrollbackLines: 200});
+    await adapter.detach();
+    expect(adapter.screenBounds()).toBeUndefined();
+    expect(adapter.metrics()).toMatchObject({cellWidth: 0, cellHeight: 0});
+    await adapter.dispose();
+  });
+
+  it('names the cell under a point in absolute rows, clamped to the screen, and nothing before it is laid out', async () => {
+    const {adapter} = await laidOut();
+    await adapter.write!(text(Array.from({length: 12}, (_, i) => `row ${i}`).join('\r\n')));
+    const top = adapter.viewport().top;
+    expect(top).toBeGreaterThan(0);
+    expect(adapter.cellAt(35, 65)).toEqual({x: 2, y: top + 2});
+    expect(adapter.cellAt(-500, -500)).toEqual({x: 0, y: top});
+    expect(adapter.cellAt(5000, 5000)).toEqual({x: 19, y: top + 4});
+    const detached = await open();
+    expect(detached.adapter.cellAt(35, 65)).toBeUndefined();
+    await Promise.all([adapter.dispose(), detached.adapter.dispose()]);
+  });
+
+  it('turns a wheel into lines, scrolling only while the program does not track the mouse', async () => {
+    const {adapter} = await laidOut();
+    await adapter.write!(text(Array.from({length: 40}, (_, i) => `row ${i}`).join('\r\n')));
+    const bottom = adapter.viewport().top;
+    adapter.wheel({clientX: 20, clientY: 40, deltaY: -40, unit: 'pixel'});
+    expect(adapter.viewport().top).toBe(bottom - 2);
+    adapter.wheel({clientX: 20, clientY: 40, deltaY: -3, unit: 'line'});
+    expect(adapter.viewport().top).toBe(bottom - 5);
+    // A notch smaller than a line still moves one line.
+    adapter.wheel({clientX: 20, clientY: 40, deltaY: 4, unit: 'pixel'});
+    expect(adapter.viewport().top).toBe(bottom - 4);
+    await adapter.write!(text('\x1b[?1000h'));
+    adapter.wheel({clientX: 20, clientY: 40, deltaY: -40, unit: 'pixel'});
+    expect(adapter.viewport().top).toBe(bottom - 4);
+    await adapter.dispose();
+  });
+});
+
 describe('native runtime path (the core owns the transport)', () => {
   it('pulls the state at the refresh rate however much output arrives', async () => {
     const refreshMs = 40, chunks = 5000;
