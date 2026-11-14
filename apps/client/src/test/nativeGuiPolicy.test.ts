@@ -14,6 +14,8 @@ it('does not inherit user display, bus, loader or home state into the native GUI
   const env=guiEnvironment('/tmp/lazysh-native-gui-owned','unix:path=/tmp/lazysh-native-gui-owned/runtime/bus',1200);
   expect(env.DISPLAY).toBe(':1200');expect(env.HOME).toBe('/tmp/lazysh-native-gui-owned/home');
   expect(env.DBUS_SESSION_BUS_ADDRESS).toBe(env.DBUS_SYSTEM_BUS_ADDRESS);
+  // A case may drop a recording stub (xdg-open) into the private bin directory; it shadows the system tool only there.
+  expect(env.PATH).toBe('/tmp/lazysh-native-gui-owned/bin:/usr/bin:/bin');
   for(const key of ['WAYLAND_DISPLAY','SSH_AUTH_SOCK','LD_PRELOAD','LD_LIBRARY_PATH','DBUS_STARTER_ADDRESS','XDG_CURRENT_DESKTOP'])expect(env).not.toHaveProperty(key);
   expect(()=>guiEnvironment('/tmp/owned','unix:path=/run/user/1000/bus',1200)).toThrow();
   expect(()=>guiEnvironment('relative','tcp:host=localhost',1200)).toThrow();

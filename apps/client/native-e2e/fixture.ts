@@ -53,6 +53,8 @@ export class NativeGui {
   private driver?:OwnedProcess;
   private notifications?:OwnedProcess;
   private clientObserver?:ClientTargetObserver;
+  private xclipFile='';
+  private readonly clipboardOwners:OwnedProcess[]=[];
   private env:NodeJS.ProcessEnv;
   private busAddress:string;
   private xSocket='';
@@ -318,6 +320,31 @@ export class NativeGui {
     if(!owned||await readlink(`/proc/${pid}/exe`)!==this.binary||(await identity(pid))?.start!==owned.start)throw new Error('Singleton owner is not the owned GUI binary');
     return {name,pid,start:owned.start};
   }
+  private async xclip(args:string[],target='UTF8_STRING') {
+    this.xclipFile||=await executable(process.env.LAZYSH_NATIVE_GUI_XCLIP??'/usr/bin/xclip','xclip','xclip');
+    await this.assertDisplay();
+    return new OwnedProcess(this.xclipFile,['-selection','clipboard','-target',target,...args],this.directory,this.env);
+  }
+  /** The text another X client reads from CLIPBOARD, or undefined while no client owns it. */
+  async readClipboard(target='UTF8_STRING'):Promise<string|undefined> {
+    return (await this.xclip(['-out'],target)).finish('owned X clipboard read',5000).catch(error=>{
+      if(/exit=1$/.test((error as Error).message))return undefined;throw error;
+    });
+  }
+  /** Makes a separate X client own CLIPBOARD with `text`; it serves the selection until replaced or the fixture stops. */
+  async seedClipboard(text:string,target='UTF8_STRING') {
+    const owner=await this.xclip(['-quiet','-in'],target);
+    this.clipboardOwners.push(owner);
+    owner.child.stdin!.end(text);
+    await until('owned X clipboard seed',async()=>await this.readClipboard(target)===text?true:undefined,5000);
+  }
+  /** Puts a recording `xdg-open` first on the application's PATH; returns the URLs it was asked to open so far. */
+  async stubUrlOpener() {
+    const directory=join(this.directory,'bin'),log=join(directory,'opened');
+    await mkdir(directory,{mode:0o700});
+    await writeFile(join(directory,'xdg-open'),`#!/bin/sh\nprintf '%s\\n' "$1" >> '${log}'\n`,{mode:0o700,flag:'wx'});
+    return async()=>(await readFile(log,'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;})).split('\n').filter(Boolean);
+  }
   async secondary(args:string[],cwd=this.directory) {
     const canonical=await realpath(cwd);
     if(canonical!==this.directory && !canonical.startsWith(this.directory+'/'))throw new Error('Secondary cwd must stay within the owned fixture');
@@ -357,6 +384,7 @@ export class NativeGui {
       },2000);},
       async()=>{await this.stopDisposableVault();},
       async()=>{if(this.notifications)await this.notifications.stop();},
+      async()=>{for(const owner of this.clipboardOwners)await owner.stop();},
       async()=>{if(this.display)await this.display.stop();},
       async()=>{if(this.bus)await this.bus.stop();},
       async()=>{if(this.clientObserver){this.clientObserver.stop();console.info(`Owned test-worker observer: ${this.clientObserver.status()}; target connections=${this.clientObserver.targetConnections}`);}},

@@ -105,3 +105,15 @@ its own still-live server before starting the app; that preflight cannot replace
 the separate native GUI SSH challenge.
 
 The GUI stops before its SSH server. Cleanup verifies the exact owned server/descendants and listener retire. Before the connected terminal is visible, this case suppresses screenshots so the temporary private-key field cannot enter artifacts. It never injects host trust, calls native terminal writes, mocks the bridge or uses an operator credential. A source implementation or passing host-fixture check does not establish the new GUI case; require the corresponding actual Linux native CI result before claiming acceptance.
+
+## Clipboard, links and Paste
+
+`native-e2e/terminalOsIntegration.spec.ts` drives a real owned SSH terminal in the bundled application and observes the operating system rather than the page:
+
+- **OSC 52 consent.** The remote shell prints an OSC 52 sequence. A separate `xclip` client first owns the X `CLIPBOARD` with a seed text; it still reads that seed while the "Remote clipboard request" prompt is open, and reads the remote text only after **Allow this copy**.
+- **Open in browser.** A terminal link's **Open in browser** runs the desktop URL opener. The fixture puts a private `bin` directory first on the application's `PATH` (`guiEnvironment`), and the case writes a recording `xdg-open` there; it must receive exactly the canonical URL and nothing before the tap.
+- **Toolbar Paste.** A separate `xclip` client owns `CLIPBOARD` with a text, offered as `text/plain;charset=utf-8` like GTK, Qt and browsers do; the toolbar **paste** key sends it to a remote `read`, which echoes it only after the case ends the line (Paste adds no Enter). An owner that offers only `UTF8_STRING` or `STRING` (a bare `xclip -in`) reads as empty through WebKitGTK's `readText()`, although Ctrl+V pastes it; the case does not cover that owner.
+
+`xclip` is a system tool like Xvfb: `LAZYSH_NATIVE_GUI_XCLIP` selects an absolute verified path (default `/usr/bin/xclip`), and CI copies it into the job-owned tool directory because the outer user namespace maps root-owned system files to an unmapped owner. Its clients run foreground (`-quiet`), so the fixture owns and stops each one.
+
+The Paste case failed on the first real run: WebKitGTK refused `navigator.clipboard.readText()` with `NotAllowedError` even after a user gesture, because a window created from its config cannot enable page clipboard access, and the app showed "Clipboard access was unavailable". On Linux `tauri.linux.conf.json` now leaves the main window uncreated and `build_unspawned_windows` (`src-tauri/src/lib.rs`) builds it from the same config with `enable_clipboard_access()`. The case is the regression test; Windows WebView2 (which asks permission without that setting) and macOS are not exercised by this suite.
