@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   headers:
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 5
     steps:
       # The default merge checkout contains the base branch's validator even when the PR

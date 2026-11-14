@@ -32,7 +32,7 @@ jobs:
   # account's few hosted runners. client and agent always run. Pushes to main skip the gate
   # and run every job with the full matrix. Mapping and job table: CONTRIBUTING.md.
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 10
     outputs:
       companion: ${{ steps.paths.outputs.companion }}
@@ -86,7 +86,7 @@ jobs:
 
   client:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     steps:
       # moon derives the pull request's affected tasks from the merge base, so it needs history.
       - uses: actions/checkout@v4
@@ -145,7 +145,7 @@ jobs:
 
   agent:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -798,7 +798,7 @@ jobs:
   native-android:
     needs: changes
     if: needs.changes.outputs.android == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - *source-bun
@@ -1175,7 +1175,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 75
     steps:
       - *source-checkout
@@ -1385,7 +1385,7 @@ jobs:
   native-android-auxiliary:
     needs: changes
     if: needs.changes.outputs.android_auxiliary == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580
@@ -1414,7 +1414,7 @@ jobs:
   native-android-biometric:
     needs: changes
     if: needs.changes.outputs.android == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580
@@ -1431,7 +1431,7 @@ jobs:
         # Main and push-path pull requests run both; other pull requests run only Google,
         # because native-android-auxiliary already exercises F-Droid UnifiedPush enrollment.
         push-variant: ${{ fromJSON(needs.changes.outputs.ntfy_variants) }}
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 35
     env:
       ANDROID_SERIAL: emulator-5580

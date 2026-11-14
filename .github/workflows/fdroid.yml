@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   metadata-and-scanner:
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:

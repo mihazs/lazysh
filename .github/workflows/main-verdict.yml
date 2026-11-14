@@ -28,7 +28,7 @@ concurrency:
 jobs:
   client:
     name: verdict-client
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
 
   agent:
     name: verdict-agent
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
 
   release-tools:
     name: verdict-release-tools
-    runs-on: ubuntu-24.04
+    runs-on: sengi-basic-4-ubuntu-2404
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
