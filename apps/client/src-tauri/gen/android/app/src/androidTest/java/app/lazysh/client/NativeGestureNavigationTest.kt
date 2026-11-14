@@ -1,5 +1,6 @@
 package app.lazysh.client
 
+import android.app.Activity
 import android.graphics.Rect
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -16,6 +17,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -237,11 +240,19 @@ class NativeGestureNavigationTest {
      * The device plugins Tauri built with the first activity must act on the one in front after a recreation (#1462): the launcher icon
      * is refused with "Open lazysh before changing the launcher icon" when its plugin judges a destroyed activity not to be in front, and
      * the soft keyboard refuses with `soft_keyboard_unavailable`. CI saw the first one fail in `NativeWorkspaceTest` once this class had recreated the activity.
+     * The file exchange and background session plugins read the activity through the same `currentActivity`, which is asserted directly: their
+     * commands need a staged download or a live session, which this class has none of.
      */
     @Test fun theDevicePluginsActOnTheActivityInFrontAfterRecreation() {
         awaitStartPage()
+        var first: Activity? = null
+        scenario.onActivity { first = it }
         scenario.recreate()
         awaitStartPage()
+        scenario.onActivity {
+            assertNotSame("the recreation built a new activity", first, it)
+            assertSame("a plugin Tauri built with the first activity reads the one in front", it, currentActivity(first!!))
+        }
         invokeFromPage("app_icon_status")
         val current = JSONObject(outcome("the launcher icon")).getString("current")
         invokeFromPage("set_app_icon", "{icon:'$current'}")
@@ -250,6 +261,16 @@ class NativeGestureNavigationTest {
         invokeFromPage("soft_keyboard", "{action:'status'}")
         val keyboard = outcome("the soft keyboard status")
         assertFalse("the soft keyboard plugin sees the activity in front: $keyboard", keyboard.startsWith("error"))
+        try {
+            invokeFromPage("terminal_private_keyboard", "{active:true}")
+            val privateKeyboard = outcome("the private keyboard mode")
+            assertFalse("the private keyboard plugin accepts the command: $privateKeyboard", privateKeyboard.startsWith("error"))
+            poll("the private keyboard mode to be on") { PrivateKeyboard.active.takeIf { it } }
+        } finally {
+            invokeFromPage("terminal_private_keyboard", "{active:false}")
+            outcome("the private keyboard mode is off again")
+        }
+        assertFalse("the private keyboard mode follows the command back off", PrivateKeyboard.active)
     }
 
     /** The Rust command refuses what Android would clamp or ignore: a row taller than the 200 dp cap, an inverted row, a zone outside 1 to 96 dp. */
