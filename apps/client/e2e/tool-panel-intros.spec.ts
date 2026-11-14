@@ -1,6 +1,7 @@
 import {expect,test,type Locator,type Page} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {routePreviewPage} from './fixtures/previewPage';
+import {dictationFixture} from './fixtures/directDictation';
 import {remoteMuxName} from '../src/test/multiplexerFixture';
 import type {mountMultiplexerHarness} from './fixtures/MultiplexerHarness';
 import type {mountDevices} from './fixtures/DeviceHarness';
@@ -9,7 +10,7 @@ declare global {interface Window {introMux:ReturnType<typeof mountMultiplexerHar
 
 /** The panel's optional intro sits behind one closed 44px line, in every language, and its trust text never folds. */
 async function expectFoldedIntro(page:Page,scope:Locator,about:string,intro:string,retained:string[]=[]){
-  for(const language of ['en','pt-BR','es']){
+  for(const language of ['pt-BR','es','en']){
     const [aboutText,introText,...retainedText]=await page.evaluate(async({language,keys})=>{
       const {uiI18n,t}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage(language);
       return keys.map(key=>t(key as never));
@@ -45,4 +46,12 @@ test('the Preview automatic-refresh hint folds while the SSH exposure text stays
   await page.evaluate(async()=>{const{mountPreviewHarness}=await import('/e2e/fixtures/PreviewHarness.tsx');window.introPreview=mountPreviewHarness();});
   await expect(page.getByRole('button',{name:'Select page element',exact:true})).toBeEnabled();
   await expectFoldedIntro(page,page.locator('.preview-panel'),'previewAutomaticAbout','previewAutomaticHint',['previewConnectionHint']);
+});
+test('the Dictation intro and engine details fold while each engine privacy line and the auto-send warning stay visible',async({page})=>{
+  await dictationFixture(page,true);
+  const panel=page.locator('.voice-panel');
+  await expectFoldedIntro(page,panel,'voiceAbout','voiceIntro',['voiceWhisperHint','voiceDeliveryHint']);
+  await expectFoldedIntro(page,panel,'voiceWhisperAbout','voiceWhisperDetails',['voiceWhisperHint']);
+  await page.getByRole('combobox',{name:'Speech engine',exact:true}).selectOption('parakeet');
+  await expectFoldedIntro(page,panel,'voiceParakeetAbout','voiceParakeetDetails',['voiceParakeetHint','voiceDeliveryHint']);
 });
