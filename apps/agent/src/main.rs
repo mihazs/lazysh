@@ -106,9 +106,17 @@ enum Command {
         timeout_seconds: u16,
     },
     /// Developer prototype: start a throwaway Chrome-family browser with a random loopback debug port
-    /// and stop it when stdin closes. Needs LAZYSH_DEV_HOST_BROWSER=1; see docs/host-browser.md.
+    /// and stop it when stdin closes. Needs the host browser setting on (`settings host-browser update`)
+    /// and LAZYSH_DEV_HOST_BROWSER=1; see docs/host-browser.md.
     #[command(hide = true)]
     HostBrowser {
+        /// Remove the kept profile (Clear browser data) instead of starting a browser. Works while the
+        /// setting is off, so that a user who switched the feature off can still remove what it kept.
+        #[arg(long, conflicts_with_all = ["binary", "allow_origin", "url", "headed", "no_sandbox", "keep_profile"])]
+        clear_data: bool,
+        /// Keep the browser profile (cookies, sessions) after the session, until --clear-data.
+        #[arg(long)]
+        keep_profile: bool,
         #[arg(long)]
         binary: Option<std::path::PathBuf>,
         /// Exact origin allowed to open the debug WebSocket; repeatable, never a wildcard.
@@ -284,6 +292,12 @@ enum Command {
 #[derive(Subcommand)]
 enum SettingsCommand {
     Show,
+    /// The host browser switch, off by default. It has its own file and revision: `settings show` and
+    /// `settings update` keep their schema so that a released client keeps reading and writing them.
+    HostBrowser {
+        #[command(subcommand)]
+        command: HostBrowserSettingsCommand,
+    },
     Update {
         #[arg(long)]
         expected_revision: u64,
@@ -293,6 +307,16 @@ enum SettingsCommand {
         recorded_usage_enabled: bool,
         #[arg(long, action=clap::ArgAction::Set, required=true)]
         device_tools_enabled: bool,
+    },
+}
+#[derive(Subcommand)]
+enum HostBrowserSettingsCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        host_browser_enabled: bool,
     },
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
@@ -330,21 +354,33 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::Settings { command } => {
             let directory = lazysh_agent::state_directory()?;
             let settings = match command {
-                SettingsCommand::Show => lazysh_agent::settings::read(&directory)?,
+                SettingsCommand::HostBrowser { command } => {
+                    use lazysh_agent::host_browser::settings;
+                    serde_json::to_value(match command {
+                        HostBrowserSettingsCommand::Show => settings::read(&directory)?,
+                        HostBrowserSettingsCommand::Update {
+                            expected_revision,
+                            host_browser_enabled,
+                        } => settings::update(&directory, expected_revision, host_browser_enabled)?,
+                    })
+                }
+                SettingsCommand::Show => {
+                    serde_json::to_value(lazysh_agent::settings::read(&directory)?)
+                }
                 SettingsCommand::Update {
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                } => lazysh_agent::settings::update(
+                } => serde_json::to_value(lazysh_agent::settings::update(
                     &directory,
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                )?,
+                )?),
             };
-            Some(serde_json::to_value(settings).map_err(|_| Error::InvalidEvent)?)
+            Some(settings.map_err(|_| Error::InvalidEvent)?)
         }
         Command::Usage {
             agent,
@@ -385,6 +421,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
         }
         Command::HostBrowser {
+            clear_data: true, ..
+        } => {
+            let cleared =
+                lazysh_agent::host_browser::profile::clear(&lazysh_agent::state_directory()?)?;
+            Some(serde_json::json!({"schemaVersion": 1, "cleared": cleared}))
+        }
+        Command::HostBrowser {
+            clear_data: false,
+            keep_profile,
             binary,
             allow_origin,
             url,
@@ -392,6 +437,8 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             no_sandbox,
         } => {
             lazysh_agent::host_browser::run(&lazysh_agent::host_browser::Launch {
+                state: &lazysh_agent::state_directory()?,
+                keep_profile,
                 binary: binary.as_deref(),
                 allow_origins: &allow_origin,
                 url: url.as_deref(),

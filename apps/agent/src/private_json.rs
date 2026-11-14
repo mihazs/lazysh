@@ -7,6 +7,8 @@ use std::{
 };
 
 pub(crate) const MAX_CONFIG: u64 = 4096;
+/// The largest revision a JavaScript client can represent exactly.
+pub(crate) const MAX_REVISION: u64 = 9_007_199_254_740_991;
 
 /// Held while one state file is read, changed and replaced.
 pub(crate) struct Lock(File);
@@ -129,4 +131,29 @@ pub(crate) fn write(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
     Ok(())
+}
+
+/// Check-and-set one revisioned file under its own lock. A busy lock or a stale revision is a `Settings` error.
+pub(crate) fn update_revisioned<T: serde::Serialize>(
+    directory: &Path,
+    file: &str,
+    lock_name: &str,
+    expected_revision: u64,
+    current_revision: impl FnOnce() -> Result<u64>,
+    next: impl FnOnce(u64) -> T,
+) -> Result<T> {
+    if expected_revision >= MAX_REVISION {
+        return Err(Error::InvalidArgument);
+    }
+    let _lock = lock(directory, lock_name)?.ok_or(Error::Settings("SettingsBusy"))?;
+    if current_revision()? != expected_revision {
+        return Err(Error::Settings("SettingsConflict"));
+    }
+    let value = next(expected_revision + 1);
+    write(
+        directory,
+        file,
+        &serde_json::to_vec(&value).map_err(|_| Error::InvalidArgument)?,
+    )?;
+    Ok(value)
 }

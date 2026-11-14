@@ -2,7 +2,8 @@
 //!
 //! Starts a Chrome-family browser with a throwaway profile and a random loopback debug port, reports where it
 //! listens, and stops it and deletes the profile when stdin closes, on SIGINT/SIGTERM or when the browser exits.
-//! Off unless `LAZYSH_DEV_HOST_BROWSER=1`: the product relay is a separate, later slice.
+//! Off unless the host setting `hostBrowserEnabled` is on (see [`settings`]) and `LAZYSH_DEV_HOST_BROWSER=1`:
+//! the product relay is a separate, later slice.
 use crate::{Error, Result};
 use std::{
     io::{self, Read, Write},
@@ -11,6 +12,9 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
+
+pub mod profile;
+pub mod settings;
 
 pub const ENABLE_VARIABLE: &str = "LAZYSH_DEV_HOST_BROWSER";
 const CANDIDATES: [&str; 5] = [
@@ -24,6 +28,10 @@ const CANDIDATES: [&str; 5] = [
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub struct Launch<'a> {
+    /// The companion state directory: where the setting and the profiles live.
+    pub state: &'a Path,
+    /// **Keep profile**: reuse one profile that outlives the session, until **Clear browser data**.
+    pub keep_profile: bool,
     pub binary: Option<&'a Path>,
     pub allow_origins: &'a [String],
     /// First page; `about:blank` when absent.
@@ -83,8 +91,10 @@ fn parse_active_port(text: &str) -> Option<(u16, String)> {
 }
 
 pub fn run(launch: &Launch) -> Result<()> {
+    // Before anything else: the switch is off by default and an off switch must start nothing.
+    settings::require_enabled(launch.state)?;
     if std::env::var(ENABLE_VARIABLE).as_deref() != Ok("1") {
-        return Err(Error::Browser("HostBrowserDisabled"));
+        return Err(Error::Browser("HostBrowserDevFlagOff"));
     }
     if !launch
         .allow_origins
@@ -98,8 +108,22 @@ pub fn run(launch: &Launch) -> Result<()> {
         return Err(Error::Browser("BrowserUrlInvalid"));
     }
     let binary = find_binary(launch.binary)?;
-    // Removed on drop, on every exit path below. The browser keeps cookies and sessions here, so it is private.
-    let profile = private_profile()?;
+    // Listening before the profile exists: a signal or a closed channel at any later point still cleans up.
+    let (stop, stopped) = mpsc::channel::<()>();
+    let closed = stop.clone();
+    std::thread::spawn(move || {
+        let mut sink = [0u8; 64];
+        let mut input = io::stdin();
+        while matches!(input.read(&mut sink), Ok(read) if read > 0) {}
+        let _ = closed.send(());
+    });
+    // Also covers SIGINT, SIGTERM and SIGHUP through ctrlc's termination feature.
+    let _ = ctrlc::set_handler(move || {
+        let _ = stop.send(());
+    });
+    // Removed on drop, on every exit path below, unless the user asked to keep it. The browser keeps cookies and
+    // sessions here, so it is private.
+    let profile = profile::create(launch.state, launch.keep_profile)?;
     let mut command = Command::new(&binary);
     command
         .arg("--remote-debugging-port=0")
@@ -127,6 +151,7 @@ pub fn run(launch: &Launch) -> Result<()> {
         ));
     }
     own_process_group(&mut command);
+    die_with_launcher(&mut command);
     let mut child = command.arg(url).spawn()?;
     let started = Instant::now();
     let endpoint = loop {
@@ -134,6 +159,10 @@ pub fn run(launch: &Launch) -> Result<()> {
             if let Some(endpoint) = parse_active_port(&text) {
                 break endpoint;
             }
+        }
+        if stopped.try_recv().is_ok() {
+            terminate(&mut child);
+            return Ok(());
         }
         if child.try_wait()?.is_some() {
             return Err(Error::Browser("BrowserExited"));
@@ -156,18 +185,6 @@ pub fn run(launch: &Launch) -> Result<()> {
     stdout.flush()?;
     drop(stdout);
 
-    let (stop, stopped) = mpsc::channel::<()>();
-    let closed = stop.clone();
-    std::thread::spawn(move || {
-        let mut sink = [0u8; 64];
-        let mut input = io::stdin();
-        while matches!(input.read(&mut sink), Ok(read) if read > 0) {}
-        let _ = closed.send(());
-    });
-    // Also covers SIGINT, SIGTERM and SIGHUP through ctrlc's termination feature.
-    let _ = ctrlc::set_handler(move || {
-        let _ = stop.send(());
-    });
     while !matches!(
         stopped.recv_timeout(Duration::from_millis(100)),
         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
@@ -175,17 +192,6 @@ pub fn run(launch: &Launch) -> Result<()> {
     {}
     terminate(&mut child);
     Ok(())
-}
-
-fn private_profile() -> Result<tempfile::TempDir> {
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("lazysh-host-browser-");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(std::fs::Permissions::from_mode(0o700));
-    }
-    Ok(builder.tempdir()?)
 }
 
 /// The browser and its helper processes share one group, so one signal reaches all of them.
@@ -196,6 +202,23 @@ fn own_process_group(command: &mut Command) {
 }
 #[cfg(not(unix))]
 fn own_process_group(_: &mut Command) {}
+
+/// A launcher that is killed outright (SIGKILL, the OOM killer) cannot stop its browser, so the kernel does.
+// shortcut: Linux only; elsewhere the browser stays until the host user stops it, and only its profile is
+// removed at the next start. The product relay uses a pipe, which has no such gap.
+#[cfg(target_os = "linux")]
+fn die_with_launcher(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: prctl is async-signal-safe and the closure touches no memory of the parent.
+    unsafe {
+        command.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            Ok(())
+        });
+    }
+}
+#[cfg(not(target_os = "linux"))]
+fn die_with_launcher(_: &mut Command) {}
 
 #[cfg(unix)]
 fn terminate(child: &mut Child) {
