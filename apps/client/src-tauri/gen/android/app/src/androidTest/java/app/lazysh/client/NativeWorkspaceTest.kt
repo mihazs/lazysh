@@ -2867,6 +2867,55 @@ class NativeWorkspaceTest {
             select(1, target) // Stock public focus must move the other real client too.
             select(2, target)
         }
+        // The Sessions panel's Herdr browser sends the typed create, rename, split and zoom actions (`--no-focus`, so the shared
+        // focus the checks above rely on stays put). The host reads the workspace back from Herdr itself; the panel's refreshed
+        // tree is only the synchronization point and the pane id source here.
+        fun panelActions() {
+            val nonce = navigation.getString("workspaceLabel").removePrefix("NAV_WORKSPACE_")
+            require(Regex("[a-f0-9]{32}").matches(nonce)) { "Owned Herdr nonce required" }
+            val created = "ANDROID_CREATED_$nonce"
+            val renamed = "ANDROID_RENAMED_$nonce"
+            val directory = requireNotNull(java.io.File(herdr.getString("transcript")).parent) { "Owned Herdr directory required" }
+            require(directory.startsWith("/")) { "Owned Herdr directory must be absolute" }
+            val section = "section[aria-label='Herdr $server workspaces']"
+            val sectionPath = "//section[@aria-label='Herdr $server workspaces']"
+            fun workspacePath(label: String) = "$sectionPath/details[starts-with(normalize-space(./summary),'$label')]"
+            val idle = "(()=>{const s=document.querySelector(${JSONObject.quote(section)});return !!s && !s.querySelector('[role=status],[role=alert]');})()"
+            fun summaries() = "Array.from(document.querySelectorAll(${JSONObject.quote("$section > details > summary")})).map(x=>x.textContent.trim())"
+            fun paneIds(label: String) = """(()=>{const w=Array.from(document.querySelectorAll(${JSONObject.quote("$section > details")}))
+                .find(x=>(x.querySelector(':scope > summary')?.textContent??'').trim().startsWith(${JSONObject.quote(label)}));
+                return w ? Array.from(w.querySelectorAll('.mux-row strong')).map(x=>x.textContent.trim().split(' · ')[0]) : [];})()"""
+            fun clickPath(path: String) = onWebView().withElement(findElement(Locator.XPATH, path)).perform(webScrollIntoView()).perform(webClick())
+            val labelInput = "$section form label:nth-of-type(1) input"
+            val directoryInput = "$section form label:nth-of-type(2) input"
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "Herdr browser list ready", "Array.from(document.querySelectorAll('.multiplexer-panel button')).filter(x=>x.textContent.trim()==='List herdr sessions' && !x.disabled).length===1")
+            click("List herdr sessions")
+            awaitDocument(scenario, "Herdr browser lists $server", "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Browse Herdr $server' && !x.disabled).length===1")
+            click("Browse Herdr $server")
+            awaitDocument(scenario, "Herdr browser reads its two workspaces", "$idle && ${summaries()}.length===2")
+            // Create: a new workspace in the fixture directory, not focused.
+            click("New Herdr workspace")
+            awaitDocument(scenario, "Herdr create form", "document.querySelectorAll(${JSONObject.quote(directoryInput)}).length===1")
+            typeInto(scenario, labelInput, created); closeSoftKeyboard()
+            replaceNativeText(scenario, directoryInput, directory); closeSoftKeyboard()
+            clickPath("$sectionPath//form//button[normalize-space(.)='Save Herdr workspace']")
+            awaitDocument(scenario, "Herdr panel lists the created workspace", "$idle && ${summaries()}.length===3 && ${summaries()}.some(x=>x.startsWith(${JSONObject.quote(created)}))")
+            // Rename: the form starts from the current label.
+            clickPath("${workspacePath(created)}/div[contains(@class,'tool-bar')]/button[normalize-space(.)='Rename Herdr workspace']")
+            awaitDocument(scenario, "Herdr rename form", "document.querySelector(${JSONObject.quote(labelInput)})?.value===${JSONObject.quote(created)}")
+            replaceNativeText(scenario, labelInput, renamed); closeSoftKeyboard()
+            clickPath("$sectionPath//form//button[normalize-space(.)='Save Herdr workspace']")
+            awaitDocument(scenario, "Herdr panel shows the renamed workspace", "$idle && ${summaries()}.some(x=>x.startsWith(${JSONObject.quote(renamed)})) && !${summaries()}.some(x=>x.startsWith(${JSONObject.quote(created)}))")
+            // Split down the new workspace's only pane, then zoom it.
+            awaitDocument(scenario, "the renamed workspace has one pane", "${paneIds(renamed)}.length===1")
+            val pane = evaluate(scenario, "${paneIds(renamed)}[0]").trim('"')
+            require(Regex("w[0-9]+:p[0-9]+").matches(pane)) { "Herdr panel pane id invalid" }
+            clickPath("${workspacePath(renamed)}//button[normalize-space(.)='Split $pane down']")
+            awaitDocument(scenario, "Herdr split adds a second pane", "$idle && ${paneIds(renamed)}.length===2 && ${paneIds(renamed)}.includes(${JSONObject.quote(pane)})")
+            clickPath("${workspacePath(renamed)}//button[normalize-space(.)='Zoom $pane']")
+            awaitDocument(scenario, "Herdr zoom settled without an error", "$idle && ${paneIds(renamed)}.length===2")
+        }
         var primaryFailure: Throwable? = null
         try {
             for (display in 1..2) {
@@ -2896,7 +2945,8 @@ class NativeWorkspaceTest {
             navigate("Agents", "codex", source, source.getString("label"))
             reopenSource()
             assertEquals("Returning to the old destination cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
-            println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus and unavailable private Chat input; no input action dispatched")
+            panelActions()
+            println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus, unavailable private Chat input, and the panel's create, rename, split and zoom; no input action dispatched")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
