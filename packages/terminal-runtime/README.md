@@ -28,6 +28,8 @@ PNGs as images (the test writes `<name>.actual.png` into the target directory wh
 
 `prototypes/wgpu` is a throwaway wgpu implementation of `TerminalRenderer` for the renderer shootout ([#1323](https://github.com/mihazs/lazysh/issues/1323)); it is a separate nested workspace with its own lock file so wgpu never reaches this crate, the root workspace or the integrity-checked Ghostty sources. It needs a GPU adapter to run its tests; CI only checks that it compiles and lints (the `herdr-native` job). See the "wgpu prototype" section of [terminal benchmarks](../../docs/architecture/terminal-benchmarks.md).
 
+`prototypes/glyphs` is a throwaway glyph rasterization microbenchmark (fontdue) for the same shootout, also a nested workspace with its own lock file; CI does not build it and its tests need the Liberation Mono font. See the "What the same glyphs cost to rasterize natively" section of [terminal benchmarks](../../docs/architecture/terminal-benchmarks.md).
+
 ## One Ghostty dependency
 
 `ghostty-vt` is a path dependency on `../herdr-upstream/crates/ghostty-vt`. Nothing is copied,

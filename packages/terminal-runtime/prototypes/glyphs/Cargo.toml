@@ -1,0 +1,17 @@
+[package]
+name = "lazysh-terminal-glyph-raster"
+version = "0.0.0"
+edition = "2021"
+description = "Throwaway glyph rasterization microbenchmark for the renderer shootout (#1323); not shipped"
+license = "GPL-3.0-or-later"
+publish = false
+rust-version = "1.96"
+
+# Nested workspace like prototypes/wgpu: the font crate must not reach the runtime crate or its lock file.
+[workspace]
+
+[dependencies]
+fontdue = { version = "0.9", default-features = false, features = ["std"] }
+
+[profile.release]
+debug = false

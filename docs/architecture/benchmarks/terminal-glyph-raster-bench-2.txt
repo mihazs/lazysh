@@ -1,0 +1,15 @@
+load average: 14.74, 15.29, 16.86
+fonts: /usr/share/fonts/liberation/LiberationMono-Regular.ttf, /usr/share/fonts/liberation/LiberationMono-Bold.ttf
+printable ASCII: 94 glyphs; times are per glyph, median of 15 runs, one thread
+
+devicePixelRatio 3, 14 px font (42 px)
+  rasterize one glyph (extent from the rasterizer):     1.5 us
+  rasterize and scan the mask for its extent:           2.1 us
+  every printable ASCII glyph, regular and bold:       0.26 ms (colour applied by the shader: all the work a first screen of any colours needs)
+  33838 glyph-and-colour pairs baked one by one:     50.7 ms (the cache design of the xterm.js addon, native rasterizer, no readback)
+
+devicePixelRatio 1, 14 px font
+  rasterize one glyph (extent from the rasterizer):     0.9 us
+  rasterize and scan the mask for its extent:           1.3 us
+  every printable ASCII glyph, regular and bold:       0.19 ms (colour applied by the shader: all the work a first screen of any colours needs)
+  33838 glyph-and-colour pairs baked one by one:     25.0 ms (the cache design of the xterm.js addon, native rasterizer, no readback)
