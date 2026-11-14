@@ -1288,6 +1288,8 @@ jobs:
         # Exact Herdr pane focus runs the current-source companion.
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
+          # A renamed case must not turn the local-session cases into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ | grep -c ': test$' | grep -Fx 2
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
       - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}

@@ -3,7 +3,8 @@
 Status: specification. Tracked by the epic [#1129](https://github.com/mihazs/lazysh/issues/1129) and its slice issues on the
 [GitHub Project](https://github.com/users/mihazs/projects/2). Nothing here is released
 until the slice that implements it ships. Today's behaviour is described in
-[Local desktop terminals](local-terminal.md).
+[Local desktop terminals](local-terminal.md), including the native multiplexer commands
+that already accept local session ids ahead of their interface.
 
 lazysh on the desktop (Linux and Windows; macOS follows Linux unless noted) must be
 the single place to run and supervise coding agents, on remote hosts **and** on the

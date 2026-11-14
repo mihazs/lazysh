@@ -3569,30 +3569,47 @@ pub async fn list_multiplexer_sessions(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     tmux_server: Option<String>,
 ) -> AccessResult<Vec<MuxSession>> {
-    lease.run(async {
-
-    let session = state.session(&session_id).await?;
-    let server = crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
-    let text=exec(&session, &lease,format!("{} list-sessions -F '#{{session_id}}\t#{{session_name}}\t#{{session_windows}}\t#{{session_attached}}'", server.prefix())).await?;
-    Ok(text
-        .lines()
-        .filter_map(|line| {
-            let f = line.split('\t').collect::<Vec<_>>();
-            if f.len() != 4 {
-                return None;
-            }
-            Some(MuxSession {
-                id: f[0].into(),
-                name: f[1].into(),
-                windows: f[2].parse().ok()?,
-                attached: f[3] != "0",
-            })
+    lease
+        .run(async {
+            let (host, server) = crate::multiplexer::tmux_target(
+                &state,
+                &local,
+                &session_id,
+                tmux_server.as_deref(),
+                &lease,
+            )
+            .await?;
+            let text = host
+                .run(
+                    &lease,
+                    &server.cmd(&[
+                        "list-sessions",
+                        "-F",
+                        "#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}",
+                    ]),
+                )
+                .await?;
+            Ok(text
+                .lines()
+                .filter_map(|line| {
+                    let f = line.split('\t').collect::<Vec<_>>();
+                    if f.len() != 4 {
+                        return None;
+                    }
+                    Some(MuxSession {
+                        id: f[0].into(),
+                        name: f[1].into(),
+                        windows: f[2].parse().ok()?,
+                        attached: f[3] != "0",
+                    })
+                })
+                .collect())
         })
-        .collect())
-    }).await
+        .await
 }
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
