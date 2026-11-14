@@ -34,6 +34,6 @@ choosing an arbitrary theme. Missing or undecodable QR yields no result.
 
 ## Evidence and platform acceptance
 
-See [theme QR acceptance](../theme-qr-acceptance.md) for evidence and pending platform checks.
+See [theme QR acceptance](../theme-qr-acceptance.md) for evidence and platform acceptance status.
 
 For setup and usage, see [theme-qr](../theme-qr.md). Return to the [documentation map](../README.md).

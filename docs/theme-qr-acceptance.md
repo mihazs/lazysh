@@ -58,26 +58,57 @@ and manifest declarations do not establish successful permission/capture on
 any device. CSP allows only local/blob media and keeps existing remote-connect
 restrictions. Cross-origin preview frames have no camera permission delegation.
 
-Actual Android WebView serialization and allow/deny, iOS/macOS signing and
-privacy prompts, desktop WebView camera support, hardware focus/dense-code
-recognition, background/resume and physical camera-indicator shutdown need native
-and physical acceptance. Browser synthetic media and Linux decoder tests are
-distinct evidence and do not close that platform gap. Track #208 under #16;
-the wider parity issue remains open until real-camera acceptance is recorded.
+## Acceptance status
 
-Pending native/physical acceptance includes:
+Executed, with the evidence each check produces:
 
-- Fresh Android install: no camera prompt on launch/render; explicitly Scan,
-  deny permission, and verify a usable local-image fallback and no native decode.
-- Android: grant only after Scan, decode an owned theme QR into preview without
-  Apply, then cancel/background while capture or permission is pending and verify
-  camera-indicator shutdown and stale-result rejection. Deny the existing explicit
-  Attachment Photo action independently and verify ordinary file picking still
-  works; its new CAMERA-declaration branch must not be mistaken for startup use.
-- iOS/macOS: verify built purpose strings/entitlement and localized allow/deny,
-  rear/front availability, late permission response, indicator shutdown on cancel,
-  background and view closure, plus explicit Apply only after review.
-- Windows/Linux desktop: verify actual WebView camera permission/capture and
-  absent-device behavior, then run the same owned QR and cancellation checks.
+- **Android emulator camera, permission and preview.**
+  `NativeWorkspaceTest.ownedQrCameraRequiresPermissionAndExplicitPreview` runs in
+  the `native-android-auxiliary` job (`qr-camera` suite) on an API 36 x86_64
+  emulator whose rear camera is the official `-camera-back imagefile` feed of the
+  owned [fixture](../apps/client/src-tauri/fixtures/theme-qr-camera.md), front
+  camera none. Camera permission starts ungranted. The test explicitly taps Scan,
+  denies the real system permission sheet and checks that the image-file control
+  stays usable, then allows the camera and requires one fresh explicit Scan after
+  the permission lifecycle cancels the first attempt. It then asserts the
+  natively decoded preview, an unchanged manual draft and unchanged preferences
+  without Apply, explicit discard and release of the rear camera. The scoped JUnit
+  artifact must show this named method executed and not skipped; a green job
+  alone is not evidence. At the time of writing, main run 43493222104 (commit
+  `a21f4b21`, 2026-11-13) reports 1 executed, 0 failed, 0 skipped. See
+  [Android testing](android-testing.md) for the procedure.
+- **Browser lifecycle.** `apps/client/e2e/theme-qr.spec.ts` covers scan, mandatory
+  Apply, cancel, deadline and track cleanup with synthetic media and mocked native
+  decoding. It is not OS permission or Tauri marshalling evidence.
+- **Native decoding.** The Rust tests in `src-tauri/src/theme_qr/tests.rs` decode
+  the real PNG and JPEG fixtures and cover the bounds, worker retention and
+  revocation.
+- **Apple privacy resources.** The iOS simulator job runs
+  `PermissionLocalizationTests` against the compiled app. It asserts the exact
+  expected `InfoPlist.strings` key set, including `NSCameraUsageDescription`, in
+  English, Brazilian Portuguese and Spanish with no fallback masking a missing
+  file. It does not start a camera or show a prompt.
+
+Not executed, so unverified:
+
+- **Physical cameras.** Hardware focus, dense-code recognition and
+  camera-indicator shutdown on any device. The user waived these on 2026-10-26
+  because no physical devices are available. The waiver is not a pass.
+- **iOS and macOS runtime.** The camera permission prompt, capture, front and
+  rear availability, background and view-closure shutdown, signing, and the effect
+  of the macOS camera entitlement (declared in `Entitlements.plist`, not
+  exercised).
+- **Windows and Linux desktop.** WebView camera permission, capture and the
+  absent-device case. The desktop GUI QR image-scan row is tracked in
+  [#995](https://github.com/mihazs/lazysh/issues/995).
+- **Android emulator gaps.** The existing explicit Attachment Photo action after
+  the CAMERA declaration, the ordinary file chooser (DocumentsUI) and cancelling an
+  already granted active capture are tracked in
+  [#1521](https://github.com/mihazs/lazysh/issues/1521). Apply to preferences is
+  covered only by the browser tests; the emulator case stops at preview.
+
+Browser synthetic media, Linux decoder tests and the emulator image-file feed are
+distinct evidence. None of them establishes physical-camera behavior or desktop
+and Apple runtime parity.
 
 See [theme QR import](theme-qr.md) for usage and [QR processing](reference/theme-qr.md) for bounds.
