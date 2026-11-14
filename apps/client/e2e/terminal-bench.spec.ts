@@ -199,11 +199,11 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
 
 // A shared host drifts more between two full runs than the adapter's per-chunk Promise can add, so this loads the page once per
 // stream and alternates the two write paths (direct, adapter, adapter, direct, direct, ...): neighbouring streams share the load.
-const pairedRounds = full ? 12 : 1;
+const pairedRounds = Number(process.env.LAZYSH_BENCH_PAIRED_ROUNDS) || (full ? 12 : 1), pairedKinds = process.env.LAZYSH_BENCH_PAIRED_KINDS?.split(',');
 test('terminal write paths, paired streams', async ({ page, browser, browserName }, info) => {
   test.skip(browserName !== 'chromium', 'Matches the baseline: Chromium only.');
   test.skip(full && !process.env.LAZYSH_BENCH_PAIRED, 'The full paired comparison is opt-in (LAZYSH_BENCH_PAIRED=1): it adds minutes to bench:terminal.');
-  const atStart = os.loadavg(), kinds = [['plain', scale.plain], ['ansi', scale.ansi], ['redraw', scale.frames]] as const;
+  const atStart = os.loadavg(), kinds = ([['plain', scale.plain], ['ansi', scale.ansi], ['redraw', scale.frames]] as const).filter(([kind]) => !pairedKinds || pairedKinds.includes(kind));
   const streams: Record<string, Record<string, { MiBs: number; ackP99Ms: number }[]>> = {};
   for (const [kind, size] of kinds) for (let i = 0; i < pairedRounds * 2; i++) {
     const writePath = (i + (i >> 1)) % 2 === 0 ? 'direct' : 'adapter';
