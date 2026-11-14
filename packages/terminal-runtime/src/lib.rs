@@ -39,5 +39,6 @@ pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
 // Re-exported so consumers never depend on the binding crate (or a second VT engine) directly.
 pub use ghostty_vt::{
-    ffi, ActiveScreen, CellStyle, CellWide, CursorVisualStyle, RenderCursor, RgbColor,
+    default_palette, ffi, ActiveScreen, CellColor, CellStyle, CellWide, CursorVisualStyle,
+    RenderCursor, RgbColor,
 };

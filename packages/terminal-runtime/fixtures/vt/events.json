@@ -1,0 +1,143 @@
+[
+  {
+    "id": "osc52-clipboard-set",
+    "about": "OSC 52 with BEL and ST terminators",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]52;c;SGVsbG8=\u001b\\"
+      },
+      {
+        "write": "\u001b]52;p;V29ybGQ=\u0007"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "events": {
+        "osc52": [
+          "c;SGVsbG8=",
+          "p;V29ybGQ="
+        ]
+      }
+    },
+    "core": {
+      "divergence": [
+        "osc52-payload-decoded",
+        "osc52-selection-filter"
+      ],
+      "expect": {
+        "events": {
+          "bell": 0,
+          "osc52": [
+            "Hello"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "osc52-clipboard-query",
+    "about": "OSC 52 with ? asks for the clipboard",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]52;c;?\u001b\\"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "events": {
+        "osc52": [
+          "c;?"
+        ]
+      }
+    },
+    "core": {
+      "divergence": [
+        "osc52-query-not-surfaced"
+      ],
+      "expect": {
+        "events": {
+          "bell": 0,
+          "osc52": []
+        }
+      }
+    }
+  },
+  {
+    "id": "bell",
+    "about": "BEL rings, inside an OSC it only terminates",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "a\u0007b\u0007"
+      },
+      {
+        "write": "\u001b]0;title\u0007c"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abc",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 0
+      },
+      "events": {
+        "bell": 2
+      }
+    }
+  },
+  {
+    "id": "osc-title-and-cwd-do-not-draw",
+    "about": "OSC 0, 2 and 7 are not text",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]0;title\u0007\u001b]2;t2\u001b\\\u001b]7;file://host/tmp\u001b\\vis"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "vis",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 0
+      }
+    }
+  }
+]

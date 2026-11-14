@@ -1,0 +1,1052 @@
+[
+  {
+    "id": "capture-vim-edit",
+    "about": "Real TERM=xterm-256color stream, vim 9 started on a file, insert text, :set number, :q!. Provenance: captures/README.md.",
+    "cols": 60,
+    "rows": 12,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/vim-edit.bin"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b[O\u001b[2;2R\u001b[3;1R\u001b[>0;276;0c\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": "\u001b[2;2R\u001b[3;1R\u001b[>1;0;0c\u001b[4;12;60t\u001b[6;1;1t"
+      }
+    }
+  },
+  {
+    "id": "capture-less-page",
+    "about": "Real TERM=xterm-256color stream, less -R paging a UTF-8 file with CJK and a combining mark. Provenance: captures/README.md.",
+    "cols": 60,
+    "rows": 6,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/less-page.bin"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "synchronized-output-mode-known"
+      ],
+      "expect": {}
+    }
+  },
+  {
+    "id": "capture-tmux-splits",
+    "about": "Real TERM=xterm-256color stream, tmux with a vertical then a horizontal split, a coloured line, status line. Provenance: captures/README.md.",
+    "cols": 60,
+    "rows": 14,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/tmux-splits.bin"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "$ printf 'left pane\\n'        │$ printf '\\033[31mred\\033[0m",
+        "left pane                     │right\\n'",
+        "$                             │red right",
+        "                              │$",
+        "                              │",
+        "                              │",
+        "                              ├─────────────────────────────",
+        "                              │$ printf 'bottom\\n'",
+        "                              │bottom",
+        "                              │$",
+        "                              │",
+        "                              │",
+        "                              │",
+        "[demo] 0:main*"
+      ],
+      "cursor": {
+        "x": 33,
+        "y": 9
+      },
+      "buffer": "alternate",
+      "modes": {
+        "bracketedPaste": true,
+        "applicationCursorKeys": true,
+        "mouseTracking": true
+      },
+      "data": "\u001b[?1;2c\u001b[>0;276;0c\u001b[?2026;0$y\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "synchronized-output-mode-known"
+      ],
+      "expect": {
+        "data": "\u001b[?62;22c\u001b[>1;0;0c\u001bP>|libghostty\u001b\\\u001b[?2026;2$y\u001b[8;14;60t\u001b[4;14;60t"
+      }
+    }
+  },
+  {
+    "id": "capture-claude-welcome",
+    "about": "Claude Code 2.1.322 first run on an empty HOME: the theme picker with a syntax-highlighted diff preview. Provenance: captures/README.md.",
+    "cols": 100,
+    "rows": 30,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/claude.bin"
+      }
+    ],
+    "probes": [
+      [
+        3,
+        24
+      ],
+      [
+        3,
+        25
+      ],
+      [
+        40,
+        24
+      ],
+      [
+        40,
+        25
+      ],
+      [
+        2,
+        15
+      ],
+      [
+        4,
+        15
+      ],
+      [
+        4,
+        14
+      ],
+      [
+        7,
+        4
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "                                             ░▓▓███▓▓░",
+        " *                                 ░░░░",
+        "                                 ░░░░░░░░",
+        "                               ░░░░░░░░░░░░░░░░",
+        "       █████████                                        *",
+        "      ██▄█████▄██                        *",
+        "       █████████      *",
+        ".......█ █   █ █..........................................",
+        "",
+        " Let's get started.",
+        "",
+        " Choose the text style that looks best with your terminal",
+        " To change this later, run /theme",
+        "",
+        "     Auto (match terminal)",
+        " ❯ ✔ Dark mode",
+        "     Light mode",
+        "     Dark mode (colorblind-friendly)",
+        "     Light mode (colorblind-friendly)",
+        "     Dark mode (ANSI colors only)",
+        "     Light mode (ANSI colors only)",
+        "",
+        " ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+        "  1  function greet() {",
+        "  2 -  console.log(\"Hello, World!\");",
+        "  2 +  console.log(\"Hello, Claude!\");",
+        "  3  }",
+        " ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+        "  Syntax theme: Monokai Extended (ctrl+t to disable)",
+        ""
+      ],
+      "cursor": {
+        "x": 1,
+        "y": 15
+      },
+      "modes": {
+        "bracketedPaste": true,
+        "sendFocus": true
+      },
+      "scrollbackRows": 8,
+      "cells": [
+        {
+          "x": 3,
+          "y": 24,
+          "text": " ",
+          "width": 1,
+          "fg": "p:167",
+          "bg": "p:52",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 25,
+          "text": " ",
+          "width": 1,
+          "fg": "p:77",
+          "bg": "p:22",
+          "flags": []
+        },
+        {
+          "x": 40,
+          "y": 24,
+          "text": " ",
+          "width": 1,
+          "fg": "p:231",
+          "bg": "p:52",
+          "flags": []
+        },
+        {
+          "x": 40,
+          "y": 25,
+          "text": " ",
+          "width": 1,
+          "fg": "p:231",
+          "bg": "p:22",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 15,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 4,
+          "y": 15,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 4,
+          "y": 14,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 7,
+          "y": 4,
+          "text": "█",
+          "width": 1,
+          "fg": "p:174",
+          "bg": "default",
+          "flags": []
+        }
+      ],
+      "data": "\u001b[O\u001b[?1;2c"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "kitty-keyboard-protocol-honoured",
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": "\u001bP>|libghostty\u001b\\\u001b[?0u\u001b[?62;22c"
+      }
+    }
+  },
+  {
+    "id": "capture-claude-onboarding",
+    "about": "Claude Code 2.1.322 first run: Down, Down and Enter on the theme picker, ending on the login method screen. Provenance: captures/README.md.",
+    "cols": 100,
+    "rows": 30,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/claude-onboarding.bin"
+      }
+    ],
+    "probes": [
+      [
+        2,
+        22
+      ],
+      [
+        5,
+        22
+      ],
+      [
+        5,
+        23
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        9,
+        5
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "Welcome to Claude Code v2.1.322",
+        "..........................................................",
+        "",
+        "     *                                       █████▓▓░",
+        "                                 *         ███▓░     ░░",
+        "            ░░░░░░                        ███▓░",
+        "    ░░░   ░░░░░░░░░░                      ███▓░",
+        "   ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓",
+        "                                             ░▓▓███▓▓░",
+        " *                                 ░░░░",
+        "                                 ░░░░░░░░",
+        "                               ░░░░░░░░░░░░░░░░",
+        "       █████████                                        *",
+        "      ██▄█████▄██                        *",
+        "       █████████      *",
+        ".......█ █   █ █..........................................",
+        "",
+        " Claude Code can be used with your Claude subscription or billed based on API usage through your",
+        " Console account.",
+        "",
+        " Select login method:",
+        "",
+        " ❯ 1. Claude account with subscription · Individual, Team, or Enterprise",
+        "   2. Anthropic Console account · API usage billing",
+        "   3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 1,
+        "y": 22
+      },
+      "modes": {
+        "bracketedPaste": true,
+        "sendFocus": true
+      },
+      "scrollbackRows": 8,
+      "cells": [
+        {
+          "x": 2,
+          "y": 22,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 5,
+          "y": 22,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 5,
+          "y": 23,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "text": "W",
+          "width": 1,
+          "fg": "p:215",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 9,
+          "y": 5,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ],
+      "data": "\u001b[O\u001b[?1;2c"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "kitty-keyboard-protocol-honoured",
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": "\u001bP>|libghostty\u001b\\\u001b[?0u\u001b[?62;22c"
+      }
+    }
+  },
+  {
+    "id": "capture-codex-login",
+    "about": "Codex 0.167.0 first run on an empty CODEX_HOME: the sign-in menu with arrow-key selection; it enables bracketed paste, focus events and the Kitty keyboard flags and asks for colours and the cursor position. Provenance: captures/README.md.",
+    "cols": 100,
+    "rows": 30,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/codex-login.bin"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        4
+      ],
+      [
+        2,
+        4
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        3,
+        13
+      ],
+      [
+        2,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "  Welcome to Codex, OpenAI's command-line coding agent",
+        "",
+        "  Choose how you want to use Codex.",
+        "",
+        "> 1. Sign in with ChatGPT",
+        "     Usage included with Plus, Pro, Business, and Enterprise plans",
+        "",
+        "  2. Sign in with Device Code",
+        "     Sign in from another device with a one-time code",
+        "",
+        "  3. Sign in another way",
+        "     Use an API key or another provider",
+        "",
+        "  Press enter to continue",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 53,
+        "y": 8
+      },
+      "buffer": "alternate",
+      "modes": {
+        "bracketedPaste": true,
+        "sendFocus": true
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 4,
+          "text": ">",
+          "width": 1,
+          "fg": "p:6",
+          "bg": "default",
+          "flags": [
+            "faint"
+          ]
+        },
+        {
+          "x": 2,
+          "y": 4,
+          "text": "1",
+          "width": 1,
+          "fg": "p:6",
+          "bg": "default",
+          "flags": [
+            "faint"
+          ]
+        },
+        {
+          "x": 5,
+          "y": 5,
+          "text": "U",
+          "width": 1,
+          "fg": "p:6",
+          "bg": "default",
+          "flags": [
+            "faint"
+          ]
+        },
+        {
+          "x": 3,
+          "y": 13,
+          "text": "r",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "faint"
+          ]
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "W",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ],
+      "data": "\u001b[O\u001b[?1;2c\u001b[1;1R\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "kitty-keyboard-protocol-honoured",
+        "focus-report-on-enable",
+        "color-queries-theme"
+      ],
+      "expect": {
+        "data": "\u001b[?7u\u001b[?62;22c\u001b[1;1R"
+      }
+    }
+  },
+  {
+    "id": "capture-opencode-home",
+    "about": "OpenCode 2.2.7 home screen on an empty HOME, text typed into the prompt and cleared with Ctrl+C: alternate screen, synchronized updates and true colour. Provenance: captures/README.md.",
+    "cols": 100,
+    "rows": 30,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/opencode-home.bin"
+      }
+    ],
+    "probes": [
+      [
+        13,
+        16
+      ],
+      [
+        16,
+        16
+      ],
+      [
+        32,
+        10
+      ],
+      [
+        13,
+        19
+      ],
+      [
+        16,
+        18
+      ],
+      [
+        91,
+        28
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "                                                                ▄",
+        "                               █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█",
+        "                               █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀",
+        "                               ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀",
+        "",
+        "",
+        "             ┃",
+        "             ┃  Ask anything… \"What is the tech stack of this project?\"",
+        "             ┃",
+        "             ┃  Build · Big Pickle OpenCode",
+        "             ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "             ~/work                                    shift+tab agents  ctrl+p commands",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "                                                                                             2.2.7",
+        ""
+      ],
+      "cursor": {
+        "x": 16,
+        "y": 16
+      },
+      "buffer": "alternate",
+      "modes": {
+        "bracketedPaste": true,
+        "mouseTracking": true
+      },
+      "cells": [
+        {
+          "x": 13,
+          "y": 16,
+          "text": "┃",
+          "width": 1,
+          "fg": "p:75",
+          "bg": "p:232",
+          "flags": []
+        },
+        {
+          "x": 16,
+          "y": 16,
+          "text": "A",
+          "width": 1,
+          "fg": "p:8",
+          "bg": "p:234",
+          "flags": []
+        },
+        {
+          "x": 32,
+          "y": 10,
+          "text": "▀",
+          "width": 1,
+          "fg": "p:8",
+          "bg": "p:232",
+          "flags": []
+        },
+        {
+          "x": 13,
+          "y": 19,
+          "text": "╹",
+          "width": 1,
+          "fg": "p:75",
+          "bg": "p:232",
+          "flags": []
+        },
+        {
+          "x": 16,
+          "y": 18,
+          "text": "B",
+          "width": 1,
+          "fg": "p:75",
+          "bg": "p:234",
+          "flags": []
+        },
+        {
+          "x": 91,
+          "y": 28,
+          "text": " ",
+          "width": 1,
+          "fg": "p:15",
+          "bg": "p:232",
+          "flags": []
+        }
+      ],
+      "data": "\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\\u001b[1;1R\u001b[?1016;2$y\u001b[?2027;0$y\u001b[?2031;0$y\u001b[?1004;2$y\u001b[?2004;2$y\u001b[?2026;0$y\u001b[?1;2c\u001b[1;1R\u001b[1;1R\u001b]4;0;rgb:2e2e/3434/3636\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "kitty-keyboard-protocol-honoured",
+        "private-mode-queries-known",
+        "synchronized-output-mode-known",
+        "color-queries-theme"
+      ],
+      "expect": {
+        "data": "\u001bP>|libghostty\u001b\\\u001b[1;1R\u001bP1+r4D73=5C455D35323B25703125733B25703225735C303037\u001b\\\u001b[?1016;2$y\u001b[?2027;1$y\u001b[?2031;1$y\u001b[?1004;2$y\u001b[?2004;2$y\u001b[?2026;2$y\u001b[?0u\u001b[?62;22c\u001b[1;1R\u001b[1;1R\u001b[4;30;100t\u001b]4;0;rgb:1d1d/1f1f/2121\u0007"
+      }
+    }
+  },
+  {
+    "id": "capture-zellij-panes",
+    "about": "Zellij 0.46.0 on a private socket: a shell command with CJK text, a new pane (Ctrl+p n) and a command in it. Provenance: captures/README.md.",
+    "cols": 100,
+    "rows": 16,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/zellij-panes.bin"
+      }
+    ],
+    "probes": [
+      [
+        1,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        2,
+        15
+      ],
+      [
+        20,
+        15
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        3,
+        2
+      ]
+    ],
+    "expect": {
+      "lines": [
+        " Zellij (lazysh-capture)  Tab #1  +                                                 [ 1 running v ]",
+        "                      Pane #1                    │                      Pane #2",
+        "$ echo hello 日本語 é                            │$  echo second pane",
+        "hello 日本語 é                                   │second pane",
+        "$                                                │$",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        "                                                 │",
+        " Ctrl +  <g> LOCK  <p> PANE  <t> TAB  <n> RESIZE  <h> MOVE  <s> SEARCH  <o> SESSION  <q> QUIT    ..."
+      ],
+      "cursor": {
+        "x": 52,
+        "y": 4
+      },
+      "buffer": "alternate",
+      "modes": {
+        "bracketedPaste": true,
+        "mouseTracking": true,
+        "sendFocus": true
+      },
+      "cells": [
+        {
+          "x": 1,
+          "y": 0,
+          "text": "Z",
+          "width": 1,
+          "fg": "rgb:d7d7d7",
+          "bg": "rgb:0b0b0b",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "l",
+          "width": 1,
+          "fg": "rgb:d7d7d7",
+          "bg": "rgb:0b0b0b",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 2,
+          "y": 15,
+          "text": "t",
+          "width": 1,
+          "fg": "rgb:d7d7d7",
+          "bg": "rgb:0b0b0b",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 20,
+          "y": 15,
+          "text": "p",
+          "width": 1,
+          "fg": "rgb:4f1a22",
+          "bg": "rgb:989898",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 0,
+          "y": 1,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 2,
+          "text": "c",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ],
+      "data": "\u001b[O\u001b]11;rgb:0000/0000/0000\u001b\\\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b[?2026;0$y\u001b[?2027;0$y\u001b[?1;2c"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "extra-replies",
+        "private-mode-queries-known",
+        "synchronized-output-mode-known",
+        "color-queries-theme",
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": "\u001b[4;16;100t\u001b[6;1;1t\u001b[?2026;2$y\u001b[?2027;1$y\u001b[?62;22c"
+      }
+    }
+  },
+  {
+    "id": "capture-herdr-session",
+    "about": "Herdr 0.9.5 on a private HOME and socket: the welcome card, the integrations settings, a shell command with CJK text and the keybinds overlay. Provenance: captures/README.md.",
+    "cols": 100,
+    "rows": 30,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeFile": "captures/herdr-session.bin"
+      }
+    ],
+    "probes": [
+      [
+        1,
+        0
+      ],
+      [
+        26,
+        1
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        26,
+        0
+      ],
+      [
+        1,
+        14
+      ],
+      [
+        1,
+        16
+      ],
+      [
+        2,
+        1
+      ]
+    ],
+    "expect": {
+      "lines": [
+        " spaces                  │   1      +",
+        "                         │$ echo hello 日本語 é",
+        " · work                  │hello 日本語 é",
+        "                         │$",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        " new                 menu│",
+        "─────────────────────────│",
+        " agents           grouped│",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                         │",
+        "                        «│"
+      ],
+      "cursor": {
+        "x": 28,
+        "y": 3
+      },
+      "buffer": "alternate",
+      "modes": {
+        "bracketedPaste": true,
+        "mouseTracking": true,
+        "sendFocus": true
+      },
+      "cells": [
+        {
+          "x": 1,
+          "y": 0,
+          "text": "s",
+          "width": 1,
+          "fg": "rgb:6c7086",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 26,
+          "y": 1,
+          "text": "$",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 2,
+          "text": " ",
+          "width": 1,
+          "fg": "rgb:6c7086",
+          "bg": "rgb:1e1e2e",
+          "flags": []
+        },
+        {
+          "x": 26,
+          "y": 0,
+          "text": " ",
+          "width": 1,
+          "fg": "rgb:181825",
+          "bg": "rgb:89b4fa",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 14,
+          "text": "n",
+          "width": 1,
+          "fg": "rgb:6c7086",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 16,
+          "text": "a",
+          "width": 1,
+          "fg": "rgb:6c7086",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 2,
+          "y": 1,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ],
+      "data": "\u001b[?1016;2$y\u001b[?1;2c\u001b[O\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\\u001b]4;0;rgb:2e2e/3434/3636\u001b\\\u001b]4;1;rgb:cccc/0000/0000\u001b\\\u001b]4;2;rgb:4e4e/9a9a/0606\u001b\\\u001b]4;3;rgb:c4c4/a0a0/0000\u001b\\\u001b]4;4;rgb:3434/6565/a4a4\u001b\\\u001b]4;5;rgb:7575/5050/7b7b\u001b\\\u001b]4;6;rgb:0606/9898/9a9a\u001b\\\u001b]4;7;rgb:d3d3/d7d7/cfcf\u001b\\\u001b]4;8;rgb:5555/5757/5353\u001b\\\u001b]4;9;rgb:efef/2929/2929\u001b\\\u001b]4;10;rgb:8a8a/e2e2/3434\u001b\\\u001b]4;11;rgb:fcfc/e9e9/4f4f\u001b\\\u001b]4;12;rgb:7272/9f9f/cfcf\u001b\\\u001b]4;13;rgb:adad/7f7f/a8a8\u001b\\\u001b]4;14;rgb:3434/e2e2/e2e2\u001b\\\u001b]4;15;rgb:eeee/eeee/ecec\u001b\\\u001b]4;16;rgb:0000/0000/0000\u001b\\\u001b]4;17;rgb:0000/0000/5f5f\u001b\\\u001b]4;18;rgb:0000/0000/8787\u001b\\\u001b]4;19;rgb:0000/0000/afaf\u001b\\\u001b]4;20;rgb:0000/0000/d7d7\u001b\\\u001b]4;21;rgb:0000/0000/ffff\u001b\\\u001b]4;22;rgb:0000/5f5f/0000\u001b\\\u001b]4;23;rgb:0000/5f5f/5f5f\u001b\\\u001b]4;24;rgb:0000/5f5f/8787\u001b\\\u001b]4;25;rgb:0000/5f5f/afaf\u001b\\\u001b]4;26;rgb:0000/5f5f/d7d7\u001b\\\u001b]4;27;rgb:0000/5f5f/ffff\u001b\\\u001b]4;28;rgb:0000/8787/0000\u001b\\\u001b]4;29;rgb:0000/8787/5f5f\u001b\\\u001b]4;30;rgb:0000/8787/8787\u001b\\\u001b]4;31;rgb:0000/8787/afaf\u001b\\\u001b]4;32;rgb:0000/8787/d7d7\u001b\\\u001b]4;33;rgb:0000/8787/ffff\u001b\\\u001b]4;34;rgb:0000/afaf/0000\u001b\\\u001b]4;35;rgb:0000/afaf/5f5f\u001b\\\u001b]4;36;rgb:0000/afaf/8787\u001b\\\u001b]4;37;rgb:0000/afaf/afaf\u001b\\\u001b]4;38;rgb:0000/afaf/d7d7\u001b\\\u001b]4;39;rgb:0000/afaf/ffff\u001b\\\u001b]4;40;rgb:0000/d7d7/0000\u001b\\\u001b]4;41;rgb:0000/d7d7/5f5f\u001b\\\u001b]4;42;rgb:0000/d7d7/8787\u001b\\\u001b]4;43;rgb:0000/d7d7/afaf\u001b\\\u001b]4;44;rgb:0000/d7d7/d7d7\u001b\\\u001b]4;45;rgb:0000/d7d7/ffff\u001b\\\u001b]4;46;rgb:0000/ffff/0000\u001b\\\u001b]4;47;rgb:0000/ffff/5f5f\u001b\\\u001b]4;48;rgb:0000/ffff/8787\u001b\\\u001b]4;49;rgb:0000/ffff/afaf\u001b\\\u001b]4;50;rgb:0000/ffff/d7d7\u001b\\\u001b]4;51;rgb:0000/ffff/ffff\u001b\\\u001b]4;52;rgb:5f5f/0000/0000\u001b\\\u001b]4;53;rgb:5f5f/0000/5f5f\u001b\\\u001b]4;54;rgb:5f5f/0000/8787\u001b\\\u001b]4;55;rgb:5f5f/0000/afaf\u001b\\\u001b]4;56;rgb:5f5f/0000/d7d7\u001b\\\u001b]4;57;rgb:5f5f/0000/ffff\u001b\\\u001b]4;58;rgb:5f5f/5f5f/0000\u001b\\\u001b]4;59;rgb:5f5f/5f5f/5f5f\u001b\\\u001b]4;60;rgb:5f5f/5f5f/8787\u001b\\\u001b]4;61;rgb:5f5f/5f5f/afaf\u001b\\\u001b]4;62;rgb:5f5f/5f5f/d7d7\u001b\\\u001b]4;63;rgb:5f5f/5f5f/ffff\u001b\\\u001b]4;64;rgb:5f5f/8787/0000\u001b\\\u001b]4;65;rgb:5f5f/8787/5f5f\u001b\\\u001b]4;66;rgb:5f5f/8787/8787\u001b\\\u001b]4;67;rgb:5f5f/8787/afaf\u001b\\\u001b]4;68;rgb:5f5f/8787/d7d7\u001b\\\u001b]4;69;rgb:5f5f/8787/ffff\u001b\\\u001b]4;70;rgb:5f5f/afaf/0000\u001b\\\u001b]4;71;rgb:5f5f/afaf/5f5f\u001b\\\u001b]4;72;rgb:5f5f/afaf/8787\u001b\\\u001b]4;73;rgb:5f5f/afaf/afaf\u001b\\\u001b]4;74;rgb:5f5f/afaf/d7d7\u001b\\\u001b]4;75;rgb:5f5f/afaf/ffff\u001b\\\u001b]4;76;rgb:5f5f/d7d7/0000\u001b\\\u001b]4;77;rgb:5f5f/d7d7/5f5f\u001b\\\u001b]4;78;rgb:5f5f/d7d7/8787\u001b\\\u001b]4;79;rgb:5f5f/d7d7/afaf\u001b\\\u001b]4;80;rgb:5f5f/d7d7/d7d7\u001b\\\u001b]4;81;rgb:5f5f/d7d7/ffff\u001b\\\u001b]4;82;rgb:5f5f/ffff/0000\u001b\\\u001b]4;83;rgb:5f5f/ffff/5f5f\u001b\\\u001b]4;84;rgb:5f5f/ffff/8787\u001b\\\u001b]4;85;rgb:5f5f/ffff/afaf\u001b\\\u001b]4;86;rgb:5f5f/ffff/d7d7\u001b\\\u001b]4;87;rgb:5f5f/ffff/ffff\u001b\\\u001b]4;88;rgb:8787/0000/0000\u001b\\\u001b]4;89;rgb:8787/0000/5f5f\u001b\\\u001b]4;90;rgb:8787/0000/8787\u001b\\\u001b]4;91;rgb:8787/0000/afaf\u001b\\\u001b]4;92;rgb:8787/0000/d7d7\u001b\\\u001b]4;93;rgb:8787/0000/ffff\u001b\\\u001b]4;94;rgb:8787/5f5f/0000\u001b\\\u001b]4;95;rgb:8787/5f5f/5f5f\u001b\\\u001b]4;96;rgb:8787/5f5f/8787\u001b\\\u001b]4;97;rgb:8787/5f5f/afaf\u001b\\\u001b]4;98;rgb:8787/5f5f/d7d7\u001b\\\u001b]4;99;rgb:8787/5f5f/ffff\u001b\\\u001b]4;100;rgb:8787/8787/0000\u001b\\\u001b]4;101;rgb:8787/8787/5f5f\u001b\\\u001b]4;102;rgb:8787/8787/8787\u001b\\\u001b]4;103;rgb:8787/8787/afaf\u001b\\\u001b]4;104;rgb:8787/8787/d7d7\u001b\\\u001b]4;105;rgb:8787/8787/ffff\u001b\\\u001b]4;106;rgb:8787/afaf/0000\u001b\\\u001b]4;107;rgb:8787/afaf/5f5f\u001b\\\u001b]4;108;rgb:8787/afaf/8787\u001b\\\u001b]4;109;rgb:8787/afaf/afaf\u001b\\\u001b]4;110;rgb:8787/afaf/d7d7\u001b\\\u001b]4;111;rgb:8787/afaf/ffff\u001b\\\u001b]4;112;rgb:8787/d7d7/0000\u001b\\\u001b]4;113;rgb:8787/d7d7/5f5f\u001b\\\u001b]4;114;rgb:8787/d7d7/8787\u001b\\\u001b]4;115;rgb:8787/d7d7/afaf\u001b\\\u001b]4;116;rgb:8787/d7d7/d7d7\u001b\\\u001b]4;117;rgb:8787/d7d7/ffff\u001b\\\u001b]4;118;rgb:8787/ffff/0000\u001b\\\u001b]4;119;rgb:8787/ffff/5f5f\u001b\\\u001b]4;120;rgb:8787/ffff/8787\u001b\\\u001b]4;121;rgb:8787/ffff/afaf\u001b\\\u001b]4;122;rgb:8787/ffff/d7d7\u001b\\\u001b]4;123;rgb:8787/ffff/ffff\u001b\\\u001b]4;124;rgb:afaf/0000/0000\u001b\\\u001b]4;125;rgb:afaf/0000/5f5f\u001b\\\u001b]4;126;rgb:afaf/0000/8787\u001b\\\u001b]4;127;rgb:afaf/0000/afaf\u001b\\\u001b]4;128;rgb:afaf/0000/d7d7\u001b\\\u001b]4;129;rgb:afaf/0000/ffff\u001b\\\u001b]4;130;rgb:afaf/5f5f/0000\u001b\\\u001b]4;131;rgb:afaf/5f5f/5f5f\u001b\\\u001b]4;132;rgb:afaf/5f5f/8787\u001b\\\u001b]4;133;rgb:afaf/5f5f/afaf\u001b\\\u001b]4;134;rgb:afaf/5f5f/d7d7\u001b\\\u001b]4;135;rgb:afaf/5f5f/ffff\u001b\\\u001b]4;136;rgb:afaf/8787/0000\u001b\\\u001b]4;137;rgb:afaf/8787/5f5f\u001b\\\u001b]4;138;rgb:afaf/8787/8787\u001b\\\u001b]4;139;rgb:afaf/8787/afaf\u001b\\\u001b]4;140;rgb:afaf/8787/d7d7\u001b\\\u001b]4;141;rgb:afaf/8787/ffff\u001b\\\u001b]4;142;rgb:afaf/afaf/0000\u001b\\\u001b]4;143;rgb:afaf/afaf/5f5f\u001b\\\u001b]4;144;rgb:afaf/afaf/8787\u001b\\\u001b]4;145;rgb:afaf/afaf/afaf\u001b\\\u001b]4;146;rgb:afaf/afaf/d7d7\u001b\\\u001b]4;147;rgb:afaf/afaf/ffff\u001b\\\u001b]4;148;rgb:afaf/d7d7/0000\u001b\\\u001b]4;149;rgb:afaf/d7d7/5f5f\u001b\\\u001b]4;150;rgb:afaf/d7d7/8787\u001b\\\u001b]4;151;rgb:afaf/d7d7/afaf\u001b\\\u001b]4;152;rgb:afaf/d7d7/d7d7\u001b\\\u001b]4;153;rgb:afaf/d7d7/ffff\u001b\\\u001b]4;154;rgb:afaf/ffff/0000\u001b\\\u001b]4;155;rgb:afaf/ffff/5f5f\u001b\\\u001b]4;156;rgb:afaf/ffff/8787\u001b\\\u001b]4;157;rgb:afaf/ffff/afaf\u001b\\\u001b]4;158;rgb:afaf/ffff/d7d7\u001b\\\u001b]4;159;rgb:afaf/ffff/ffff\u001b\\\u001b]4;160;rgb:d7d7/0000/0000\u001b\\\u001b]4;161;rgb:d7d7/0000/5f5f\u001b\\\u001b]4;162;rgb:d7d7/0000/8787\u001b\\\u001b]4;163;rgb:d7d7/0000/afaf\u001b\\\u001b]4;164;rgb:d7d7/0000/d7d7\u001b\\\u001b]4;165;rgb:d7d7/0000/ffff\u001b\\\u001b]4;166;rgb:d7d7/5f5f/0000\u001b\\\u001b]4;167;rgb:d7d7/5f5f/5f5f\u001b\\\u001b]4;168;rgb:d7d7/5f5f/8787\u001b\\\u001b]4;169;rgb:d7d7/5f5f/afaf\u001b\\\u001b]4;170;rgb:d7d7/5f5f/d7d7\u001b\\\u001b]4;171;rgb:d7d7/5f5f/ffff\u001b\\\u001b]4;172;rgb:d7d7/8787/0000\u001b\\\u001b]4;173;rgb:d7d7/8787/5f5f\u001b\\\u001b]4;174;rgb:d7d7/8787/8787\u001b\\\u001b]4;175;rgb:d7d7/8787/afaf\u001b\\\u001b]4;176;rgb:d7d7/8787/d7d7\u001b\\\u001b]4;177;rgb:d7d7/8787/ffff\u001b\\\u001b]4;178;rgb:d7d7/afaf/0000\u001b\\\u001b]4;179;rgb:d7d7/afaf/5f5f\u001b\\\u001b]4;180;rgb:d7d7/afaf/8787\u001b\\\u001b]4;181;rgb:d7d7/afaf/afaf\u001b\\\u001b]4;182;rgb:d7d7/afaf/d7d7\u001b\\\u001b]4;183;rgb:d7d7/afaf/ffff\u001b\\\u001b]4;184;rgb:d7d7/d7d7/0000\u001b\\\u001b]4;185;rgb:d7d7/d7d7/5f5f\u001b\\\u001b]4;186;rgb:d7d7/d7d7/8787\u001b\\\u001b]4;187;rgb:d7d7/d7d7/afaf\u001b\\\u001b]4;188;rgb:d7d7/d7d7/d7d7\u001b\\\u001b]4;189;rgb:d7d7/d7d7/ffff\u001b\\\u001b]4;190;rgb:d7d7/ffff/0000\u001b\\\u001b]4;191;rgb:d7d7/ffff/5f5f\u001b\\\u001b]4;192;rgb:d7d7/ffff/8787\u001b\\\u001b]4;193;rgb:d7d7/ffff/afaf\u001b\\\u001b]4;194;rgb:d7d7/ffff/d7d7\u001b\\\u001b]4;195;rgb:d7d7/ffff/ffff\u001b\\\u001b]4;196;rgb:ffff/0000/0000\u001b\\\u001b]4;197;rgb:ffff/0000/5f5f\u001b\\\u001b]4;198;rgb:ffff/0000/8787\u001b\\\u001b]4;199;rgb:ffff/0000/afaf\u001b\\\u001b]4;200;rgb:ffff/0000/d7d7\u001b\\\u001b]4;201;rgb:ffff/0000/ffff\u001b\\\u001b]4;202;rgb:ffff/5f5f/0000\u001b\\\u001b]4;203;rgb:ffff/5f5f/5f5f\u001b\\\u001b]4;204;rgb:ffff/5f5f/8787\u001b\\\u001b]4;205;rgb:ffff/5f5f/afaf\u001b\\\u001b]4;206;rgb:ffff/5f5f/d7d7\u001b\\\u001b]4;207;rgb:ffff/5f5f/ffff\u001b\\\u001b]4;208;rgb:ffff/8787/0000\u001b\\\u001b]4;209;rgb:ffff/8787/5f5f\u001b\\\u001b]4;210;rgb:ffff/8787/8787\u001b\\\u001b]4;211;rgb:ffff/8787/afaf\u001b\\\u001b]4;212;rgb:ffff/8787/d7d7\u001b\\\u001b]4;213;rgb:ffff/8787/ffff\u001b\\\u001b]4;214;rgb:ffff/afaf/0000\u001b\\\u001b]4;215;rgb:ffff/afaf/5f5f\u001b\\\u001b]4;216;rgb:ffff/afaf/8787\u001b\\\u001b]4;217;rgb:ffff/afaf/afaf\u001b\\\u001b]4;218;rgb:ffff/afaf/d7d7\u001b\\\u001b]4;219;rgb:ffff/afaf/ffff\u001b\\\u001b]4;220;rgb:ffff/d7d7/0000\u001b\\\u001b]4;221;rgb:ffff/d7d7/5f5f\u001b\\\u001b]4;222;rgb:ffff/d7d7/8787\u001b\\\u001b]4;223;rgb:ffff/d7d7/afaf\u001b\\\u001b]4;224;rgb:ffff/d7d7/d7d7\u001b\\\u001b]4;225;rgb:ffff/d7d7/ffff\u001b\\\u001b]4;226;rgb:ffff/ffff/0000\u001b\\\u001b]4;227;rgb:ffff/ffff/5f5f\u001b\\\u001b]4;228;rgb:ffff/ffff/8787\u001b\\\u001b]4;229;rgb:ffff/ffff/afaf\u001b\\\u001b]4;230;rgb:ffff/ffff/d7d7\u001b\\\u001b]4;231;rgb:ffff/ffff/ffff\u001b\\\u001b]4;232;rgb:0808/0808/0808\u001b\\\u001b]4;233;rgb:1212/1212/1212\u001b\\\u001b]4;234;rgb:1c1c/1c1c/1c1c\u001b\\\u001b]4;235;rgb:2626/2626/2626\u001b\\\u001b]4;236;rgb:3030/3030/3030\u001b\\\u001b]4;237;rgb:3a3a/3a3a/3a3a\u001b\\\u001b]4;238;rgb:4444/4444/4444\u001b\\\u001b]4;239;rgb:4e4e/4e4e/4e4e\u001b\\\u001b]4;240;rgb:5858/5858/5858\u001b\\\u001b]4;241;rgb:6262/6262/6262\u001b\\\u001b]4;242;rgb:6c6c/6c6c/6c6c\u001b\\\u001b]4;243;rgb:7676/7676/7676\u001b\\\u001b]4;244;rgb:8080/8080/8080\u001b\\\u001b]4;245;rgb:8a8a/8a8a/8a8a\u001b\\\u001b]4;246;rgb:9494/9494/9494\u001b\\\u001b]4;247;rgb:9e9e/9e9e/9e9e\u001b\\\u001b]4;248;rgb:a8a8/a8a8/a8a8\u001b\\\u001b]4;249;rgb:b2b2/b2b2/b2b2\u001b\\\u001b]4;250;rgb:bcbc/bcbc/bcbc\u001b\\\u001b]4;251;rgb:c6c6/c6c6/c6c6\u001b\\\u001b]4;252;rgb:d0d0/d0d0/d0d0\u001b\\\u001b]4;253;rgb:dada/dada/dada\u001b\\\u001b]4;254;rgb:e4e4/e4e4/e4e4\u001b\\\u001b]4;255;rgb:eeee/eeee/eeee\u001b\\"
+    },
+    "core": {
+      "divergence": [
+        "device-attributes-identity",
+        "kitty-keyboard-protocol-honoured",
+        "color-queries-theme",
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": "\u001b[?1016;2$y\u001b[?7u\u001b[?62;22c\u001b]4;0;rgb:1d1d/1f1f/2121\u001b\\\u001b]4;1;rgb:cccc/6666/6666\u001b\\\u001b]4;2;rgb:b5b5/bdbd/6868\u001b\\\u001b]4;3;rgb:f0f0/c6c6/7474\u001b\\\u001b]4;4;rgb:8181/a2a2/bebe\u001b\\\u001b]4;5;rgb:b2b2/9494/bbbb\u001b\\\u001b]4;6;rgb:8a8a/bebe/b7b7\u001b\\\u001b]4;7;rgb:c5c5/c8c8/c6c6\u001b\\\u001b]4;8;rgb:6666/6666/6666\u001b\\\u001b]4;9;rgb:d5d5/4e4e/5353\u001b\\\u001b]4;10;rgb:b9b9/caca/4a4a\u001b\\\u001b]4;11;rgb:e7e7/c5c5/4747\u001b\\\u001b]4;12;rgb:7a7a/a6a6/dada\u001b\\\u001b]4;13;rgb:c3c3/9797/d8d8\u001b\\\u001b]4;14;rgb:7070/c0c0/b1b1\u001b\\\u001b]4;15;rgb:eaea/eaea/eaea\u001b\\\u001b]4;16;rgb:0000/0000/0000\u001b\\\u001b]4;17;rgb:0000/0000/5f5f\u001b\\\u001b]4;18;rgb:0000/0000/8787\u001b\\\u001b]4;19;rgb:0000/0000/afaf\u001b\\\u001b]4;20;rgb:0000/0000/d7d7\u001b\\\u001b]4;21;rgb:0000/0000/ffff\u001b\\\u001b]4;22;rgb:0000/5f5f/0000\u001b\\\u001b]4;23;rgb:0000/5f5f/5f5f\u001b\\\u001b]4;24;rgb:0000/5f5f/8787\u001b\\\u001b]4;25;rgb:0000/5f5f/afaf\u001b\\\u001b]4;26;rgb:0000/5f5f/d7d7\u001b\\\u001b]4;27;rgb:0000/5f5f/ffff\u001b\\\u001b]4;28;rgb:0000/8787/0000\u001b\\\u001b]4;29;rgb:0000/8787/5f5f\u001b\\\u001b]4;30;rgb:0000/8787/8787\u001b\\\u001b]4;31;rgb:0000/8787/afaf\u001b\\\u001b]4;32;rgb:0000/8787/d7d7\u001b\\\u001b]4;33;rgb:0000/8787/ffff\u001b\\\u001b]4;34;rgb:0000/afaf/0000\u001b\\\u001b]4;35;rgb:0000/afaf/5f5f\u001b\\\u001b]4;36;rgb:0000/afaf/8787\u001b\\\u001b]4;37;rgb:0000/afaf/afaf\u001b\\\u001b]4;38;rgb:0000/afaf/d7d7\u001b\\\u001b]4;39;rgb:0000/afaf/ffff\u001b\\\u001b]4;40;rgb:0000/d7d7/0000\u001b\\\u001b]4;41;rgb:0000/d7d7/5f5f\u001b\\\u001b]4;42;rgb:0000/d7d7/8787\u001b\\\u001b]4;43;rgb:0000/d7d7/afaf\u001b\\\u001b]4;44;rgb:0000/d7d7/d7d7\u001b\\\u001b]4;45;rgb:0000/d7d7/ffff\u001b\\\u001b]4;46;rgb:0000/ffff/0000\u001b\\\u001b]4;47;rgb:0000/ffff/5f5f\u001b\\\u001b]4;48;rgb:0000/ffff/8787\u001b\\\u001b]4;49;rgb:0000/ffff/afaf\u001b\\\u001b]4;50;rgb:0000/ffff/d7d7\u001b\\\u001b]4;51;rgb:0000/ffff/ffff\u001b\\\u001b]4;52;rgb:5f5f/0000/0000\u001b\\\u001b]4;53;rgb:5f5f/0000/5f5f\u001b\\\u001b]4;54;rgb:5f5f/0000/8787\u001b\\\u001b]4;55;rgb:5f5f/0000/afaf\u001b\\\u001b]4;56;rgb:5f5f/0000/d7d7\u001b\\\u001b]4;57;rgb:5f5f/0000/ffff\u001b\\\u001b]4;58;rgb:5f5f/5f5f/0000\u001b\\\u001b]4;59;rgb:5f5f/5f5f/5f5f\u001b\\\u001b]4;60;rgb:5f5f/5f5f/8787\u001b\\\u001b]4;61;rgb:5f5f/5f5f/afaf\u001b\\\u001b]4;62;rgb:5f5f/5f5f/d7d7\u001b\\\u001b]4;63;rgb:5f5f/5f5f/ffff\u001b\\\u001b]4;64;rgb:5f5f/8787/0000\u001b\\\u001b]4;65;rgb:5f5f/8787/5f5f\u001b\\\u001b]4;66;rgb:5f5f/8787/8787\u001b\\\u001b]4;67;rgb:5f5f/8787/afaf\u001b\\\u001b]4;68;rgb:5f5f/8787/d7d7\u001b\\\u001b]4;69;rgb:5f5f/8787/ffff\u001b\\\u001b]4;70;rgb:5f5f/afaf/0000\u001b\\\u001b]4;71;rgb:5f5f/afaf/5f5f\u001b\\\u001b]4;72;rgb:5f5f/afaf/8787\u001b\\\u001b]4;73;rgb:5f5f/afaf/afaf\u001b\\\u001b]4;74;rgb:5f5f/afaf/d7d7\u001b\\\u001b]4;75;rgb:5f5f/afaf/ffff\u001b\\\u001b]4;76;rgb:5f5f/d7d7/0000\u001b\\\u001b]4;77;rgb:5f5f/d7d7/5f5f\u001b\\\u001b]4;78;rgb:5f5f/d7d7/8787\u001b\\\u001b]4;79;rgb:5f5f/d7d7/afaf\u001b\\\u001b]4;80;rgb:5f5f/d7d7/d7d7\u001b\\\u001b]4;81;rgb:5f5f/d7d7/ffff\u001b\\\u001b]4;82;rgb:5f5f/ffff/0000\u001b\\\u001b]4;83;rgb:5f5f/ffff/5f5f\u001b\\\u001b]4;84;rgb:5f5f/ffff/8787\u001b\\\u001b]4;85;rgb:5f5f/ffff/afaf\u001b\\\u001b]4;86;rgb:5f5f/ffff/d7d7\u001b\\\u001b]4;87;rgb:5f5f/ffff/ffff\u001b\\\u001b]4;88;rgb:8787/0000/0000\u001b\\\u001b]4;89;rgb:8787/0000/5f5f\u001b\\\u001b]4;90;rgb:8787/0000/8787\u001b\\\u001b]4;91;rgb:8787/0000/afaf\u001b\\\u001b]4;92;rgb:8787/0000/d7d7\u001b\\\u001b]4;93;rgb:8787/0000/ffff\u001b\\\u001b]4;94;rgb:8787/5f5f/0000\u001b\\\u001b]4;95;rgb:8787/5f5f/5f5f\u001b\\\u001b]4;96;rgb:8787/5f5f/8787\u001b\\\u001b]4;97;rgb:8787/5f5f/afaf\u001b\\\u001b]4;98;rgb:8787/5f5f/d7d7\u001b\\\u001b]4;99;rgb:8787/5f5f/ffff\u001b\\\u001b]4;100;rgb:8787/8787/0000\u001b\\\u001b]4;101;rgb:8787/8787/5f5f\u001b\\\u001b]4;102;rgb:8787/8787/8787\u001b\\\u001b]4;103;rgb:8787/8787/afaf\u001b\\\u001b]4;104;rgb:8787/8787/d7d7\u001b\\\u001b]4;105;rgb:8787/8787/ffff\u001b\\\u001b]4;106;rgb:8787/afaf/0000\u001b\\\u001b]4;107;rgb:8787/afaf/5f5f\u001b\\\u001b]4;108;rgb:8787/afaf/8787\u001b\\\u001b]4;109;rgb:8787/afaf/afaf\u001b\\\u001b]4;110;rgb:8787/afaf/d7d7\u001b\\\u001b]4;111;rgb:8787/afaf/ffff\u001b\\\u001b]4;112;rgb:8787/d7d7/0000\u001b\\\u001b]4;113;rgb:8787/d7d7/5f5f\u001b\\\u001b]4;114;rgb:8787/d7d7/8787\u001b\\\u001b]4;115;rgb:8787/d7d7/afaf\u001b\\\u001b]4;116;rgb:8787/d7d7/d7d7\u001b\\\u001b]4;117;rgb:8787/d7d7/ffff\u001b\\\u001b]4;118;rgb:8787/ffff/0000\u001b\\\u001b]4;119;rgb:8787/ffff/5f5f\u001b\\\u001b]4;120;rgb:8787/ffff/8787\u001b\\\u001b]4;121;rgb:8787/ffff/afaf\u001b\\\u001b]4;122;rgb:8787/ffff/d7d7\u001b\\\u001b]4;123;rgb:8787/ffff/ffff\u001b\\\u001b]4;124;rgb:afaf/0000/0000\u001b\\\u001b]4;125;rgb:afaf/0000/5f5f\u001b\\\u001b]4;126;rgb:afaf/0000/8787\u001b\\\u001b]4;127;rgb:afaf/0000/afaf\u001b\\\u001b]4;128;rgb:afaf/0000/d7d7\u001b\\\u001b]4;129;rgb:afaf/0000/ffff\u001b\\\u001b]4;130;rgb:afaf/5f5f/0000\u001b\\\u001b]4;131;rgb:afaf/5f5f/5f5f\u001b\\\u001b]4;132;rgb:afaf/5f5f/8787\u001b\\\u001b]4;133;rgb:afaf/5f5f/afaf\u001b\\\u001b]4;134;rgb:afaf/5f5f/d7d7\u001b\\\u001b]4;135;rgb:afaf/5f5f/ffff\u001b\\\u001b]4;136;rgb:afaf/8787/0000\u001b\\\u001b]4;137;rgb:afaf/8787/5f5f\u001b\\\u001b]4;138;rgb:afaf/8787/8787\u001b\\\u001b]4;139;rgb:afaf/8787/afaf\u001b\\\u001b]4;140;rgb:afaf/8787/d7d7\u001b\\\u001b]4;141;rgb:afaf/8787/ffff\u001b\\\u001b]4;142;rgb:afaf/afaf/0000\u001b\\\u001b]4;143;rgb:afaf/afaf/5f5f\u001b\\\u001b]4;144;rgb:afaf/afaf/8787\u001b\\\u001b]4;145;rgb:afaf/afaf/afaf\u001b\\\u001b]4;146;rgb:afaf/afaf/d7d7\u001b\\\u001b]4;147;rgb:afaf/afaf/ffff\u001b\\\u001b]4;148;rgb:afaf/d7d7/0000\u001b\\\u001b]4;149;rgb:afaf/d7d7/5f5f\u001b\\\u001b]4;150;rgb:afaf/d7d7/8787\u001b\\\u001b]4;151;rgb:afaf/d7d7/afaf\u001b\\\u001b]4;152;rgb:afaf/d7d7/d7d7\u001b\\\u001b]4;153;rgb:afaf/d7d7/ffff\u001b\\\u001b]4;154;rgb:afaf/ffff/0000\u001b\\\u001b]4;155;rgb:afaf/ffff/5f5f\u001b\\\u001b]4;156;rgb:afaf/ffff/8787\u001b\\\u001b]4;157;rgb:afaf/ffff/afaf\u001b\\\u001b]4;158;rgb:afaf/ffff/d7d7\u001b\\\u001b]4;159;rgb:afaf/ffff/ffff\u001b\\\u001b]4;160;rgb:d7d7/0000/0000\u001b\\\u001b]4;161;rgb:d7d7/0000/5f5f\u001b\\\u001b]4;162;rgb:d7d7/0000/8787\u001b\\\u001b]4;163;rgb:d7d7/0000/afaf\u001b\\\u001b]4;164;rgb:d7d7/0000/d7d7\u001b\\\u001b]4;165;rgb:d7d7/0000/ffff\u001b\\\u001b]4;166;rgb:d7d7/5f5f/0000\u001b\\\u001b]4;167;rgb:d7d7/5f5f/5f5f\u001b\\\u001b]4;168;rgb:d7d7/5f5f/8787\u001b\\\u001b]4;169;rgb:d7d7/5f5f/afaf\u001b\\\u001b]4;170;rgb:d7d7/5f5f/d7d7\u001b\\\u001b]4;171;rgb:d7d7/5f5f/ffff\u001b\\\u001b]4;172;rgb:d7d7/8787/0000\u001b\\\u001b]4;173;rgb:d7d7/8787/5f5f\u001b\\\u001b]4;174;rgb:d7d7/8787/8787\u001b\\\u001b]4;175;rgb:d7d7/8787/afaf\u001b\\\u001b]4;176;rgb:d7d7/8787/d7d7\u001b\\\u001b]4;177;rgb:d7d7/8787/ffff\u001b\\\u001b]4;178;rgb:d7d7/afaf/0000\u001b\\\u001b]4;179;rgb:d7d7/afaf/5f5f\u001b\\\u001b]4;180;rgb:d7d7/afaf/8787\u001b\\\u001b]4;181;rgb:d7d7/afaf/afaf\u001b\\\u001b]4;182;rgb:d7d7/afaf/d7d7\u001b\\\u001b]4;183;rgb:d7d7/afaf/ffff\u001b\\\u001b]4;184;rgb:d7d7/d7d7/0000\u001b\\\u001b]4;185;rgb:d7d7/d7d7/5f5f\u001b\\\u001b]4;186;rgb:d7d7/d7d7/8787\u001b\\\u001b]4;187;rgb:d7d7/d7d7/afaf\u001b\\\u001b]4;188;rgb:d7d7/d7d7/d7d7\u001b\\\u001b]4;189;rgb:d7d7/d7d7/ffff\u001b\\\u001b]4;190;rgb:d7d7/ffff/0000\u001b\\\u001b]4;191;rgb:d7d7/ffff/5f5f\u001b\\\u001b]4;192;rgb:d7d7/ffff/8787\u001b\\\u001b]4;193;rgb:d7d7/ffff/afaf\u001b\\\u001b]4;194;rgb:d7d7/ffff/d7d7\u001b\\\u001b]4;195;rgb:d7d7/ffff/ffff\u001b\\\u001b]4;196;rgb:ffff/0000/0000\u001b\\\u001b]4;197;rgb:ffff/0000/5f5f\u001b\\\u001b]4;198;rgb:ffff/0000/8787\u001b\\\u001b]4;199;rgb:ffff/0000/afaf\u001b\\\u001b]4;200;rgb:ffff/0000/d7d7\u001b\\\u001b]4;201;rgb:ffff/0000/ffff\u001b\\\u001b]4;202;rgb:ffff/5f5f/0000\u001b\\\u001b]4;203;rgb:ffff/5f5f/5f5f\u001b\\\u001b]4;204;rgb:ffff/5f5f/8787\u001b\\\u001b]4;205;rgb:ffff/5f5f/afaf\u001b\\\u001b]4;206;rgb:ffff/5f5f/d7d7\u001b\\\u001b]4;207;rgb:ffff/5f5f/ffff\u001b\\\u001b]4;208;rgb:ffff/8787/0000\u001b\\\u001b]4;209;rgb:ffff/8787/5f5f\u001b\\\u001b]4;210;rgb:ffff/8787/8787\u001b\\\u001b]4;211;rgb:ffff/8787/afaf\u001b\\\u001b]4;212;rgb:ffff/8787/d7d7\u001b\\\u001b]4;213;rgb:ffff/8787/ffff\u001b\\\u001b]4;214;rgb:ffff/afaf/0000\u001b\\\u001b]4;215;rgb:ffff/afaf/5f5f\u001b\\\u001b]4;216;rgb:ffff/afaf/8787\u001b\\\u001b]4;217;rgb:ffff/afaf/afaf\u001b\\\u001b]4;218;rgb:ffff/afaf/d7d7\u001b\\\u001b]4;219;rgb:ffff/afaf/ffff\u001b\\\u001b]4;220;rgb:ffff/d7d7/0000\u001b\\\u001b]4;221;rgb:ffff/d7d7/5f5f\u001b\\\u001b]4;222;rgb:ffff/d7d7/8787\u001b\\\u001b]4;223;rgb:ffff/d7d7/afaf\u001b\\\u001b]4;224;rgb:ffff/d7d7/d7d7\u001b\\\u001b]4;225;rgb:ffff/d7d7/ffff\u001b\\\u001b]4;226;rgb:ffff/ffff/0000\u001b\\\u001b]4;227;rgb:ffff/ffff/5f5f\u001b\\\u001b]4;228;rgb:ffff/ffff/8787\u001b\\\u001b]4;229;rgb:ffff/ffff/afaf\u001b\\\u001b]4;230;rgb:ffff/ffff/d7d7\u001b\\\u001b]4;231;rgb:ffff/ffff/ffff\u001b\\\u001b]4;232;rgb:0808/0808/0808\u001b\\\u001b]4;233;rgb:1212/1212/1212\u001b\\\u001b]4;234;rgb:1c1c/1c1c/1c1c\u001b\\\u001b]4;235;rgb:2626/2626/2626\u001b\\\u001b]4;236;rgb:3030/3030/3030\u001b\\\u001b]4;237;rgb:3a3a/3a3a/3a3a\u001b\\\u001b]4;238;rgb:4444/4444/4444\u001b\\\u001b]4;239;rgb:4e4e/4e4e/4e4e\u001b\\\u001b]4;240;rgb:5858/5858/5858\u001b\\\u001b]4;241;rgb:6262/6262/6262\u001b\\\u001b]4;242;rgb:6c6c/6c6c/6c6c\u001b\\\u001b]4;243;rgb:7676/7676/7676\u001b\\\u001b]4;244;rgb:8080/8080/8080\u001b\\\u001b]4;245;rgb:8a8a/8a8a/8a8a\u001b\\\u001b]4;246;rgb:9494/9494/9494\u001b\\\u001b]4;247;rgb:9e9e/9e9e/9e9e\u001b\\\u001b]4;248;rgb:a8a8/a8a8/a8a8\u001b\\\u001b]4;249;rgb:b2b2/b2b2/b2b2\u001b\\\u001b]4;250;rgb:bcbc/bcbc/bcbc\u001b\\\u001b]4;251;rgb:c6c6/c6c6/c6c6\u001b\\\u001b]4;252;rgb:d0d0/d0d0/d0d0\u001b\\\u001b]4;253;rgb:dada/dada/dada\u001b\\\u001b]4;254;rgb:e4e4/e4e4/e4e4\u001b\\\u001b]4;255;rgb:eeee/eeee/eeee\u001b\\\u001b[6;1;1t"
+      }
+    }
+  }
+]

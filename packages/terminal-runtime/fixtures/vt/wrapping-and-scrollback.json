@@ -1,0 +1,88 @@
+[
+  {
+    "id": "long-line-wraps",
+    "about": "a line longer than the width wraps and a newline starts a fresh row",
+    "cols": 10,
+    "rows": 5,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "0123456789abcdefghij0123\r\nnext"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "0123456789",
+        "abcdefghij",
+        "0123",
+        "next",
+        ""
+      ],
+      "cursor": {
+        "x": 4,
+        "y": 3
+      }
+    }
+  },
+  {
+    "id": "scrolls-into-history",
+    "about": "output past the bottom moves rows into scrollback",
+    "cols": 10,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "line0\r\nline1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\r\nline7\r\nline8\r\nline9\r\nline10\r\nline11"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "line8",
+        "line9",
+        "line10",
+        "line11"
+      ],
+      "cursor": {
+        "x": 6,
+        "y": 3
+      },
+      "scrollbackRows": 8
+    }
+  },
+  {
+    "id": "history-limit",
+    "about": "scrollback keeps the newest lines",
+    "cols": 10,
+    "rows": 4,
+    "scrollback": 20,
+    "steps": [
+      {
+        "write": "L000\r\nL001\r\nL002\r\nL003\r\nL004\r\nL005\r\nL006\r\nL007\r\nL008\r\nL009\r\nL010\r\nL011\r\nL012\r\nL013\r\nL014\r\nL015\r\nL016\r\nL017\r\nL018\r\nL019\r\nL020\r\nL021\r\nL022\r\nL023\r\nL024\r\nL025\r\nL026\r\nL027\r\nL028\r\nL029\r\nL030\r\nL031\r\nL032\r\nL033\r\nL034\r\nL035\r\nL036\r\nL037\r\nL038\r\nL039\r\nL040\r\nL041\r\nL042\r\nL043\r\nL044\r\nL045\r\nL046\r\nL047\r\nL048\r\nL049\r\nL050\r\nL051\r\nL052\r\nL053\r\nL054\r\nL055\r\nL056\r\nL057\r\nL058\r\nL059"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "L056",
+        "L057",
+        "L058",
+        "L059"
+      ],
+      "cursor": {
+        "x": 4,
+        "y": 3
+      },
+      "scrollbackRows": 20
+    },
+    "core": {
+      "divergence": [
+        "scrollback-budget-in-bytes"
+      ],
+      "expect": {
+        "scrollbackRows": 56
+      }
+    }
+  }
+]

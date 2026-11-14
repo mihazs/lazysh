@@ -1,0 +1,172 @@
+[
+  {
+    "id": "cursor-addressing",
+    "about": "CUP, CUU/CUD/CUF/CUB, CHA, VPA and clamping at the edges",
+    "cols": 20,
+    "rows": 6,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[3;5HX\u001b[2AY\u001b[3BZ\u001b[100CE\u001b[100DS\u001b[1GA\u001b[2dV"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "     Y",
+        " V",
+        "    X",
+        "A     Z            E",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 2,
+        "y": 1
+      }
+    }
+  },
+  {
+    "id": "cursor-save-restore",
+    "about": "DECSC/DECRC and SCOSC/SCORC keep position",
+    "cols": 20,
+    "rows": 6,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[2;3Hab\u001b7\u001b[5;1Hcd\u001b8ef\u001b[s\u001b[1;1Hgh\u001b[uij"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "gh",
+        "  abefij",
+        "",
+        "",
+        "cd",
+        ""
+      ],
+      "cursor": {
+        "x": 8,
+        "y": 1
+      }
+    }
+  },
+  {
+    "id": "cursor-autowrap-and-nowrap",
+    "about": "DECAWM on wraps to the next row, off overwrites the last cell",
+    "cols": 10,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "abcdefghijkl"
+      },
+      {
+        "write": "\u001b[?7l"
+      },
+      {
+        "write": "\u001b[3;1Hmnopqrstuvwxyz\u001b[?7h"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abcdefghij",
+        "kl",
+        "mnopqrstuz",
+        ""
+      ],
+      "cursor": {
+        "x": 10,
+        "y": 2
+      }
+    },
+    "core": {
+      "divergence": [
+        "cursor-pending-wrap-column"
+      ],
+      "expect": {
+        "cursor": {
+          "x": 9,
+          "y": 2
+        }
+      }
+    }
+  },
+  {
+    "id": "cursor-origin-mode-and-regions",
+    "about": "DECSTBM scroll region with DECOM positions relative to the region",
+    "cols": 10,
+    "rows": 5,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[2;4r\u001b[?6h\u001b[1;1HTOP\u001b[3;1HBOT\u001b[?6l\u001b[1;1HHOME"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "HOME",
+        "TOP",
+        "",
+        "BOT",
+        ""
+      ],
+      "cursor": {
+        "x": 4,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "cursor-hide-show-style",
+    "about": "DECTCEM and DECSCUSR do not change the screen text",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?25lhi\u001b[?25h\u001b[5 qyo"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "hiyo",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 4,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "tabs-and-backspace",
+    "about": "HT stops every 8 columns, HTS/TBC edit them, BS moves left without erasing",
+    "cols": 30,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "a\tb\t\tc\u001b[3g\r\td\u001bH\u001b[1;1H\r\ta\bx"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "a       b               c   xa",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 29,
+        "y": 0
+      }
+    }
+  }
+]

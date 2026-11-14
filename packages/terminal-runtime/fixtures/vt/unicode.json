@@ -1,0 +1,692 @@
+[
+  {
+    "id": "cjk-wide-cells",
+    "about": "CJK ideographs occupy two cells; the cursor advances by two",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "a日本語b"
+      }
+    ],
+    "probes": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "a日本語b",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 8,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 1,
+          "y": 0,
+          "text": "日",
+          "width": 2,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "",
+          "width": 0,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "本",
+          "width": 2,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 7,
+          "y": 0,
+          "text": "b",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "wide-glyph-at-the-last-column",
+    "about": "a wide glyph that does not fit wraps whole to the next row",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "abcdefghi日j"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abcdefghi",
+        "日j",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 1
+      }
+    }
+  },
+  {
+    "id": "combining-marks",
+    "about": "base plus combining marks share one cell (e+U+0301, a+U+0308+U+0323)",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "éx ạ̈y"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "éx ạ̈y",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 5,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "é",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "x",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "ạ̈",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 4,
+          "y": 0,
+          "text": "y",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "emoji-presentation",
+    "about": "a plain emoji, an emoji with VS16 and a text-style symbol",
+    "cols": 16,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "a😀b ❤️c ❤d"
+      }
+    ],
+    "probes": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "a😀b ❤️c ❤d",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 9,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 1,
+          "y": 0,
+          "text": "😀",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "b",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 5,
+          "y": 0,
+          "text": "c",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 6,
+          "y": 0,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 7,
+          "y": 0,
+          "text": "❤",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    },
+    "core": {
+      "divergence": [
+        "unicode-widths-and-graphemes"
+      ],
+      "expect": {
+        "cursor": {
+          "x": 11,
+          "y": 0
+        },
+        "cells": [
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "😀",
+            "width": 2,
+            "x": 1,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "",
+            "width": 0,
+            "x": 2,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "b",
+            "width": 1,
+            "x": 3,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "❤️",
+            "width": 2,
+            "x": 5,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "",
+            "width": 0,
+            "x": 6,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "c",
+            "width": 1,
+            "x": 7,
+            "y": 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "zwj-and-skin-tone-sequences",
+    "about": "family ZWJ sequence, a skin-tone modifier and a regional-indicator flag",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "👨‍👩‍👧|👍🏽|🇧🇷|x"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "👨‍👩‍👧|👍🏽|🇧🇷|x",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 11,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "👨‍",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "👩‍",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "👧",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "|",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 4,
+          "y": 0,
+          "text": "👍",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    },
+    "core": {
+      "divergence": [
+        "unicode-widths-and-graphemes"
+      ],
+      "expect": {
+        "cursor": {
+          "x": 10,
+          "y": 0
+        },
+        "cells": [
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "👨‍👩‍👧",
+            "width": 2,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "",
+            "width": 0,
+            "x": 1,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "|",
+            "width": 1,
+            "x": 2,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "👍🏽",
+            "width": 2,
+            "x": 3,
+            "y": 0
+          },
+          {
+            "bg": "default",
+            "fg": "default",
+            "flags": [],
+            "text": "",
+            "width": 0,
+            "x": 4,
+            "y": 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "fullwidth-halfwidth-and-ambiguous",
+    "about": "fullwidth Latin, halfwidth katakana, box drawing and ambiguous-width symbols",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "ＡＢ ｶﾞ ─│█ ±★✓"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "ＡＢ ｶﾞ ─│█ ±★✓",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 15,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "Ａ",
+          "width": 2,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "Ｂ",
+          "width": 2,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "",
+          "width": 0,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "hangul-and-indic-clusters",
+    "about": "precomposed Hangul, conjoining jamo and a Devanagari conjunct",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "한한 क्ष x"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        2,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "한한 क्ष x",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 9,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "한",
+          "width": 2,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "한",
+          "width": 2,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "rtl-text-is-stored-in-logical-order",
+    "about": "Arabic and Hebrew letters are cells in arrival order, no shaping",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "مرحبا שלום"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "مرحبا שלום",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 10,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "invalid-utf8-and-controls",
+    "about": "a lone continuation byte, a truncated sequence and C0 controls do not corrupt later text",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "writeBase64": "YQCAYsOjYwsMZA=="
+      },
+      {
+        "write": "ok"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abãc",
+        "",
+        "    dok"
+      ],
+      "cursor": {
+        "x": 7,
+        "y": 2
+      }
+    },
+    "core": {
+      "divergence": [
+        "invalid-utf8-replacement"
+      ],
+      "expect": {
+        "lines": [
+          "a�bãc",
+          "",
+          "     dok"
+        ],
+        "cursor": {
+          "x": 8,
+          "y": 2
+        }
+      }
+    }
+  }
+]

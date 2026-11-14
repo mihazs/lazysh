@@ -1,0 +1,179 @@
+[
+  {
+    "id": "erase-line-and-display",
+    "about": "EL 0/1/2 and ED 0/1/2 with background colour fill",
+    "cols": 10,
+    "rows": 4,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "0123456789\r\n0123456789\r\n0123456789"
+      },
+      {
+        "write": "\u001b[2;5H\u001b[K"
+      },
+      {
+        "write": "\u001b[3;5H\u001b[1K"
+      },
+      {
+        "write": "\u001b[1;3H\u001b[44m\u001b[J"
+      }
+    ],
+    "probes": [
+      [
+        3,
+        0
+      ],
+      [
+        3,
+        1
+      ],
+      [
+        0,
+        2
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "01",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 2,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 3,
+          "y": 0,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "p:4",
+          "flags": []
+        },
+        {
+          "x": 3,
+          "y": 1,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "p:4",
+          "flags": []
+        },
+        {
+          "x": 0,
+          "y": 2,
+          "text": "",
+          "width": 1,
+          "fg": "default",
+          "bg": "p:4",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "insert-delete-chars-and-lines",
+    "about": "ICH, DCH, ECH, IL, DL shift or blank cells and rows",
+    "cols": 8,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "abcdefgh\r\nijklmnop\r\nqrstuvwx"
+      },
+      {
+        "write": "\u001b[1;3H\u001b[2@"
+      },
+      {
+        "write": "\u001b[2;3H\u001b[2P"
+      },
+      {
+        "write": "\u001b[3;2H\u001b[3X"
+      },
+      {
+        "write": "\u001b[2;1H\u001b[L"
+      },
+      {
+        "write": "\u001b[1;1H\u001b[M"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "ijmnop",
+        "q   uvwx",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "scroll-up-down-and-index",
+    "about": "SU, SD, IND, RI and NEL move content inside the region",
+    "cols": 5,
+    "rows": 4,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "1\r\n2\r\n3\r\n4"
+      },
+      {
+        "write": "\u001b[2;3r\u001b[2S\u001b[1T"
+      },
+      {
+        "write": "\u001b[r\u001b[1;1H\u001bM\u001bM0"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "0",
+        "",
+        "1",
+        ""
+      ],
+      "cursor": {
+        "x": 1,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "repeat-and-reset",
+    "about": "REP repeats the last character, RIS clears everything",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "ab\u001b[3b"
+      },
+      {
+        "write": "\u001bc"
+      },
+      {
+        "write": "z"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "z",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 1,
+        "y": 0
+      }
+    }
+  }
+]

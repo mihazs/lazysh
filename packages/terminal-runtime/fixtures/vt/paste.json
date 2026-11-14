@@ -1,0 +1,128 @@
+[
+  {
+    "id": "paste-without-bracketed-mode",
+    "about": "newlines become carriage returns",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "paste": "a\nb\r\nc"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "a\rb\rc"
+    }
+  },
+  {
+    "id": "paste-with-bracketed-mode",
+    "about": "the paste is wrapped in 200~/201~",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?2004h"
+      },
+      {
+        "paste": "hi\nthere"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "modes": {
+        "bracketedPaste": true
+      },
+      "data": "\u001b[200~hi\rthere\u001b[201~"
+    }
+  },
+  {
+    "id": "paste-containing-the-end-marker",
+    "about": "an embedded 201~ is what a hostile clipboard would carry",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?2004h"
+      },
+      {
+        "paste": "x\u001b[201~rm -rf /"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "modes": {
+        "bracketedPaste": true
+      },
+      "data": "\u001b[200~x\u001b[201~rm -rf /\u001b[201~"
+    },
+    "core": {
+      "divergence": [
+        "bracketed-paste-end-marker-stripped"
+      ],
+      "expect": {
+        "data": "\u001b[200~xrm -rf /\u001b[201~"
+      }
+    }
+  },
+  {
+    "id": "paste-of-wide-and-combining-text",
+    "about": "non-ASCII paste is passed through unchanged",
+    "cols": 10,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?2004h"
+      },
+      {
+        "paste": "日本é 😀"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "modes": {
+        "bracketedPaste": true
+      },
+      "data": "\u001b[200~日本é 😀\u001b[201~"
+    }
+  }
+]

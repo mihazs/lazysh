@@ -4,8 +4,8 @@
 mod support;
 
 use lazysh_terminal_runtime::{
-    ffi, ActiveScreen, CellWide, CursorVisualStyle, KeyInput, MouseInput, Offer, RenderCursor,
-    RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime,
+    ffi, ActiveScreen, CellWide, Config, CursorVisualStyle, KeyInput, MouseInput, Offer,
+    RenderCursor, RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime,
 };
 use support::*;
 
@@ -247,6 +247,87 @@ fn mouse_reports_match_the_xterm_encodings_for_buttons_wheel_motion_and_modifier
         b"\x1b[<35;6;2M",
         "motion with no button is 3 plus 32"
     );
+}
+
+/// Regression for #1314: a pointer resting in one cell must not send a motion report per event.
+#[test]
+fn repeated_motion_in_one_cell_is_reported_once() {
+    let motion = |x: f32, y: f32, button| MouseInput {
+        action: ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
+        button,
+        mods: 0,
+        x,
+        y,
+    };
+    let left = Some(ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_LEFT);
+    let mut rt = runtime(40, 10);
+    feed(&mut rt, b"\x1b[?1003h\x1b[?1006h");
+    assert_eq!(
+        rt.encode_mouse(motion(55.0, 30.0, None)).unwrap(),
+        b"\x1b[<35;6;2M"
+    );
+    // Same cell (10x20 pixels), still no button: nothing to say.
+    assert!(rt
+        .encode_mouse(motion(57.0, 31.0, None))
+        .unwrap()
+        .is_empty());
+    // Another cell, or the same cell with a button now held, is news.
+    assert_eq!(
+        rt.encode_mouse(motion(65.0, 30.0, None)).unwrap(),
+        b"\x1b[<35;7;2M"
+    );
+    assert_eq!(
+        rt.encode_mouse(motion(65.0, 30.0, left)).unwrap(),
+        b"\x1b[<32;7;2M"
+    );
+    // A press in between means the next motion in that cell is reported again.
+    let press = MouseInput {
+        action: ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS,
+        ..motion(65.0, 30.0, left)
+    };
+    assert_eq!(rt.encode_mouse(press).unwrap(), b"\x1b[<0;7;2M");
+    assert_eq!(
+        rt.encode_mouse(motion(65.0, 30.0, left)).unwrap(),
+        b"\x1b[<32;7;2M"
+    );
+    // SGR-pixels reports every distinct pixel and only drops exact repeats.
+    feed(&mut rt, b"\x1b[?1016h");
+    assert_eq!(
+        rt.encode_mouse(motion(51.0, 40.0, None)).unwrap(),
+        b"\x1b[<35;51;40M"
+    );
+    assert!(rt
+        .encode_mouse(motion(51.0, 40.0, None))
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        rt.encode_mouse(motion(52.0, 40.0, None)).unwrap(),
+        b"\x1b[<35;52;40M"
+    );
+}
+
+#[test]
+fn a_zero_cell_size_never_panics_the_mouse_path() {
+    let mut rt = TerminalRuntime::new(Config {
+        size: Size {
+            cols: 40,
+            rows: 10,
+            cell_width_px: 0,
+            cell_height_px: 0,
+        },
+        ..Config::default()
+    })
+    .unwrap();
+    feed(&mut rt, b"\x1b[?1003h\x1b[?1006h");
+    let motion = MouseInput {
+        action: ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
+        button: None,
+        mods: 0,
+        x: 5.0,
+        y: 5.0,
+    };
+    assert!(rt.encode_mouse(motion).is_ok());
+    assert!(rt.encode_mouse(motion).is_ok());
 }
 
 #[test]

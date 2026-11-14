@@ -1,0 +1,2 @@
+# Raw pty streams are replayed byte for byte: no end-of-line conversion, no text diff.
+captures/*.bin binary
