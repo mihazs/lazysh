@@ -632,6 +632,21 @@ Measured with `cargo run --release --example mosh_bench` in `packages/terminal-r
 
 The resize adds no measurable time over the repaint at 80x24 (the p50 is the same with and without it), and the cost follows the number of cells repainted. It says the core's share is a fraction of a frame on this host; it does not say what a phone costs, and a single invocation under load is not a regression threshold. An earlier invocation (load 17.3) gave p50 0.169 and 0.521 ms for the two alternating rows.
 
+### Screen inspection in the core (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example inspect_bench` in `packages/terminal-runtime` ([#1318](https://github.com/mihazs/lazysh/issues/1318)). A Herdr tap reads two things: row 0 and the right 10 columns of row 1; the second row is a screen read of every visible row, for scale. Core only: no bridge, no JavaScript, no device, so it is not the cost of a tap in the app and no ratio against xterm.js is valid. Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3, rustc 1.96.1 release); the 1-minute load average at the start was 3.6. One invocation of 20,000 runs per row; microseconds per query.
+
+| Grid | Query | p50 | p95 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| 46x30 | Herdr tap (two reads) | 1.8 | 1.8 | 1.9 | 20.7 |
+| 46x30 | every visible row | 26.7 | 26.9 | 33.5 | 109.0 |
+| 80x24 | Herdr tap | 2.9 | 2.9 | 3.0 | 10.1 |
+| 80x24 | every visible row | 32.3 | 32.4 | 37.3 | 82.2 |
+| 200x60 | Herdr tap | 6.6 | 6.6 | 8.0 | 41.4 |
+| 200x60 | every visible row | 168.6 | 174.2 | 180.2 | 350.1 |
+
+The tap check costs a few microseconds here and scales with the row width (each read visits every column of the row to find the span), so the inspection itself is not where a tap's latency would come from; the bridge round trip, which this does not measure, is. It does not say what a phone costs.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.
