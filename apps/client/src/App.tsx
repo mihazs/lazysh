@@ -1481,6 +1481,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const companionActive=!!active?.connected && (!active.local || localView(localCapability,'agents'));
   /** The inbox follows every connected session that has a companion; one poll serves all sessions of a host key. */
   const inboxSessions=sessions.filter(session=>!session.local || localView(localCapability,'agents'));
+  const inboxSessionsRef=useRef(inboxSessions);inboxSessionsRef.current=inboxSessions;
   // A connected remote session on a phone lists Agents, Workspaces, Connections and opens on Agents; with no such connection Connections leads.
   const agentsFirst=companionActive && !wideSidebar;
   const navigationEntry=navigation[activeId??'']??{mode:agentsFirst?'agents' as const:'connections' as const,agents:false};
@@ -1874,9 +1875,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         typeof detail.sessionId !== "string"
       )
         return;
-      const reachable = (id: string) => sessionsRef.current.find(
-        (session) => session.id === id && session.connected && !session.local,
-      );
+      const reachable = (id: string) => inboxSessionsRef.current.find((session) => session.id === id && session.connected);
       const source = reachable(detail.sessionId);
       if (!source) return;
       // The pane comes first so the Agent view that opens next follows the agent that raised the event.
@@ -1887,7 +1886,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       setView('terminal');setInbox(false);
       // A needs-you notification leads to the pending card in the Agent view; other events open the agents list.
       const opened=sessionsRef.current.find(session=>session.id===target);
-      if('waiting' in detail && detail.waiting===true && opened) {setViewChoices(choices=>saveSessionView(choices,sessionViewKey(opened),'agent'));return;}
+      if('waiting' in detail && detail.waiting===true && opened && !opened.local) {setViewChoices(choices=>saveSessionView(choices,sessionViewKey(opened),'agent'));return;}
       setNavigation(previous=>({...previous,[target]:{mode:'agents',agents:true}}));
       setSidebar(true);
     };
