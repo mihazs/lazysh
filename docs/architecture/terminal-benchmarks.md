@@ -566,6 +566,18 @@ What this says, and does not say:
 - **Not comparable with the other renderers' tables.** Those draw the dirty rows of a live stream (the CPU reference renderer 0.4 to 1.6 ms per frame, the wgpu prototype 0.2 to 0.5 ms at the median, [wgpu table](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device)) with dot-pattern glyphs and no font; this table repaints the whole screen every frame through a real text stack with font fallback. The [wgpu section](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device) puts the full-repaint figures side by side; a like-for-like incremental Canvas figure needs per-row display lists, which were not built.
 - Not shown: a physical Android device or any phone GPU (Waydroid's GPU is a desktop AMD part, so a phone's driver, memory bandwidth, thermal throttling and power are unmeasured), energy, the app's fonts and CJK fallback behaviour, shaping beyond what `Canvas.drawText` does, a `SurfaceView` with `lockHardwareCanvas` or a Vulkan surface (this is `View.onDraw`), compositing with the WebView, per-row display-list caching (the likely next optimization), and the Rust-to-Kotlin hop: the layouts are replayed from files because libghostty-vt does not build for Android yet ([#1312](https://github.com/mihazs/lazysh/issues/1312)).
 
+### Mosh display update in the core (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example mosh_bench` in `packages/terminal-runtime` ([#1317](https://github.com/mihazs/lazysh/issues/1317)). One update is the bytes of a Mosh display frame (`begin` envelope, `ESC [ r`, home, clear, a full repaint of every row with a colour per row, `end` envelope) fed in one call, a canonical resize when the grid size changes, and the first renderable frame taken. It is the core's share of resize-to-first-correct-frame: the Mosh transport, the JS bridge, the renderer and the display are not included, and there is no xterm.js comparison, so no ratio is valid. Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3, rustc 1.96.1 release), taken while the host was heavily shared: the 1-minute load average at the start was 12.9 (24 threads). One invocation of 4000 updates per row; the figures are milliseconds per update.
+
+| Grid sizes | p50 | p95 | p99 | max |
+| --- | --- | --- | --- | --- |
+| 80x24, unchanged on every update (the usual case) | 0.165 | 0.333 | 0.392 | 4.800 |
+| 80x24 and 40x12 alternating | 0.165 | 0.198 | 0.249 | 0.901 |
+| 120x40 and 60x20 alternating | 0.531 | 0.687 | 0.958 | 1.590 |
+
+The resize adds no measurable time over the repaint at 80x24 (the p50 is the same with and without it), and the cost follows the number of cells repainted. It says the core's share is a fraction of a frame on this host; it does not say what a phone costs, and a single invocation under load is not a regression threshold. An earlier invocation (load 17.3) gave p50 0.169 and 0.521 ms for the two alternating rows.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.

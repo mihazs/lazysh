@@ -218,6 +218,8 @@ jobs:
           cp -a packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
           cp -a packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
           cp packages/common/src/{hex_digest,guarded_target}.rs "$HERDR_CI_ROOT/common/src/"
+          # The core replays the Mosh frames the client's e2e suite also uses; one file, two readers.
+          cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
           diff --recursive --brief --no-dereference packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           diff --recursive --brief --no-dereference packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
           diff --recursive --brief --no-dereference packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
@@ -340,6 +342,8 @@ jobs:
       # Same herdr-upstream copy, Zig, admitted archives and Zig caches as above; only the Cargo build of the binding repeats.
       - name: Test the shared terminal runtime against the same libghostty-vt build
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        env:
+          LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-herdr-native/mosh-resize-frames.json
         run: |
           cargo +1.96.1 fmt --check
           cargo +1.96.1 clippy --locked --all-targets -- -D warnings

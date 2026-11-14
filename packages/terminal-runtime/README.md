@@ -5,7 +5,7 @@ Shared, UI-independent terminal runtime on Herdr's vendored libghostty-vt bindin
 Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal-runtime.md). Not wired into the app.
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
-snapshots for a recreated surface, UI size intent versus transport-authoritative size, terminal
+snapshots for a recreated surface, UI size intent versus transport-authoritative size (including Mosh's OSC 7777 frames as a top-anchored resize without reflow, `Config::canonical_frames`), terminal
 replies, key/mouse/paste encoding, and text inspection. A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
 
 `Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
@@ -42,13 +42,15 @@ Zig writes `zig-pkg/` beside the vendored `build.zig`, so build from a copy outs
 runs these tests against the archives it admits by Zig package hash):
 
 ```sh
-root="$(mktemp -d)"; cp -a packages/herdr-upstream packages/terminal-runtime "$root"
+repo="$PWD"; root="$(mktemp -d)"; cp -a packages/herdr-upstream packages/terminal-runtime "$root"
 cd "$root/terminal-runtime"
 export ZIG=/path/to/zig-0.16.0 CARGO_TARGET_DIR="$root/target" \
-  ZIG_LOCAL_CACHE_DIR="$root/zig-local" ZIG_GLOBAL_CACHE_DIR="$root/zig-global"
+  ZIG_LOCAL_CACHE_DIR="$root/zig-local" ZIG_GLOBAL_CACHE_DIR="$root/zig-global" \
+  LAZYSH_MOSH_FIXTURE="$repo/apps/client/e2e/fixtures/mosh-resize-frames.json"
 cargo +1.96.1 test --locked
 cargo +1.96.1 run --release --example parse_bench   # host throughput, see docs/architecture/terminal-benchmarks.md
 cargo +1.96.1 run --release --example session_bench # pooled data path, input latency, memory
+cargo +1.96.1 run --release --example mosh_bench    # one Mosh display update: canonical resize plus repaint
 ```
 
 ## Target status

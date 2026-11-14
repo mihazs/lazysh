@@ -1,6 +1,7 @@
 use crate::frame::{Frame, Renderer};
 use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
+use crate::mosh::{self, Action, Display, DisplayFailure};
 use crate::size::{Size, SizeAuthority, SizeOutcome};
 use ghostty_vt::{ActiveScreen, Terminal};
 use std::fmt;
@@ -12,6 +13,18 @@ const MAX_REPLY_BYTES: usize = 64 * 1024;
 /// Pending OSC 52 writes and directory changes the host has not taken yet. The binding bounds one
 /// payload (192 KiB) but not how many queue up, so an ignored session cannot grow without limit.
 const MAX_PENDING_EVENTS: usize = 8;
+/// How a new grid size is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Resize {
+    /// libghostty-vt's own: reflowing and bottom-anchored.
+    Plain,
+    /// Mosh's: top-anchored, no reflow, nothing pushed into scrollback. Only at a sequence boundary.
+    Canonical,
+}
+
+/// DEC private modes 6 (origin) and 7 (wraparound); libghostty-vt reflows only while 7 is set.
+const MODE_ORIGIN: u16 = 6;
+const MODE_WRAPAROUND: u16 = 7;
 const DEFAULT_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 /// Matches the current transport credit window (OUTPUT_WINDOW/WINDOW in the Rust workers).
 const DEFAULT_INGRESS_BYTES: usize = 256 * 1024;
@@ -47,6 +60,10 @@ pub struct Config {
     /// libghostty-vt budgets scrollback in bytes, not lines (lazysh's setting is lines).
     pub scrollback_bytes: usize,
     pub ingress_bytes: usize,
+    /// The transport is Mosh: its OSC 7777 envelopes carry the authoritative grid size (see
+    /// [`crate::mosh`]) and UI sizes are only intent from the first byte, as with the xterm
+    /// backend's `enableCanonicalResize`.
+    pub canonical_frames: bool,
 }
 
 impl Default for Config {
@@ -55,6 +72,7 @@ impl Default for Config {
             size: Size::new(80, 24),
             scrollback_bytes: DEFAULT_SCROLLBACK_BYTES,
             ingress_bytes: DEFAULT_INGRESS_BYTES,
+            canonical_frames: false,
         }
     }
 }
@@ -78,6 +96,17 @@ pub struct Events {
     pub pwd_changes: Vec<Vec<u8>>,
     /// Clipboard writes and directory changes refused because the host had not taken earlier ones.
     pub dropped: u64,
+    /// The latest grid size the runtime applied since the last take (local or transport).
+    pub geometry: Option<Geometry>,
+    /// Set once, when the Mosh display fails; the session cannot recover (see [`DisplayFailure`]).
+    pub display_failure: Option<DisplayFailure>,
+}
+
+/// A grid size change and who decided it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geometry {
+    pub size: Size,
+    pub authority: SizeAuthority,
 }
 
 #[derive(Default)]
@@ -96,6 +125,7 @@ pub struct TerminalRuntime {
     size: Size,
     authority: SizeAuthority,
     intent: Option<Size>,
+    display: Option<Display>,
     processed: u64,
 }
 
@@ -127,8 +157,13 @@ impl TerminalRuntime {
             replies,
             events: Events::default(),
             size,
-            authority: SizeAuthority::Local,
+            authority: if config.canonical_frames {
+                SizeAuthority::Transport
+            } else {
+                SizeAuthority::Local
+            },
             intent: None,
+            display: config.canonical_frames.then(Display::new),
             processed: 0,
         })
     }
@@ -150,12 +185,62 @@ impl TerminalRuntime {
     pub fn pump(&mut self, budget: usize) -> usize {
         let mut bytes = 0;
         for chunk in self.ingress.take(budget) {
-            self.terminal.write(&chunk);
+            self.write_chunk(&chunk);
             self.collect_events();
             bytes += chunk.len();
         }
         self.processed += bytes as u64;
         bytes
+    }
+
+    /// Feed one chunk to the VT. On a Mosh session the chunk is cut after each envelope so its
+    /// geometry is applied between the bytes before it and the bytes after it.
+    fn write_chunk(&mut self, chunk: &[u8]) {
+        let mut at = 0;
+        while let Some((end, signal)) = self
+            .display
+            .as_mut()
+            .filter(|display| display.scanning())
+            .and_then(|display| display.find(chunk, at))
+        {
+            self.terminal.write(&chunk[at..end]);
+            at = end;
+            let action = self
+                .display
+                .as_mut()
+                .and_then(|display| display.handle(signal));
+            self.run(action);
+        }
+        self.terminal.write(&chunk[at..]);
+    }
+
+    fn run(&mut self, action: Option<Action>) {
+        match action {
+            Some(Action::Resize { cols, rows }) => {
+                let size = Size {
+                    cols,
+                    rows,
+                    ..self.size
+                };
+                // Out of memory is the only way this fails; a display that cannot follow the
+                // transport is as good as a corrupt one.
+                if self
+                    .apply(size, SizeAuthority::Transport, Resize::Canonical)
+                    .is_err()
+                {
+                    self.fail_display(DisplayFailure::InvalidFrame);
+                }
+            }
+            Some(Action::Failed(failure)) => self.events.display_failure = Some(failure),
+            None => {}
+        }
+    }
+
+    fn fail_display(&mut self, failure: DisplayFailure) {
+        if let Some(display) = self.display.as_mut() {
+            display.fail(failure);
+        }
+        self.events.display_failure = Some(failure);
     }
 
     /// Move what the VT queued into the bounded host-facing queue; runs after every chunk, so the
@@ -183,21 +268,34 @@ impl TerminalRuntime {
         self.processed
     }
 
-    /// The UI asks for a size (viewport change). Applied only when the runtime owns the size.
+    /// The UI asks for a size (viewport change). Applied only when the runtime owns the size; when
+    /// the transport owns it (Mosh) this is intent only: the caller forwards it to the transport
+    /// and the answer arrives as a frame envelope or through [`Self::apply_transport_size`].
     pub fn request_size(&mut self, size: Size) -> Result<SizeOutcome, Error> {
+        if self.authority == SizeAuthority::Transport && self.display_failure().is_some() {
+            return Ok(SizeOutcome::Dropped);
+        }
         let size = size.validate()?;
+        if self.display.is_some() && !mosh::valid_size(size.cols, size.rows) {
+            return Err(Error::InvalidSize(size));
+        }
         self.intent = Some(size);
         match self.authority {
-            SizeAuthority::Local => self.apply(size).map(|()| SizeOutcome::Applied),
+            SizeAuthority::Local => self
+                .apply(size, SizeAuthority::Local, Resize::Plain)
+                .map(|()| SizeOutcome::Applied),
             SizeAuthority::Transport => Ok(SizeOutcome::Deferred(size)),
         }
     }
 
-    /// The transport states the real grid size (Mosh framebuffer). Always applied; from now on UI
-    /// requests are deferred until [`Self::release_transport_authority`].
+    /// The transport states the real grid size. Always applied, as a plain libghostty-vt resize
+    /// (reflowing, bottom-anchored); from now on UI requests are deferred until
+    /// [`Self::release_transport_authority`]. Mosh frames do not come through here: the envelope
+    /// path resizes top-anchored and without reflow ([`Config::canonical_frames`]), which needs to
+    /// run at a sequence boundary that only the byte stream knows.
     pub fn apply_transport_size(&mut self, size: Size) -> Result<(), Error> {
         let size = size.validate()?;
-        self.apply(size)?;
+        self.apply(size, SizeAuthority::Transport, Resize::Plain)?;
         self.authority = SizeAuthority::Transport;
         Ok(())
     }
@@ -207,20 +305,90 @@ impl TerminalRuntime {
     pub fn release_transport_authority(&mut self) -> Result<(), Error> {
         self.authority = SizeAuthority::Local;
         match self.intent {
-            Some(size) if size != self.size => self.apply(size),
+            Some(size) if size != self.size => {
+                self.apply(size, SizeAuthority::Local, Resize::Plain)
+            }
             _ => Ok(()),
         }
     }
 
-    fn apply(&mut self, size: Size) -> Result<(), Error> {
-        self.terminal.resize(
+    /// The Mosh transport ended: stop reading envelopes and hand the size back to the UI without
+    /// applying its pending intent (the final canonical geometry stays until the UI asks again).
+    /// A frame left open fails the display as [`DisplayFailure::PartialFrame`]. Idempotent.
+    pub fn finish_canonical(&mut self) -> Option<DisplayFailure> {
+        let action = self.display.as_mut().and_then(Display::finish);
+        self.run(action);
+        if self.display.is_some() {
+            self.authority = SizeAuthority::Local;
+            self.intent = None;
+        }
+        self.display_failure()
+    }
+
+    /// Why the Mosh display stopped following the transport, if it did.
+    pub fn display_failure(&self) -> Option<DisplayFailure> {
+        self.display.as_ref().and_then(Display::failure)
+    }
+
+    fn apply(&mut self, size: Size, authority: SizeAuthority, how: Resize) -> Result<(), Error> {
+        let old = self.size;
+        // Every Mosh update repeats the grid size; an unchanged grid is a plain call that only
+        // refreshes the pixel size, and moves nothing.
+        if how == Resize::Plain || (size.cols, size.rows) == (old.cols, old.rows) {
+            self.terminal.resize(
+                size.cols,
+                size.rows,
+                size.cell_width_px,
+                size.cell_height_px,
+            )?;
+        } else {
+            self.resize_canonical(size)?;
+        }
+        self.size = size;
+        if size != old {
+            self.events.geometry = Some(Geometry { size, authority });
+        }
+        Ok(())
+    }
+
+    /// libghostty-vt keeps the bottom of the grid when it shrinks (the rows above become history),
+    /// pulls history down when it grows, and reflows wrapped lines while wraparound is on. Mosh
+    /// repaints from the top, so each of those would duplicate or rewrite rows the server never
+    /// changed. So: erase the rows that no longer fit (Ghostty trims blank trailing rows without
+    /// making history), park the cursor on the first cell so there is no reason to move rows,
+    /// resize with wraparound off (no reflow), then put the cursor back, clamped. The erase and the
+    /// moves are ordinary VT input at a sequence boundary; origin mode is cleared around them
+    /// because CUP is margin-relative under it. The saved-cursor slot is not touched.
+    fn resize_canonical(&mut self, size: Size) -> Result<(), Error> {
+        let (wrap, origin) = (
+            self.terminal.mode_get(MODE_WRAPAROUND)?,
+            self.terminal.mode_get(MODE_ORIGIN)?,
+        );
+        let scrolled = self.terminal.scrollbar()?;
+        self.terminal.scroll_viewport_bottom();
+        let (x, y) = self.renderer.cursor_cell(&self.terminal)?;
+        self.terminal.mode_set(MODE_ORIGIN, false)?;
+        if size.rows < self.size.rows {
+            self.terminal
+                .write(format!("\x1b[{};1H\x1b[J", size.rows + 1).as_bytes());
+        }
+        self.terminal.write(b"\x1b[H");
+        self.terminal.mode_set(MODE_WRAPAROUND, false)?;
+        let resized = self.terminal.resize(
             size.cols,
             size.rows,
             size.cell_width_px,
             size.cell_height_px,
-        )?;
-        self.size = size;
-        Ok(())
+        );
+        self.terminal.mode_set(MODE_WRAPAROUND, wrap)?;
+        let (x, y) = (x.min(size.cols - 1), y.min(size.rows - 1));
+        self.terminal
+            .write(format!("\x1b[{};{}H", y + 1, x + 1).as_bytes());
+        self.terminal.mode_set(MODE_ORIGIN, origin)?;
+        if scrolled.offset + scrolled.len < scrolled.total {
+            self.terminal.scroll_viewport_row(scrolled.offset);
+        }
+        Ok(resized?)
     }
 
     pub fn size(&self) -> Size {
