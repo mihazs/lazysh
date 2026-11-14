@@ -10,11 +10,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// A companion command that runs in no multiplexer pane, whatever the test process itself runs in.
 fn command(directory: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
-    command
-        .env("LAZYSH_STATE_DIR", directory)
-        .env("TMUX_PANE", "%7");
+    command.env("LAZYSH_STATE_DIR", directory);
+    for name in [
+        "TMUX_PANE",
+        "ZELLIJ_SESSION_NAME",
+        "ZELLIJ_PANE_ID",
+        "HERDR_ENV",
+        "HERDR_PANE_ID",
+        "HERDR_SOCKET_PATH",
+    ] {
+        command.env_remove(name);
+    }
     command
 }
 fn run(directory: &Path, args: &[&str], input: &[u8]) -> Output {
@@ -41,7 +50,12 @@ fn start(directory: &Path, timeout: &str) -> Hook {
     start_with(directory, timeout, &payload())
 }
 fn start_with(directory: &Path, timeout: &str, payload: &Value) -> Hook {
+    start_in(directory, timeout, payload, &[("TMUX_PANE", "%7")])
+}
+/// A hook started with exactly the environment a multiplexer exports to the pane it runs in.
+fn start_in(directory: &Path, timeout: &str, payload: &Value, pane: &[(&str, &str)]) -> Hook {
     let mut child = command(directory)
+        .envs(pane.iter().copied())
         .args([
             "approval-request",
             "--agent",
@@ -97,11 +111,13 @@ fn resolve_with(directory: &Path, request: &Value, decision: &str, extra: &[&str
         request["expectedHash"].as_str().unwrap(),
         "--session-id",
         request["sessionId"].as_str().unwrap(),
-        "--pane-id",
-        request["paneId"].as_str().unwrap(),
         "--decision",
         decision,
     ];
+    // A request listed without a pane is answered without one; the companion refuses any pane for it.
+    if let Some(pane) = request["paneId"].as_str() {
+        args.extend(["--pane-id", pane]);
+    }
     args.extend_from_slice(extra);
     run(directory, &args, b"")
 }
@@ -449,4 +465,158 @@ fn requests_stored_by_an_older_companion_still_resolve() {
             .success()
     );
     assert_eq!(decision(hook)["updatedPermissions"][0]["type"], "addRules");
+}
+
+/// A `herdr` that lists exactly these sessions, as `herdr session list --json` does; returns the `PATH` that finds it.
+#[cfg(unix)]
+fn fake_herdr(directory: &Path, sessions: &Value) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = directory.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("herdr");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\n[ \"$*\" = 'session list --json' ] || exit 1\ncat <<'JSON'\n{sessions}\nJSON\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+}
+#[cfg(unix)]
+fn herdr_pane<'a>(path: &'a str, pane: &'a str) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("HERDR_ENV", "1"),
+        ("HERDR_PANE_ID", pane),
+        ("HERDR_SOCKET_PATH", "/run/herdr/work.sock"),
+        ("PATH", path),
+    ]
+}
+#[cfg(unix)]
+fn herdr_sessions() -> Value {
+    json!({"sessions":[
+        {"default":true,"name":"default","running":true,"socket_path":"/run/herdr/default.sock"},
+        {"default":false,"name":"work","running":true,"socket_path":"/run/herdr/work.sock"}
+    ]})
+}
+
+#[cfg(unix)]
+#[test]
+fn a_zellij_or_herdr_pane_is_bound_into_the_decision_and_no_other_pane_can_answer_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_herdr(dir.path(), &herdr_sessions());
+    let zellij = vec![("ZELLIJ_SESSION_NAME", "work"), ("ZELLIJ_PANE_ID", "3")];
+    for (pane, identity, others) in [
+        (
+            zellij,
+            "zellij:work:3",
+            vec!["zellij:work:4", "zellij:other:3", "%3", "herdr:work:w3V:p1"],
+        ),
+        (
+            herdr_pane(&path, "w3V:p1"),
+            "herdr:work:w3V:p1",
+            vec![
+                "herdr:work:w3V:p2",
+                "herdr:work:w4V:p1",
+                "herdr:default:w3V:p1",
+                "%1",
+                "zellij:work:3",
+                "herdr:work:w3V:p1:x",
+            ],
+        ),
+    ] {
+        let state = dir.path().join(identity.replace(':', "-"));
+        let hook = start_in(&state, "10", &payload(), &pane);
+        let request = pending(&state);
+        assert_eq!(request["paneId"], identity);
+        // A pane replaced by another pane (or session) of the same multiplexer, another multiplexer and no pane all fail closed.
+        for other in others.iter().map(|other| json!(other)).chain([Value::Null]) {
+            let mut altered = request.clone();
+            altered["paneId"] = other;
+            let output = resolve(&state, &altered, "allow");
+            assert!(!output.status.success(), "{altered}");
+            assert!(output.stdout.is_empty());
+        }
+        assert_eq!(list(&state)["requests"].as_array().unwrap().len(), 1);
+        // The board row is named as its lifecycle hooks name it: by a Zellij pane, never by a Herdr one.
+        let board: Value = serde_json::from_slice(&run(&state, &["snapshot"], b"").stdout).unwrap();
+        assert_eq!(
+            board["sessions"][0]["paneId"],
+            if identity.starts_with("herdr:") {
+                Value::Null
+            } else {
+                json!(identity)
+            }
+        );
+        assert!(resolve(&state, &request, "allow").status.success());
+        assert_eq!(decision(hook), json!({"behavior":"allow"}));
+        assert!(!resolve(&state, &request, "allow").status.success());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_herdr_pane_that_cannot_be_named_exactly_is_listed_without_a_pane_that_no_pane_id_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = |running: bool, name: &str| json!({"default":false,"name":name,"running":running,"socket_path":"/run/herdr/work.sock"});
+    let missing = dir.path().join("empty");
+    fs::create_dir_all(&missing).unwrap();
+    // Each case lists a different set of sessions (or none), then breaks the pane's own environment.
+    for (index, (sessions, pane_id, env_value)) in [
+        (json!({"sessions":[work(false, "work")]}), "w3V:p1", "1"),
+        (json!({"sessions":[]}), "w3V:p1", "1"),
+        (
+            json!({"sessions":[work(true, "work"), work(true, "other")]}),
+            "w3V:p1",
+            "1",
+        ),
+        (json!({"sessions":[work(true, "bad:name")]}), "w3V:p1", "1"),
+        (json!({"sessions":[work(true, "work")]}), "p1", "1"),
+        (json!({"sessions":[work(true, "work")]}), "w3V:p1", "0"),
+        (json!({"nope":true}), "w3V:p1", "1"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = fake_herdr(&dir.path().join(index.to_string()), &sessions);
+        let mut pane = herdr_pane(&path, pane_id);
+        pane[0].1 = env_value;
+        let state = dir.path().join(format!("state-{index}"));
+        let hook = start_in(&state, "10", &payload(), &pane);
+        let request = pending(&state);
+        assert_eq!(request["paneId"], Value::Null, "case {index}");
+        let mut invented = request.clone();
+        invented["paneId"] = json!("herdr:work:w3V:p1");
+        assert!(!resolve(&state, &invented, "allow").status.success());
+        assert!(resolve(&state, &request, "deny").status.success());
+        assert_eq!(decision(hook)["behavior"], "deny");
+    }
+    // No herdr binary at all fails closed the same way.
+    let pane = herdr_pane(missing.to_str().unwrap(), "w3V:p1");
+    let hook = start_in(&dir.path().join("state-none"), "10", &payload(), &pane);
+    assert_eq!(
+        pending(&dir.path().join("state-none"))["paneId"],
+        Value::Null
+    );
+    drop(hook);
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_names_the_pane_before_zellij_and_herdr_and_a_malformed_tmux_pane_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_herdr(dir.path(), &herdr_sessions());
+    let mut pane = herdr_pane(&path, "w3V:p1");
+    pane.extend([
+        ("ZELLIJ_SESSION_NAME", "work"),
+        ("ZELLIJ_PANE_ID", "3"),
+        ("TMUX_PANE", "%9"),
+    ]);
+    let hook = start_in(dir.path(), "10", &payload(), &pane);
+    assert_eq!(pending(dir.path())["paneId"], "%9");
+    drop(hook);
+    let refused = dir.path().join("refused");
+    let output = start_in(&refused, "10", &payload(), &[("TMUX_PANE", "7;cmd")]).finish();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!refused.exists());
 }

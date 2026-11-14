@@ -68,11 +68,21 @@ it("rejects malformed request hashes, ambiguous panes and unbounded payloads", (
   for (const row of [
     { ...request, expectedHash: "a" },
     { ...request, paneId: "%7;command" },
+    { ...request, paneId: "zellij:work" },
+    { ...request, paneId: "herdr:work:w3V:p1;command" },
     { ...request, toolInput: "x".repeat(32769) },
   ])
     expect(() =>
       parseApprovals({ schemaVersion: 1, requests: [row] }),
     ).toThrow();
+});
+
+it.each(['zellij:work:3','herdr:work:w3V:p1'])('lists a request of the pane %s and answers it with exactly that pane',async paneId=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[{...request,paneId}]}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1"/>);
+  await screen.findByText(paneId);
+  fireEvent.click(screen.getByRole('button',{name:'Deny request'}));
+  await vi.waitFor(()=>expect(invoke).toHaveBeenLastCalledWith('resolve_agent_approval',{sessionId:'ssh1',id:request.id,expectedHash:request.expectedHash,agentSessionId:'agent-session',paneId,decision:'deny'},expect.anything()));
 });
 
 it('does not read approvals or keep its interval active while hidden',async()=>{
