@@ -1,6 +1,7 @@
 import {createTerminal, applyTerminalTheme} from '../../src/xterm/terminal';
 import {defaults, parsePreferences} from '../../src/preferences';
 import {importedTheme} from '../../src/themeImport';
+import {fontFamilyFor} from '../../src/fonts';
 import '../../src/xterm/styles';
 
 export function mountThemeRenderingHarness() {
@@ -18,7 +19,7 @@ export function mountThemeRenderingHarness() {
     const imported = importedTheme({v:1,name:'Renderer fixture',mode,colors:{...colors,...(mode==='light'?{background:'#fafafa',foreground:'#111111'}:{}),...(bold===undefined?{}:{bold})}});
     host.style.background=imported.colors.background!;
     preferences = parsePreferences({...defaults,theme:'custom',customTheme:imported.colors,customThemeInfo:{name:imported.name,mode:imported.mode}});
-    applyTerminalTheme(terminal,preferences);
+    applyTerminalTheme(terminal,preferences,fontFamilyFor(preferences));
   }
   theme();
   terminal.focus();
@@ -59,6 +60,7 @@ export function mountThemeRenderingHarness() {
       return {foreground:style.color,background:style.backgroundColor,weight:style.fontWeight,text:span.textContent,classes:span.className};
     },
     rows() {return Array.from(host.querySelectorAll('.xterm-rows>div'),row=>row.textContent);},
+    grid() {const screen=host.querySelector('.xterm-screen')!.getBoundingClientRect();return {left:screen.left,top:screen.top,cellWidth:screen.width/terminal.cols,cellHeight:screen.height/terminal.rows};},
     dispose() {terminal.dispose();terminal.dispose();host.remove();},
   };
 }
