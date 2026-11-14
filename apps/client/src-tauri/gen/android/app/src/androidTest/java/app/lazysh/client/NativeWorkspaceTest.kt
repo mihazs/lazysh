@@ -1,11 +1,15 @@
 package app.lazysh.client
 
+import android.app.Activity
+import android.app.Instrumentation
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.view.KeyEvent
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.PatternMatcher
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -4696,6 +4700,118 @@ class NativeWorkspaceTest {
                 endOwnedConnection(scenario, name)
             }
             println("lazysh parity: only the opted-in host saw a forwarded agent, listing exactly the selected identity")
+        }
+    }
+
+    /** The text the system clipboard holds, read where the app itself reads it. */
+    private fun systemClipboardText(): String? {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        var text: String? = null
+        instrumentation.runOnMainSync {
+            text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(instrumentation.targetContext)?.toString()
+        }
+        return text
+    }
+
+    /** A real finger tap at the point `point` reports in WebView CSS pixels as [x, y, innerWidth], measured once the keyboard is closed. */
+    private fun tapCss(point: () -> JSONArray) {
+        closeSoftKeyboard()
+        val css = point()
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+            val location = IntArray(2); view.getLocationOnScreen(location)
+            val scale = view.width / css.getDouble(2)
+            floatArrayOf((location[0] + css.getDouble(0) * scale).toFloat(), (location[1] + css.getDouble(1) * scale).toFloat())
+        }, Press.FINGER))
+    }
+
+    /** The one visible button with this label or text, hit-tested, as [x, y, innerWidth]. */
+    private fun buttonCenter(scenario: ActivityScenario<MainActivity>, label: String) = JSONArray(evaluate(scenario, """
+        (()=>{const matches=Array.from(document.querySelectorAll('button')).filter(x=>(x.getAttribute('aria-label')||x.textContent.trim())===${JSONObject.quote(label)});
+          if(matches.length!==1||matches[0].disabled)throw Error('Owned enabled button required');
+          const rect=matches[0].getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+          if(document.elementFromPoint(x,y)?.closest('button')!==matches[0])throw Error('Owned button hit target required');
+          return [x,y,innerWidth];})()
+    """))
+
+    /** The middle of `text` inside the terminal row that reads exactly `row`, as [x, y, innerWidth]. */
+    private fun terminalTextCenter(scenario: ActivityScenario<MainActivity>, row: String, text: String) = JSONArray(evaluate(scenario, """
+        (()=>{const lines=Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).filter(x=>x.textContent.trim()===${JSONObject.quote(row)});
+          if(lines.length<1)throw Error('Owned terminal row required');
+          let offset=lines[0].textContent.indexOf(${JSONObject.quote(text)})+${text.length / 2};
+          const nodes=document.createTreeWalker(lines[0],NodeFilter.SHOW_TEXT);
+          for(let node=nodes.nextNode();node;node=nodes.nextNode()){
+            if(offset<node.textContent.length){const range=document.createRange();range.setStart(node,offset);range.setEnd(node,offset+1);
+              const box=range.getBoundingClientRect();return [box.left+box.width/2,box.top+box.height/2,innerWidth];}
+            offset-=node.textContent.length;}
+          throw Error('Owned terminal text was not drawn');})()
+    """))
+
+    private fun regionShows(label: String, text: String) =
+        "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')===${JSONObject.quote(label)} && x.textContent.includes(${JSONObject.quote(text)}))"
+
+    /**
+     * What a remote shell can ask of the device, observed at the operating system: an OSC 52 write reaches the system
+     * clipboard only after the Allow tap, and Open on a terminal link starts an ACTION_VIEW intent for exactly that URL.
+     */
+    @Test fun ownedSshClipboardAndLinksReachTheSystemThroughRealUi() {
+        val name = "Parity clipboard links"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            awaitDocument(scenario, "authenticated owned clipboard prompt", terminalScreenContains(parity.prompt("primary")))
+
+            val copied = "OSC52_${parity.nonce}"
+            val osc = "printf '\\033]52;c;%s\\007' \"\$(printf %s $copied | base64)\""
+            require(!osc.contains("]52;c;$copied")) { "Owned OSC 52 text must not appear in its input" }
+            sendOwnedCommand(scenario, osc, parity.label)
+            awaitDocument(scenario, "owned OSC 52 consent", regionShows("Remote clipboard request", copied))
+            // The composer's own paste left the command on the clipboard; the remote text must not replace it before consent.
+            assertTrue("The OSC 52 text must not reach the clipboard before Allow", systemClipboardText() != copied)
+            tapCss { buttonCenter(scenario, "Allow this copy") }
+            val copyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (systemClipboardText() != copied) {
+                assertTrue("Allow did not write the OSC 52 text to the system clipboard", System.nanoTime() < copyDeadline)
+                Thread.sleep(100)
+            }
+            // SystemUI previews the copied clip over the bottom-left for a few seconds; wait it out before the next tap.
+            awaitClipboardPreviewGone(System.nanoTime())
+
+            val url = "https://example.invalid/l/${parity.nonce.take(8)}"
+            sendOwnedCommand(scenario, "printf '%s\\n' $url", parity.label)
+            awaitDocument(scenario, "owned terminal link row",
+                "Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).some(x=>x.textContent.trim()===${JSONObject.quote(url)})")
+            var offered = false
+            for (attempt in 1..4) {
+                if (offered) break
+                tapCss { terminalTextCenter(scenario, url, url) }
+                // A second tap could dismiss the prompt the first one is still opening, so give each tap time.
+                val offerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+                while (!offered && System.nanoTime() < offerDeadline) {
+                    offered = evaluate(scenario, regionShows("Terminal link", url)) == "true"
+                    if (!offered) Thread.sleep(100)
+                }
+            }
+            assertTrue("Tapping the terminal link did not offer it", offered)
+            val view = IntentFilter(Intent.ACTION_VIEW).apply {
+                addDataScheme("https"); addDataAuthority("example.invalid", null); addDataPath("/l/${parity.nonce.take(8)}", PatternMatcher.PATTERN_LITERAL)
+            }
+            // A blocking monitor stands in for the browser, so the intent is observed without any handler installed.
+            val monitor = instrumentation.addMonitor(view, Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true)
+            try {
+                tapCss { buttonCenter(scenario, "Open in browser") }
+                val openDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                while (monitor.hits < 1) {
+                    assertTrue("Open in browser did not start an ACTION_VIEW intent for $url", System.nanoTime() < openDeadline)
+                    Thread.sleep(50)
+                }
+                assertEquals("Open in browser must start exactly one ACTION_VIEW intent", 1, monitor.hits)
+            } finally { instrumentation.removeMonitor(monitor) }
+            println("lazysh parity: OSC 52 Allow wrote the system clipboard and Open in browser started an ACTION_VIEW intent for the terminal link")
         }
     }
 
