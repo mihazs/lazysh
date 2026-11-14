@@ -8,35 +8,15 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 #[path = "support/binary.rs"]
 mod binary;
-
-fn agent(state: &Path) -> Command {
-    let mut command = Command::new(binary::path());
-    command.env("LAZYSH_STATE_DIR", state);
-    command
-}
-
-/// Change the host browser switch, as the app does through the settings command.
-fn switch(state: &Path, revision: &str, enabled: &str) {
-    let output = agent(state)
-        .args(["settings", "host-browser", "update"])
-        .args([
-            "--expected-revision",
-            revision,
-            "--host-browser-enabled",
-            enabled,
-        ])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-}
-
-fn enable(state: &Path) {
-    switch(state, "0", "true");
-}
+#[path = "support/host_browser.rs"]
+mod support;
+use support::{
+    agent, assert_nothing_started, chrome, enable, refusing_states, state_text, switch, wait_gone,
+};
 
 fn launcher(state: &Path, extra: &[&str], dev_flag: bool) -> Command {
     let mut command = agent(state);
@@ -143,19 +123,6 @@ fn profile_of(report: &Value) -> PathBuf {
     PathBuf::from(report["profile"].as_str().unwrap())
 }
 
-fn alive(pid: u32) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
-fn wait_gone(pid: u32) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while alive(pid) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(!alive(pid), "process {pid} survived the launcher");
-}
-
 fn stop(mut child: Child) {
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
@@ -177,52 +144,17 @@ fn cleared(output: &Output) -> bool {
     serde_json::from_slice::<Value>(&output.stdout).unwrap()["cleared"] == true
 }
 
-/// Everything a launcher run left in the state directory, as text, so a leak shows as a missing needle.
-fn state_text(state: &Path) -> String {
-    fn walk(path: &Path, text: &mut String) {
-        let Ok(entries) = fs::read_dir(path) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            text.push_str(&entry.file_name().to_string_lossy());
-            if entry.path().is_dir() {
-                walk(&entry.path(), text);
-            } else if let Ok(bytes) = fs::read(entry.path()) {
-                text.push_str(&String::from_utf8_lossy(&bytes));
-            }
-        }
-    }
-    let mut text = String::new();
-    walk(state, &mut text);
-    text
-}
-
 #[test]
 fn a_switch_that_is_off_or_unreadable_fails_before_anything_starts() {
     let fixture = Fixture::new();
     let root = fixture.directory.path();
-    let explicit = root.join("explicit");
-    let malformed = root.join("malformed");
-    for state in [&explicit, &malformed] {
-        fs::create_dir(state).unwrap();
-        fs::set_permissions(state, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    switch(&explicit, "0", "false");
-    let file = malformed.join("host-browser.json");
-    fs::write(&file, r#"{"hostBrowserEnabled":true,"x":1}"#).unwrap();
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     // The developer flag is on in every case: the switch alone must refuse.
-    for (state, reason) in [
-        (&fixture.state, "HostBrowserDisabled"),
-        (&explicit, "HostBrowserDisabled"),
-        (&malformed, "InvalidArgument"),
-    ] {
+    for (state, reason) in refusing_states(root, &fixture.state) {
         let binary = ["--binary", fixture.fake.to_str().unwrap()];
-        let mut command = launcher(state, &binary, true);
+        let mut command = launcher(&state, &binary, true);
         let output = command.env("FAKE_BROWSER_DIR", root).output().unwrap();
         assert!(failure(&output).contains(reason), "{output:?}");
-        assert!(fixture.recorded("args").is_none(), "a browser was started");
-        assert!(!state.join("host-browser").exists(), "a profile was made");
+        assert_nothing_started(root, &state);
     }
     assert!(!fixture.state.exists(), "the gate created state");
 }
@@ -435,18 +367,7 @@ fn the_page_address_is_never_written_by_the_launcher() {
 /// The real browser: skipped, with a message, on a host that has none of the supported binaries.
 #[test]
 fn real_browser_serves_loopback_devtools_and_leaves_nothing_behind() {
-    let Some(binary) = [
-        "google-chrome-stable",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-    ]
-    .iter()
-    .find_map(|name| {
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .map(|dir| dir.join(name))
-            .find(|path| path.is_file())
-    }) else {
+    let Some(binary) = chrome() else {
         eprintln!("skipped: no Chrome or Chromium on PATH");
         return;
     };

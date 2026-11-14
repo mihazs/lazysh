@@ -108,8 +108,10 @@ enum Command {
     /// Developer prototype: start a throwaway Chrome-family browser with a random loopback debug port
     /// and stop it when stdin closes. Needs the host browser setting on (`settings host-browser update`)
     /// and LAZYSH_DEV_HOST_BROWSER=1; see docs/host-browser.md.
-    #[command(hide = true)]
+    #[command(hide = true, args_conflicts_with_subcommands = true)]
     HostBrowser {
+        #[command(subcommand)]
+        command: Option<HostBrowserCommand>,
         /// Remove the kept profile (Clear browser data) instead of starting a browser. Works while the
         /// setting is off, so that a user who switched the feature off can still remove what it kept.
         #[arg(long, conflicts_with_all = ["binary", "allow_origin", "url", "headed", "no_sandbox", "keep_profile"])]
@@ -310,6 +312,18 @@ enum SettingsCommand {
     },
 }
 #[derive(Subcommand)]
+enum HostBrowserCommand {
+    /// The relay one SSH exec channel talks to: starts a private, headless Chrome or Chromium and streams its
+    /// page as frames (docs/host-browser.md, "Relay wire format"). Needs the host browser setting on.
+    Serve {
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+        /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
+        #[arg(long)]
+        no_sandbox: bool,
+    },
+}
+#[derive(Subcommand)]
 enum HostBrowserSettingsCommand {
     Show,
     Update {
@@ -421,6 +435,17 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
         }
         Command::HostBrowser {
+            command: Some(HostBrowserCommand::Serve { binary, no_sandbox }),
+            ..
+        } => {
+            lazysh_agent::host_browser::relay::serve(&lazysh_agent::host_browser::relay::Serve {
+                state: &lazysh_agent::state_directory()?,
+                binary: binary.as_deref(),
+                no_sandbox,
+            })?;
+            None
+        }
+        Command::HostBrowser {
             clear_data: true, ..
         } => {
             let cleared =
@@ -428,6 +453,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             Some(serde_json::json!({"schemaVersion": 1, "cleared": cleared}))
         }
         Command::HostBrowser {
+            command: None,
             clear_data: false,
             keep_profile,
             binary,
