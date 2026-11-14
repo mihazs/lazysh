@@ -539,7 +539,7 @@ What this says, and does not say:
 - Not shown: Chromium or an Android WebView (a different V8 version and flags), WebAssembly SIMD, a worker thread, memory growth under a long session (the linear memory never shrinks), startup time of instantiating a 4.5 MiB module, any rendering, energy, or any device.
 ### wgpu prototype against the CPU reference renderer (host GPU, not a device)
 
-Measured with `cargo run --release --example wgpu_bench` in `packages/terminal-runtime/prototypes/wgpu` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): the wgpu candidate, prototype quality, implementing the same `TerminalRenderer` trait as the CPU reference renderer and fed the same `Frame` stream from the real libghostty-vt core. It consumes the shared layout (`layout::row_draws`): each draw becomes one instance of an instanced quad (a solid rectangle, or a glyph mask taken from an atlas), the dirty rows' instances are uploaded once per frame and drawn in one pass into an offscreen `Rgba8Unorm` texture. It is **offscreen and headless**: no window, swapchain or compositor, so `present` waits for the GPU to finish what `draw` submitted (the latest moment a swapchain image could be shown), and what the table calls a frame is draw (instance build, upload, encode, submit) plus that wait. It draws the reference renderer's dot-pattern glyphs, not text: no fonts, shaping, fallback or atlas eviction.
+Measured with `cargo run --release --example wgpu_bench` in `packages/terminal-runtime/prototypes/wgpu` ([#1323](https://github.com/mihazs/lazysh/issues/1323); that directory was promoted to [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) by [#1324](https://github.com/mihazs/lazysh/issues/1324), and the numbers below were taken before the promotion, with the prototype's code; the [next section](#wgpu-renderer-idle-atlas-and-memory-host-gpu-not-a-device) measures the production crate): the wgpu candidate, prototype quality, implementing the same `TerminalRenderer` trait as the CPU reference renderer and fed the same `Frame` stream from the real libghostty-vt core. It consumes the shared layout (`layout::row_draws`): each draw becomes one instance of an instanced quad (a solid rectangle, or a glyph mask taken from an atlas), the dirty rows' instances are uploaded once per frame and drawn in one pass into an offscreen `Rgba8Unorm` texture. It is **offscreen and headless**: no window, swapchain or compositor, so `present` waits for the GPU to finish what `draw` submitted (the latest moment a swapchain image could be shown), and what the table calls a frame is draw (instance build, upload, encode, submit) plus that wait. It draws the reference renderer's dot-pattern glyphs, not text: no fonts, shaping, fallback or atlas eviction.
 
 **Correctness against the oracle.** `tests/vs_reference.rs` feeds the same frames to both renderers and requires identical pixels: ASCII, bold, faint, inverse, hidden, every underline style with a colored underline, strike-through, overline, wide, combining and emoji clusters, the four cursor shapes (including on a wide character), linear and block selection, 40 incremental frames against the CPU renderer after each one, and recovery from a destroyed device (`DeviceLost` on every call, `resume`, snapshot). All four pass; the test fails if one color channel is swapped in the shader (checked by hand), and refuses to compare against a blank oracle image. This is the golden-image check of [#1322](https://github.com/mihazs/lazysh/issues/1322) applied to a GPU implementation; it does not show anything about text.
 
@@ -639,6 +639,74 @@ What this says, and does not say:
 - **Pipeline throughput through GL was about as good as through Vulkan at 80x24 and lower at 152x38**: the median ratio of MiB/s was 0.96 (GL) and 1.01 (GLES) at 80x24 and 0.74 and 0.88 at 152x38 (rows 0.61 to 1.12). It includes the VT and the host load, so it is the weakest of these figures.
 - **Memory was within a few MiB.** The first GPU context added 65.5 and 65.7 MiB resident (GL 4.6), 65.3 and 65.3 MiB (GLES 3.2) and 61.1 and 60.5 MiB (Vulkan); four more renderers added 10.7 and 10.7 MiB (GL), 10.6 and 10.6 MiB (GLES) and 12.6 and 12.6 MiB (Vulkan). Creating the first renderer took 175 and 40 ms (GL), 179 and 84 ms (GLES) and 234 and 243 ms (Vulkan); one invocation each says little about startup, but no backend was slower to start than Vulkan in these runs.
 - **Not shown, and what it does not tell about an Android device.** The GLES context here is Mesa's radeonsi on a desktop GPU, forced by an environment variable, so these figures say that wgpu's GL backend adds no large cost next to Vulkan on one desktop driver and give nothing on an Android GLES driver (Adreno, Mali, PowerVR, ANGLE), whose quality, shader compiler and context-loss behaviour differ. Also not shown: wgpu on Android at all (the vendored `ghostty-vt` build has no Android target, see [Amendment 2](adr-0001-terminal-runtime.md#amendment-2-2026-11-13-native-candidates-measured-on-the-host-and-on-waydroid)), a window surface and EGL display on a device, presentation timing, energy, text, and idle wake-ups. The host load differed between runs (9.6 to 25), so a ratio below about 1.1 cannot be told from noise.
+
+### wgpu renderer: idle, atlas and memory (host GPU, not a device)
+
+Measured with `cargo run --release --example renderer_stats` and `--example wgpu_bench` in [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) ([#1324](https://github.com/mihazs/lazysh/issues/1324)): the production crate, which keeps the prototype's instanced-quad pipeline and adds a bounded glyph atlas with eviction, dirty-row batching (backgrounds merged into runs, the theme background dropped), `needs_draw()`, an adapter policy and counters. Still **offscreen and headless** with the reference renderer's dot-pattern glyphs: no window, swapchain, fonts or shaping (#1325), no Android, and a frame is still draw plus a wait for the GPU. Raw output: [`renderer_stats`](benchmarks/terminal-wgpu-renderer-stats-1.txt), [`wgpu_bench`](benchmarks/terminal-wgpu-renderer-bench-1.txt).
+
+Environment: AMD Radeon RX 5500 XT (RADV NAVI14, Mesa 26.2.6), Vulkan, wgpu 30.0.2, discrete GPU; AMD Ryzen 9 5900X host shared with other builds and agents (load average 6.2 at the start of `renderer_stats`, 5.5 at the start of `wgpu_bench`); Linux 7.3.3, rustc 1.96.1 release profile; one run of each, no repeats beyond the bench's own 5 runs per cell.
+
+**What a frame submits.** The same 16 MiB streams as above, a frame after every 256 KiB (64 frames), 8x16 pixel cells, 2048-texel atlas:
+
+| grid | workload | rows drawn | passes (= submissions) | layout draws | instances submitted | glyph hits | glyph misses | atlas upload KiB | evictions | uploaded MiB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | 1536 | 64 | 223,601 | 102,297 (46 %) | 100,685 | 36 | 4.5 | 0 | 3.13 |
+| 80x24 | ANSI + truecolor | 1533 | 64 | 150,647 | 31,051 (21 %) | 27,986 | 21 | 2.6 | 0 | 0.95 |
+| 80x24 | full-screen redraw | 150 | 64 | 15,243 | 3,433 (23 %) | 3,222 | 21 | 2.6 | 0 | 0.11 |
+| 80x24 | CJK/emoji/combining | 87 | 64 | 7,265 | 1,294 (18 %) | 1,139 | 28 | 5.6 | 0 | 0.04 |
+| 152x38 | plain text | 2432 | 64 | 530,417 | 163,211 (31 %) | 160,717 | 36 | 4.5 | 0 | 4.99 |
+| 152x38 | ANSI + truecolor | 2429 | 64 | 413,833 | 49,443 (12 %) | 44,604 | 21 | 2.6 | 0 | 1.51 |
+| 152x38 | full-screen redraw | 164 | 64 | 28,171 | 3,433 (12 %) | 3,222 | 21 | 2.6 | 0 | 0.11 |
+| 152x38 | CJK/emoji/combining | 101 | 64 | 15,783 | 1,602 (10 %) | 1,447 | 28 | 5.6 | 0 | 0.05 |
+
+Each frame is one pass and one `Queue::submit`. The renderer submitted 10 to 46 % of the draws the layout asked for, because a row is cleared to the theme background in one instance, the cell backgrounds that equal it are not drawn and neighbouring cells of one color are merged. The atlas misses are the distinct (cluster, width, weight) combinations of the stream: at most 36, each rasterized and uploaded once (a mask is one cell or two cells of bytes, 5.6 KiB at most per workload); nothing was evicted at this size.
+
+**Rows drawn changed since the earlier tables, for every renderer.** `Screen::apply` now marks a row dirty only when its cells differ from what the renderer holds, so an application that rewrites the same text (a TUI repainting its status bar) costs no redraw. The full-screen-redraw and CJK workloads rewrite mostly identical rows: 2,070 and 1,047 rows were drawn per 1,024 frames at 80x24 where 24,576 were before (the [prototype table](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device) above lists the pre-change counts, and its frame times for those workloads are not comparable with these). The `wgpu_bench` run, one per-cell median of 5 runs ([raw output](benchmarks/terminal-wgpu-renderer-bench-1.txt)), draw plus present per frame in milliseconds, p50:
+
+| grid | workload | CPU reference | wgpu | wgpu p99 against the reference's |
+|---|---|---|---|---|
+| 80x24 | plain text | 0.80 | 0.38 (2.1 times cheaper) | 1.7 against 1.4 ms (per chunk) |
+| 80x24 | ANSI + truecolor | 0.44 | 0.23 (2.0 times) | 0.27 against 0.76 ms |
+| 80x24 | full-screen redraw | 0.04 | 0.12 (**3.2 times dearer**) | 0.15 against 0.05 ms |
+| 80x24 | CJK/emoji/combining | 0.02 | 0.13 (**6 times dearer**) | 0.15 against 0.03 ms |
+| 152x38 | plain text | 1.70 | 0.41 (4.2 times cheaper) | 0.46 against 1.8 ms |
+| 152x38 | ANSI + truecolor | 1.13 | 0.31 (3.6 times) | 0.38 against 1.2 ms |
+| 152x38 | full-screen redraw | 0.06 | 0.13 (2.1 times dearer) | 0.16 against 0.07 ms |
+| 152x38 | CJK/emoji/combining | 0.03 | 0.13 (4 times dearer) | 0.18 against 0.05 ms |
+
+(One frame per 16 KiB chunk; the per-256 KiB cadence is in the raw file and says the same, with a wgpu p99 of 1.7 to 2.8 ms against 0.6 to 2.1 ms, which is the cost of waiting on the GPU.) **Where a screen changes by two rows, the reference renderer's frame (0.02 to 0.06 ms) is cheaper than the wgpu frame (0.12 to 0.16 ms)**: wgpu pays a fixed cost to submit and wait for the GPU that buys nothing when almost nothing is drawn. Where whole screens change it is 2 to 4 times cheaper. Full repaint of the 64 screens that the Android Canvas harness uses (every frame sets the appearance again, which marks every row stale; 80x24, 20 passes after a warm-up pass), p50 / p99 in milliseconds:
+
+| workload | CPU reference | wgpu |
+|---|---|---|
+| plain text | 0.922 / 0.979 | 0.250 / 0.339 |
+| ANSI + truecolor | 0.561 / 0.631 | 0.187 / 0.205 |
+| full-screen redraw | 0.574 / 0.593 | 0.184 / 0.251 |
+| CJK/emoji/combining | 0.693 / 0.731 | 0.186 / 0.204 |
+
+The first `wgpu_bench` run of this crate was discarded: its full-repaint table redrew only the rows that differed between consecutive screens (identical rows are no longer redrawn), so for the redraw and CJK screens it measured almost nothing; the table above resets the appearance before every frame to mark every row stale. Its per-stream rows agreed with this run within about 30 % (plain text at 80x24: 0.29 against 0.38 ms for wgpu, 0.81 against 0.80 ms for the reference). This ranks nothing on any phone; it says that a GPU's fixed per-frame cost matters most exactly where the screen changes least.
+
+**Idle.** 100,000 consecutive `draw` and `present` calls on a screen nothing changed: 0 submissions, 0 passes, 0 frames drawn or presented, 2 context switches of the process in total, 83 ns per call (a first run: 1 switch, 50 ns). The renderer starts no thread and no timer of its own, so there is nothing for it to wake; `needs_draw()` was false before every call (the example asserts it). This is the acceptance criterion "zero frames submitted while the screen is unchanged" for a steady cursor; cursor blink timing is #1326. Rewriting the same text (`tests/frames.rs`, 50 rewrites of a status line through the real core) also submitted nothing.
+
+**GPU memory the renderer created** (its own buffers and textures, by construction; the driver's own scratch and the Vulkan driver's 62 MiB of process memory are not in it): 5,120 KiB at 80x24 (4,096 atlas, 960 target, 64 instance buffer), 7,048 KiB at 152x38 and 16,160 KiB at 300x80. The atlas is a fixed 4 MiB at the default size and the target grows with the window; the instance buffer grows by doubling up to a cap of 2 MiB (65,536 instances), so there is an upper bound that does not depend on the screen's content.
+
+**Churn.** 20 warm-up frames, then 4,000 frames of 60 clusters never seen before (3x the atlas at the smallest size), on an 80x24 grid:
+
+| atlas side | slots | renderer memory before / after (bytes) | live buffers before / after | resident set of the process after 20, 1,020, 2,020, 3,020 and 4,020 frames (KiB) | evictions | spills | passes |
+|---|---|---|---|---|---|---|---|
+| 64 | 28 | 1,019,920 / 1,019,920 | 5 / 5 | 85,664, 102,832, 105,932, 107,064, 107,320 | 3,030,476 | 684,838 | 688,858 |
+| 512 | 1,792 | 1,277,968 / 1,310,736 | 5 / 5 | 103,576, 104,848, 106,116, 107,248, 107,320 | 26,263 | 0 | 4,020 |
+| 2048 | 28,672 | 5,210,128 / 5,242,896 | 5 / 5 | 103,576, 104,848, 106,116, 107,248, 107,320 | 22,281 | 0 | 4,020 |
+
+The 28-slot atlas turned over 3 million glyphs without growing (the renderer's memory is identical before and after, as is the driver's buffer count; it needs 171 passes per frame to do it, which is the price of an atlas far smaller than a screen, and why the default is large). The two larger sizes grew by one 32 KiB step of the instance buffer (it doubled once for a larger frame). The resident set rose by 1 to 2 MiB per 1,000 frames and flattened by 4,000 on every size, including the one that never evicts, so it is the core's scrollback filling (this harness writes 4,000 distinct lines), not the GPU side; a separate probe of 8,000 frames showed the 512-texel atlas's resident set flat from frame 4,000 to frame 8,000 (73.4 MiB). The test that guards this ([`memory_has_an_upper_bound_under_glyph_churn`](../../packages/terminal-renderer-wgpu/tests/frames.rs)) compares the renderer's own memory and the driver's live buffer count before and after 400 frames.
+
+**Startup.** The first renderer took 59 ms to create and added 64,176 KiB to the resident set (the Vulkan driver and shader compiler), four more 17,468 KiB together (4.4 MiB each at 80x24, where the prototype run showed 3.1 MiB; one run each, from the `wgpu_bench` run above).
+
+What this says, and does not say:
+
+- **Idle is free and the atlas is bounded**, both measured on the host's GPU through the Vulkan backend and, for the pixel and counter tests, also on Mesa's software OpenGL (llvmpipe) as a stand-in for CI's software adapter.
+- **A frame costs 0.12 to 0.43 ms of draw plus GPU wait at the median** on this machine's discrete GPU (80x24 and 152x38), and the GPU's fixed cost makes it slower than the CPU reference on screens where only a few rows change. Nothing here shows what a phone GPU's fixed cost is.
+- **The first GPU context still costs 64 MiB of resident memory** on this driver against 7 to 8 MiB for an xterm.js session; the renderer's own GPU memory (5 to 16 MiB by window size) is small next to it.
+- Not shown: any text (rasterization, shaping, font fallback and their atlas pressure: real glyph masks are larger and more varied than dot patterns), a window surface and presentation timing, Android (Vulkan or OpenGL ES drivers, surface loss), Apple, Windows, energy and thermals, a long-lived session's memory beyond 4,000 frames, and a CI run on real hardware (CI has only software adapters).
 
 ### Android Canvas drawing of the shared layout (Waydroid, not a device)
 

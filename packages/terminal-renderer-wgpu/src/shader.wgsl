@@ -39,11 +39,13 @@ fn vs_main(@builtin(vertex_index) corner: u32, inst: Instance) -> Varying {
 
 @fragment
 fn fs_main(in: Varying) -> @location(0) vec4<f32> {
+    var coverage = 1.0;
     if in.mask.x != 0xffffffffu {
         let local = vec2<u32>(in.position.xy) - in.origin;
-        if textureLoad(atlas, vec2<i32>(in.mask + local), 0).r < 0.5 {
+        coverage = textureLoad(atlas, vec2<i32>(in.mask + local), 0).r;
+        if coverage <= 0.0 {
             discard;
         }
     }
-    return in.color;
+    return vec4<f32>(in.color.rgb, coverage);
 }

@@ -1,0 +1,35 @@
+host load average at start: 6.16 5.77 4.62 5/4514 2999340
+adapter: Ok(AdapterInfo { name: "AMD Radeon RX 5500 XT (RADV NAVI14)", backend: Vulkan, device_type: DiscreteGpu, driver: "radv Mesa 26.2.6-arch3.1" })
+
+| grid | workload | frames | rows drawn | passes | layout draws | instances | glyph hits | glyph misses | atlas upload KiB | evictions | uploaded MiB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | 64 | 1536 | 64 | 223601 | 102297 | 100685 | 36 | 4.5 | 0 | 3.13 |
+| 80x24 | ANSI + truecolor | 64 | 1533 | 64 | 150647 | 31051 | 27986 | 21 | 2.6 | 0 | 0.95 |
+| 80x24 | full-screen redraw | 64 | 150 | 64 | 15243 | 3433 | 3222 | 21 | 2.6 | 0 | 0.11 |
+| 80x24 | CJK/emoji/combining | 64 | 87 | 64 | 7265 | 1294 | 1139 | 28 | 5.6 | 0 | 0.04 |
+| 152x38 | plain text | 64 | 2432 | 64 | 530417 | 163211 | 160717 | 36 | 4.5 | 0 | 4.99 |
+| 152x38 | ANSI + truecolor | 64 | 2429 | 64 | 413833 | 49443 | 44604 | 21 | 2.6 | 0 | 1.51 |
+| 152x38 | full-screen redraw | 64 | 164 | 64 | 28171 | 3433 | 3222 | 21 | 2.6 | 0 | 0.11 |
+| 152x38 | CJK/emoji/combining | 64 | 101 | 64 | 15783 | 1602 | 1447 | 28 | 5.6 | 0 | 0.05 |
+
+Idle screen: 100000 draw + present calls with nothing changed
+
+| submissions | passes | frames drawn | frames presented | context switches | ns per call |
+|---|---|---|---|---|---|
+| 0 | 0 | 0 | 0 | 2 | 83 |
+
+GPU memory the renderer created, by grid (8x16 px cells, 2048-texel atlas)
+
+| grid | atlas KiB | target KiB | instance buffer KiB | total KiB |
+|---|---|---|---|---|
+| 80x24 | 4096 | 960 | 64 | 5120 |
+| 152x38 | 4096 | 2888 | 64 | 7048 |
+| 300x80 | 4096 | 12000 | 64 | 16160 |
+
+Glyph churn: 20 warm-up frames, then 4000 frames of 60 clusters never seen before (80x24 grid), resident set read every 1000 frames
+
+| atlas side | slots | memory bytes before | after | live buffers before | after | resident set KiB after 20 | 1020 | 2020 | 3020 | 4020 frames | atlas evictions | atlas spills | passes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 64 | 28 | 1019920 | 1019920 | 5 | 5 | 85664 | 102832 | 105932 | 107064 | 107320 | 3030476 | 684838 | 688858 |
+| 512 | 1792 | 1277968 | 1310736 | 5 | 5 | 103576 | 104848 | 106116 | 107248 | 107320 | 26263 | 0 | 4020 |
+| 2048 | 28672 | 5210128 | 5242896 | 5 | 5 | 103576 | 104848 | 106116 | 107248 | 107320 | 22281 | 0 | 4020 |

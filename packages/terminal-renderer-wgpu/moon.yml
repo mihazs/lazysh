@@ -1,0 +1,6 @@
+language: rust
+layer: tool
+# Nested workspace on the terminal runtime, which builds libghostty-vt with Zig: the vendor tag keeps
+# the inherited cargo tasks off it. Its tests run inside the herdr-native CI job, not through moon.
+tags: [vendor]
+dependsOn: [terminal-runtime]

@@ -1,0 +1,41 @@
+[package]
+name = "lazysh-terminal-renderer-wgpu"
+version = "0.0.0"
+edition = "2021"
+description = "wgpu implementation of the lazysh Terminal Renderer API: glyph atlas, dirty-row batching, event-driven frames (#1324)"
+license = "GPL-3.0-or-later"
+publish = false
+rust-version = "1.96"
+
+# Nested workspace beside the runtime crate: the runtime builds libghostty-vt with Zig, and wgpu must
+# not reach the root workspace, the runtime crate's own lock file or the integrity-checked Ghostty
+# sources. Not wired into the app yet (the Android surface is #1327).
+[workspace]
+
+[dependencies]
+lazysh-terminal-runtime = { path = "../terminal-runtime" }
+# "counters": LiveResources reads the driver layer's own resource counts (a handful of atomic adds per allocation).
+wgpu = { version = "30", default-features = false, features = ["wgsl", "counters"] }
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+# Backends per platform (the policy in src/adapter.rs ranks them): Vulkan everywhere but Apple, with
+# OpenGL ES as the Android and Linux fallback, Metal on Apple, Direct3D 12 on Windows.
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["gles"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["metal"] }
+
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
+
+[dev-dependencies]
+# Goldens only: already in the lock through the runtime crate.
+png = "0.17"
+
+[profile.release]
+debug = false

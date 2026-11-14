@@ -37,6 +37,7 @@ jobs:
     outputs:
       companion: ${{ steps.paths.outputs.companion }}
       herdr: ${{ steps.paths.outputs.herdr }}
+      terminal_runtime: ${{ steps.paths.outputs.terminal_runtime }}
       linux: ${{ steps.paths.outputs.linux }}
       linux_runtimes: ${{ steps.paths.outputs.linux_runtimes }}
       desktop: ${{ steps.paths.outputs.desktop }}
@@ -224,12 +225,14 @@ jobs:
           cp -a packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           cp -a packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
           cp -a packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
+          cp -a packages/terminal-renderer-wgpu "$HERDR_CI_ROOT/terminal-renderer-wgpu"
           cp packages/common/src/{hex_digest,guarded_target}.rs "$HERDR_CI_ROOT/common/src/"
           # The core replays the Mosh frames the client's e2e suite also uses; one file, two readers.
           cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
           diff --recursive --brief --no-dereference packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           diff --recursive --brief --no-dereference packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
           diff --recursive --brief --no-dereference packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
+          diff --recursive --brief --no-dereference packages/terminal-renderer-wgpu "$HERDR_CI_ROOT/terminal-renderer-wgpu"
           diff packages/common/src/hex_digest.rs "$HERDR_CI_ROOT/common/src/hex_digest.rs"
           diff packages/common/src/guarded_target.rs "$HERDR_CI_ROOT/common/src/guarded_target.rs"
       - name: Check the pinned official Rust release manifest
@@ -356,12 +359,19 @@ jobs:
           cargo +1.96.1 clippy --locked --all-targets -- -D warnings
           cargo +1.96.1 test --locked
 
-      # The shootout prototype has its own lock file and needs a GPU to run, so CI only keeps it compiling.
-      - name: Check that the wgpu renderer prototype still builds against the runtime
-        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime/prototypes/wgpu
+      # The wgpu renderer has its own lock file and nested workspace. The runner has no GPU: its tests run
+      # on Mesa's software Vulkan (lavapipe) or software OpenGL, which the test policy accepts and the
+      # shipping policy refuses. They compare pixels with the CPU reference renderer and the goldens.
+      - name: Install a software Vulkan driver for the renderer tests
+        if: needs.changes.outputs.terminal_runtime == 'true'
+        run: sudo sh .github/scripts/apt-install.sh mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri
+      - name: Test the wgpu renderer against the runtime and the reference renderer
+        if: needs.changes.outputs.terminal_runtime == 'true'
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-renderer-wgpu
         run: |
           cargo +1.96.1 fmt --check
           cargo +1.96.1 clippy --locked --all-targets -- -D warnings
+          cargo +1.96.1 test --locked
 
       - name: Retain the exact guarded binary for native SSH interoperability
         id: guarded-artifact
