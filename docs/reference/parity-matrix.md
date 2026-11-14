@@ -531,8 +531,8 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
 | Inventory of host simulators, emulators and devices | implemented | implemented | `apps/agent/src/devices.rs:362-363,476-483`; client `apps/client/src/DevicePanel.tsx`. Host-side real emulator inventory and screenshot `apps/agent/src/devices/tests.rs:360` (NAA). Mocked `e2e/device-locales.spec.ts:6`. | Client-side runtime case; iOS simulator on a Mac host. |
-| Video streaming | partial | partial | iOS `devices/idb.rs:331`; Android screenrecord is view-only (`devices/android.rs:1,145`) and a screenshot stands in for a video frame that has not come for a second (`android.rs` `pipeline`, synthetic tests; Waydroid run; emulator case `owned_emulator_video_delivers_frames_while_idle_and_after_a_change` on `main` only). | Android touch on video; a green emulator run of the video case (#19). |
-| Touch and button control | partial | partial | `DevicePanel.tsx:233-235,451-460,526-532`; `devices.rs:570-650`. Android control through screenshots only. | Real-device control test (#19). |
+| Video streaming | partial | partial | iOS `devices/idb.rs:331`; Android screenrecord (`devices/android.rs:1,145`) and a screenshot stands in for a video frame that has not come for a second (`android.rs` `pipeline`, synthetic tests; Waydroid run; emulator case `owned_emulator_video_delivers_frames_while_idle_and_after_a_change` on `main` only). | A green emulator run of the video case (#19). |
+| Touch and button control | partial | partial | `DevicePanel.tsx`; `devices.rs`. Android control through screenshots, and on the video with the display size the pointer was mapped from (`devices android tap`/`swipe` refuse a changed size, `devices/tests.rs` `android_video_gestures_*`; the real-emulator case `android_owned_emulator_video_gestures_follow_the_display_size` is in the Android runtime job and has not yet run on `main`; a Waydroid guest accepted and refused gestures as documented). | Green Android runtime job on `main`; rotation of a real emulator (#19). |
 | Boot, reboot and shutdown | implemented | implemented | `DevicePanel.tsx:462-474,555-558`; `devices.rs:102-118,598-684`. | Real lifecycle test (#19). |
 | Agent accessibility actions | partial | partial | Android only: `devices android ui tree`/`ui act` (`apps/agent/src/devices/ui.rs`; fixture tests there), `DeviceAccessibility.tsx`, Tauri `android_ui_tree`/`android_ui_action`; a real Waydroid guest run is recorded in `docs/devices.md`. | iOS accessibility; scroll and text entry; a CI emulator case (#19). |
 
@@ -612,7 +612,7 @@ Every row that is not `verified` on Android or desktop, grouped and ordered by u
 | 26 | Appearance: desktop clipboard theme import, QR and deep-link dispatch, font-download success path, cursor rendering test, Android glass rendering. Android clipboard import and app icons verified; desktop icon switching stays missing | implemented / missing to implemented | #995; umbrella #16 |
 | 27 | Notifications: desktop remote push and delivery, local notification, inbox and action tests, pane-level deep links, webhook and Gotify against real servers | implemented to partial / missing to partial | #14, #344, #945, #879 |
 | 28 | Keep-awake: desktop focus-loss release, physical idle acceptance | verified / implemented | #81 |
-| 29 | Simulator previews: client runtime inventory and lifecycle, Android video touch, accessibility actions | partial to missing / partial to missing | #19 |
+| 29 | Simulator previews: client runtime inventory and lifecycle, a green run of the Android video-touch case on `main`, accessibility actions | partial to missing / partial to missing | #19 |
 | 30 | UI locale on macOS native | verified / verified (Linux) | #20 |
 
 Accessibility, performance and release-size gates from the evidence catalog are outside this matrix and stay with #20.

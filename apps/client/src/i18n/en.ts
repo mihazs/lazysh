@@ -2045,7 +2045,7 @@ export const english = {
   devicesVerifyAndroid: "Verify Android video tools",
   devicesStopVideo: "Stop video preview",
   devicesStartVideo: "Start video preview",
-  devicesAndroidHint: "View-only, up to three minutes. Requires installed host FFmpeg. Capture a fresh screenshot after stopping to enable input.",
+  devicesAndroidHint: "Up to three minutes. Requires installed host FFmpeg. Touch on the video works while the display keeps its size; rotating or resizing it stops the video. Capture a fresh screenshot after stopping to enable input.",
   devicesSocket: "idb companion socket",
   devicesVerifyIos: "Verify iOS companion",
   devicesIosHint: "Requires installed idb and an existing socket accessible only to your host account.",

@@ -85,6 +85,7 @@ fn main() {
         "android_device_probe",
         "android_ui_tree",
         "android_ui_action",
+        "android_device_action",
         "ios_device_action",
         "device_stream_start",
         "device_stream_next",
