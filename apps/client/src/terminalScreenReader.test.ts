@@ -142,6 +142,22 @@ describe('screen reader mirror', () => {
     expect(host.querySelector('[aria-current]')).toBeNull();
   });
 
+  it('does not announce the difference between history and the live screen when the reader returns to it', () => {
+    const state = screen(['old', 'older'], {following: false});
+    const {adapter, emit} = fakeAdapter(state);
+    mountScreenReaderMirror(adapter, host);
+    state.following = true;
+    write(state, ['live', 'screen']);
+    emit({type: 'viewport', viewport: {top: 198, rows: 2, length: 200, following: true}});
+    vi.advanceTimersByTime(3000);
+    expect(rowsOf()).toEqual(['live', 'screen']);
+    expect(spoken()).toEqual([]);
+    write(state, ['screen', 'next']);
+    emit({type: 'output'});
+    vi.advanceTimersByTime(150);
+    expect(spoken()).toEqual(['next']);
+  });
+
   it('speaks a selection, cut to its bound, and nothing when the selection is cleared', () => {
     const state = screen(['text', '$']);
     const {adapter, emit} = fakeAdapter(state);
