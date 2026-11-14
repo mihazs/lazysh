@@ -109,6 +109,8 @@ xterm.js offers `screenReaderMode` (wired to `preferences.screenReader`). A GPU 
 - What is spoken is the diff of rows, not the screen: lines that scrolled in, the characters appended to an edited row, the row under the cursor when only the cursor moved (a menu), and a selection. Nothing is spoken while the reader looks at history. A new row identical to one still on screen counts as unchanged (the text cannot tell them apart); per-row change flags from the core would remove that limit.
 - A backend declares the `accessibility` capability only when it mounts this mirror and the mirror passed its test on the platform. Backend selection requires `accessibility` while the screen-reader preference is on (`screenReaderRequirements`), so a native backend without it is refused, xterm.js is used and the registry records `lacks accessibility`.
 
+Cost, measured on one desktop host with no screen reader running: one viewport read per settle window and nothing visible in stream throughput ([benchmarks](terminal-benchmarks.md#screen-reader-mirror-what-it-adds-to-a-stream-1329)).
+
 Not verified: TalkBack, VoiceOver, Narrator, NVDA or Orca reading the mirror. The unit tests prove the DOM and the announcement bounds, not what a screen reader says. Tracked in [#1329](https://github.com/mihazs/lazysh/issues/1329) and [#1335](https://github.com/mihazs/lazysh/issues/1335).
 
 ## Rejected or deferred alternatives
