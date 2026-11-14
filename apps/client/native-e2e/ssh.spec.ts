@@ -4,10 +4,10 @@ import {join} from 'node:path';
 import {createHash,randomBytes} from 'node:crypto';
 import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedProcess';
 import {OwnedSshRelay} from './sshRelay';
+import {recordedReader} from './recordedReader';
 import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
 import {prepareRecordedConversation,recordedCompanionBytes} from '../../../tests/support/recordedConversation';
-import {recordedPageCall} from '../../../tests/support/recordedCards';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
@@ -34,7 +34,6 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   await disconnectOwnedSsh(gui,terminal);
 });
 
-type RecordedSource={agent:string;view?:string;path:string;sessionId?:string};
 // Reads the shared synthetic Codex and OpenCode V1/V2 records, then the recorded plan, question,
 // turn-state, Markdown and thinking pages, through the source-built companion over real SSH.
 it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their cards through native SSH without replacing its terminal',async()=>{
@@ -47,29 +46,7 @@ it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their c
   const {browser,terminal,owner}=await openOwnedSsh(gui,ssh),terminalId=terminal.elementId;
   await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
   gui.stage='owned synthetic recorded Conversation';await workspaceAction(gui,'Transcript');
-  const panel='//section[contains(concat(" ",@class," ")," chat-panel ")]';
-  const choose=(label:string,value:string)=>browser.waitUntil(async()=>{
-    const select=await browser.$(`${panel}//label[normalize-space(text())="${label}"]/select`);
-    if(await select.getValue()!==value)await select.selectByAttribute('value',value);
-    return await select.getValue()===value;
-  },{timeout:5000,timeoutMsg:`Recorded ${label} did not select ${value}`});
-  const open=async(source:RecordedSource)=>{
-    // Choosing Codex resets View to records, so View is chosen after Agent.
-    await choose('Agent',source.agent);await choose('View',source.view??'conversation');
-    await (await browser.$('.chat-panel input[placeholder="Absolute host path to session.jsonl"]')).setValue(source.path);
-    if(source.sessionId!==undefined && source.agent==='opencode')await (await browser.$(`${panel}//label[normalize-space(text())="Transcript session ID"]/input`)).setValue(source.sessionId);
-    expect(await browser.execute(()=>Array.from(document.querySelectorAll<HTMLSelectElement>('.chat-panel select'),x=>x.value).slice(0,2))).toEqual([source.agent,source.view??'conversation']);
-    await (await browser.$(`${panel}//button[normalize-space(.)="Open transcript"]`)).click();
-  };
-  // The page compares in place, so the result never depends on driver object serialization.
-  const awaitPage=async(stage:string,name:'messages'|'cards',argument:unknown)=>{
-    try{await browser.waitUntil(async()=>await browser.execute(`return ${recordedPageCall(name,argument)}`)===true,{timeout:20_000,timeoutMsg:stage});}
-    catch(primary){
-      console.info('Owned recorded page observation',stage,await browser.execute(`return ${recordedPageCall(name,argument,true)}`).catch(()=>'unavailable'));
-      throw primary;
-    }
-  };
-  const unchanged=async()=>{expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);};
+  const {open,awaitPage,unchanged}=recordedReader(gui,owner);
   let expected:{role:string;text:string}[]=[];
   for(const source of sources){
     expected=source.messages;await open(source);
