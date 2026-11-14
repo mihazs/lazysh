@@ -45,6 +45,17 @@ What will change, and what stays the same:
   Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
 - **Automatic updates.** A companion setting chooses `off`, `notify` (the host checks for a newer release at most once per interval, the app shows an update-available badge, nothing is replaced) or `install` (the planned default, on since 2026-11-13: replaces when a newer release is out or a newer lazysh app connects, only when no agent turn is active and that version has not already failed). `lazysh-agent auto-update enable` can add a user-level timer (systemd user timer, launchd agent or Scheduled Task); it never uses `sudo`. See [host settings](../companion-settings.md#companion-updates-planned).
 
+## Open host links on your device (optional)
+
+Programs on the host that open a browser (`aws sso login`, `gcloud auth login`, `codex login`, `xdg-open`) can hand the link to lazysh so it opens on your phone or desktop. The host half is the opt-in browser shim ([details](../companion.md#open-host-browser-requests-on-your-device-browser-shim)); the app side that reads these requests is tracked in [#1513](https://github.com/mihazs/lazysh/issues/1513) and [#1514](https://github.com/mihazs/lazysh/issues/1514).
+
+1. On the host, run `lazysh-agent browser-shim install`, then open a new shell (the startup files are read when a shell starts). It adds wrapper commands under `~/.local/share/lazysh/companion/shims/` and one marked block to your shell startup files; nothing else changes.
+2. Run `lazysh-agent browser-shim status` to see the wrappers, the startup files and whether a device is attached.
+3. Until a device is attached, `xdg-open` and friends behave as before, and on a host with no browser they print `lazysh: open this on your device: URL`, which the terminal turns into a tappable link.
+4. To undo it, run `lazysh-agent browser-shim uninstall`. It restores each startup file byte for byte.
+
+With the shim installed, tools that fall back to a device code when the host has no browser launcher (`az login`) start their browser flow instead.
+
 ## Enable reporting deliberately
 
 1. Follow [agent hook setup](../agent-hooks.md) for your installed provider and selected existing profile. Inspect changes before applying them; preserve unrelated hooks. Managed hook setup binds the resolved absolute executable and needs no PATH change. Select alternate profiles explicitly: discovery respects provider overrides/XDG paths but does not prove which profile a running agent loaded. Configuration printers only print fragments and do not install them or change provider trust.
