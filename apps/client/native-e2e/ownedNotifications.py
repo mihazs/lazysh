@@ -7,10 +7,13 @@ that notification, then NotificationClosed with the dismissed reason, as a
 notification server does after a user clicks an action. It never displays
 anything and keeps no state beyond the identifiers it issued.
 """
-import json
+import os
 import sys
 
 from gi.repository import Gio, GLib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I keeps this directory off the path
+from ownedBus import connect, emit
 
 INTERFACE = "org.freedesktop.Notifications"
 PATH = "/org/freedesktop/Notifications"
@@ -27,16 +30,8 @@ XML = f"""<node><interface name="{INTERFACE}">
 LIMIT = 256
 
 
-def emit(record):
-    # Callers bound every field (at most 8 actions of LIMIT), so each line stays valid JSON.
-    print(json.dumps(record, separators=(",", ":")), flush=True)
-
-
 def main():
-    if len(sys.argv) != 2 or not sys.argv[1].startswith("unix:path=/"):
-        raise SystemExit("usage: ownedNotifications.py unix:path=/private/bus")
-    flags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
-    connection = Gio.DBusConnection.new_for_address_sync(sys.argv[1], flags, None, None)
+    connection = connect("ownedNotifications.py")
     issued = set()
     loop = GLib.MainLoop()
 

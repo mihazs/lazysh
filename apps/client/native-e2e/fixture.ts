@@ -51,7 +51,7 @@ export class NativeGui {
   private secretMembers:OwnedPid[]=[];
   private credentialItem?:string;
   private driver?:OwnedProcess;
-  private notifications?:OwnedProcess;
+  private readonly servers=new Map<string,OwnedProcess>();
   private clientObserver?:ClientTargetObserver;
   private env:NodeJS.ProcessEnv;
   private busAddress:string;
@@ -327,18 +327,38 @@ export class NativeGui {
     if(JSON.stringify(current)!==JSON.stringify(original))throw new Error('Secondary CLI replaced the original GUI owner');
     if((await this.browser!.getWindowHandles()).length!==1)throw new Error('Secondary CLI created another native window');
   }
-  /** An owned Desktop Notifications server on this private bus; see ownedNotifications.py. */
-  async notificationServer() {
-    if(this.notifications)throw new Error('Owned notification server already started');
+  /** Start an owned Python helper that prints `{"event":"ready"}` once it is serving. */
+  private async helper(script:string,args:string[]) {
+    if(this.servers.has(script))throw new Error(`Owned ${script} already started`);
     const interpreter=await realpath(process.env.LAZYSH_NATIVE_GUI_PYTHON??'/usr/bin/python3'),name=basename(interpreter);
-    if(!/^python3(?:\.[0-9]+)?$/.test(name))throw new Error('Owned notification server requires the system Python 3');
-    const server=this.notifications=new OwnedProcess(await executable(interpreter,'owned notification server interpreter',name),
-      ['-I',join(dirname(fileURLToPath(import.meta.url)),'ownedNotifications.py'),this.busAddress],this.directory,this.env);
-    await until('owned notification server',async()=>{
-      if(!await server.liveIdentity())throw new Error('Owned notification server stopped during startup');
+    if(!/^python3(?:\.[0-9]+)?$/.test(name))throw new Error('Owned native GUI helpers require the system Python 3');
+    const server=new OwnedProcess(await executable(interpreter,'owned helper interpreter',name),
+      ['-I','-B',join(dirname(fileURLToPath(import.meta.url)),script),...args],this.directory,this.env);
+    this.servers.set(script,server);
+    await until(script,async()=>{
+      if(!await server.liveIdentity())throw new Error(`Owned ${script} stopped during startup`);
       return server.stdout.startsWith('{"event":"ready"}\n')?true:undefined;
     },10_000);
     return server;
+  }
+  /** An owned Desktop Notifications server on this private bus; see ownedNotifications.py. */
+  notificationServer() {return this.helper('ownedNotifications.py',[this.busAddress]);}
+  /** An owned xdg-desktop-portal Inhibit server on this private bus; see ownedPortal.py. */
+  async portalServer() {
+    // The bus answers StartServiceByName only for a name with an activation file. While the server owns the name
+    // nothing is launched; once it is gone the bus runs `false`, so activation fails as it does without a portal.
+    await writeFile(join(this.directory,'services','org.freedesktop.portal.Desktop.service'),'[D-BUS Service]\nName=org.freedesktop.portal.Desktop\nExec=/usr/bin/false\n',{mode:0o600,flag:'wx'});
+    return this.helper('ownedPortal.py',[this.busAddress]);
+  }
+  /** Move the pointer off and back onto the application window, which on this display gives up and regains its focus; see ownedPointer.py. */
+  async pointer() {
+    const helper=await this.helper('ownedPointer.py',[]);
+    const move=async(command:'leave'|'enter')=>{
+      const lines=()=>helper.stdout.split('\n').filter(Boolean).length,seen=lines();
+      helper.child.stdin!.write(`${command}\n`);
+      await until(`owned pointer ${command}`,async()=>lines()>seen?true:undefined,5000);
+    };
+    return {leave:()=>move('leave'),enter:()=>move('enter')};
   }
   async screenshot() {
     await this.appOwner();
@@ -356,7 +376,7 @@ export class NativeGui {
         return live.some(Boolean)?undefined:true;
       },2000);},
       async()=>{await this.stopDisposableVault();},
-      async()=>{if(this.notifications)await this.notifications.stop();},
+      async()=>{for(const server of this.servers.values())await server.stop();},
       async()=>{if(this.display)await this.display.stop();},
       async()=>{if(this.bus)await this.bus.stop();},
       async()=>{if(this.clientObserver){this.clientObserver.stop();console.info(`Owned test-worker observer: ${this.clientObserver.status()}; target connections=${this.clientObserver.targetConnections}`);}},

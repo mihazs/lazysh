@@ -41,6 +41,13 @@ Compositor and physical-device acceptance remain under issue #81. Other language
 feature-panel localization are tracked separately; this control adds no preference
 schema, native permission text or credential policy change.
 
+The Linux native GUI suite (`apps/client/native-e2e/keepAwake.spec.ts`, described in
+[native GUI testing](native-gui-testing.md)) drives the real bundled app against an owned portal
+server on a private bus. It checks the opt-in, the exact request closed on window focus loss, on
+leaving the board and on disabling, no reacquisition while unfocused, and the error shown without a
+portal. It does not run a compositor, a real display timer or a battery, and nothing here has been
+run on Windows or macOS hardware.
+
 Native policy tests, actual OS API round trips, synthetic browser lifecycle tests
 and physical hardware acceptance are separate. No simulator/unit result proves
 screen timeout, lock-screen, battery or hardware behavior. Follow the native package
