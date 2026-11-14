@@ -119,7 +119,8 @@ for output in \
   "android_appium_quarantine=$quarantine" \
   "android_auxiliary=$(flag any android agent push)" \
   "android_ntfy=$(flag any android push)" \
-  "ios=$(flag has ios)"; do
+  "ios=$(flag has ios)" \
+  "terminal_perf=$(flag has terminal_runtime)"; do
   echo "$output"
   case "$output" in *=true) native=true ;; esac
 done
