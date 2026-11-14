@@ -40,7 +40,7 @@ export function lostConnectionControl(route:Route,tmux:{observe():Promise<number
  * relay and control ports, and runs the lost-connection case with that control channel.
  */
 export async function androidLostConnectionAcceptance(root=resolve(import.meta.dir,'../..')) {
-  const {adb,device}=ownedEmulator('lost-connection acceptance');
+  const {serial,adb,device}=ownedEmulator('lost-connection acceptance');
   const reverses:number[]=[];
   let owned:TmuxFixture|undefined,relay:OwnedSshRelay|undefined,keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined;
   let control:Awaited<ReturnType<typeof listen>>['server']|undefined,remote:string|undefined;
