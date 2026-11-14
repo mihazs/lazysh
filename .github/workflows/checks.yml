@@ -1342,10 +1342,11 @@ jobs:
             bun run test:android-fdroid;
             fdroid_result=$?;
             if (( fdroid_result != 0 )); then exit "$fdroid_result"; fi;
-            LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
-            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture &&
-            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change -- --ignored --exact --nocapture;
-            exit $?;
+            LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr || exit $?;
+            for device_case in devices::tests::android_owned_emulator_inventory_and_screenshot devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change devices::tests::android_owned_emulator_video_gestures_follow_the_display_size; do
+            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib "$device_case" -- --ignored --exact --nocapture || exit $?;
+            done;
+            exit 0;
             '
       - name: Save Gradle dependency and wrapper downloads from main
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded' && steps.android-toolchains.outputs.gradle-cache-hit != 'true' }}

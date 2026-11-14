@@ -12,9 +12,16 @@ screen capture. It is ignored in ordinary test runs because it requires the SDK
 and an owned emulator; `LAZYSH_TEST_ANDROID_SERIAL` must explicitly match
 `ANDROID_SERIAL` before any SDK command executes.
 
-This gate does not exercise touch calibration, lifecycle commands, video,
-SSH/frontend delivery, latency, battery use or physical devices. Those remain
-under issue #19. A passing synthetic inventory/image fixture alone does not
+The same job also runs `devices::tests::android_owned_emulator_video_gestures_follow_the_display_size`
+against that emulator. It taps with the real display size, shrinks the display with
+`wm size`, checks that a gesture mapped from the old size is refused with
+`DeviceDimensionsChanged` while one mapped from the new size is accepted, and
+resets the size afterwards (also when an assertion fails). It rotates nothing and
+reads no screen content.
+
+This gate does not exercise touch calibration to pixel accuracy, lifecycle commands,
+the video stream, SSH/frontend delivery, latency, battery use or physical devices.
+Those remain under issue #19. A passing synthetic inventory/image fixture alone does not
 establish the real SDK gate's result.
 
 The initial [API 36 emulator run](https://github.com/mihazs/lazysh/actions/runs/40268377280/job/121395629728)

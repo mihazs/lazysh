@@ -6,32 +6,8 @@ use std::io::Write;
 pub enum IosAction {
     Probe,
     Stream,
-    Tap {
-        #[arg(long)]
-        x: u32,
-        #[arg(long)]
-        y: u32,
-        #[arg(long)]
-        width: u32,
-        #[arg(long)]
-        height: u32,
-    },
-    Swipe {
-        #[arg(long)]
-        x: u32,
-        #[arg(long)]
-        y: u32,
-        #[arg(long)]
-        to_x: u32,
-        #[arg(long)]
-        to_y: u32,
-        #[arg(long)]
-        width: u32,
-        #[arg(long)]
-        height: u32,
-        #[arg(long)]
-        duration_ms: u16,
-    },
+    #[command(flatten)]
+    Gesture(Gesture),
     Button {
         #[arg(long)]
         key: String,
@@ -143,13 +119,6 @@ pub(super) fn execute(
     action: IosAction,
 ) -> Result<Value> {
     let (width, height) = probe(runner, id, socket)?;
-    let point = |x: u32, y: u32, w: u32, h: u32| {
-        if w == width && h == height && x < width && y < height {
-            Ok(())
-        } else {
-            Err(Error::Device("DeviceDimensionsChanged"))
-        }
-    };
     let arguments = match action {
         IosAction::Probe => {
             return Ok(
@@ -157,38 +126,27 @@ pub(super) fn execute(
             )
         }
         IosAction::Stream => return Err(Error::InvalidArgument),
-        IosAction::Tap {
-            x,
-            y,
-            width: w,
-            height: h,
-        } => {
-            point(x, y, w, h)?;
-            vec!["tap".into(), x.to_string(), y.to_string()]
-        }
-        IosAction::Swipe {
-            x,
-            y,
-            to_x,
-            to_y,
-            width: w,
-            height: h,
-            duration_ms,
-        } => {
-            point(x, y, w, h)?;
-            point(to_x, to_y, w, h)?;
-            if !(1..=10000).contains(&duration_ms) {
-                return Err(Error::InvalidArgument);
+        IosAction::Gesture(gesture) => {
+            gesture.check(width, height)?;
+            match gesture {
+                Gesture::Tap { x, y, .. } => vec!["tap".into(), x.to_string(), y.to_string()],
+                Gesture::Swipe {
+                    x,
+                    y,
+                    to_x,
+                    to_y,
+                    duration_ms,
+                    ..
+                } => vec![
+                    "swipe".into(),
+                    x.to_string(),
+                    y.to_string(),
+                    to_x.to_string(),
+                    to_y.to_string(),
+                    "--duration".into(),
+                    format!("{}.{:03}", duration_ms / 1000, duration_ms % 1000),
+                ],
             }
-            vec![
-                "swipe".into(),
-                x.to_string(),
-                y.to_string(),
-                to_x.to_string(),
-                to_y.to_string(),
-                "--duration".into(),
-                format!("{}.{:03}", duration_ms / 1000, duration_ms % 1000),
-            ]
         }
         IosAction::Button { key } => vec![
             "button".into(),

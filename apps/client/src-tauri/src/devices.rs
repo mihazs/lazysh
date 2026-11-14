@@ -48,6 +48,58 @@ fn android_command(id: &str, action: &str) -> Result<String> {
         quote(id)
     ))
 }
+fn display_size(width: u32, height: u32, message: &'static str) -> Result<()> {
+    if (1..=8192).contains(&width) && (1..=8192).contains(&height) {
+        Ok(())
+    } else {
+        Err(SshError::new("invalid_input", message))
+    }
+}
+/// The `tap`/`swipe` subcommand and flags for a point inside the display the coordinates were mapped from.
+fn gesture_arguments(
+    action: &DeviceAction,
+    width: u32,
+    height: u32,
+) -> Option<(&'static str, String)> {
+    let (subcommand, flags) = match *action {
+        DeviceAction::Tap { x, y } if x < width && y < height => {
+            ("tap", format!("--x {x} --y {y}"))
+        }
+        DeviceAction::Swipe {
+            x,
+            y,
+            to_x,
+            to_y,
+            duration_ms,
+        } if x < width
+            && y < height
+            && to_x < width
+            && to_y < height
+            && (1..=10000).contains(&duration_ms) =>
+        {
+            (
+                "swipe",
+                format!("--x {x} --y {y} --to-x {to_x} --to-y {to_y} --duration-ms {duration_ms}"),
+            )
+        }
+        _ => return None,
+    };
+    Some((
+        subcommand,
+        format!("{flags} --width {width} --height {height}"),
+    ))
+}
+fn android_gesture_command(
+    id: &str,
+    width: u32,
+    height: u32,
+    action: &DeviceAction,
+) -> Result<String> {
+    display_size(width, height, "Invalid Android display size")?;
+    let (subcommand, arguments) = gesture_arguments(action, width, height)
+        .ok_or_else(|| SshError::new("invalid_input", "Unsupported Android video action"))?;
+    android_command(id, &format!("{subcommand} {arguments}"))
+}
 async fn remote_json(
     state: &AppState,
     access: &AccessLease,
@@ -107,25 +159,48 @@ pub async fn ios_device_action(
     height: u32,
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
-    access.run(async {
-    let (subcommand,arguments)=match action {
-        DeviceAction::Tap{x,y} if x<width && y<height => ("tap",format!("--x {x} --y {y} --width {width} --height {height}")),
-        DeviceAction::Swipe{x,y,to_x,to_y,duration_ms} if x<width && y<height && to_x<width && to_y<height && (1..=10000).contains(&duration_ms)=>("swipe",format!("--x {x} --y {y} --to-x {to_x} --to-y {to_y} --duration-ms {duration_ms} --width {width} --height {height}")),
-        DeviceAction::Key{key} if matches!(key.as_str(),"home"|"power"|"volume-up"|"volume-down")=>("button",format!("--key {key}")),
-        _=>return Err(SshError::new("invalid_input","Unsupported iOS companion action")),
-    };
-    if !(1..=8192).contains(&width) || !(1..=8192).contains(&height) {
-        return Err(SshError::new(
-            "invalid_input",
-            "Invalid iOS point dimensions",
-        ));
-    }
-    let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
-    let session = state.session(&session_id).await?;
+    access
+        .run(async {
+            let (subcommand, arguments) = match &action {
+                DeviceAction::Key { key }
+                    if matches!(key.as_str(), "home" | "power" | "volume-up" | "volume-down") =>
+                {
+                    ("button", format!("--key {key}"))
+                }
+                _ => gesture_arguments(&action, width, height).ok_or_else(|| {
+                    SshError::new("invalid_input", "Unsupported iOS companion action")
+                })?,
+            };
+            display_size(width, height, "Invalid iOS point dimensions")?;
+            let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
+            let session = state.session(&session_id).await?;
             access.check()?;
-    Ok(serde_json::from_str(&exec_for_access(&session, command, &access).await?)?)
-
-    }).await
+            Ok(serde_json::from_str(
+                &exec_for_access(&session, command, &access).await?,
+            )?)
+        })
+        .await
+}
+/// Touch an Android device while its video is shown. The host refuses the gesture when the display
+/// no longer has the `width` x `height` the pointer was mapped from (rotation or resize).
+#[tauri::command]
+pub async fn android_device_action(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+    width: u32,
+    height: u32,
+    action: DeviceAction,
+) -> Protected<serde_json::Value> {
+    access
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            android_gesture_command(&id, width, height, &action),
+        ))
+        .await
 }
 #[tauri::command]
 pub async fn list_devices(
@@ -274,5 +349,38 @@ mod tests {
         )
         .is_err());
         assert!(action_command("ios;cmd", "id", DeviceAction::Boot).is_err());
+    }
+    #[test]
+    fn android_video_gestures_carry_the_mapped_display_size_and_stay_inside_it() {
+        let tap = DeviceAction::Tap { x: 540, y: 960 };
+        assert_eq!(
+            android_gesture_command("emulator-5554", 1080, 1920, &tap).unwrap(),
+            "lazysh-agent devices android --id='emulator-5554' tap --x 540 --y 960 --width 1080 --height 1920"
+        );
+        let swipe = DeviceAction::Swipe {
+            x: 1,
+            y: 2,
+            to_x: 3,
+            to_y: 4,
+            duration_ms: 250,
+        };
+        assert!(
+            android_gesture_command("id'$(cmd)", 1080, 1920, &swipe)
+                .unwrap()
+                .contains("--id='id'\\''$(cmd)' swipe --x 1 --y 2 --to-x 3 --to-y 4 --duration-ms 250 --width 1080")
+        );
+        for rejected in [
+            (DeviceAction::Tap { x: 1080, y: 0 }, 1080, 1920),
+            (DeviceAction::Tap { x: 0, y: 1920 }, 1080, 1920),
+            (DeviceAction::Tap { x: 0, y: 0 }, 0, 1920),
+            (DeviceAction::Tap { x: 0, y: 0 }, 1080, 8193),
+            (DeviceAction::Key { key: "home".into() }, 1080, 1920),
+            (DeviceAction::Boot, 1080, 1920),
+        ] {
+            assert!(
+                android_gesture_command("emulator-5554", rejected.1, rejected.2, &rejected.0)
+                    .is_err()
+            );
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! Optional view-only Android capture through SDK screenrecord and an installed FFmpeg.
+//! Optional Android capture through SDK screenrecord and an installed FFmpeg, with input guarded by the display size.
 use super::*;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{atomic::AtomicU64, Mutex, PoisonError};
@@ -12,6 +12,9 @@ const IDLE_SCREENSHOT: Duration = Duration::from_secs(1);
 pub enum AndroidAction {
     Probe,
     Stream,
+    /// Touch the display only while it still has the size the video's coordinates were mapped from.
+    #[command(flatten)]
+    Gesture(Gesture),
 }
 
 fn ffmpeg_args() -> Vec<String> {
@@ -78,6 +81,10 @@ fn bounded_size(width: u32, height: u32) -> (u32, u32) {
     let bound = |value: u32| (((f64::from(value) * scale) as u32) / 2 * 2).max(2);
     (bound(width), bound(height))
 }
+pub(super) fn display_size(runner: &mut impl Runner, id: &str) -> Result<(u32, u32)> {
+    png_dimensions(&screencap(runner, id)?)
+}
+/// Returns the display's pixel size, which is also the touch coordinate space.
 fn probe(runner: &mut impl Runner, id: &str) -> Result<(u32, u32)> {
     if !valid_id(Platform::Android, id) {
         return Err(Error::InvalidArgument);
@@ -126,19 +133,41 @@ fn probe(runner: &mut impl Runner, id: &str) -> Result<(u32, u32)> {
             return Err(Error::Device("FfmpegCapabilityUnavailable"));
         }
     }
-    let screenshot = frame(Platform::Android, id, &screencap(runner, id)?)?;
-    Ok(bounded_size(
-        screenshot["width"].as_u64().unwrap() as u32,
-        screenshot["height"].as_u64().unwrap() as u32,
-    ))
+    display_size(runner, id)
 }
 pub(super) fn execute(runner: &mut impl Runner, id: &str, action: AndroidAction) -> Result<Value> {
-    if !matches!(action, AndroidAction::Probe) {
+    let gesture = match action {
+        AndroidAction::Probe => {
+            let (display_width, display_height) = probe(runner, id)?;
+            let (width, height) = bounded_size(display_width, display_height);
+            return Ok(
+                json!({"schemaVersion":1,"platform":"android","id":id,"stream":true,"viewOnly":false,"width":width,"height":height,"displayWidth":display_width,"displayHeight":display_height,"maximumSeconds":180}),
+            );
+        }
+        AndroidAction::Stream => return Err(Error::InvalidArgument),
+        AndroidAction::Gesture(gesture) => gesture,
+    };
+    if !valid_id(Platform::Android, id) {
         return Err(Error::InvalidArgument);
     }
-    let (width, height) = probe(runner, id)?;
+    let (width, height) = gesture.mapped_size();
+    gesture.check(width, height)?; // bad coordinates reach no SDK command
+    let (width, height) = display_size(runner, id)?;
+    gesture.check(width, height)?;
+    let (operation, arguments) = match gesture {
+        Gesture::Tap { x, y, .. } => ("tap", tap_args(id, x, y)),
+        Gesture::Swipe {
+            x,
+            y,
+            to_x,
+            to_y,
+            duration_ms,
+            ..
+        } => ("swipe", swipe_args(id, [x, y, to_x, to_y], duration_ms)),
+    };
+    runner.output(Tool::Adb, &arguments, MAX_SDK_TEXT)?;
     Ok(
-        json!({"schemaVersion":1,"platform":"android","id":id,"stream":true,"viewOnly":true,"width":width,"height":height,"maximumSeconds":180}),
+        json!({"schemaVersion":1,"platform":"android","id":id,"operation":operation,"status":"requested"}),
     )
 }
 
@@ -295,6 +324,7 @@ pub fn stream(id: &str) -> Result<()> {
         cancelled: cancel.clone(),
     };
     let (width, height) = probe(&mut runner, id)?;
+    let (width, height) = bounded_size(width, height);
     pipeline(
         SdkRunner::command(Tool::Adb, &capture_args(id, width, height)),
         SdkRunner::command(Tool::Ffmpeg, &ffmpeg_args()),
@@ -593,6 +623,7 @@ mod tests {
                 cancelled: cancel.clone(),
             };
             let (width, height) = probe(&mut runner, &id).expect("verified video tools");
+            let (width, height) = bounded_size(width, height);
             let mut device = |arguments: &[&str]| {
                 let mut shell = vec!["-s", &id, "shell"];
                 shell.extend(arguments);
