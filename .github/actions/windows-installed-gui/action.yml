@@ -48,7 +48,6 @@ runs:
         "LAZYSH_WINDOWS_GUI_DRIVER=$env:RUNNER_TEMP\lazysh-native-driver\bin\tauri-driver.exe" >> $env:GITHUB_ENV
     - name: Install, drive and uninstall the packaged application
       shell: bash
-      timeout-minutes: 15
       env:
         LAZYSH_TEST_WINDOWS_GUI: '1'
         LAZYSH_EXPECTED_SOURCE_REVISION: ${{ inputs.revision || github.sha }}

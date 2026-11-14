@@ -74,7 +74,7 @@ The case:
 
 The EdgeDriver is not pinned to one version because the hosted image's WebView2 runtime moves independently of this repository; a driver that does not match the runtime exactly fails the case instead. The ports are fresh loopback ports, but their listeners are not attributed to the driver process the way the Linux suite attributes socket inodes.
 
-The `native-desktop` step is `continue-on-error` until the first hosted run records a pass on [#492](https://github.com/mihazs/lazysh/issues/492); only then is it made blocking. A skipped or failed run proves nothing about the installed application.
+The `native-desktop` step is `continue-on-error` until the first hosted run records a pass on [#492](https://github.com/mihazs/lazysh/issues/492); only then is it made blocking. A skipped or failed run proves nothing about the installed application, and GitHub reports a failed `continue-on-error` step as a success, so read the step's log and its `##[error]` lines, not its marker. A composite step cannot set `timeout-minutes` (the runner then refuses to load the action and nothing runs), so the 30-minute bound sits on the workflow step.
 
 This establishes startup, window ownership and bundled identity of the installed application only. SSH, saved hosts, singleton delivery, ConPTY and a real terminal session on Windows remain open ([#492](https://github.com/mihazs/lazysh/issues/492), [#457](https://github.com/mihazs/lazysh/issues/457)). No Windows hardware was used; the result is whatever the hosted run reports.
 
