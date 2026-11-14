@@ -58,6 +58,28 @@ impl Session {
         (!self.0.is_empty()).then_some(Value::Object(self.0))
     }
 
+    /// The model and the prompt size of the newest Gemini message that recorded them; the window is not recorded.
+    pub(super) fn gemini(&mut self, messages: &[Value]) {
+        let recorded = || {
+            messages
+                .iter()
+                .rev()
+                .filter(|message| message["type"] == "gemini")
+        };
+        self.set(
+            "model",
+            recorded()
+                .find_map(|message| label(&message["model"]))
+                .map(|model| json!(model)),
+        );
+        self.set(
+            "usage",
+            recorded()
+                .find_map(|message| message["tokens"]["input"].as_u64())
+                .map(|used| json!({"usedTokens": used})),
+        );
+    }
+
     /// `permission_mode` and the total cost come from file-level records; the rest from the
     /// active chain, newest first.
     pub(super) fn claude(
