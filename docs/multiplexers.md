@@ -195,6 +195,59 @@ is needed. The message is confirmed by the conversation showing it, and a failur
 after the command started is never resent. A guarded host keeps using the guarded
 input. A dialog answer (an option's digit, arrows and Enter) goes through `herdr agent send-keys PANE KEY...` on either kind of host, after the same check of the pane's agent session, and the dialog itself is read with `herdr agent read PANE --source visible`; see [Herdr panes](agent-view.md#herdr-panes).
 
+### Pane input on a stock Herdr, pinned to one server process
+
+`lazysh-agent herdr-pane-input --session NAME` is the host half of typing into a
+named pane of an unchanged stock Herdr (Linux hosts with kernel 6.5 or newer; on
+other hosts it reports `HerdrInputPlatformUnsupported` and nothing is sent). It
+speaks JSON lines on stdin and stdout and ends when stdin closes. The app does
+not use it yet, so no Chat or Agent view behaviour changes in this release; it is
+the verified transport that the explicit destination picker will build on (#655).
+
+Stock Herdr has no private guard to prove which server owns a socket, and its
+JSON connections last one request. The actor therefore pins the server process
+once: it connects, takes the peer's pidfd from that connection (`SO_PEERPIDFD`,
+never a pid number reopened later), checks the peer belongs to the same user, and
+keeps a read-only `events.subscribe` connection open. Each operation then opens its
+own connection and compares that connection's peer, by pidfd, pid and process start
+time, with the pinned process before a single request byte is written. Anything
+else retires the actor for good, with no rediscovery and no retry: a socket path
+now served by another server, a restarted server, the subscription ending, the
+server process exiting, a kernel without `SO_PEERPIDFD`, or a malformed request.
+
+Requests are `preflight` (read the pane's occupant: pane id, terminal id, agent,
+working directory, label, title), `send` (text plus Enter in one `pane.send_input`)
+and `escape`. Text is 1 to 4,096 bytes of UTF-8 without control characters other
+than newline and tab, the same bound as guarded Herdr input; Herdr itself wraps it
+in bracketed paste when the pane's program asked for that. Operation ids must
+strictly increase and are spent before anything is sent, so a repeated id cannot
+write twice. Outcomes are `occupant`, `delivered`, `refused` (Herdr or the actor
+said no before writing: stale id, invalid text, pane not found, the occupant changed,
+Herdr's own error reply), `retired` (the pinned server is gone; nothing was written)
+and `uncertain` (the request left and no intact acknowledgement came back; it is
+never resent). `retired` and `uncertain` end the actor, so the caller must confirm a
+destination again and keeps its draft.
+
+The destination is the selected pane's **current occupant**. Herdr's public API has
+no terminal-id or revision compare-and-swap, so the actor reads the pane right
+before writing and refuses when its terminal id is no longer the confirmed one, but
+a runtime replaced in the instant between that read and the write is the one window
+this cannot close. It does not focus, resize, attach or resume anything, so another
+client's focus cannot redirect the input and sending moves no client.
+
+What is verified: the CI `native-linux` job runs
+`herdr_pane_input_stock` against the same-run unchanged stock Herdr and owned PTY
+receivers: the selected receiver gets the exact bytes in legacy, bracketed-paste and
+Kitty keyboard modes (a 4,096-byte UTF-8 draft included, Escape as `ESC` or
+`CSI 27 u`) while the others stay empty, a focused other pane gets nothing, a pane
+closed after the preflight is refused, a socket path taken over by another live
+server and a restarted server are retired before any request byte, and a lost
+acknowledgement is `uncertain`. What is not: a server that hands its listener to a
+new process (`server.live_handoff`) is retired, because the pinned process exits;
+PID reuse, inherited listeners and PID namespaces were not induced; macOS and
+Windows hosts are unsupported; and the Android and desktop confirmation screens are
+not built yet.
+
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.
 
