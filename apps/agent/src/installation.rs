@@ -29,9 +29,7 @@ pub fn run(command: Command) -> Result<Value> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) use unix::{
-    destination, file_hash, lock, namespace, Existing, Lock, Temporary, MAXIMUM, NAME,
-};
+pub(crate) use unix::{destination, file_hash, lock, namespace, Existing, Lock, Temporary, NAME};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix {

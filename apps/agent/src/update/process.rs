@@ -34,6 +34,11 @@ pub fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // A process on Windows cannot even start its networking and cryptography without it.
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
     // A file that was just written can be briefly busy to exec while another descriptor to it closes.
     let mut child = (0..5)
         .find_map(|attempt| match command.spawn() {

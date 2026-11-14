@@ -7,15 +7,27 @@ use lazysh_companion_release::{
 use serde_json::Value;
 use std::{
     fs,
-    os::fd::FromRawFd,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
+};
+#[cfg(unix)]
+use std::{
+    os::{fd::FromRawFd, unix::fs::PermissionsExt},
     ptr::{null, null_mut},
 };
 
 pub const THIS: &str = env!("CARGO_PKG_VERSION");
 pub const BINARY: &[u8] = b"companion bytes";
+pub const NAME: &str = if cfg!(windows) {
+    "lazysh-agent.exe"
+} else {
+    "lazysh-agent"
+};
+pub const PREVIOUS: &str = if cfg!(windows) {
+    "lazysh-agent.exe.previous"
+} else {
+    "lazysh-agent.previous"
+};
 
 pub struct Fixture {
     pub root: tempfile::TempDir,
@@ -90,6 +102,7 @@ pub fn listing(path: &Path) -> Vec<String> {
     names.sort();
     names
 }
+#[cfg(unix)]
 /// A pseudo-terminal as (master, slave): a child given the slave as stdin sees a terminal, and bytes
 /// written to the master are what it reads.
 pub fn pty() -> (fs::File, fs::File) {
@@ -103,6 +116,7 @@ pub fn pty() -> (fs::File, fs::File) {
         (fs::File::from_raw_fd(master), fs::File::from_raw_fd(slave))
     }
 }
+#[cfg(unix)]
 pub fn mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
@@ -140,6 +154,14 @@ impl Fixture {
             .env("LAZYSH_UPDATE_TEST_ENDPOINT", &self.server.api)
             .env("LAZYSH_UPDATE_TEST_CA", self.root.path().join("ca.pem"))
             .stdin(std::process::Stdio::null());
+        // Windows resolves the user data folder through the shell, so the seam names it instead.
+        #[cfg(windows)]
+        {
+            command.env("LAZYSH_UPDATE_TEST_DATA_DIR", self.root.path().join("data"));
+            if let Some(root) = std::env::var_os("SystemRoot") {
+                command.env("SystemRoot", root);
+            }
+        }
         fs::write(self.root.path().join("ca.pem"), &self.server.ca_pem).unwrap();
         command
     }
@@ -156,22 +178,26 @@ impl Fixture {
     }
     /// An installed managed companion: a private directory holding one owner-only executable.
     pub fn managed_binary(&self, script: &[u8]) {
-        let path = self.managed().join("lazysh-agent");
+        let path = self.managed().join(NAME);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        mode(path.parent().unwrap(), 0o700);
         fs::write(&path, script).unwrap();
-        mode(&path, 0o700);
+        #[cfg(unix)]
+        {
+            mode(path.parent().unwrap(), 0o700);
+            mode(&path, 0o700);
+        }
     }
     pub fn installed(&self) -> Vec<u8> {
-        fs::read(self.managed().join("lazysh-agent")).unwrap()
+        fs::read(self.managed().join(NAME)).unwrap()
     }
     pub fn previous(&self) -> Option<Vec<u8>> {
-        fs::read(self.managed().join("lazysh-agent.previous")).ok()
+        fs::read(self.managed().join(PREVIOUS)).ok()
     }
     /// The recorded `update-state.json`, if any.
     pub fn recorded(&self) -> Option<Value> {
         let path = self.state().join("update-state.json");
         fs::read(&path).ok().map(|bytes| {
+            #[cfg(unix)]
             assert_eq!(
                 fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600
