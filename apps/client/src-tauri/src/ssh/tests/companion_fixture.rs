@@ -461,7 +461,8 @@ async fn device_fallback(session: &Arc<Session>, directory: &Path) {
 }
 
 #[cfg(target_os = "linux")]
-async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Path) {
+async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory: &Path) {
+    let host = crate::host::Host::Remote(session.clone());
     use std::os::unix::fs::PermissionsExt;
     let executable = directory.join("bin/codex");
     let marker = directory.join("agent-was-executed");
@@ -482,7 +483,7 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
     fs::create_dir_all(&amp_profile).unwrap();
     let detected_profile = directory.join(".codex");
     fs::create_dir(&detected_profile).unwrap();
-    let discovery = crate::companion::hooks::discover(session, lease)
+    let discovery = crate::companion::hooks::discover(&host, lease)
         .await
         .unwrap();
     let detected = discovery["agents"]
@@ -509,7 +510,7 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         .unwrap();
     assert_eq!(legacy_copilot["setup"], "manual");
     assert_eq!(legacy_copilot["profiles"], serde_json::json!([]));
-    let v2 = crate::companion::hooks::discover_version(session, lease, 2)
+    let v2 = crate::companion::hooks::discover_version(&host, lease, 2)
         .await
         .unwrap();
     assert_eq!(v2["schemaVersion"], 2);
@@ -525,7 +526,7 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         copilot_profile.to_str().unwrap()
     );
     assert!(!marker.exists());
-    let newest = crate::companion::hooks::discover_version(session, lease, 3)
+    let newest = crate::companion::hooks::discover_version(&host, lease, 3)
         .await
         .unwrap();
     let amp = newest["agents"]
@@ -567,7 +568,7 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         }
         let invoke = |action: &str, plan: Option<&str>| {
             let request = serde_json::from_value(serde_json::json!({"agent":agent,"action":action,"profileRoot":profile,"expectedPlan":plan})).unwrap();
-            crate::companion::hooks::execute(session, request, lease)
+            crate::companion::hooks::execute(&host, request, lease)
         };
         let opaque = profile.join("config.json");
         if agent == "copilot" {

@@ -1,5 +1,6 @@
-//! Closed lifecycle setup commands over the existing protected SSH channel.
+//! Closed lifecycle setup commands over the existing protected SSH channel, or run on this device.
 use super::*;
+use crate::{host::Host, local::LocalState};
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
@@ -73,14 +74,16 @@ impl Request {
 #[tauri::command]
 pub async fn companion_hooks(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     request: Request,
     access: AccessLease,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>> {
-    dispatch(state, session_id, access, Some(request), None).await
+    dispatch(state, local, session_id, access, Some(request), None).await
 }
 async fn dispatch(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     access: AccessLease,
     request: Option<Request>,
@@ -88,43 +91,44 @@ async fn dispatch(
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             match request {
-                Some(request) => execute(&session, request, &access).await,
+                Some(request) => execute(&host, request, &access).await,
                 None => match schema_version {
-                    None => discover(&session, &access).await,
-                    Some(version) => discover_version(&session, &access, version).await,
+                    None => discover(&host, &access).await,
+                    Some(version) => discover_version(&host, &access, version).await,
                 },
             }
         })
         .await
 }
 pub(crate) async fn execute(
-    session: &Session,
+    host: &Host,
     request: Request,
     access: &AccessLease,
 ) -> Result<serde_json::Value> {
     let command = request.command()?;
-    execute_command(session, &command, access).await
+    execute_command(host, &command, access).await
 }
 #[tauri::command]
 pub async fn companion_hook_discovery(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     schema_version: Option<u8>,
     access: AccessLease,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>> {
-    dispatch(state, session_id, access, None, schema_version).await
+    dispatch(state, local, session_id, access, None, schema_version).await
 }
-pub(crate) async fn discover(session: &Session, access: &AccessLease) -> Result<serde_json::Value> {
-    execute_command(session, discovery_command(None)?, access).await
+pub(crate) async fn discover(host: &Host, access: &AccessLease) -> Result<serde_json::Value> {
+    execute_command(host, discovery_command(None)?, access).await
 }
 pub(crate) async fn discover_version(
-    session: &Session,
+    host: &Host,
     access: &AccessLease,
     schema_version: u8,
 ) -> Result<serde_json::Value> {
-    execute_command(session, discovery_command(Some(schema_version))?, access).await
+    execute_command(host, discovery_command(Some(schema_version))?, access).await
 }
 fn discovery_command(schema_version: Option<u8>) -> Result<&'static str> {
     match schema_version {
@@ -138,17 +142,24 @@ fn discovery_command(schema_version: Option<u8>) -> Result<&'static str> {
     }
 }
 async fn execute_command(
-    session: &Session,
+    host: &Host,
     command: &str,
     access: &AccessLease,
 ) -> Result<serde_json::Value> {
-    let unix = resolve::detect(session, access).await?.ok_or_else(|| {
-        error(
-            "companion_install_unsupported",
-            "Hook setup requires an identified Unix SSH shell",
-        )
-    })?;
-    let text = ssh::exec_for_access(session, unix.command(command)?, access).await?;
+    let text = match host {
+        Host::Remote(session) => {
+            let unix = resolve::detect(session, access).await?.ok_or_else(|| {
+                error(
+                    "companion_install_unsupported",
+                    "Hook setup requires an identified Unix SSH shell",
+                )
+            })?;
+            ssh::exec_for_access(session, unix.command(command)?, access).await?
+        }
+        // The companion itself says what this platform supports (templates only on Windows).
+        #[cfg(desktop)]
+        Host::Local(_) => host.companion(access, command.into()).await?,
+    };
     parse_response(&text)
 }
 fn parse_response(text: &str) -> Result<serde_json::Value> {
@@ -156,6 +167,52 @@ fn parse_response(text: &str) -> Result<serde_json::Value> {
         return Err(error("invalid_output", "Hook setup response is too large"));
     }
     serde_json::from_str(text).map_err(|_| error("invalid_output", "Invalid hook setup response"))
+}
+
+/// What a user does in the companion panel, through the real command: give a Claude profile a
+/// foreign setting, inspect the plan, install exactly that plan, and return the profile's
+/// `settings.json` after checking the setup kept the foreign setting.
+#[cfg(all(test, unix))]
+pub(crate) async fn install_keeping_foreign_settings(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session_id: &str,
+    profile: &std::path::Path,
+    lease: &AccessLease,
+) -> serde_json::Value {
+    use tauri::Manager;
+    std::fs::create_dir_all(profile).unwrap();
+    std::fs::write(profile.join("settings.json"), "{\"theme\": \"dark\"}").unwrap();
+    let run = |action: &str, plan: Option<&str>| {
+        let request = serde_json::from_value(serde_json::json!({
+            "agent": "claude", "action": action, "profileRoot": profile, "expectedPlan": plan
+        }))
+        .unwrap();
+        // Boxed when called: the command future would overflow a test thread's stack in debug.
+        let answer = Box::pin(companion_hooks(
+            app.state(),
+            app.state(),
+            session_id.into(),
+            request,
+            lease.clone(),
+        ));
+        async move {
+            answer
+                .await
+                .map(|value| value.into_inner().unwrap())
+                .unwrap()
+        }
+    };
+    let status = run("status", None).await;
+    assert_eq!(status["supported"], true);
+    let installed = run("install", status["installPlan"].as_str()).await;
+    assert_eq!(installed["outcome"]["status"], "configured");
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(profile.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(
+        settings["theme"], "dark",
+        "managed setup keeps other settings"
+    );
+    settings
 }
 
 #[cfg(test)]

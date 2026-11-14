@@ -1,23 +1,23 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::host::Host;
+use crate::local::LocalState;
 use crate::ssh::{quote, AppState, Result, SshError};
 use tauri::State;
 
 #[tauri::command]
 pub async fn agent_approvals(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     access: AccessLease,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             Ok(serde_json::from_str(
-                &crate::companion::exec(
-                    &session,
-                    "lazysh-agent approval-list --limit 20".into(),
-                    &access,
-                )
-                .await?,
+                &host
+                    .companion(&access, "lazysh-agent approval-list --limit 20".into())
+                    .await?,
             )?)
         })
         .await
@@ -78,6 +78,7 @@ fn resolve_command(
 #[allow(clippy::too_many_arguments)]
 pub async fn resolve_agent_approval(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
     expected_hash: String,
@@ -101,9 +102,9 @@ pub async fn resolve_agent_approval(
                     message: message.as_deref(),
                 },
             )?;
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             Ok(serde_json::from_str(
-                &crate::companion::exec(&session, command, &access).await?,
+                &host.companion(&access, command).await?,
             )?)
         })
         .await

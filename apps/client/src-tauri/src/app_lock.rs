@@ -880,6 +880,7 @@ mod tests {
             .build(tauri::generate_context!(test = true))
             .unwrap();
         app.manage(crate::ssh::AppState::new(directory.path().into()).unwrap());
+        app.manage(crate::local::LocalState::default());
         let authority = app.vault().access();
         authority
             .initialize(true, true, "synthetic native IPC".into())
