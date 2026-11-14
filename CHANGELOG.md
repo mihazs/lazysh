@@ -312,6 +312,7 @@
 - Discover separate current Kimi Code and legacy Kimi CLI profile candidates without executing agents or reading configuration. Preserve literal overrides, manual-only setup and legacy hook output; clarify the printer targets Kimi CLI 1.52 and current lifecycle remains unqualified. No setup or trust defaults change.
 
 - Correct packaged agent-reporting guidance for read-only discovery and explicit managed Cline setup. Preserve plugin restrictions and separate installation from loaded reporting; no installation or trust defaults change.
+- Add the native terminal engine's adapter, the piece that lets the terminal state live in the Rust core instead of the WebView: it answers sizes, scrolling, modes, rows of text and selection from the core's control plane (no cell data crosses the bridge), pulls the core's state at most once per 16 ms however much output arrives, and passes the same adapter contract suite as xterm.js, here against a stand-in core on headless xterm.js (the Rust core's commands, the engine setting and a renderer are not in this release). Nothing selects it, so terminal behaviour does not change and no defaults change; xterm.js stays the only engine.
 
 - Add optional Herdr reported-session details for bounded Codex, Claude Code and OpenCode IDs, with same-connection companion report matches, stale-reference labels and selected-server shared-reference counts. These read-only details do not establish pane ownership or enable Chat.
 
