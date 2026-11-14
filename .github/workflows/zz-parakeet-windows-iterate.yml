@@ -37,3 +37,13 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 60
         uses: ./.github/actions/windows-parakeet
+      - name: Package the actual Windows NSIS installer
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
+      - name: Exercise actual Windows install, same-version repair and uninstall
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          LAZYSH_TEST_WINDOWS_INSTALLER: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
