@@ -1977,6 +1977,63 @@ it.each(['tmux','herdr','zellij'] as const)('enters the saved named %s directly 
   expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
   expect(mocks.api.saveHost).not.toHaveBeenCalled();
 });
+function enableSessionChoice() {
+  mocks.invoke.mockImplementation(async(command:string)=>command==='transport_capabilities'?{mosh:true,et:true}:command==='multiplexer_tree'?{tmuxAvailable:true,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'chosen',windows:[]}]}
+    :command==='multiplexer_sessions'?[{name:'herd'}]:false);
+  mocks.api.connect.mockResolvedValue({sessionId:'choice-control'});
+  mocks.api.attachTmux.mockResolvedValue({sessionId:'choice-attached'});
+}
+it('opens Sessions on the new connection when asked, keeping the plain terminal as its own tab',async()=>{
+  enableSessionChoice();
+  const user=await openConnection();
+  const choice=screen.getByRole('checkbox',{name:'Choose a multiplexer session after connecting'});
+  expect(choice).toHaveProperty('checked',false);
+  await user.click(choice);
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  const row=await screen.findByRole('button',{name:'Attach chosen'});
+  expect(mocks.api.connect).toHaveBeenCalledExactlyOnceWith('home',{password:'temporary-secret'},expect.any(Function));
+  expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'choice-control'},expect.anything());
+  expect(mocks.api.attachTmux).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+  expect(screen.getAllByRole('tab')).toHaveLength(1);
+  await chooseWorkspaceTool(user,'Terminal');await screen.findByText('Live SSH terminal');
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  await chooseWorkspaceTool(user,'Sessions');
+  await user.click(await screen.findByRole('button',{name:'Attach chosen'}));
+  await waitFor(()=>expect(mocks.api.attachTmux).toHaveBeenCalledExactlyOnceWith('choice-control','chosen',expect.any(Function),undefined));
+  await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
+  expect(row).toBeTruthy();expect(mocks.api.saveHost).not.toHaveBeenCalled();
+});
+it('opens the terminal as before unless the session choice is ticked',async()=>{
+  enableSessionChoice();
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(screen.queryByRole('button',{name:'Attach chosen'})).toBeNull();
+  expect(screen.getAllByRole('tab')).toHaveLength(1);
+});
+it('keeps the saved transport when the session choice is ticked',async()=>{
+  enableSessionChoice();
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'mosh'}]);
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'choice-mosh'});
+  const user=await openConnection();
+  await user.click(screen.getByRole('checkbox',{name:'Choose a multiplexer session after connecting'}));
+  expect(screen.getByLabelText('Transport')).toHaveProperty('value','mosh');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.api.connectMosh).toHaveBeenCalledTimes(1));
+  await screen.findByRole('button',{name:'Attach chosen'});
+  expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'choice-mosh'},expect.anything());
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1);
+  expect(mocks.api.saveHost).not.toHaveBeenCalled();
+});
+it('does not offer the session choice where the connection already names its destination',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'tmux',name:'work'}}]);
+  const user=await openConnection();
+  expect(screen.queryByRole('checkbox',{name:'Choose a multiplexer session after connecting'})).toBeNull();
+  await user.click(screen.getByRole('button',{name:'Cancel'}));
+  cleanup();
+  enableHostLaunch();
+  render(<App/>);await screen.findByRole('dialog',{name:'Connect to Home'});
+  expect(screen.queryByRole('checkbox',{name:'Choose a multiplexer session after connecting'})).toBeNull();
+});
 it('opens Agents on the attached default Herdr session among several running servers',async()=>{
   reportedHistoryApp(reportedAppMetadata);
   const companion=mocks.invoke.getMockImplementation()!;

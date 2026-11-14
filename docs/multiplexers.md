@@ -26,7 +26,7 @@ navigation, workspace/session-level gestures and pane-zoom pinch bindings remain
 separate work. Current Zellij exposes `switch-session`, but lazysh does not yet
 use it or reconcile remembered attachment names after a host-side session switch.
 
-Open **Sessions** on an SSH connection. lazysh discovers tmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
+Open **Sessions** on an SSH connection, or tick [**Choose a multiplexer session after connecting**](connections.md#choose-a-session-after-connecting) in the connection dialog to land on it. lazysh discovers tmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
 
 ## tmux
 

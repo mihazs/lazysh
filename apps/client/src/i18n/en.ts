@@ -291,6 +291,8 @@ export const english = {
   defaultMuxCreate: "Attach to the named session, or create it using the selected multiplexer. No other session is selected.",
   defaultMuxConnecting: "Enter {{kind}} session {{name}} directly after connecting.",
   defaultMuxInvalid: "Choose a supported multiplexer and a nonempty session name of at most 200 UTF-8 bytes without control characters. Zellij names cannot begin with a dash; tmux names cannot contain colons or periods. Herdr accepts 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding a single or double period.",
+  connectChooseMultiplexer: "Choose a multiplexer session after connecting",
+  connectChooseMultiplexerHint: "Opens Sessions on this connection to list tmux, Herdr and Zellij sessions instead of the terminal. The plain terminal stays open in its own tab, and the saved host and its transport are unchanged.",
   defaultMuxClosed: "The default multiplexer connection closed before entry. No other session was opened.",
   fontDownloadRegion: "Downloadable CJK font",
   fontDownloadTitle: "Optional Noto CJK fallback",

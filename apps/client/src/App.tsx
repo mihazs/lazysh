@@ -690,7 +690,8 @@ export function ConnectDialog({
 }: {
   host: Host;
   hosts: Host[];
-  connected: (session: LiveSession) => void;
+  /** `chooseSession` asks for Sessions to open on the new connection, instead of its terminal. */
+  connected: (session: LiveSession, chooseSession?: boolean) => void;
   close: () => void;
   launch?: DesktopHostLaunch;
   recovery?: {sessionId:string;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void};
@@ -723,6 +724,9 @@ export function ConnectDialog({
   const [exportedIdentity, setExportedIdentity] = useState("");
   // Explicit launch receipts keep their original directory/multiplexer semantics.
   const defaultMultiplexer=launch || recovery || reconnect ? undefined : host.defaultMultiplexer;
+  // A saved default, an explicit desktop launch, a sign-in recovery and a reconnect each already say where the connection goes.
+  const offerSessionChoice=!launch && !recovery && !reconnect && !host.defaultMultiplexer;
+  const [chooseSession,setChooseSession]=useState(false);
   const entry:MultiplexerEntry|undefined=reconnect ? reconnect.attached : defaultMultiplexer ? {...defaultMultiplexer,createIfMissing:true} : undefined;
   const preset=reconnect?.auto ?? {mosh:reconnect?.mosh,et:reconnect?.et};
   const [transport, setTransport] = useState<TransportMode>(reconnect ? (reconnect.auto ? 'auto' : reconnect.et ? 'et' : reconnect.mosh ? 'mosh' : 'ssh')
@@ -865,7 +869,7 @@ export function ConnectDialog({
       setPrivateKey("");
       setPassphrase("");
       connectingSessions.current.clear();
-      connected(session);
+      connected(session, offerSessionChoice && chooseSession);
     } catch (e) {
       await connectingSessions.current.closeAll().catch(() => {});
       disposeTerminal(session);
@@ -1144,6 +1148,12 @@ export function ConnectDialog({
                 }
               />{t("appSaveCredentialsOnThisDeviceAfterConnecting")}</label>
           )}
+          {offerSessionChoice && <>
+            <label>
+              <input type="checkbox" checked={chooseSession} disabled={busy} onChange={event=>setChooseSession(event.target.checked)}/>
+              {t('connectChooseMultiplexer')}</label>
+            <p className="muted">{t('connectChooseMultiplexerHint')}</p>
+          </>}
           {error && (
             <p className="inline-error" role="alert">
               {uiErrorText(error)}
@@ -2012,14 +2022,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     setSidebar(false);
   }
   /** `typing` marks a terminal the user just opened to type in; switching to one, restoring and reconnecting are navigation and never raise the soft keyboard. */
-  function sessionConnected(session: LiveSession, launch?:DesktopHostLaunch, typing=false) {
+  function sessionConnected(session: LiveSession, launch?:DesktopHostLaunch, typing=false, chooseSession=false) {
     launch?.lease.assert();
     persistWorkspace([...sessionsRef.current, session]);
     setSessions((previous) => [...previous, session]);
     adoptRetained(session);
     setActiveId(session.id);if(typing)setTypingTerminal(session.id);
     if(launch?.mux)setMuxLaunch(Object.freeze({sessionId:session.id,lease:launch.lease,mux:launch.mux}));
-    setView(launch?.mux ? "sessions" : "terminal");
+    setView(launch?.mux || chooseSession ? "sessions" : "terminal");
     setConnectingHost(null);setHostLaunch(undefined);
     if(!session.local)void loadHosts();
   }
@@ -2667,7 +2677,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           hosts={hostLaunch ? [...hostLaunch.hosts] : hosts}
           host={connectingHost}
           launch={hostLaunch}
-          connected={session=>sessionConnected(session,hostLaunch,true)}
+          connected={(session,chooseSession)=>sessionConnected(session,hostLaunch,true,chooseSession)}
           close={() => {setConnectingHost(null);setHostLaunch(undefined);}}
         />
       )}

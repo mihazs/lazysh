@@ -204,6 +204,14 @@ control session over the fixture's freshly authenticated transport. It does not
 exercise actual OS argv delivery, GUI startup or credential/biometric prompts;
 those remain unexecuted acceptance gates. See the [native command and scope](multiplexers.md#native-checks).
 
+## Choose a session after connecting
+
+To look for a tmux, Herdr or Zellij session without saving a default, tick **Choose a multiplexer session after connecting** at the bottom of the connection dialog. It is off every time the dialog opens and is never saved with the host.
+
+After the usual host-key check and sign-in, lazysh opens **Sessions** on the new connection instead of its terminal. This is the same panel as **Sessions** in the workspace tools: it detects each multiplexer, shows its version and badge, and lists the real sessions. Nothing is attached, created or typed until you choose a row or enter a name. The plain terminal of that connection stays open and is one tap away (**Terminal** in the tools, or its tab), so a plain shell is always the fallback. Attaching a session opens it in a new tab on the same verified connection, as it does from **Sessions** at any other time; the plain terminal is not replaced.
+
+The transport you chose (or the host's saved one) is used as it is, and the saved host is not changed. The option is not offered where the connection already names its destination: a host with a saved [default multiplexer](#enter-a-saved-default-multiplexer), a [launch from the command line](#multiplexer-picker-launches), a sign-in recovery or a reconnect of a lost tab. Frontend tests cover the dialog (default off, transport and saved host unchanged, the options hidden where a destination is already named) and the connect-to-Sessions path, and a browser test checks it at phone and desktop widths with a synthetic native bridge. No physical device or real multiplexer host was used for this option.
+
 ## Transport selection
 
 Choose a host's **Preferred transport** in its editor. New hosts default to **Auto**; existing hosts without a preference keep SSH. The connection dialog starts with that preference and its saved helper paths/ports. A per-connection override does not silently change the saved host.
