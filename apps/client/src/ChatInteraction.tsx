@@ -42,8 +42,11 @@ function list(value:unknown,limit:number,allowEmpty=false):unknown[] {
 
 /** Cards are display-only projections the companion attaches to recorded tool calls. */
 export function parseCard(value:unknown,context:{agent:string;view?:string;type:string}):Card {
-  if(!cardAgents.includes(context.agent))throw invalid();
+  // Grok Build records a plan and nothing else the cards show, and only in its conversation view.
+  const grok=context.agent==='grok-acp' && context.view==='active_branch';
+  if(!cardAgents.includes(context.agent) && !grok)throw invalid();
   const kind=exact(value,['kind'],['entries','explanation','text','questions','cause']).kind;
+  if(grok && kind!=='plan')throw invalid();
   const textBlock=context.type==='text';
   if(kind==='error') {
     // Claude Code writes a failed API call as an assistant text record.

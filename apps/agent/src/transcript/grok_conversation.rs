@@ -119,12 +119,16 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                         + id.len();
                     Action::Tool(id.into(), patch, tag == "tool_call", position, timestamp)
                 }
-                "plan" => display_action(
-                    &record,
-                    position,
-                    Some(format!("record:{position}")),
-                    &mut charged,
-                )?,
+                // The plan card when the entries are the recorded shape; anything else stays the labeled text.
+                "plan" => match super::interaction::grok_plan(update) {
+                    Some(card) => plan_action(card, position, &timestamp, &mut charged)?,
+                    None => display_action(
+                        &record,
+                        position,
+                        Some(format!("record:{position}")),
+                        &mut charged,
+                    )?,
+                },
                 // Explicit non-conversation ACP snapshots do not change the timeline.
                 "available_commands_update"
                 | "current_mode_update"
@@ -323,6 +327,20 @@ fn reduce(actions: Vec<Action>) -> Result<Vec<Value>> {
         validate_normalized(&messages[index])?;
     }
     Ok(messages)
+}
+
+/// A plan update as one `plan` call carrying the shared plan card, so the plan chip and the card of the turn read it.
+fn plan_action(card: Value, position: u64, timestamp: &str, charged: &mut usize) -> Result<Action> {
+    let mut call = super::block(
+        "tool_use",
+        String::new(),
+        Some(format!("grok-plan-{position}")),
+        Some("plan".into()),
+    );
+    call["card"] = card;
+    let message = json!({"id":format!("grok-record-{position}"),"role":"assistant","blocks":[call],"timestamp":timestamp});
+    *charged += normalized_size(&message)?;
+    Ok(Action::Chunk(message, Some(format!("record:{position}"))))
 }
 
 fn display_action(

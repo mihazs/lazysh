@@ -68,6 +68,40 @@ fn streamed_chunks_and_tool_replacements_form_one_recorded_timeline() {
     assert_eq!(result["truncated"], false);
 }
 #[test]
+fn a_plan_update_becomes_the_shared_plan_card_and_a_replacement_is_a_new_card() {
+    let plan = |entries: Value| event("plan", json!({"entries":entries}));
+    let result = run(&[
+        prompt(0, "Fix it"),
+        plan(json!([
+            {"content":"Read the module","status":"completed","priority":"high"},
+            {"content":"Write the fix","status":"in_progress","priority":"medium"}
+        ])),
+        plan(json!([
+            {"content":"Read the module","status":"completed","priority":"high"},
+            {"content":"Write the fix","status":"completed","priority":"medium"}
+        ])),
+    ]);
+    let cards: Vec<Value> = result["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["blocks"].as_array().unwrap().clone())
+        .filter(|block| block["type"] == "tool_use")
+        .map(|block| block["card"].clone())
+        .collect();
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[1]["kind"], "plan");
+    assert_eq!(
+        cards[1]["entries"],
+        json!([
+            {"text":"Read the module","status":"completed"},
+            {"text":"Write the fix","status":"completed"}
+        ])
+    );
+    assert_eq!(cards[0]["entries"][1]["status"], "in_progress");
+}
+
+#[test]
 fn rewind_removes_abandoned_tool_updates_and_compaction_never_fetches_paths() {
     let result = run(&[
         prompt(0, "first"),

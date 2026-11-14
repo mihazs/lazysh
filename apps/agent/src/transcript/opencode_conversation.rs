@@ -347,6 +347,8 @@ pub(super) fn normalize(
     time: i64,
 ) -> Result<Option<Value>> {
     let mut blocks = Vec::new();
+    // OpenCode records a compaction as a message of its own: a V1 user message holding one `compaction` part, or a V2 `compaction` role.
+    let mut compacted = role == "compaction";
     if kind == Schema::V2 && role == "user" {
         blocks.push(block("text", text(data, "text")?, None, None));
         if let Some(files) = data.get("files") {
@@ -387,8 +389,9 @@ pub(super) fn normalize(
                 "file" => blocks.push(attachment(part)?),
                 "tool" => tool(part, &mut blocks)?,
                 // V1 structural timeline markers contain no conversation text.
-                "step-start" | "step-finish" | "snapshot" | "patch" | "compaction" | "retry"
-                | "agent" | "subtask" => {}
+                "compaction" => compacted = true,
+                "step-start" | "step-finish" | "snapshot" | "patch" | "retry" | "agent"
+                | "subtask" => {}
                 _ => return Err(Error::InvalidEvent),
             }
         }
@@ -433,12 +436,12 @@ pub(super) fn normalize(
             None,
         ));
     }
-    if blocks.is_empty() {
-        return Ok(None);
-    }
     let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(time)
         .ok_or(Error::InvalidEvent)?
         .to_rfc3339();
+    if blocks.is_empty() {
+        return Ok(compacted.then(|| super::events::compacted(id, &json!(timestamp))));
+    }
     let mut message = json!({"id":id,"role":if role=="user" {"user"}else{"assistant"},"blocks":blocks,"timestamp":timestamp});
     database::opencode_usage(&mut message, data);
     Ok(Some(message))
