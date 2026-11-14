@@ -93,13 +93,13 @@ pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<
                 if !info.is_object() {
                     return Err(Error::InvalidEvent);
                 }
-                Some(RecordedContext {
-                    source: "codex_token_count",
-                    used_tokens: counter(&info["last_token_usage"]["total_tokens"])?,
-                    limit_tokens: counter(&info["model_context_window"])?,
-                    recorded_at: recorded_at.clone(),
+                Some(RecordedContext::new(
+                    "codex_token_count",
+                    counter(&info["last_token_usage"]["total_tokens"])?,
+                    counter(&info["model_context_window"])?,
+                    recorded_at.clone(),
                     freshness,
-                })
+                ))
             };
             let last = &info["last_token_usage"];
             if !last.is_null() {

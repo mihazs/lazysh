@@ -117,3 +117,57 @@ fn reading_usage_returns_only_selected_transcript_metrics_without_retaining_prom
     assert_eq!(output["samples"][0]["inputTokens"], 22);
     assert!(!dir.path().join("unused-state").exists());
 }
+
+fn claude_response(id: &str, usage: Value) -> Value {
+    json!({"id":id,"timestamp":"2026-10-24T19:59:00Z","usage":usage})
+}
+
+#[test]
+fn claude_context_is_the_newest_response_with_no_window_and_never_a_partial_sum() {
+    let all = |input, output, read, write| json!({"inputTokens":input,"outputTokens":output,"cacheReadTokens":read,"cacheWriteTokens":write});
+    let context = |messages: Vec<Value>, agent: TranscriptAgent| {
+        let mut page = page(messages);
+        page.agent = agent;
+        serde_json::to_value(usage::from_page(page, now()).unwrap()).unwrap()["recordedContext"]
+            .clone()
+    };
+    // The newest response wins; older ones are never added to it.
+    assert_eq!(
+        context(
+            vec![
+                claude_response("a", all(9, 9, 9, 9)),
+                claude_response("b", all(2, 8, 100, 30)),
+            ],
+            TranscriptAgent::Claude
+        ),
+        json!({"source":"claude_last_response","usedTokens":140,"limitTokens":null,"remainingTokens":null,
+               "recordedAt":"2026-10-24T19:59:00+00:00","freshness":"fresh"})
+    );
+    // A missing counter, an all-zero (synthetic) response, no samples and other agents are unknown.
+    for (messages, agent) in [
+        (
+            vec![claude_response(
+                "a",
+                json!({"inputTokens":5,"outputTokens":1}),
+            )],
+            TranscriptAgent::Claude,
+        ),
+        (
+            vec![claude_response("a", all(0, 0, 0, 0))],
+            TranscriptAgent::Claude,
+        ),
+        (vec![], TranscriptAgent::Claude),
+        (
+            vec![claude_response("a", all(2, 8, 100, 30))],
+            TranscriptAgent::Pi,
+        ),
+    ] {
+        assert_eq!(context(messages, agent), Value::Null);
+    }
+    // A stale response stays labelled stale rather than becoming the live context.
+    let stale = json!({"id":"a","timestamp":"2026-10-24T18:00:00Z","usage":all(1, 1, 1, 1)});
+    assert_eq!(
+        context(vec![stale], TranscriptAgent::Claude)["freshness"],
+        "stale"
+    );
+}

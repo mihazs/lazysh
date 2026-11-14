@@ -74,7 +74,7 @@ it("discards an old host response after the SSH session changes", async () => {
   expect(screen.getByLabelText("Usage transcript path")).toHaveProperty("value", "");
 });
 
-const recordedContext = { source: "codex_token_count" as const, usedTokens: 132, limitTokens: 1000, recordedAt: "2026-10-24T19:59:00Z", freshness: "fresh" as const };
+const recordedContext = { source: "codex_token_count" as const, usedTokens: 132, limitTokens: 1000, remainingTokens: 868, recordedAt: "2026-10-24T19:59:00Z", freshness: "fresh" as const };
 const providerWindow = { provider: "codex" as const, accountId: null, limitId: "codex", kind: "primary" as const, usedPercent: 12.5, windowMinutes: 300, resetsAt: "2026-10-24T20:01:00Z", recordedAt: "2026-10-24T19:59:00Z", freshness: "fresh" as const };
 
 it("validates recorded Codex metadata while retaining unknown live limits", () => {
@@ -83,6 +83,9 @@ it("validates recorded Codex metadata while retaining unknown live limits", () =
   for (const invalid of [
     { ...value, agent: "claude" },
     { ...value, recordedContext: { ...recordedContext, usedTokens: -1 } },
+    { ...value, recordedContext: { ...recordedContext, remainingTokens: 867 } },
+    { ...value, recordedContext: { ...recordedContext, limitTokens: null } },
+    { ...value, recordedContext: { ...recordedContext, source: "claude_last_response" } },
     { ...value, recordedContext: { ...recordedContext, recordedAt: null } },
     { ...value, providerWindows: [{ ...providerWindow, usedPercent: 101 }] },
     { ...value, providerWindows: [{ ...providerWindow, accountId: "guessed-account" }] },
@@ -103,8 +106,23 @@ it("shows recorded context and provider windows without claiming a current accou
   await screen.findByRole("heading", { name: "Last recorded response context" });
   expect(screen.getByText("Recorded context tokens").nextElementSibling?.textContent).toBe("132");
   expect(screen.getByText("Recorded context window").nextElementSibling?.textContent).toBe("1,000");
+  expect(screen.getByText("Recorded context remaining").nextElementSibling?.textContent).toBe("868");
   expect(screen.getByText("Context remaining").nextElementSibling?.textContent).toBe("Unknown");
   expect(screen.getByText("0%")).toBeTruthy();
   expect(screen.getByText(/Account identity is unknown/)).toBeTruthy();
   expect(screen.getByText(/Recording time does not prove/)).toBeTruthy();
+});
+
+it("shows Claude's last response as the context in use with the window and the remainder unknown", async () => {
+  const claudeContext = { source: "claude_last_response" as const, usedTokens: 140, limitTokens: null, remainingTokens: null, recordedAt: "2026-10-24T19:59:00Z", freshness: "fresh" as const };
+  expect(() => parseUsage({ ...snapshot, recordedContext: claudeContext })).not.toThrow();
+  expect(() => parseUsage({ ...snapshot, recordedContext: { ...claudeContext, source: "codex_token_count" } })).toThrow();
+  vi.mocked(invoke).mockResolvedValue({ ...snapshot, recordedContext: claudeContext });
+  render(<UsagePanel sessionId="ssh1" />);
+  fireEvent.change(screen.getByLabelText("Usage transcript path"), { target: { value: "/host/session.jsonl" } });
+  fireEvent.click(screen.getByRole("button", { name: "Inspect usage" }));
+  await screen.findByRole("heading", { name: "Last recorded response context" });
+  expect(screen.getByText("Recorded context tokens").nextElementSibling?.textContent).toBe("140");
+  expect(screen.getByText("Recorded context window").nextElementSibling?.textContent).toBe("Unknown");
+  expect(screen.getByText("Recorded context remaining").nextElementSibling?.textContent).toBe("Unknown");
 });
