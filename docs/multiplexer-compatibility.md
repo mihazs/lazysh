@@ -147,10 +147,10 @@ implemented without full evidence, *part* means partial.
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
 | Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
 | Agent launch | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
-| Rename | session, window; pane → #1144 | tab yes; session, pane impl → yes #1685 | workspace, tab, pane | no → #1140, #1144 |
-| Close | no → #1144 | tab yes; pane, session impl → yes #1685 | workspace, tab (#1573), pane | no → #1144 |
+| Rename | session, window, pane | tab yes; session, pane impl → yes #1685 | workspace, tab, pane | no → #1140, #1144 |
+| Close | session, window (tab strip), pane | tab yes; pane, session impl → yes #1685 | workspace, tab (#1573), pane | no → #1144 |
 | Split, zoom | yes | yes | yes | no → #1140 |
-| Resize | no → #1144 | impl → yes #1685 | yes | no → #1144 |
+| Resize | yes | impl → yes #1685 | yes | no → #1144 |
 | History | yes | yes | part: Herdr serves the newest 1000 lines | no → #1700, #1140 |
 | OSC 52 | impl; `set-clipboard` documented → yes #1699 | impl; default → yes #1699 | impl; default over SSH → yes #1699 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
