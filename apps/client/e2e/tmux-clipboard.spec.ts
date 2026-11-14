@@ -38,7 +38,8 @@ async function allow(page:Page,text:string) {
 }
 
 test.describe('real tmux',()=>{
-  test.skip(!available,'Requires tmux and util-linux script on PATH (LAZYSH_TEST_TMUX selects a tmux binary).');
+  // CI installs tmux, so a missing binary there fails the spec rather than hiding it as a skip.
+  test.skip(!available&&!process.env.CI,'Requires tmux and util-linux script on PATH (LAZYSH_TEST_TMUX selects a tmux binary).');
   let session:Awaited<ReturnType<typeof attachTmux>>|undefined;
   test.afterEach(()=>{session?.dispose();session=undefined;});
 
