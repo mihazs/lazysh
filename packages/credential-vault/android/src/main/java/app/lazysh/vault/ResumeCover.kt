@@ -28,6 +28,8 @@ internal class ResumeCover(private var activity: Activity) {
     private var title: TextView? = null
     private var status: TextView? = null
     private var failed = false
+    // Bumped whenever the cover must be shown or a newer reveal starts; a pending reveal acts only for its own value.
+    private var uncover = 0L
     val ready get() = overlay != null && webview != null
     fun load(view: WebView, owner: Activity = activity) {
         if (webview === view && activity === owner) { render(); return }
@@ -37,6 +39,7 @@ internal class ResumeCover(private var activity: Activity) {
             gate.rebind(resumed)
             webview?.visibility = View.INVISIBLE
             (overlay?.parent as? ViewGroup)?.removeView(overlay)
+            uncover++
             overlay = null; logo = null; title = null; status = null; unlock = null; failed = false
         }
         activity = owner
@@ -45,6 +48,7 @@ internal class ResumeCover(private var activity: Activity) {
         val panel = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             setBackgroundColor(Color.rgb(11, 23, 40)); isFocusable = true; isFocusableInTouchMode = true
+            isClickable = true // a visible WebView beneath must not receive touches
             logo = ImageView(activity).apply {
                 setImageDrawable(activity.applicationInfo.loadIcon(activity.packageManager))
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -92,11 +96,30 @@ internal class ResumeCover(private var activity: Activity) {
         if (gate.protectsContent) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         webview?.apply {
-            visibility = if (covered) View.INVISIBLE else View.VISIBLE
+            // While the policy is unknown the page shows only its placeholder, so it may render under the opaque cover and keep its
+            // frame current for the reveal. A confirmed lock hides it entirely.
+            visibility = if (covered && !gate.awaitingPolicy) View.INVISIBLE else View.VISIBLE
             importantForAccessibility = if (covered) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
             isEnabled = !covered
             if (covered) (activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(windowToken, 0)
         }
-        overlay?.apply { visibility = if (covered) View.VISIBLE else View.GONE; if (covered) { bringToFront(); requestFocus() } }
+        overlay?.apply {
+            if (covered) { uncover++; visibility = View.VISIBLE; bringToFront(); requestFocus() }
+            else if (visibility == View.VISIBLE) uncoverAfterPaint(this)
+        }
     }
+    /**
+     * A hidden WebView stops painting, so revealing it shows whatever frame it presented last (the pre-ready placeholder) until the
+     * committed workspace is drawn. The WebView is already visible here: keep the cover until its DOM state has been rendered, with
+     * a short bound so a missing callback can never leave a ready WebView covered.
+     */
+    private fun uncoverAfterPaint(cover: View) {
+        val mine = ++uncover
+        val finish = Runnable { if (uncover == mine && overlay === cover) cover.visibility = View.GONE }
+        cover.postDelayed(finish, UNCOVER_TIMEOUT_MS)
+        webview?.postVisualStateCallback(mine, object : WebView.VisualStateCallback() {
+            override fun onComplete(requestId: Long) { cover.removeCallbacks(finish); finish.run() }
+        })
+    }
+    private companion object { const val UNCOVER_TIMEOUT_MS = 300L }
 }
