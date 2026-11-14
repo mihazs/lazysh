@@ -89,11 +89,11 @@ impl Unix {
     pub fn target(&self) -> String {
         format!("{}-agent-{}", self.os, self.arch)
     }
+    pub fn managed_dir(&self) -> String {
+        format!("{}/lazysh/companion", self.data.trim_end_matches('/'))
+    }
     pub fn managed(&self) -> String {
-        format!(
-            "{}/lazysh/companion/lazysh-agent",
-            self.data.trim_end_matches('/')
-        )
+        format!("{}/lazysh-agent", self.managed_dir())
     }
     fn stat(&self) -> &'static str {
         if self.os == "linux" {

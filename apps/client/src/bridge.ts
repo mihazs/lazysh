@@ -82,15 +82,19 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   if(args.sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   return createSession(command,args,onEvent);
 }
+function installCompanionVia(command:'install_companion'|'install_companion_from_device',sessionId:string,onProgress:(value:unknown)=>void) {
+  if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
+  const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
+  return remoteInvoke<unknown>(command,{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
+}
 export const api = {
   accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
   companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
   companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
-  installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
-    if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
-    const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
-    return remoteInvoke<unknown>('install_companion',{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
-  },
+  /** The host downloads and installs the companion; this device sends only a pin. */
+  installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion',sessionId,onProgress),
+  /** The labelled offline fallback: this device downloads the companion and uploads it to a host that cannot reach GitHub. */
+  installCompanionFromDevice: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion_from_device',sessionId,onProgress),
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
   clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
   clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),

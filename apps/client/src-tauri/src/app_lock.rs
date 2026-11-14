@@ -874,7 +874,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -913,6 +913,9 @@ mod tests {
             installer.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"}),
             );
+            let mut fallback = request(nonce);
+            fallback.cmd = "install_companion_from_device".into();
+            fallback.body = installer.body.clone();
             let mut hooks = request(nonce);
             hooks.cmd = "companion_hooks".into();
             hooks.body = tauri::ipc::InvokeBody::Json(
@@ -922,7 +925,7 @@ mod tests {
             discovery.cmd = "companion_hook_discovery".into();
             discovery.body =
                 tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
-            [read, update, installer, hooks, discovery]
+            [read, update, installer, fallback, hooks, discovery]
         };
         let rejected = |nonce: Option<&str>| {
             for request in protected_requests(nonce) {
@@ -935,7 +938,7 @@ mod tests {
         };
         let admitted = |nonce: &str| {
             for request in protected_requests(Some(nonce)) {
-                let installer = request.cmd == "install_companion";
+                let installer = request.cmd.starts_with("install_companion");
                 let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
                 if installer {
                     assert!(error.get("phase").is_some_and(serde_json::Value::is_null));

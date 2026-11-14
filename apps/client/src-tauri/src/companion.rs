@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tauri::{ipc::Channel, State};
 pub mod hooks;
-mod install;
+pub(crate) mod install;
 mod release;
 mod resolve;
 mod transfer;
@@ -99,13 +99,28 @@ pub enum Stage {
     Downloading,
     Uploading,
     Verifying,
+    SelfTesting,
     Installing,
     CheckingInstalled,
     CleaningUp,
 }
+/// A stage change; `bytes` and `total` only accompany `downloading`, which the host reports.
 #[derive(Clone, Serialize)]
 pub struct Progress {
     stage: Stage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<u64>,
+}
+impl Progress {
+    fn new(stage: Stage) -> Self {
+        Self {
+            stage,
+            bytes: None,
+            total: None,
+        }
+    }
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,12 +140,20 @@ pub struct InstallFailure {
     #[serde(flatten)]
     error: SshError,
     phase: Option<Stage>,
+    /// Why the host failed, from a closed list; never remote text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'static str>,
 }
 impl From<SshError> for InstallFailure {
     fn from(error: SshError) -> Self {
-        Self { error, phase: None }
+        Self {
+            error,
+            phase: None,
+            detail: None,
+        }
     }
 }
+/// Installs or updates the companion with the host doing the download: the phone sends only a pin.
 #[tauri::command]
 pub async fn install_companion(
     state: State<'_, AppState>,
@@ -138,32 +161,81 @@ pub async fn install_companion(
     progress: Channel<Progress>,
     access: AccessLease,
 ) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
+    install_from(state, session_id, progress, access, install::Route::Host).await
+}
+/// The labelled offline fallback for hosts that cannot reach GitHub: this device downloads the
+/// companion and uploads it over SFTP. Nothing else calls the device download.
+#[tauri::command]
+pub async fn install_companion_from_device(
+    access: AccessLease,
+    progress: Channel<Progress>,
+    session_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
+    install_from(state, session_id, progress, access, install::Route::Device).await
+}
+async fn install_from(
+    state: State<'_, AppState>,
+    session_id: String,
+    progress: Channel<Progress>,
+    access: AccessLease,
+    route: install::Route,
+) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
     access
         .run(async {
             let session = state
                 .session(&session_id)
                 .await
                 .map_err(InstallFailure::from)?;
-            install::run(session, &access, progress).await
+            install::run(session, &access, progress, route).await
         })
         .await
 }
 
+/// An owned release fixture: `binary` published as `version`. The metadata is the fixture's; everything
+/// the route then does to the host is real. It counts what the client was asked to fetch.
 #[cfg(all(test, unix))]
-pub(crate) async fn owned_install(
-    session: Arc<Session>,
-    lease: &AccessLease,
-    binary: &std::path::Path,
-) -> Result<Installed> {
-    let bytes = std::fs::read(binary)?;
-    install::run_with(
-        session,
-        lease,
-        Channel::new(|_| Err(std::io::Error::other("owned retired observer").into())),
-        release::Publisher::owned(bytes, env!("CARGO_PKG_VERSION").into()),
-    )
-    .await
-    .map_err(|failure| failure.error)
+pub(crate) struct Owned(release::Publisher);
+#[cfg(all(test, unix))]
+impl Owned {
+    pub(crate) fn new(binary: &std::path::Path, version: &str) -> Self {
+        Self(release::Publisher::owned(
+            std::fs::read(binary).unwrap(),
+            version.into(),
+        ))
+    }
+    /// How often the client asked for release metadata.
+    pub(crate) fn selects(&self) -> usize {
+        self.0.calls.selects()
+    }
+    /// How often the client downloaded the companion itself: only the offline fallback may.
+    pub(crate) fn downloads(&self) -> usize {
+        self.0.calls.downloads()
+    }
+    pub(crate) async fn install(
+        &self,
+        session: Arc<Session>,
+        lease: &AccessLease,
+        route: install::Route,
+    ) -> std::result::Result<Installed, InstallFailure> {
+        install::run_with(
+            session,
+            lease,
+            Channel::new(|_| Err(std::io::Error::other("owned retired observer").into())),
+            &self.0,
+            route,
+        )
+        .await
+    }
+}
+#[cfg(all(test, unix))]
+impl InstallFailure {
+    pub(crate) fn kind(&self) -> &str {
+        self.error.kind()
+    }
+    pub(crate) fn detail(&self) -> Option<&'static str> {
+        self.detail
+    }
 }
 #[cfg(test)]
 mod probe_tests {

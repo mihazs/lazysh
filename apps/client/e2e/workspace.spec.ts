@@ -113,7 +113,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(({geometry,sessionNames})=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,offline:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       // Herdr display replies can be slowed to mimic a network round trip.
@@ -133,8 +133,10 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
       }if(state.visualStates){tree.agents=tree.agents.map((agent,index)=>({...agent,agent_status:index%3===0?'blocked':index%3===1?'working':'done'}));tree.panes=tree.panes.map((pane,index)=>({...pane,agent_status:tree.agents[index].agent_status}));}if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
-      if(command==='install_companion'){
+      if(command==='install_companion'||command==='install_companion_from_device'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
+        // A host with no route to GitHub fails the default route; only the labelled device route still installs.
+        if(state.offline&&command==='install_companion')throw {kind:'companion_host_network',detail:'dns',phase:'downloading',message:'Private remote text'};
         const status=state.installed?'reused':'installed';(args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'checkingInstalled'});state.installed=true;
         return {schemaVersion:1,status,version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
       }
@@ -519,6 +521,30 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(false);
   await page.evaluate(()=>(window as unknown as {finishHerdrRead:()=>void}).finishHerdrRead());
   await expect.poll(()=>page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(true);
+});
+
+test('a host that cannot reach GitHub offers the labelled device install and the default route never downloads on the device',async({page},testInfo)=>{
+  await openClockedNavigation(page);
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{offline:boolean}}).workspaceNavigationState.offline=true;});
+  await (await workspaceControl(page,'Agents')).click();
+  await selectAgentSection(page,'activity');
+  const board=page.getByRole('region',{name:'Agent activity',exact:true});
+  await page.clock.runFor(200);
+  const calls=(name:string)=>page.evaluate(command=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(call=>call===command).length,name);
+  await board.getByRole('button',{name:'Install companion',exact:true}).click();
+  await expect(board.locator('details.companion-install').getByRole('alert')).toHaveText('The host could not download the companion from GitHub. It needs outbound HTTPS access.');
+  expect(await calls('install_companion')).toBe(1);
+  expect(await calls('install_companion_from_device'),'the device route is only offered, never taken by itself').toBe(0);
+  const fallback=board.getByRole('button',{name:'Install through this device',exact:true});
+  await fallback.scrollIntoViewIfNeeded();await expect(fallback).toBeInViewport();
+  expect((await fallback.boundingBox())!.height).toBeGreaterThanOrEqual(testInfo.project.name==='phone'?32:20);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await fallback.click();
+  await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  await expect(fallback).toHaveCount(0);
+  expect([await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,1]);
 });
 
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{

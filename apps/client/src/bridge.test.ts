@@ -20,6 +20,13 @@ it('sends installation through one protected native command with no renderer URL
   channel.onmessage({stage:'uploading'});expect(progress).not.toHaveBeenCalled();
   invoke.mockClear();await expect(api.installCompanion('local:owned',progress)).rejects.toThrow('SSH connection');expect(invoke).not.toHaveBeenCalled();
 });
+it('sends the offline fallback through its own protected command so the default never downloads on the device',async()=>{
+  const progress=vi.fn();
+  await api.installCompanionFromDevice('ssh-installer',progress);
+  expect(invoke).toHaveBeenCalledWith('install_companion_from_device',{sessionId:'ssh-installer',progress:expect.any(Object)},expect.anything());
+  expect(Object.keys(invoke.mock.calls[0][1]).sort()).toEqual(['progress','sessionId']);
+  invoke.mockClear();await expect(api.installCompanionFromDevice('local:owned',progress)).rejects.toThrow('SSH connection');expect(invoke).not.toHaveBeenCalled();
+});
 it('submits a complete sequence through one protected native request for either transport',async()=>{
   for (const [id,command] of [['local:sequence','local_write'],['ssh-sequence','write_stdin']]) {
     await api.writeSequence(id,['\x02','T']);

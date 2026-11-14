@@ -37,8 +37,12 @@ do not install hooks, enable publishing or change existing companion settings.
 Starting with 1.2.0, connect to the intended Linux or macOS account and open
 **Agents → Install companion** (or **Update companion**). This action is available
 even when the helper is missing; on phones, open Agents through **More**.
-The app verifies a stable published executable,
-transfers it through the existing SSH connection and checks the installation.
+The app verifies a stable published release's metadata and sends the host a pin
+(version, size and SHA-256); the host downloads that executable itself over HTTPS,
+checks it, replaces the managed copy atomically and keeps the previous one. The
+phone does not download the companion. A host that cannot reach GitHub gets a
+separate **Install through this device** button that uploads it through the
+existing SSH connection instead.
 It prefers a valid managed executable without changing PATH; an absent managed
 installation keeps legacy PATH behavior. Installation never starts automatically
 or changes host permissions or hooks. See [companion setup](https://github.com/mihazs/lazysh/blob/main/docs/companion.md) for the

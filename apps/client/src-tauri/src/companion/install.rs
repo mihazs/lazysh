@@ -1,5 +1,12 @@
 use super::*;
 use tokio::sync::{watch, OwnedSemaphorePermit};
+mod host;
+/// Who downloads the companion: the host (the default) or, as the labelled offline fallback, this device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Host,
+    Device,
+}
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Identity {
@@ -35,6 +42,7 @@ struct Flight {
     _permit: OwnedSemaphorePermit,
 }
 struct Operation {
+    route: Route,
     session: Arc<Session>,
     lease: AccessLease,
     progress: Channel<Progress>,
@@ -53,6 +61,7 @@ struct Work {
     possible_commit: Option<(String, String)>,
     checking_installed: bool,
     phase: Option<Stage>,
+    detail: Option<&'static str>,
 }
 impl Operation {
     fn work_stage(&self, phase: &mut Option<Stage>, stage: Stage) {
@@ -61,7 +70,7 @@ impl Operation {
     }
     fn stage(&self, stage: Stage) {
         if self.lease.check().is_ok() && !*self.session.cancel.borrow() {
-            let _ = self.progress.send(Progress { stage });
+            let _ = self.progress.send(Progress::new(stage));
         }
     }
     async fn active<T>(&self, future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
@@ -87,18 +96,41 @@ impl Operation {
         )
         .await
     }
-    async fn perform(&self, work: &mut Work, publisher: &release::Publisher) -> Result<Installed> {
+    /// The positively identified Unix host both routes install on; anything else is unsupported.
+    async fn detect(&self, work: &mut Work) -> Result<resolve::Unix> {
         self.work_stage(&mut work.phase, Stage::Detecting);
-        let unix = resolve::detect(&self.session, &self.lease)
+        resolve::detect(&self.session, &self.lease)
             .await?
             .ok_or_else(|| {
                 error(
                     "companion_install_unsupported",
                     "Installation requires a positively identified Linux or macOS SSH shell",
                 )
-            })?;
+            })
+    }
+    /// The host and the verified release for it: the metadata is all either route asks the publisher for first.
+    async fn resolve(
+        &self,
+        work: &mut Work,
+        publisher: &release::Publisher,
+    ) -> Result<(resolve::Unix, release::Selection)> {
+        let unix = self.detect(work).await?;
         self.work_stage(&mut work.phase, Stage::CheckingRelease);
         let selection = publisher.select(&unix.target()).await?;
+        Ok((unix, selection))
+    }
+    async fn perform(&self, work: &mut Work, publisher: &release::Publisher) -> Result<Installed> {
+        match self.route {
+            Route::Host => self.perform_host(work, publisher).await,
+            Route::Device => self.perform_device(work, publisher).await,
+        }
+    }
+    async fn perform_device(
+        &self,
+        work: &mut Work,
+        publisher: &release::Publisher,
+    ) -> Result<Installed> {
+        let (unix, selection) = self.resolve(work, publisher).await?;
         self.work_stage(&mut work.phase, Stage::Downloading);
         let bytes = publisher.download(&selection).await?;
         self.work_stage(&mut work.phase, Stage::Uploading);
@@ -246,14 +278,16 @@ pub(super) async fn run(
     session: Arc<Session>,
     lease: &AccessLease,
     progress: Channel<Progress>,
+    route: Route,
 ) -> std::result::Result<Installed, InstallFailure> {
-    run_with(session, lease, progress, release::Publisher::new()?).await
+    run_with(session, lease, progress, &release::Publisher::new()?, route).await
 }
 pub(super) async fn run_with(
     session: Arc<Session>,
     lease: &AccessLease,
     progress: Channel<Progress>,
-    publisher: release::Publisher,
+    publisher: &release::Publisher,
+    route: Route,
 ) -> std::result::Result<Installed, InstallFailure> {
     let permit = session
         .companion_install
@@ -267,22 +301,31 @@ pub(super) async fn run_with(
         })?;
     let (stop, _) = watch::channel(false);
     let op = Operation {
+        route,
         session,
         lease: lease.clone(),
         progress,
         flight: Arc::new(Flight { _permit: permit }),
         stop,
-        deadline: tokio::time::Instant::now() + Duration::from_secs(240),
+        deadline: tokio::time::Instant::now()
+            + Duration::from_secs(match route {
+                Route::Host => host::OPERATION_SECONDS,
+                Route::Device => 240,
+            }),
     };
     let mut work = Work::default();
     let outcome = op
-        .active(op.perform(&mut work, &publisher))
+        .active(op.perform(&mut work, publisher))
         .await
         .map_err(|error| InstallFailure {
             error,
             phase: work.phase,
+            detail: work.detail,
         });
-    op.stage(Stage::CleaningUp);
+    // Only the device route stages files on the host; the host route cleans up in its own script.
+    if work.staging.is_some() {
+        op.stage(Stage::CleaningUp);
+    }
     let cleanup = if let Some(staging) = &mut work.staging {
         if op.lease.check().is_ok() && !*op.session.cancel.borrow() {
             match tokio::time::timeout(Duration::from_secs(5), staging.cleanup()).await {
@@ -366,7 +409,8 @@ mod tests {
                 session,
                 &lease,
                 Channel::new(|_| Err(std::io::Error::other("retired observer").into())),
-                release::Publisher::owned(vec![1], "1.0.0".into()),
+                &release::Publisher::owned(vec![1], "1.0.0".into()),
+                Route::Host,
             )
             .await
         });

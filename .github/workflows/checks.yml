@@ -250,7 +250,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lazysh-pinned-downloads
-          key: lazysh-pinned-downloads-${{ github.job }}-v1-zig70e49664-tmux551ab8de-tmux38e79c699c-mosh872e4b13-et3065d282-zellij40bcc2e0
+          key: lazysh-pinned-downloads-${{ github.job }}-v2-zig70e49664-tmux551ab8de-tmux38e79c699c-mosh872e4b13-et3065d282-zellij40bcc2e0-agent1280d8f0bab9-agent1334b37f2b67
       - name: Provision checksum-verified Zig 0.16.0 outside the checkout
         # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-linux].shasum
         run: |
@@ -531,6 +531,15 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
           printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
+      # The two published companions that real hosts still run. The owned SSH case updates a host that has each one.
+      - name: Fetch the pinned published 1.28.0 and 1.33.4 companions for the owned update hosts
+        run: |
+          old_companions=$(mktemp -d "$RUNNER_TEMP/lazysh-old-companions-XXXXXX")
+          sh .github/scripts/pinned-download.sh d8f0bab955d71e3d2f2d9731a2514c88f482b6809fe20593a9906737a977f1d0 "$old_companions/lazysh-1.28.0-linux-agent-x64.bin" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 11481648 https://github.com/mihazs/lazysh/releases/download/v1.28.0/lazysh-1.28.0-linux-agent-x64.bin
+          sh .github/scripts/pinned-download.sh b37f2b673732b99fc2e751cf8974393a9329fc979d8e1ef205cf6829cc8b6804 "$old_companions/lazysh-1.33.4-linux-agent-x64.bin" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 11514416 https://github.com/mihazs/lazysh/releases/download/v1.33.4/lazysh-1.33.4-linux-agent-x64.bin
+          (cd "$old_companions" && printf '%s  %s\n' d8f0bab955d71e3d2f2d9731a2514c88f482b6809fe20593a9906737a977f1d0 lazysh-1.28.0-linux-agent-x64.bin b37f2b673732b99fc2e751cf8974393a9329fc979d8e1ef205cf6829cc8b6804 lazysh-1.33.4-linux-agent-x64.bin | sha256sum --check --strict)
+          chmod 700 "$old_companions"/*.bin
+          echo "LAZYSH_TEST_OLD_COMPANIONS=$old_companions" >> "$GITHUB_ENV"
       - name: Exercise owned companion transfer and exact Mosh entry over SSH
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
