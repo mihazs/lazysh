@@ -3,7 +3,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {OwnedProcess} from './support/ownedProcess';
-import {commandLine,moonScript,moonTask} from './support/moon';
+import {commandLine,moonScript,moonTask,plannedTargets} from './support/moon';
 import {interpolate} from './support/workflowGraph';
 import {quarantine,shard,tiers} from '../apps/client/mobile-e2e/support/ci';
 
@@ -57,9 +57,20 @@ test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google
   }
   expect(lines).toHaveLength(1);
   expect((await readFile(receipt,'utf8')).split('\n')).toEqual([
-    join(runnerTemp,'lazysh-ntfy-emulator.pid'),variant==='google'?'google':'',
-    'run','test:android-ntfy','',
+    join(runnerTemp,'lazysh-ntfy-emulator.pid'),'',
+    'run',variant==='google'?'test:android-ntfy:google':'test:android-ntfy','',
   ]);
+});
+
+test('the Google ntfy task runs the Google APK built before it instead of rebuilding the FOSS one',async()=>{
+  const scripts=(await Bun.file(new URL('../package.json',import.meta.url)).json()).scripts as Record<string,string>;
+  const target=/^moon run (\S+)$/.exec(scripts['test:android-ntfy:google'])![1];
+  const google=await moonTask(target),fdroid=await moonTask('client:test-android-ntfy');
+  // Both builds write app-universal-debug.apk, so a FOSS build ahead of the Google task would replace the APK under test.
+  expect(await plannedTargets(target)).toEqual([target]);
+  expect(await plannedTargets(fdroid.target)).toEqual(['client:build-android-fdroid-emulator',fdroid.target]);
+  expect(google.env).toEqual({LAZYSH_NTFY_ANDROID_VARIANT:'google'});
+  expect(commandLine(google)).toBe(commandLine(fdroid));
 });
 
 test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {

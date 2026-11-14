@@ -115,8 +115,14 @@ tasks:
     options: *local
   test-android-ntfy:
     type: test
-    script: cargo test -p lazysh-notifications --locked --lib --no-run && LAZYSH_ANDROID_NTFY=1 bun test ../../tests/android-ntfy.test.ts
+    script: &ntfyScript cargo test -p lazysh-notifications --locked --lib --no-run && LAZYSH_ANDROID_NTFY=1 bun test ../../tests/android-ntfy.test.ts
     deps: [~:build-android-fdroid-emulator]
+    options: *local
+  # The Google job builds its own APK first. The FOSS dependency above would replace it at the same output path.
+  test-android-ntfy-google:
+    type: test
+    script: *ntfyScript
+    env: {LAZYSH_NTFY_ANDROID_VARIANT: google}
     options: *local
   test-android:
     type: test

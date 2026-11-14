@@ -53,6 +53,7 @@
     "build:android:fdroid": "moon run client:build-android-fdroid",
     "test:android-fdroid": "moon run client:test-android-fdroid",
     "test:android-ntfy": "moon run client:test-android-ntfy",
+    "test:android-ntfy:google": "moon run client:test-android-ntfy-google",
     "test:android-qr": "moon run client:test-android-qr",
     "test:android-gestures": "moon run client:test-android-gestures",
     "test:android-biometric": "moon run client:test-android-biometric"
