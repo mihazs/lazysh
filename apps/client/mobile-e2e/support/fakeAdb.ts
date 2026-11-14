@@ -8,6 +8,8 @@ import {join} from 'node:path';
 export interface FakeDevice {
   size: string | null;
   density: number | null;
+  /** What the guest reports without an override: a phone unless a test says otherwise. */
+  physical: {size: string; density: number};
   navigation: string;
   settings: Record<string, string>;
   permissions: Record<string, boolean>;
@@ -17,7 +19,7 @@ export interface FakeDevice {
 }
 
 export const initialDevice = (): FakeDevice => ({
-  size: null, density: null, navigation: 'threebutton', failOn: [], calls: [], reverses: [],
+  size: null, density: null, physical: {size: '1080x2340', density: 420}, navigation: 'threebutton', failOn: [], calls: [], reverses: [],
   settings: {
     'secure.default_input_method': 'com.android.inputmethod.latin/.LatinIME', 'system.user_rotation': '0',
     'system.accelerometer_rotation': '0', 'global.window_animation_scale': '1.0', 'global.transition_animation_scale': '1.0',
@@ -47,7 +49,7 @@ if (state.failOn.some(text => (command + ' ' + line).includes(text))) { process.
 if (command === 'wm') {
   const [what, value] = rest, key = what;
   if (value === undefined) {
-    const physical = what === 'size' ? 'Physical size: 1080x2340\\n' : 'Physical density: 420\\n';
+    const physical = what === 'size' ? 'Physical size: ' + state.physical.size + '\\n' : 'Physical density: ' + state.physical.density + '\\n';
     done(physical + (state[key] === null ? '' : 'Override ' + key + ': ' + state[key] + '\\n'));
   }
   state[key] = value === 'reset' ? null : (key === 'density' ? Number(value) : value);

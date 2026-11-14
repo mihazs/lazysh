@@ -71,7 +71,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     const selected=target.kind==='workspace'?tree?.workspaces.some(item=>item.workspace_id===target.workspace&&item.focused):target.kind==='tab'?tree?.tabs.some(item=>item.tab_id===target.tab&&item.focused):tree?.panes.some(item=>item.pane_id===target.pane&&item.terminal_id===target.terminal&&item.focused);
     const agentRow=mode==='agents' && target.kind==='pane';
     // A press keeps focus where it is, so a terminal's soft keyboard that is already open does not close and reopen around the switch.
-    return <button className="herdr-navigation-row" data-agent-status={status} data-current={selected||undefined} disabled={working} onPointerDown={event=>event.preventDefault()} onClick={()=>void open(target)}>
+    return <button className="herdr-navigation-row" data-testid={agentRow ? "herdr-agent-row" : undefined} data-agent-status={status} data-current={selected||undefined} disabled={working} onPointerDown={event=>event.preventDefault()} onClick={()=>void open(target)}>
       {agentRow && <StatusRing tone={herdrTones[status]}/>}
       <span><strong title={mode==='spaces'?label:undefined}>{label}</strong>{context && <small title={title}>{context}</small>}{agentRow && <span className="row-tags" aria-hidden="true">{kind && <span className="row-tag" data-agent-kind={agentKind(kind)}>{kind}</span>}<span className="row-tag-status">{t(herdrStatusKeys[status])}</span></span>}</span><small className={mode==='agents'||inherited?'sr-only':'herdr-row-status'}>{t(herdrStatusKeys[status])}</small>
       {agentRow && <ChevronRight className="row-chevron" size={18} aria-hidden="true"/>}

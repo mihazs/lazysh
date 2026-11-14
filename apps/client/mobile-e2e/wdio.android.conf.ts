@@ -1,5 +1,5 @@
 import {join} from 'node:path';
-import {acquireDevice, adbFor, restoreFromJournal, type DeviceSession} from './support/device';
+import {acquireDevice, adbFor, ensurePhoneScreen, ensureThreeButtonNavigation, restoreFromJournal, type DeviceSession} from './support/device';
 import {ENDPOINTS_ENV, hostKinds, startHosts, type OwnedHosts} from './support/hosts';
 import {config as shared, here, reports} from './wdio.conf';
 
@@ -29,8 +29,9 @@ export const config: WebdriverIO.Config = {
     platformName: 'Android',
     'appium:automationName': 'UiAutomator2',
     'appium:udid': serial,
-    // Without LAZYSH_E2E_APK the already installed build is tested.
-    ...(process.env.LAZYSH_E2E_APK ? {'appium:app': process.env.LAZYSH_E2E_APK} : {}),
+    // Without LAZYSH_E2E_APK the already installed build is tested. Every debug build has the same version code, and Appium
+    // skips the install of a package that is already there unless it is told to enforce it.
+    ...(process.env.LAZYSH_E2E_APK ? {'appium:app': process.env.LAZYSH_E2E_APK, 'appium:enforceAppInstall': true} : {}),
     'appium:appPackage': 'app.lazysh.client',
     'appium:appActivity': '.MainActivity',
     'appium:noReset': false,
@@ -53,6 +54,8 @@ export const config: WebdriverIO.Config = {
       process.env.LAZYSH_E2E_NONCE = hosts.nonce;
     }
   },
+  // Before the session starts the app, so it never sees the tablet-shaped window a Waydroid guest has or a gestural overlay left behind.
+  beforeSession: async () => { await ensurePhoneScreen(adbFor(serial)); await ensureThreeButtonNavigation(adbFor(serial)); },
   // Every worker runs one spec file: put the device back to the recorded baseline between files, even after a failure.
   after: () => restoreFromJournal(serial),
   // Hosts first (their forwards and processes), then the device baseline and lock, even when the first step fails.

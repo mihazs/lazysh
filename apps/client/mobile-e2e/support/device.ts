@@ -46,6 +46,33 @@ export const setRotation = (adb: Adb, user: string, auto: string) =>
 export const setPermission = (adb: Adb, permission: string, granted: boolean) =>
   shell(adb, 'pm', granted ? 'grant' : 'revoke', '--user', '0', APP_PACKAGE, permission);
 
+// The phone layout (side menu, no top bar) needs a portrait window narrower than 600 dp; a Waydroid guest is a 1920x1080 tablet.
+const PHONE_SIZE = '1080x2400', PHONE_DENSITY = 420;
+
+/** Gives the app a phone-shaped window unless it already has one (a phone emulator is left alone). `release()` restores the baseline. */
+export async function ensurePhoneScreen(adb: Adb) {
+  const [size, density] = await Promise.all([shell(adb, 'wm', 'size'), shell(adb, 'wm', 'density')]);
+  const [width, height] = (override(size, 'size') ?? /Physical size: (\S+)/.exec(size)?.[1] ?? '').split('x').map(Number);
+  const dpi = Number(override(density, 'density') ?? /Physical density: (\d+)/.exec(density)?.[1]);
+  if (width < height && (width * 160) / dpi < 600) return false;
+  await setWindowSize(adb, PHONE_SIZE);
+  await setDensity(adb, PHONE_DENSITY);
+  return true;
+}
+
+export const THREE_BUTTON = 'com.android.internal.systemui.navbar.threebutton';
+
+/**
+ * Starts a session from three-button navigation, where an edge swipe belongs to the app: a guest left on a gestural overlay would
+ * turn every left-edge swipe into the system's Back. A spec that tests a gestural overlay switches to it itself. `release()` restores
+ * the baseline.
+ */
+export async function ensureThreeButtonNavigation(adb: Adb) {
+  if ((await captureBaseline(adb)).navigation === THREE_BUTTON) return false;
+  await setNavigation(adb, THREE_BUTTON);
+  return true;
+}
+
 async function runtimePermissions(adb: Adb) {
   const permissions: Record<string, boolean> = {};
   const block = (await shell(adb, 'dumpsys', 'package', APP_PACKAGE)).split('runtime permissions:')[1] ?? '';

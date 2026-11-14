@@ -70,6 +70,20 @@ same three steps). One reason to fail per test, no conditionals in the body, no 
 element a label or `aria-label` names and fails from a scoped element (`el.$('aria/...')`), so start it at the document. A label
 that wraps a `<select>` names the label, not the select (its text includes every option): use the `<select>` itself.
 
+### Test id inventory
+
+Every `data-testid` the Appium suite relies on, with the reason no accessible name does. Add a row in the pull request that adds
+the attribute; the Playwright locators never use these.
+
+| Test id | Element | Why it is needed |
+| --- | --- | --- |
+| `host-transport` | the transport `<select>` of the host editor | its label wraps the select, so `aria/` names the label |
+| `host-key-fingerprint` | the fingerprint of the first-use host key review | the text is a bare hash with no label of its own |
+| `session-view-terminal`, `session-view-agent` | the Terminal and Agent buttons of the session view switch | `aria/Agent` matches more than one element on a connected host |
+| `toolbar-page-dot-<keys\|tools\|snippets>` | one page dot of the terminal toolbar | the dots and the pages they select share the accessible names `Keys page` and `Tools page` |
+| `agent-view` | the Agent view of a session (one per session stays in the page, hidden when not in front) | its name `Agent view` is also the title of the header inside it |
+| `herdr-agent-row` | a live agent row in the Agents section of the side menu | the row has no label, its name is the agent kind and workspace text |
+
 ## Waiting
 
 | Need | Use |
