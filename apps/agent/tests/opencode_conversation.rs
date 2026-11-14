@@ -426,6 +426,59 @@ fn task_calls_become_sub_agents_in_the_work_list_and_a_plain_session_has_none() 
 }
 
 #[test]
+fn a_compaction_is_one_event_line_and_a_step_or_patch_marker_stays_silent() {
+    // V1 records a compaction as a user message holding one `compaction` part; V2 as a message of the `compaction` role.
+    for v2 in [false, true] {
+        let f = Fixture::new(v2);
+        f.message(
+            "msg_a",
+            1,
+            "user",
+            json!({"time":{"created":1}, "text":"Build it"}),
+        );
+        if v2 {
+            f.message("msg_b", 2, "compaction", json!({"time":{"created":2_000}}));
+        } else {
+            f.message("msg_b", 2, "user", json!({"time":{"created":2_000}}));
+            f.part(
+                "msg_b",
+                0,
+                json!({"type":"compaction","auto":true,"overflow":false}),
+            );
+            // Markers of a step and of the files it changed show nothing: the tool cards already say what ran.
+            f.message(
+                "msg_c",
+                3,
+                "assistant",
+                json!({"time":{"created":3,"completed":4},"finish":"stop"}),
+            );
+            f.part("msg_c", 1, json!({"type":"step-start"}));
+            f.part(
+                "msg_c",
+                2,
+                json!({"type":"patch","hash":"abc","files":["/work/a.rs"]}),
+            );
+            f.part("msg_c", 3, json!({"type":"step-finish","reason":"stop"}));
+        }
+        let page = f.page(50);
+        let events: Vec<_> = page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "event")
+            .map(|message| {
+                (
+                    message["id"].as_str().unwrap(),
+                    message["event"]["kind"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(events, [("msg_b", "compacted")], "v2 {v2}");
+        assert!(!page.to_string().contains("/work/a.rs"), "v2 {v2}");
+    }
+}
+
+#[test]
 fn a_v2_database_without_a_part_table_reads_its_inline_parts_and_lists_their_sub_agents() {
     // OpenCode 2.2 has no `session_part`: the parts of a message stay in its `content`, and reminders are user text.
     let f = Fixture::new(true);

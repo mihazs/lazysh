@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Show an OpenCode compaction in the Agent view. With the updated host companion, the message OpenCode records when it summarizes a session (a `compaction` part in OpenCode 1, a `compaction` message in OpenCode 2) is one muted **Conversation compacted** line, as for Claude Code and Codex, instead of nothing. OpenCode's step markers and its `patch` part (a list of file names) stay hidden, because the tool cards already show what ran. No defaults change.
 - Show the existing conversation-too-large notice when a Herdr-selected agent conversation exceeds the companion's limit, and retain fixed error classifications for other conversation failures (#2069). Remote diagnostic text is not displayed. No defaults change.
 - Open larger recorded Codex conversations in the Agent view, including forked histories and older-message paging (#1612). The client opts in to a bounded full-history index; older clients keep the previous limit. The reader still reports `TooLarge` when its explicit source, record or metadata limits are exceeded. No defaults change for existing companion commands.
 - Keep each new terminal dialog disabled until its own safety delay has elapsed, reject stale option descriptions or pane checks, and prevent an older answer from re-enabling a newer pending answer (#2021).
