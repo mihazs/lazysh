@@ -51,6 +51,14 @@ export function workspaceDirectory(tree:HerdrTree,workspace:string) {
   for(const tab of tabs){const pane=tree.panes.find(pane=>pane.tab_id===tab.tab_id && pane.cwd);if(pane?.cwd)return pane.cwd;}
   return undefined;
 }
+/** The workspace a worktree can start from, with its directory: the focused one, else the first that reported a directory. */
+export function worktreeSource(tree:HerdrTree) {
+  for(const {workspace_id,label} of [...tree.workspaces].sort((a,b)=>Number(b.focused)-Number(a.focused))) {
+    const directory=workspaceDirectory(tree,workspace_id);
+    if(directory)return {workspace_id,label,directory};
+  }
+  return undefined;
+}
 export function knownDirectories(tree:HerdrTree|undefined,projects:readonly string[]=[]) {
   return [...new Set([...(tree?.panes.map(pane=>pane.cwd??'')??[]),...projects].filter(validAbsolutePath))];
 }

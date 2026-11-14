@@ -1,9 +1,10 @@
-import {CornerLeftUp,Ellipsis,FolderOpen,FolderPlus,GitBranchPlus,X} from 'lucide-react';
+import {Ellipsis,FolderPlus,GitBranchPlus,X} from 'lucide-react';
 import {useEffect,useMemo,useRef,useState,type FormEvent,type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {bindProtectedInvoke,type AccessLease} from './access';
+import DirectoryPicker,{type Load} from './DirectoryPicker';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
-import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,workspaceDirectory} from './herdrCreate';
+import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,workspaceDirectory,worktreeSource} from './herdrCreate';
 import {t,useUi} from './i18n/core';
 import {captureUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import type {HerdrTree} from './useHerdrNavigation';
@@ -19,7 +20,6 @@ type Request={target:Target;agent?:{kind:string;name:string;prompt?:string}};
 type Shared={sessionId:string;server:string;lease:AccessLease;disabled:boolean;tree?:HerdrTree;reports?:ReportedSessionSource;onCreated:(workspace:string)=>void};
 type Source={workspace_id:string;label:string;directory:string};
 type Invalid='herdrCreateInvalidLabel'|'herdrCreateInvalidDirectory'|'herdrCreateNotRepository'|'herdrCreateInvalidBranch'|'herdrCreateInvalidBase'|'herdrCreateAgentRequired'|'herdrCreateInvalidPrompt';
-type Load<T>={state:'loading'}|{state:'ready';value:T}|{state:'failed';cause:UiErrorCause};
 
 const stageKeys={worktree:'herdrCreateStageWorktree',workspace:'herdrCreateStageWorkspace',agentCheck:'herdrCreateStageAgentCheck',agent:'herdrCreateStageAgent'} as const;
 
@@ -30,6 +30,17 @@ export function HerdrWorkspaceCreate({label,agentFirst,...props}:Shared&{label?:
   return <>
     <button className="subtle-button herdr-create-trigger" disabled={props.disabled} onClick={()=>setOpen(true)}><FolderPlus size={16} aria-hidden="true"/>{label??t('herdrCreateWorkspace')}</button>
     {open && <CreateFlow {...props} agentFirst={agentFirst} close={()=>setOpen(false)}/>}
+  </>;
+}
+/** Opens the worktree flow of the focused workspace (else the first one that reported a directory) with "start an agent" already chosen; nothing runs before the reviewed commands are confirmed. */
+export function HerdrWorktreeCreate({label,tree,...props}:Shared&{tree:HerdrTree;label:string}) {
+  useUi();
+  const [open,setOpen]=useState(false);
+  const source=worktreeSource(tree);
+  if(!source)return null;
+  return <>
+    <button type="button" className="subtle-button herdr-create-trigger" disabled={props.disabled} onClick={()=>setOpen(true)}><GitBranchPlus size={16} aria-hidden="true"/>{label}</button>
+    {open && <CreateFlow {...props} tree={tree} source={source} agentFirst close={()=>setOpen(false)}/>}
   </>;
 }
 /** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. Escape is handled while capturing so the phone sidebar's own Escape (close the sidebar) never sees it. */
@@ -58,7 +69,7 @@ export function HerdrSpaceActions({workspace,open,onOpenChange,...props}:Shared&
   </div>;
 }
 
-function Modal({title,close,step,children}:{title:string;close:()=>void;step:string;children:ReactNode}) {
+export function Modal({title,close,step,children}:{title:string;close:()=>void;step:string;children:ReactNode}) {
   const ref=useRef<HTMLDivElement>(null);
   const heading=useRef<HTMLHeadingElement>(null);
   const first=useRef(true);
@@ -104,7 +115,6 @@ function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close,
   const [invalid,setInvalid]=useState<Invalid>();
   const [label,setLabel]=useState('');
   const [directory,setDirectory]=useState('');
-  const [browse,setBrowse]=useState<{path:string;entries:Load<string[]>}>();
   const [repository,setRepository]=useState<Load<Repository>>({state:'loading'});
   const [branch,setBranch]=useState('');
   const [base,setBase]=useState('');
@@ -138,14 +148,6 @@ function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close,
     void invoke<AgentKind[]>('herdr_agent_kinds',{sessionId}).then(value=>{if(owns())setKinds({state:'ready',value});},error=>{if(owns())setKinds({state:'failed',cause:captureUiError(error)});});
   }
   useEffect(()=>{if(agentFirst)chooseAgent(true);},[]);
-  function openDirectory(target:string) {
-    setBrowse({path:target,entries:{state:'loading'}});
-    void invoke<{name:string;isDir:boolean}[]>('list_directory',{sessionId,path:target}).then(rows=>{
-      if(owns())setBrowse(current=>current?.path===target?{path:target,entries:{state:'ready',value:rows.filter(row=>row.isDir && !row.name.startsWith('.')).map(row=>row.name).sort((a,b)=>a.localeCompare(b))}}:current);
-    },error=>{if(owns())setBrowse(current=>current?.path===target?{path:target,entries:{state:'failed',cause:captureUiError(error)}}:current);});
-  }
-  const child=(parent:string,name:string)=>`${parent==='/'?'':parent}/${name}`;
-  const up=(value:string)=>value.slice(0,Math.max(1,value.lastIndexOf('/')));
   function target():Target|Invalid {
     if(!source) {
       if(!validLabel(label))return 'herdrCreateInvalidLabel';
@@ -200,17 +202,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close,
     {phase==='form' && <form className="form-stack herdr-create-form" onSubmit={event=>void submit(event)} noValidate>
       {!source && <>
         <label>{t('herdrLabel')}<input value={label} maxLength={200} onChange={event=>setLabel(event.target.value)}/></label>
-        <label>{t('herdrDirectory')}<input value={directory} maxLength={4096} placeholder="/home/user/project" onChange={event=>setDirectory(event.target.value)}/></label>
-        <div className="herdr-create-row">
-          <button type="button" className="subtle-button" onClick={()=>openDirectory(validAbsolutePath(directory)?directory:'/')}><FolderOpen size={15} aria-hidden="true"/>{t('herdrCreateBrowse')}</button>
-          {recent.length>0 && <label>{t('herdrCreateRecent')}<select value={recent.includes(directory)?directory:''} onChange={event=>setDirectory(event.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{recent.map(item=><option key={item} value={item}>{item}</option>)}</select></label>}
-        </div>
-        {browse && <section className="herdr-create-browser" aria-label={t('herdrCreateBrowse')}>
-          <div className="herdr-create-row"><code>{browse.path}</code><button type="button" className="icon-button" disabled={browse.path==='/'} title={t('herdrCreateUp')} aria-label={t('herdrCreateUp')} onClick={()=>{const parent=up(browse.path);setDirectory(parent);openDirectory(parent);}}><CornerLeftUp size={16} aria-hidden="true"/></button></div>
-          {browse.entries.state==='loading' && <p role="status">{t('herdrReading')}</p>}
-          {browse.entries.state==='failed' && <p className="inline-error" role="alert">{uiErrorText(browse.entries.cause)}</p>}
-          {browse.entries.state==='ready' && (browse.entries.value.length===0?<p>{t('herdrCreateNoFolders')}</p>:<ul>{browse.entries.value.map(name=><li key={name}><button type="button" className="subtle-button" onClick={()=>{const next=child(browse.path,name);setDirectory(next);openDirectory(next);}}>{name}</button></li>)}</ul>)}
-        </section>}
+        <DirectoryPicker sessionId={sessionId} invoke={invoke} owns={owns} value={directory} onChange={setDirectory} recent={recent}/>
       </>}
       {source && <>
         <p className="muted">{t('herdrCreateSource')} <code>{source.directory}</code></p>
