@@ -182,7 +182,7 @@ one live agent row carries the conversation's session id in the exact pane and
 terminal the conversation was opened from; no focus is involved and no companion
 is needed. The message is confirmed by the conversation showing it, and a failure
 after the command started is never resent. A guarded host keeps using the guarded
-input.
+input. A dialog answer (an option's digit, arrows and Enter) goes through `herdr agent send-keys PANE KEY...` on either kind of host, after the same check of the pane's agent session, and the dialog itself is read with `herdr agent read PANE --source visible`; see [Herdr panes](agent-view.md#herdr-panes).
 
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.

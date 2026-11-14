@@ -7,7 +7,10 @@ import type {TerminalAdapter} from './terminalAdapter';
 import './AgentPickerDock.css';
 
 /** What the lift reads from the session's terminal: the text of the live screen's rows and a signal that output was parsed. */
-export type ScreenSource = Pick<TerminalAdapter, 'readRows' | 'viewport' | 'subscribe'>;
+export type ScreenSource = Pick<TerminalAdapter, 'readRows' | 'viewport' | 'subscribe'> & {
+  /** A screen read from the host instead of a live terminal buffer: read it again before deciding from it. */
+  readAgain?: () => Promise<void>;
+};
 /** The agents whose dialogs were captured from a real session (`src/test/agentDialogs`): each reads its own screen, and no other agent's dialog is guessed. */
 const lifters: Readonly<Record<string, (screen: readonly string[]) => Lift>> = {'Claude Code': liftDialog, Codex: liftCodexDialog};
 export const hasDialogProfile = (agent: string | undefined) => agent !== undefined && agent in lifters;
@@ -75,7 +78,8 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
     const twins = before.options.filter(option => option.label === chosen?.label && option.detail === chosen?.detail).length > 1;
     const highlightsChosen = () => {const now = readLift(screen, agent); const row = now.kind === 'dialog' ? now.dialog.options[now.dialog.highlighted] : undefined;
       return now.kind === 'dialog' && now.dialog.title === before.title && row?.label === chosen?.label && row?.detail === chosen?.detail && (!twins || now.dialog.highlighted === target);};
-    const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); if (test()) return true;} return false;};
+    const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); await screen.readAgain?.(); if (test()) return true;} return false;};
+    await screen.readAgain?.();
     if (!onScreen() || !await guard()) {setPhase('stale'); return;}
     const rows = target === undefined ? 0 : target - before.highlighted;
     if (rows !== 0) {

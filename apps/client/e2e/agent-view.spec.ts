@@ -328,6 +328,15 @@ async function claudeHere(page:Page,patch:{state?:string;transcript?:object}={})
   },patch);
 }
 
+/** Taps Blue on the open question card: a large target that answers once, and a card that stays inside the screen. */
+async function answerBlue(page:Page,card:Locator) {
+  const blue=card.getByRole('button',{name:'Blue',exact:true});
+  await expect(blue).toBeEnabled();
+  expect((await blue.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await blue.click();
+  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+}
 test('answers the open Claude question with the digit of the chosen option and the pane keeps showing the terminal',async({page})=>{
   await open(page);
   await claudeHere(page,{state:'needs_attention',transcript:{activity:'waiting',messages:[
@@ -337,14 +346,9 @@ test('answers the open Claude question with the digit of the chosen option and t
   const agent=agentView(page);
   const card=agent.getByRole('region',{name:'Question',exact:true});
   await expect(card).toContainText('Pick a color',{timeout:8000});
-  const blue=card.getByRole('button',{name:'Blue',exact:true});
-  await expect(blue).toBeEnabled();
-  expect((await blue.boundingBox())!.height).toBeGreaterThanOrEqual(36);
-  await blue.click();
-  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  await answerBlue(page,card);
   const fixture=await page.evaluate(()=>window.agentView.inputs);
   expect(fixture.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({input:{kind:'select',option:2,of:2}})]);
-  const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
 /** A Claude Code agent in the pane, with the Agent view shown. */
@@ -380,17 +384,22 @@ async function showDialog(page:Page,highlighted:number|undefined) {
     draw(highlighted===undefined?['  Permissions','  Esc to cancel']:dialog(at));
   },highlighted);
 }
-test('answers a list dialog open on the terminal with the keys a person presses, after reading the highlight back',async({page})=>{
-  await open(page);await asClaude(page);
-  const agent=await showAgent(page);
-  await showDialog(page,3);
+/** The /model picker card open at Haiku: large targets that fit the screen. Returns the card and the Sonnet option to tap. */
+async function modelCard(page:Page,agent:Locator,timeout=10000) {
   const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
-  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:8000});
+  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout});
   await expect(dialog.getByRole('button',{name:/^Haiku/})).toHaveAttribute('aria-current','true');
   const sonnet=dialog.getByRole('button',{name:/^Sonnet/});
   await expect(sonnet).toBeEnabled();
   expect((await sonnet.boundingBox())!.height).toBeGreaterThanOrEqual(36);
   const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  return {dialog,sonnet};
+}
+test('answers a list dialog open on the terminal with the keys a person presses, after reading the highlight back',async({page})=>{
+  await open(page);await asClaude(page);
+  const agent=await showAgent(page);
+  await showDialog(page,3);
+  const {dialog,sonnet}=await modelCard(page,agent);
   const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
   await sonnet.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
@@ -619,9 +628,40 @@ const richConversation=[
   {id:'t1',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'gh pr list'},{type:'tool_use',name:'Monitor',text:'watch'}]},
   {id:'a1',role:'assistant',blocks:[{type:'text',text:'v0.158.0 is published.'}],usage:{inputTokens:2,outputTokens:114,cacheReadTokens:153532,cacheWriteTokens:472}},
 ];
+/** The followed Claude Code agent of pane `w2:p1` waits for the user: its hook report says so, it has one permission request and the conversation ends on a question. */
+function herdrClaudeWaits() {
+  const base=window.nativeFixtureInvoke!,session='00000002-0000-4000-8000-000000000000';
+  window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[],gone:false};
+  window.nativeFixtureInvoke=async(command,args)=>{
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:session,agent:'Claude Code',project:'/home/owner/dev/project-2',state:'needs_attention',updatedAt:new Date().toISOString(),summary:'Answer requested',paneId:null,eventCount:3}]};
+    // A Herdr pane has no tmux pane id: the hook names the session only.
+    if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:session,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
+    if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
+    if(command==='agent_herdr_conversation')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,activity:'waiting',messages:[
+      {id:'p',role:'user',blocks:[{type:'text',text:'Ask me a question'}]},
+      {id:'a',role:'assistant',blocks:[{type:'tool_use',id:'q1',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions:[{question:'Pick a color',header:'Color',multiple:false,options:[{label:'Red'},{label:'Blue'}]}]}}]}]};
+    return base(command,args);
+  };
+}
+
+/** The followed Claude Code agent of pane `w2:p1` has its /model picker open on the pane's screen (drawn narrow, as a phone's pane is); Herdr's own agent input moves the highlight and closes it. */
+function herdrModelDialog() {
+  const base=window.nativeFixtureInvoke!,rule='─'.repeat(32),names=['Default (recommended)','Opus','Sonnet','Haiku'];
+  let at=3,open=true;
+  const rows=()=>open?[rule,'  Select model','  Pick the model.','',...names.map((name,index)=>`${index===at?'  ❯ ':'    '}${index+1}. ${name}`),'','  Enter to confirm · Esc to cancel']:['> /model','Set model','$ '];
+  window.nativeFixtureInvoke=async(command,args)=>{
+    if(command==='herdr_agent_screen')return rows();
+    if(command==='herdr_agent_input'){
+      const input=args.input as {kind:string;rows?:number;enter?:boolean};
+      if(input.kind==='pick'){if(input.enter)open=false;else at+=input.rows as number;}
+    }
+    return base(command,args);
+  };
+}
+
 /** Stock Herdr host: six live agents (one per workspace `w0`..`w5`), fifty ended hook reports without pane identity, and a companion that may predate conversation reading.
  * `focus` is the focused pane (`w2:p1`); the page can move it later through `herdrFixture.focus`. `agents` limits how many agents run. */
-async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean}={}) {
+async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean;waits?:boolean;dialog?:boolean}={}) {
   await installBaseHost(page);
   await page.addInitScript(({companion,rich,richConversation,start})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'herdr',name:'owned'}}]));
@@ -652,6 +692,7 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       if(command==='herdr_chat'){if((args.action as {kind:string}).kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
       if(command==='herdr_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
       if(command==='agent_herdr_conversation'){
         const target=args.target as {agentSessionId:string};record.conversations.push(target.agentSessionId);
@@ -671,6 +712,8 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
   },{companion,rich,richConversation,start});
+  if(start.waits)await page.addInitScript(herdrClaudeWaits);
+  if(start.dialog)await page.addInitScript(herdrModelDialog);
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
@@ -718,6 +761,47 @@ test('stock Herdr: the composer sends through Herdr\'s own agent input, and a re
   await notice.getByRole('button',{name:'Dismiss',exact:true}).click();
   await expect(agent.getByRole('alert')).toHaveCount(0);await expect(field).toHaveValue('Next step');
   expect((await herdrFixture(page)).inputs).toHaveLength(1);
+});
+
+test('stock Herdr: a permission request of the followed Claude Code agent is answered through the hook, with no key',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
+  const agent=agentView(page);
+  const dock=agent.getByRole('region',{name:'Pending approvals',exact:true});
+  await expect(dock).toContainText('git push',{timeout:8000});
+  const deny=dock.getByRole('button',{name:'Deny request',exact:true});
+  await expect(deny).toBeEnabled();
+  expect((await deny.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await deny.click();
+  await expect(dock).toHaveCount(0);
+  expect(await decided(page)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'00000002-0000-4000-8000-000000000000',paneId:null,decision:'deny'})]);
+  expect((await herdrFixture(page)).inputs).toEqual([]);
+});
+
+test('stock Herdr: the open question of the followed Claude Code agent is answered with its digit through Herdr\'s own agent input',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
+  const card=agentView(page).getByRole('region',{name:'Question',exact:true});
+  await expect(card).toContainText('Pick a color',{timeout:8000});
+  await answerBlue(page,card);
+  expect((await herdrFixture(page)).inputs).toEqual([{target:{herdrSession:'owned',pane:'w2:p1',terminal:'term-2',agent:'claude',agentSessionId:'00000002-0000-4000-8000-000000000000'},input:{kind:'select',option:2,of:2}}]);
+});
+
+test('stock Herdr: a typed answer picks the free-text row and goes to the pane as one literal line',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
+  const card=agentView(page).getByRole('region',{name:'Question',exact:true});
+  await card.getByLabel('Or type your own answer').fill('Green');
+  const send=card.getByRole('button',{name:'Send typed answer',exact:true});
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  expect((await herdrFixture(page)).inputs.map(item=>(item as {input:unknown}).input)).toEqual([{kind:'select',option:3,of:3},{kind:'type',text:'Green'}]);
+});
+
+test('stock Herdr: a list dialog open on the followed agent\'s pane is answered with the arrows and Enter a person presses, after reading the highlight back',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',dialog:true});
+  const {dialog,sonnet}=await modelCard(page,agentView(page));
+  await sonnet.click();
+  await expect(dialog).toHaveCount(0,{timeout:10000});
+  expect((await herdrFixture(page)).inputs.map(item=>(item as {input:unknown}).input)).toEqual([{kind:'pick',rows:-1,enter:false},{kind:'pick',rows:0,enter:true}]);
 });
 
 test('stock Herdr with an old companion: the Agent view says to update it and still enters the pane',async({page})=>{
@@ -1224,8 +1308,8 @@ test('shows model, plan mode and context left in one header row without taking c
 async function openZellij(page:Page,testInfo:{project:{name:string}}) {
   await installBaseHost(page);
   await page.addInitScript(()=>{
-    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown};
-    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0};
+    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown;state:string;screen:string[];onKeys?:(input:Record<string,unknown>)=>void};
+    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0,state:'working',screen:[]};
     const path='/home/owner/.claude/projects/work/a.jsonl';
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
@@ -1233,8 +1317,10 @@ async function openZellij(page:Page,testInfo:{project:{name:string}}) {
       if(command==='multiplexer_sessions')return [{name:'work'}];
       if(command==='attach_multiplexer')return {sessionId:'display-work'};
       if(command==='tmux_chat'||command==='herdr_chat'){record.tmuxCalls++;throw new Error('Zellij never uses a tmux or Herdr input');}
-      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
+      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});record.onKeys?.(args.input as Record<string,unknown>);return;}
+      // The viewport of the agent's own pane, as the host reads it.
+      if(command==='zellij_agent_screen')return record.screen;
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:record.state,updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
         {sessionId:'other-thread',agent:'Codex',project:'/other',state:'done',updatedAt:new Date().toISOString(),summary:'Done',paneId:'zellij:another:1',eventCount:2}]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',path,reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
       if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
@@ -1274,6 +1360,25 @@ test('Zellij: the Agent view follows the agent of the attached session and sends
   await expect(field).toHaveValue('Next step');
   await expectInViewport(page,notice);
   expect((await zellijFixture(page)).tmuxCalls).toBe(0);expect((await zellijFixture(page)).inputs).toHaveLength(2);
+});
+
+test('Zellij: a list dialog open in the agent pane is read from that pane and answered with the keys a person presses, sent to the pane the report names',async({page},testInfo)=>{
+  await openZellij(page,testInfo);
+  // The agent stopped and its pane shows the /model list, drawn narrow: Zellij's own screen, the one the terminal shows, is not what the card reads.
+  await page.evaluate(()=>{
+    const record=(window as unknown as {zellijFixture:{state:string;screen:string[];onKeys?:(input:Record<string,unknown>)=>void}}).zellijFixture;
+    const rule='─'.repeat(32),names=['Default (recommended)','Opus','Sonnet','Haiku'];
+    const dialog=(at:number)=>[rule,'  Select model','  Pick the model.','',...names.map((name,index)=>`${index===at?'  ❯ ':'    '}${index+1}. ${name}`),'','  Enter to confirm · Esc to cancel'];
+    let at=3;
+    record.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)record.screen=['> /model','Set model','$ '];else{at+=input.rows as number;record.screen=dialog(at);}};
+    record.screen=dialog(at);record.state='done';
+  });
+  const {dialog,sonnet}=await modelCard(page,agentView(page),20000);
+  await sonnet.click();
+  await expect(dialog).toHaveCount(0,{timeout:10000});
+  const target={zellijSession:'work',pane:7,agent:'claude'};
+  expect((await zellijFixture(page)).inputs).toEqual([{target,input:{kind:'pick',rows:-1,enter:false}},{target,input:{kind:'pick',rows:0,enter:true}}]);
+  expect((await zellijFixture(page)).tmuxCalls).toBe(0);
 });
 
 test('live: an older page loads above the reader while a live append arrives, and the line being read does not move',async({page})=>{

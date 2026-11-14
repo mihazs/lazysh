@@ -336,6 +336,17 @@ item answered in the terminal first, an expired approval or a closed dialog fail
 closed and shows a note ("Answered in the terminal", "Expired"). The terminal stays
 usable for the same answer at all times; the first answer wins.
 
+### Herdr panes
+
+For the Claude Code agent of the focused Herdr pane (the conversation Herdr links to it) the view answers what waits for the user without a tmux pane:
+
+- **Permission requests** through the approval hook, exactly as on tmux, matched by the session id the request names.
+- **The open `AskUserQuestion`** with the keys a person presses (an option's digit; the Submit row for a multi-select; the review page's **Submit answers**), sent through Herdr's own `agent send-keys` after the live tree is read again and the agent's report still says it needs the user. A typed free-text answer picks the free-text row and then goes to the pane as one literal line and its Enter (`herdr pane send-text`, checked the same way), because Herdr's `agent prompt` refuses an agent that waits for an answer.
+
+- **List dialogs** (see below) of Claude Code and Codex. The xterm buffer of a Herdr terminal is Herdr's own screen with its sidebar and borders, not the agent's, so the dialog card reads the agent pane's visible rows from the host instead (`herdr agent read PANE --source visible`, display only, at most 200 rows of 400 characters), every 3 seconds while the view is shown and Herdr does not report the agent working, and again before and between the keys of an answer. The same lift, the same read-back and the same `pick` keys apply, sent through Herdr's own `agent send-keys`; the agent's own profile reads its own screen, and a dialog it cannot read exactly shows the banner **The agent is waiting for you in the terminal**.
+
+A conversation picked by hand from the list has no input authority and no dialog card. The companion's report of the followed session names what it waits for (Herdr's own status has the wait but not its kind), so a permission request or a question keeps its own card and the dialog card adds no second one, and the header of a blocked agent names the wait and how long it has lasted (**Waiting for your approval · 5 min. ago**) instead of Herdr's **Needs attention**.
+
 ### List dialogs
 
 A TUI list dialog the agent opens (Claude Code's `/model`, `/resume`, `/rewind` lists, the folder trust prompt, the plan decision) is
@@ -352,7 +363,7 @@ transcript, so it works for dialogs no hook or transcript record describes.
   (a second `pick`) only once the dialog shows the chosen option highlighted. Nothing is sent when the screen no longer shows the dialog
   that was tapped, and a dialog that does not move gets no Enter. **Cancel the dialog** sends Escape. On a desktop keyboard the digits 1 to 9 choose.
 - **Authority.** Terminal output never grants authority: `pick` has no key path other than Up, Down and Enter, at most 30 rows, tmux only
-  (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**). A dialog an approval or question card
+  (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**; see **Herdr panes** below for what a Herdr pane can answer). A dialog an approval or question card
   already answers shows no second card (Claude's permission request and every agent's question); Codex has no approval hook here, so its
   approval prompt is answered by this card.
 - **Profile and corpus.** Each agent reads its own screen, and no agent's dialog is guessed from another's layout. The Claude Code 2.1.x
@@ -476,8 +487,16 @@ The first write failing is a plain refusal; a failure after it, or a lost connec
 and is never resent. The listing and the write are separate host calls, so a pane replaced between them is
 the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
 
-Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
-key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
+A dialog the followed agent has open (Claude Code's or Codex's list dialogs, an AskUserQuestion, a Codex question) is answered from the
+Agent view like on tmux and Herdr. The host reads the agent's own pane with `zellij action dump-screen --pane-id` (`zellij_agent_screen`;
+the terminal shows Zellij's composite screen, so its buffer is not what the dialog card reads), only while the report names the agent as not
+working, and the answer is the keys a person presses sent with `zellij action send-keys --pane-id`: a digit, Up, Down and Enter, which Zellij
+encodes for the cursor-key mode of that pane, or one typed line and its Enter. The pane is listed and proven to run the agent before every
+call, the card reads the screen again between the arrows and Enter, and the report must still name the same session in the same pane.
+
+Limits: a prompt is at most 4,096 bytes (no long paste), the mode key stays in the terminal, a permission request of a Zellij pane is
+answered from the Agents board (the Agent view's approval dock needs the exact-pane binding of #1536), and the pane test reads only the first two words
+of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
 refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
 agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.

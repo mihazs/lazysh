@@ -9,7 +9,7 @@ export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';i
   | {agent:'hermes'|'opencode';transcriptSessionId:string}
 )>;
 /** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, a free-text answer, a move of a list dialog's highlight (with Enter to take the row) and Escape to leave it. */
-export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'cycle_mode'}|{kind:'pick';rows:number;enter:boolean}|{kind:'request_stop'}>;
+export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'type';text:string}|{kind:'cycle_mode'}|{kind:'pick';rows:number;enter:boolean}|{kind:'request_stop'}>;
 /** Where Shift+Tab landed, as the agent's status line showed it; `unconfirmed` when the screen was not recognised. */
 export const permissionModes=['default','acceptEdits','plan','auto','bypassPermissions','unconfirmed'] as const;
 export type PermissionMode=typeof permissionModes[number];
@@ -29,6 +29,8 @@ class InputFailure extends Error {constructor(readonly key:FailureKey,readonly r
 type Problem={key:FailureKey;raw?:string}|{raw:string};
 /** Failures that prove nothing was written; after any other failure of a send, delivery is unknown. */
 const refusals:readonly FailureKey[]=['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy','chatHerdrBlocked','chatHerdrRejected','chatHerdrOffline'];
+/** The dialog answers Herdr's own agent input takes: named keys, or one typed line. */
+const herdrKeys:readonly string[]=['select','submit','pick','type'];
 const offline=['disconnected','timeout','ssh_error','ssh_host_tools_closed','ssh_open_busy','app_locked'];
 const invalid=()=>new InputFailure('chatTerminalInvalidReply');
 const wellFormed=(value:string)=>!/[\uD800-\uDFFF]/u.test(value);
@@ -182,10 +184,10 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     alive.current=true;setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain('');setStatus('');setBusy(false);
     return()=>{alive.current=false;retire();};
   },[context,access,invoke,accessState.epoch]);
-  function failed(error:unknown,original:string,afterInput=false,pasted=false) {
+  function failed(error:unknown,original:string,afterInput=false,pasted=false,stocked=false) {
     if(current(original)) {
       // Stock input holds nothing on the host, so a failed send leaves the input ready for an explicit second try.
-      if(!(afterInput && owned.current?.stock)){retire();setBinding(undefined);}
+      if(!(afterInput && (stocked || owned.current?.stock))){retire();setBinding(undefined);}
       setSnapshot(undefined);setStatus('');
       setUncertain(afterInput && !(error instanceof InputFailure && refusals.includes(error.key)) ? pasted?'paste':'keys' : '');
       setError(error instanceof InputFailure?{key:error.key,raw:error.raw}:{raw:errorMessage(error)});
@@ -265,13 +267,18 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
     const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
     if(flight.current || !permission || !access.current() || composing.current)return false;
-    if(body.kind==='send' && !validTerminalDraft(body.text,draftLimit(labels.backend,long))){setError({key:'chatTerminalInvalidDraft'});return false;}
+    if((body.kind==='send' || body.kind==='type') && !validTerminalDraft(body.text,body.kind==='type'?1000:draftLimit(labels.backend,long))){setError({key:'chatTerminalInvalidDraft'});return false;}
     const original=context,text=body.kind==='send'?body.text:'',revision=draftRevision;
     flight.current=true;setBusy(true);setError(undefined);setStatus('');
+    let stocked=false;
     try {
-      const reply=permission.stock?(await stockInput(body),undefined):await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body.kind==='send' && utf8(text)>SEND_BYTES?{kind:'send_long',text}:body});
-      const cycled=body.kind==='cycle_mode' && !permission.stock?parseTerminalCycle(reply,permission.nextOperation):undefined;
-      const nextOperation=permission.stock?permission.nextOperation:cycled?cycled.nextOperation:parseTerminalDelivered(reply,permission.nextOperation);
+      // The guard has no key profile: on Herdr a dialog answer goes to the pane as the keys Herdr's own agent input names, guarded host or not.
+      stocked=!!permission.stock || (labels.backend==='herdr' && !!stock && herdrKeys.includes(body.kind));
+      // A typed answer is a line and its Enter; only Herdr's own agent input has a kind for it, since its `prompt` refuses a waiting agent. tmux and the guard take it as a send.
+      const wire=body.kind==='type' && !stocked?{kind:'send' as const,text:body.text}:body;
+      const reply=stocked?(await stockInput(body),undefined):await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:wire.kind==='send' && utf8(wire.text)>SEND_BYTES?{kind:'send_long',text:wire.text}:wire});
+      const cycled=body.kind==='cycle_mode' && !stocked?parseTerminalCycle(reply,permission.nextOperation):undefined;
+      const nextOperation=stocked?permission.nextOperation:cycled?cycled.nextOperation:parseTerminalDelivered(reply,permission.nextOperation);
       if(!current(original))return false;
       landed.current=cycled?.mode;
       if(nextOperation===0xffffffff){retire();setBinding(undefined);}
@@ -281,7 +288,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       if(kind==='send')onSent(text,revision);
       return true;
     } catch(error) {
-      failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && (utf8(text)>SEND_BYTES || /[\n\t]/.test(text)));
+      failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && (utf8(text)>SEND_BYTES || /[\n\t]/.test(text)),stocked);
       if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && refusals.includes(error.key)?'refused':'unknown');
       return false;
     }
