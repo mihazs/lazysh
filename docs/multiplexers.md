@@ -152,6 +152,17 @@ lazysh does not substitute another one. Plain terminals automatically select a s
 running server and require a choice when several are available. Discovery reads one
 server per refresh and does not grant terminal input or approval authority.
 
+The **Spaces** tree marks the current workspace, tab and pane. Stock Herdr has no
+read for where one client is looking: its snapshot reports the server's shared
+focus, which another connection may have moved, so that is what the marker shows
+and why choosing a row says it changes focus for other connections. On the
+optional guarded Herdr host, the client attached through this terminal reports
+its own workspace, tab and pane through `lazysh.guard.observe`, and the marker
+shows that location instead, but only when the report names the server Spaces
+is reading. While a Chat turn holds the guard, the last reading stays; when the
+guard is unavailable the marker returns to the shared focus. Real acceptance on
+a phone and a guarded host with two clients is not part of this change.
+
 ### Create workspaces, worktrees and agents
 
 Agent view lists live agents from the attached Herdr server, including stock
