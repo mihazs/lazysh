@@ -53,7 +53,7 @@ cargo +1.96.1 run --release --example session_bench # pooled data path, input la
 cargo +1.96.1 run --release --example mosh_bench    # one Mosh display update: canonical resize plus repaint
 cargo +1.96.1 run --release --example inspect_bench # text queries: Herdr's tap check, a screen read
 cargo +1.96.1 run --release --example scrollback_budget # rows kept per byte budget by width and content (History lines mapping)
-cargo +1.96.1 run --release --example perf_gate     # the CI regression gate (`terminal-perf` job); --inject slow|allocs must fail it
+cargo +1.96.1 run --release --example perf_gate     # the CI regression gate (`terminal-perf` job); --inject slow|allocs|nocompaction must fail it
 ```
 
 ## Target status

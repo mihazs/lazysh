@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use lazysh_terminal_runtime::{
-    ffi, Appearance, CellWide, Config, Frame, Hooks, Hub, Image, KeyInput, Offer, Origin,
-    PtyWriter, ReferenceRenderer, Refused, RgbColor, Session, Size, TerminalRenderer,
+    ffi, Appearance, CellWide, Config, Frame, Hooks, Hub, HubConfig, Image, KeyInput, Offer,
+    Origin, PtyWriter, ReferenceRenderer, Refused, RgbColor, Session, Size, TerminalRenderer,
     TerminalRuntime, Theme,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
@@ -328,6 +328,53 @@ pub fn sessions_rss_growth(count: usize, data: &[u8]) -> Option<u64> {
         feed(session, data);
     }
     Some(rss_kib()?.saturating_sub(before))
+}
+
+/// Returns once every session has compacted at least once and none has stepped for 300 ms
+/// (steps follow each other at once, so a quiet 300 ms means every session is done).
+pub fn settle_compaction(fixtures: &[Fixture]) {
+    let steps = || -> u64 {
+        fixtures
+            .iter()
+            .map(|f| f.session.stats().unwrap().compactions)
+            .sum()
+    };
+    wait_until(|| {
+        fixtures
+            .iter()
+            .all(|f| f.session.stats().unwrap().compactions > 0)
+    });
+    loop {
+        let seen = steps();
+        std::thread::sleep(Duration::from_millis(300));
+        if steps() == seen {
+            break;
+        }
+    }
+}
+
+/// Resident growth in KiB per session for `count` detached sessions (4 MiB scrollback) that each
+/// received `data` and then sat idle: past `compress_after` their workers compact the history
+/// (`None` never compacts, so the figure is the filled one). The figure is the settled one.
+pub fn idle_sessions_rss_per_session(
+    count: usize,
+    data: &[u8],
+    compress_after: Option<Duration>,
+) -> Option<u64> {
+    let before = rss_kib()?;
+    let hub = Hub::new(HubConfig {
+        compress_after,
+        ..HubConfig::default()
+    });
+    let fixtures: Vec<_> = (0..count)
+        .map(|n| session(&hub, &format!("idle{n}"), config(80, 24, 4 << 20)))
+        .collect();
+    fixtures.iter().for_each(|f| f.send(data));
+    fixtures.iter().for_each(|f| f.settle(data.len() as u64));
+    if compress_after.is_some() {
+        settle_compaction(&fixtures);
+    }
+    Some(rss_kib()?.saturating_sub(before) / count as u64)
 }
 
 /// Resident set in KiB (Linux), for memory measurements.

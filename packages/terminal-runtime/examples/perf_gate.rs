@@ -23,7 +23,7 @@ use lazysh_terminal_runtime::{Size, TerminalRenderer, TerminalRuntime};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::{black_box, spin_loop};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use support::*;
 
 /// Counts allocations; a counter increment is far cheaper than the allocation it counts.
@@ -46,6 +46,7 @@ static ALLOCATOR: Counting = Counting;
 // Limits, measured on the host recorded in docs/architecture/terminal-benchmarks.md.
 const LIMIT_ROWS_KEPT: f64 = 5200.0;
 const LIMIT_RSS_PER_SESSION_KIB: f64 = 5000.0;
+const LIMIT_IDLE_RSS_PER_SESSION_KIB: f64 = 1500.0;
 const LIMIT_CHURN_GROWTH_KIB: f64 = 2048.0;
 const LIMIT_ALLOCS_VT: f64 = 142.0;
 const LIMIT_ALLOCS_FRAME: f64 = 260_000.0;
@@ -65,6 +66,8 @@ enum Inject {
     None,
     Slow,
     Allocs,
+    /// Idle sessions are never compacted.
+    NoCompaction,
 }
 
 enum Limit {
@@ -96,7 +99,7 @@ fn frame_stage(inject: Inject) -> impl FnMut(&mut TerminalRuntime) {
         let started = Instant::now();
         let frame = black_box(rt.take_frame().expect("frame"));
         match inject {
-            Inject::None => {}
+            Inject::None | Inject::NoCompaction => {}
             Inject::Slow => {
                 let until = Instant::now() + started.elapsed() * 3;
                 while Instant::now() < until {
@@ -162,7 +165,8 @@ fn main() {
         (None, _) => Inject::None,
         (Some("--inject"), Some("slow")) => Inject::Slow,
         (Some("--inject"), Some("allocs")) => Inject::Allocs,
-        _ => panic!("usage: perf_gate [--inject slow|allocs]"),
+        (Some("--inject"), Some("nocompaction")) => Inject::NoCompaction,
+        _ => panic!("usage: perf_gate [--inject slow|allocs|nocompaction]"),
     };
     println!("host load average at start: {}", load_average());
     let mut metrics = Vec::new();
@@ -177,14 +181,37 @@ fn main() {
         limit: Limit::AtLeast(LIMIT_ROWS_KEPT),
         basis: "the history a session keeps for its memory; vendored libghostty-vt, deterministic",
     });
-    if let Some(grown) = sessions_rss_growth(10, &lines) {
-        metrics.push(Metric {
-            name: "resident memory per session after 8 MiB of 80-column lines",
-            unit: "KiB",
-            value: grown as f64 / 10.0,
-            limit: Limit::AtMost(LIMIT_RSS_PER_SESSION_KIB),
-            basis: "10 sessions at the default budget; allocator-dependent, so a margin",
-        });
+    let compress_after = (inject != Inject::NoCompaction).then_some(Duration::from_millis(100));
+    for (count, filled, idle) in [
+        (
+            5,
+            "resident memory per session, 5 sessions after 8 MiB of 80-column lines",
+            "resident memory per session, 5 sessions detached and idle after compaction",
+        ),
+        (
+            10,
+            "resident memory per session, 10 sessions after 8 MiB of 80-column lines",
+            "resident memory per session, 10 sessions detached and idle after compaction",
+        ),
+    ] {
+        if let Some(grown) = sessions_rss_growth(count, &lines) {
+            metrics.push(Metric {
+                name: filled,
+                unit: "KiB",
+                value: grown as f64 / count as f64,
+                limit: Limit::AtMost(LIMIT_RSS_PER_SESSION_KIB),
+                basis: "the default budget, still attached; allocator-dependent, so a margin",
+            });
+        }
+        if let Some(kib) = idle_sessions_rss_per_session(count, &lines, compress_after) {
+            metrics.push(Metric {
+                name: idle,
+                unit: "KiB",
+                value: kib as f64,
+                limit: Limit::AtMost(LIMIT_IDLE_RSS_PER_SESSION_KIB),
+                basis: "idle scrollback compaction gives most of a full session back (#1338)",
+            });
+        }
     }
     if let Some(grown) = churn_growth(&lines[..MIB]) {
         metrics.push(Metric {
