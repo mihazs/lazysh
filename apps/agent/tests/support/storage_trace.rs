@@ -478,6 +478,7 @@ const FAILED_TESTS: &[&str] = &[
     "disabled_operations_fail_before_transcript_or_device_access_but_settings_remain_readable",
     "distinct_sessions_and_agents_keep_their_latest_state",
     "hook_previews_label_their_dialect_and_platform_binding_without_creating_state",
+    "host_browser_switch_is_off_by_default_and_never_changes_what_a_released_client_reads",
     "hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles",
     "invalid_events_fail_without_files_or_secret_echo",
     "invalid_snapshot_limits_fail_before_creating_storage",

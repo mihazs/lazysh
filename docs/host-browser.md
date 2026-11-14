@@ -62,8 +62,10 @@ Security and data (each is tested, not only stated):
 - A host setting **Host browser** is off by default, beside the three companion switches in
   [Host settings](companion-settings.md). It is the only companion switch that defaults to off, because it is
   the only one that can reach the user's web sessions. While off, every host-browser command fails before it
-  starts a process. Slice [#1258](https://github.com/mihazs/lazysh/issues/1258) decides how the settings schema
-  gains the field without breaking a released client.
+  starts a process. The field is not in `settings.json` (a strict file that a released companion or client would
+  refuse): it has its own file, `host-browser.json`, and `settings host-browser show|update`, as the planned
+  update policy does. See [the reference](reference/companion-settings.md). Shipped in the companion by slice A
+  of [#1258](https://github.com/mihazs/lazysh/issues/1258); the app's switch and confirmation come with the viewer.
 - The first use on a host shows what the browser can reach: the host's network and loopback services, any
   file the browser can open, and every site the user signs in to inside it. The user confirms per host. The
   confirmation is remembered on the device for that host only, never synced.
@@ -74,14 +76,15 @@ Security and data (each is tested, not only stated):
 | Property | Value |
 | --- | --- |
 | Binary | Found on the host's `PATH` or named by an explicit path: Google Chrome, Chromium, Firefox. The version is read from the browser and compared with the supported range; an unsupported version is named, never guessed. |
-| Profile | New private directory (mode 0700), no extensions, removed when the browser stops. Removed at the next start if a crash left one, matched by a marker with the owner's pid. |
+| Profile | New private directory (mode 0700) under the companion state directory, no extensions, removed when the browser stops. Removed at the next start if a crash left one, matched by a marker with the owner's pid. Shipped in the launcher by slice B of [#1258](https://github.com/mihazs/lazysh/issues/1258). |
 | Mode | Headless by default: nothing appears on the host's screen. **Headed** is an explicit choice for a host with a display; it shows a window to anyone at the host and switching tabs changes what they see. |
 | Flags | Chrome: `--headless=new --remote-debugging-pipe --user-data-dir=<private> --no-first-run --no-default-browser-check`. Firefox: `--headless --no-remote --profile <private> --remote-debugging-port 0`. `--remote-allow-origins=*` and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS` are never used. |
 | Lifetime | Starts when the user opens the tool, stops when the user closes it, the SSH channel closes, the session ends or the companion exits. An idle timer stops it after a configurable time. |
 | Start cost | 130 ms (Chromium) and 410 ms (Firefox) to a usable endpoint, so on demand is cheap. |
 
 **Keep profile** is an explicit option for flows that need a sign-in to survive (it keeps cookies on the host's
-disk until **Clear browser data**). It is off by default and labelled with what it stores.
+disk until **Clear browser data**). It is off by default and labelled with what it stores. In the launcher it is
+`--keep-profile` (one kept profile, refused while a browser uses it) and `host-browser --clear-data`.
 
 ### Attaching to the normal profile
 
@@ -280,8 +283,9 @@ Milestone 1 includes a prototype that proves the architecture and records latenc
 ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser.rs`,
 `apps/client/src/hostBrowser/` and their tests.
 
-- **Developer flag, off by default.** On the host, the hidden command `lazysh-agent host-browser` (not in
-  `--help`) refuses to run unless `LAZYSH_DEV_HOST_BROWSER=1` is set. On the device, the viewer is a page that
+- **Developer flag and switch, both off by default.** On the host, the hidden command `lazysh-agent host-browser`
+  (not in `--help`) refuses to run unless the host browser switch is on (`settings host-browser update`) and
+  `LAZYSH_DEV_HOST_BROWSER=1` is set. On the device, the viewer is a page that
   only the Vite development server serves at `/?hostBrowserDev=1`; a production build of the client does not
   contain it (checked by building and searching the output), and the normal app has no menu entry for it.
 - **Host side.** `lazysh-agent host-browser [--url URL] [--allow-origin ORIGIN] [--headed] [--no-sandbox]`
@@ -339,7 +343,6 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
 ## Open questions
 
 - Whether to refuse Firefox while other interactive accounts exist on the host (slice #1258).
-- How the settings file gains the new switch without breaking a released client (slice #1258).
 - Whether a hosted-runner headed run (Xvfb) is worth adding once the relay exists.
 - Whether Safari's remote automation has a place on macOS hosts. It is not investigated.
 

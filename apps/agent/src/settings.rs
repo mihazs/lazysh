@@ -2,8 +2,6 @@ use crate::{private_json, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const MAX_REVISION: u64 = 9_007_199_254_740_991;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
@@ -48,7 +46,7 @@ impl Settings {
         }
     }
     fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 || self.revision > MAX_REVISION {
+        if self.schema_version != 1 || self.revision > private_json::MAX_REVISION {
             return Err(Error::InvalidArgument);
         }
         Ok(())
@@ -72,26 +70,18 @@ pub fn update(
     usage: bool,
     devices: bool,
 ) -> Result<Settings> {
-    if expected_revision >= MAX_REVISION {
-        return Err(Error::InvalidArgument);
-    }
-    let _lock =
-        private_json::lock(directory, "settings.lock")?.ok_or(Error::Settings("SettingsBusy"))?;
-    let current = read(directory)?;
-    if current.revision != expected_revision {
-        return Err(Error::Settings("SettingsConflict"));
-    }
-    let settings = Settings {
-        schema_version: 1,
-        revision: current.revision + 1,
-        transcript_discovery_enabled: discovery,
-        recorded_usage_enabled: usage,
-        device_tools_enabled: devices,
-    };
-    private_json::write(
+    private_json::update_revisioned(
         directory,
         "settings.json",
-        &serde_json::to_vec(&settings).map_err(|_| Error::InvalidArgument)?,
-    )?;
-    Ok(settings)
+        "settings.lock",
+        expected_revision,
+        || Ok(read(directory)?.revision),
+        |revision| Settings {
+            schema_version: 1,
+            revision,
+            transcript_discovery_enabled: discovery,
+            recorded_usage_enabled: usage,
+            device_tools_enabled: devices,
+        },
+    )
 }

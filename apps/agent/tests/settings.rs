@@ -260,3 +260,55 @@ fn links_public_files_and_special_files_are_refused_without_changing_targets() {
     assert!(settings::read(&mutable.join("missing")).is_err());
     assert!(settings::update(&mutable.join("new"), 0, true, true, true).is_err());
 }
+#[test]
+fn host_browser_switch_is_off_by_default_and_never_changes_what_a_released_client_reads() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("state");
+    let switch = |args: &[&str]| {
+        let output = run(&state, &[&["settings", "host-browser"], args].concat());
+        (
+            output.status.success(),
+            serde_json::from_slice::<Value>(&output.stdout),
+        )
+    };
+    assert_eq!(
+        switch(&["show"]).1.unwrap(),
+        json!({"schemaVersion":1,"revision":0,"hostBrowserEnabled":false})
+    );
+    assert!(!state.exists(), "reading the switch created state");
+    let on = [
+        "update",
+        "--expected-revision",
+        "0",
+        "--host-browser-enabled",
+        "true",
+    ];
+    assert_eq!(switch(&on).1.unwrap()["hostBrowserEnabled"], true);
+    assert!(!switch(&on).0, "a stale revision was accepted");
+    assert!(
+        !switch(&["update", "--expected-revision", "1"]).0,
+        "the value is required"
+    );
+
+    // A released client reads the strict five-field file and updates the other three switches; the new
+    // switch must be invisible to it and survive its writes.
+    let shown = run(&state, &["settings", "show"]).stdout;
+    assert!(serde_json::from_slice::<settings::Settings>(&shown).is_ok());
+    assert!(!String::from_utf8_lossy(&shown).contains("hostBrowser"));
+    settings::update(&state, 0, false, true, true).unwrap();
+    assert_eq!(settings::read(&state).unwrap().revision, 1);
+    assert_eq!(switch(&["show"]).1.unwrap()["hostBrowserEnabled"], true);
+    assert_eq!(
+        switch(&[
+            "update",
+            "--expected-revision",
+            "1",
+            "--host-browser-enabled",
+            "false"
+        ])
+        .1
+        .unwrap(),
+        json!({"schemaVersion":1,"revision":2,"hostBrowserEnabled":false})
+    );
+    assert_eq!(settings::read(&state).unwrap().revision, 1);
+}
