@@ -1017,6 +1017,7 @@ test('an agent the view cannot read yet is named with Show terminal and no compo
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   const agent=agentView(page);
   await expect(agent.locator('header')).toContainText('Gemini CLI');
+  await expect(agent.getByText('This view shows only the last reported state of Gemini CLI. Its conversation stays in the terminal.',{exact:true})).toBeVisible();
   await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
   await expect(agent.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveCount(0);
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);

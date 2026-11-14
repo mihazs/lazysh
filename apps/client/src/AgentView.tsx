@@ -278,7 +278,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {infoOpen && reader && info?.info && <AgentInfoSheet info={info.info} onClose={()=>setInfoOpen(false)} onShowTerminal={onShowTerminal}/>}
     {(herdrSession ? !fresh && !manual && navigation.busy && !navigation.data?.loaded : binding.kind === 'finding') && !selected && <p role="status">{t('agentViewFinding')}</p>}
     {!reader && !herdrSession && binding.kind !== 'finding' && <div className="agent-view-fallback">
-      <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
+      <p>{binding.kind === 'partial' ? t(binding.row.agent in conversationAgents ? 'agentViewPartial' : 'agentViewPartialState', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
         {binding.kind === 'none' && <StartButtons sessionId={sessionId}/>}
