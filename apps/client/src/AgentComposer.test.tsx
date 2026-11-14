@@ -318,6 +318,22 @@ it('settles the receipt from the conversation: Sending, then Sent once the messa
   rerender(['Run it','Run it']);expect(screen.getByText(t('agentReceiptSent'))).toBeTruthy();
 });
 
+it('types nothing into an open dialog: Send, Enter and Retry hold while the agent waits for an answer, and the draft is kept',async()=>{
+  const {view,access}=await bound({holdSend:true});
+  type('no, use the trash instead');
+  expect(screen.getByText(t('agentComposerAnswerFirst'))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  fireEvent.keyDown(box(),{key:'Enter'});fireEvent.click(sendButton());
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,50));});
+  expect(inputs()).toEqual([]);expect(box().value).toBe('no, use the trash instead');
+  // Answered: the same draft goes out once.
+  view.rerender(<AgentComposer {...props()} access={access} invoke={bindProtectedInvoke(access)} holdSend={false}/>);
+  expect(screen.queryByText(t('agentComposerAnswerFirst'))).toBeNull();
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {text:string}).text).toBe('no, use the trash instead');
+});
+
 it('stops claiming progress when the message never shows up',async()=>{
   await bound();type('Lost?');
   await waitFor(()=>expect(sendButton().disabled).toBe(false));

@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useId,useMemo,useRef,useState,type DragEvent} from 'react';
 import {ArrowLeft,Paperclip,SendHorizontal,Square} from 'lucide-react';
-import {publishComposerControl} from './agentDialogAnswer';
+import {publishComposerControl,useDialogOpen} from './agentDialogAnswer';
 import AttachmentPanel from './AttachmentPanel';
 import AgentComposerChips from './AgentComposerChips';
 import AgentComposerNotice from './AgentComposerNotice';
@@ -33,11 +33,13 @@ const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kin
 /** The message box of the Agent view: always present under a followed conversation.
  * With a proof the input binds itself to the proven pane and Send goes straight to the agent's terminal; without one
  * the explicit destination confirmation stays. Stage in terminal is the path of a session that takes no confirmed input. */
-export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],cwd,onOpenTerminal}:{
+export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],holdSend:dialogReported=false,cwd,onOpenTerminal}:{
   sessionId:string;conversation:BoundConversation;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;shown:boolean;
   labels?:TerminalInputLabels;proof?:ComposerProof;stage:boolean;
   /** What the conversation already holds as the person's prompts, so a receipt settles from the transcript. */
   prompts?:readonly string[];
+  /** The agent has a dialog open (an approval, a question, a plan or a menu): Enter would answer it, so nothing is typed into it. */
+  holdSend?:boolean;
   /** The host folder the agent works in: the root of `@` file mentions. Without it there is no file picker. */
   cwd?:string;
   /** Switches to the terminal view, for a failure that is best looked at there. */
@@ -95,11 +97,13 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   },[proofKey,conversation.herdr?.herdrSession,conversation.herdr?.paneId,conversation.herdr?.terminalId,guarded,conversation.path]);
   // A Zellij host takes input to the pane the agent's report names, and only while that pane still runs this agent.
   const zellij=useMemo<ZellijTarget|undefined>(()=>proof?.kind==='zellij' && guarded ? Object.freeze({zellijSession:proof.session,pane:proof.pane,agent:guarded}) : undefined,[proofKey,guarded]);
+  // A dialog the report names, or one the screen shows, takes Enter and typed keys itself.
+  const holdSend=useDialogOpen(sessionId) || dialogReported;
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
   const bytes=draftLimit(labels?.backend??'tmux',true);
-  const sendable=ready && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
+  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
   const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
   // Shift+Tab has a verified key profile for Claude Code on tmux only; every other terminal hides the button.
@@ -138,7 +142,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   }
   // One explicit second try: bind again and send the draft once. A draft edited since the failure is put back first.
   function retry() {
-    if(!control)return;
+    if(!control || holdSend)return;
     if(receipt && draft!==receipt.text){edit(receipt.text);return;}
     if(validTerminalDraft(text,bytes))setReceipt({text,phase:'pending',at:Date.now(),before:receipt?receipt.before:promptsLike(prompts,text)});
     control.retry();
@@ -210,6 +214,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     {modeSwitch.note}
     {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}
     {attach.error && <p role="alert" className="agent-composer-note">{uiErrorText(attach.error)}</p>}
+    {holdSend && ready && <p role="status" className="agent-composer-note">{t('agentComposerAnswerFirst')}</p>}
     {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong',{limit:formatNumber(bytes)})}</p>}
     {staged && <p role="status" className="agent-composer-note">{t('chatDraftStaged')}</p>}
     {!labels && stage && <p className="agent-composer-note">{t('agentViewStageOnly')}</p>}
