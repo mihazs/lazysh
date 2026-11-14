@@ -123,7 +123,7 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
     {!live && <p role="note">{t('agentPickerTerminalOnly')}</p>}
     {phase !== 'idle' && phase !== 'sending' && <p role="alert">{phaseNote(phase)}</p>}
     <div className="button-row">
-      {live && <button type="button" disabled={busy} onClick={() => void answer()}>{t('agentPickerCancel')}</button>}
+      {live && !dialog.interrupts && <button type="button" disabled={busy} onClick={() => void answer()}>{t('agentPickerCancel')}</button>}
       <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
     </div>
   </section>;

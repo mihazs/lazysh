@@ -273,6 +273,7 @@
 - Persist the selected Android push provider before explicit registration or cleanup so late previous-provider token callbacks cannot change it after restart. Status inspection remains read-only, and failed persistence prevents the control action.
 
 - Add Firebase-free UnifiedPush setup to Google Android builds alongside explicit FCM. New/off Google installations select UnifiedPush without registering; existing active FCM registrations remain selected. Provider changes require paused/revoked registration. Add opt-in Gotify relay delivery to the separate Gotify client; encrypted lazysh event display remains behind its original private enrollment and consent gates.
+- Answer the questions Codex asks from the Agent view (#1485). When Codex opens a `request_user_input` question on tmux, the dialog card above the message box shows the question, its place among the questions (`Question 1/2`) and the options with Codex's highlight, and a tap moves the highlight with the arrow keys, reads it back and presses Enter, as a person would; Codex then shows its next question as its own card. It also reads Codex at a phone's width, where Codex wraps the question, both columns of an option and the footer. Changed behaviour: none for existing dialogs. A question card has no **Cancel the dialog**, because Esc interrupts Codex's turn there, and the notes box (Tab) stays in the terminal with the banner that the agent waits there.
 
 - Keep vertically dominant finger drags responsive and preserve complete coalesced scroll motion before finger lift.
 
