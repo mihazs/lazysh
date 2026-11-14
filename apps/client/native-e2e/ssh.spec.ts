@@ -34,6 +34,31 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   await disconnectOwnedSsh(gui,terminal);
 });
 
+// Auto tries Mosh, then Eternal Terminal, on the verified SSH connection and keeps that SSH terminal when neither helper starts.
+it('falls back from Auto to the trusted SSH terminal and says why Mosh and Eternal Terminal were skipped',async()=>{
+  fixture.captureSafe=false;
+  // `companion` makes the fixture run exec requests, so a missing helper exits at once instead of hanging on its shell.
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true,companion:true});
+  const gui=fixture.gui=await NativeGui.start();
+  const {browser,terminal,owner}=await openOwnedSshWith(gui,ssh,async connect=>{
+    await (await connect.$('.connection-options summary')).click();
+    await (await connect.$('.connection-options select')).selectByAttribute('value','auto');
+    await (await (await connect.$('label*=Mosh server path')).$('input')).setValue(join(ssh.directory,'absent-mosh-server'));
+    await (await (await connect.$('label*=ET terminal path')).$('input')).setValue(join(ssh.directory,'absent-etterminal'));
+    await enterOwnedKey(gui,ssh,connect);
+  });
+  fixture.captureSafe=true;
+  const notice=await browser.$('.browser-banner[role="status"]');await notice.waitForDisplayed();
+  const text=await notice.getText();
+  expect(text).toContain('Auto selected SSH.');
+  expect(text).toContain('Mosh: Mosh server failed to start.');
+  expect(text).toContain('Eternal Terminal: ET helper did not start.');
+  expect(text.indexOf('Mosh:')).toBeLessThan(text.indexOf('Eternal Terminal:'));
+  // The terminal that stays is the original verified SSH shell, not a relaunched one.
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  await disconnectOwnedSsh(gui,terminal);
+});
+
 type RecordedSource={agent:string;view?:string;path:string;sessionId?:string};
 // Reads the shared synthetic Codex and OpenCode V1/V2 records, then the recorded plan, question,
 // turn-state, Markdown and thinking pages, through the source-built companion over real SSH.
