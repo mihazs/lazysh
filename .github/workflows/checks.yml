@@ -561,12 +561,14 @@ jobs:
           (cd "$old_companions" && printf '%s  %s\n' d8f0bab955d71e3d2f2d9731a2514c88f482b6809fe20593a9906737a977f1d0 lazysh-1.28.0-linux-agent-x64.bin b37f2b673732b99fc2e751cf8974393a9329fc979d8e1ef205cf6829cc8b6804 lazysh-1.33.4-linux-agent-x64.bin | sha256sum --check --strict)
           chmod 700 "$old_companions"/*.bin
           echo "LAZYSH_TEST_OLD_COMPANIONS=$old_companions" >> "$GITHUB_ENV"
-      - name: Exercise owned companion transfer and exact Mosh entry over SSH
+      # The release companion is the one hook setup accepts (a binary over 64 MiB is refused); the two
+      # `companion::local` cases run it on this device through real local sessions, not over SSH.
+      - name: Exercise owned companion transfer, exact Mosh entry and the local companion
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
         run: |
           cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver
-          cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_attachments_default_to_private_unique_tmp_files ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_agent_board_and_approvals_through_companion_hooks ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure)
+          cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_attachments_default_to_private_unique_tmp_files ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_agent_board_and_approvals_through_companion_hooks ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell companion::local::tests::real_local_hooks_report_to_the_board_and_a_permission_request_is_answered)
           for case_name in "${cases[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
@@ -771,6 +773,19 @@ jobs:
         run: "cargo test --locked -p lazysh --lib herdr_path::"
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx moon run client-native:test-local
+      # Hook writes are Linux-verified (a debug companion is over the 64 MiB hook-setup bound); Windows reports template-only setup.
+      - name: Exercise the companion on this device through real local sessions
+        shell: bash
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: |
+          cargo build --locked -p lazysh-agent --bin lazysh-agent
+          cases=(companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell)
+          if [ "$RUNNER_OS" = Windows ]; then cases+=(companion::local::tests::real_local_hook_setup_on_windows_is_template_only); fi
+          for case_name in "${cases[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          done
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:

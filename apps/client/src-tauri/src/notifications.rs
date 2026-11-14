@@ -1,4 +1,6 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::host::Host;
+use crate::local::LocalState;
 use crate::ssh::{AppState, Result, SshError};
 use tauri::{AppHandle, State};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -22,9 +24,11 @@ fn summary(agent: &str, project: &str) -> Result<String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn notify_agent_attention(
     app: AppHandle,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     agent: String,
     project: String,
@@ -33,7 +37,7 @@ pub async fn notify_agent_attention(
 ) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let _session = state.session(&session_id).await?;
+            Host::resolve(&state, &local, &session_id, &access).await?;
             if event_id.len() != 64 || !event_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Err(SshError::new(
                     "invalid_notification",

@@ -8,6 +8,8 @@ use std::{sync::Arc, time::Duration};
 use tauri::{ipc::Channel, State};
 pub mod hooks;
 pub(crate) mod install;
+#[cfg(desktop)]
+pub(crate) mod local;
 mod release;
 mod resolve;
 mod transfer;

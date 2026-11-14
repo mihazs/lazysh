@@ -51,6 +51,7 @@ async fn read(
         agent_transcript(
             lease.clone(),
             app.state(),
+            app.state(),
             id.into(),
             agent.into(),
             path.to_str().unwrap().into(),
@@ -271,6 +272,7 @@ async fn invalid_image_options_reject_before_session_lookup() {
     let (_directory, state) = fixture_state();
     let app = tauri::test::mock_app();
     app.manage(state);
+    app.manage(crate::local::LocalState::default());
     for (agent, view, checkpointed) in [
         ("pi", None, false),
         ("grok-acp", Some("conversation"), false),
@@ -278,6 +280,7 @@ async fn invalid_image_options_reject_before_session_lookup() {
     ] {
         let error = agent_transcript(
             access_lease(),
+            app.state(),
             app.state(),
             "absent-session".into(),
             agent.into(),
@@ -320,12 +323,14 @@ async fn cancelled_agent_read(reported: bool) {
         .insert("owned-source".into(), session.clone());
     let app = tauri::test::mock_app();
     app.manage(state);
+    app.manage(crate::local::LocalState::default());
     server.hold_opens.store(true, Ordering::SeqCst);
     let original = lease.clone();
     let pending = tokio::spawn(async move {
         if reported {
             return agent_reported_history(
                 original,
+                app.state(),
                 app.state(),
                 "owned-source".into(),
                 "opaque-claude".into(),
@@ -334,6 +339,7 @@ async fn cancelled_agent_read(reported: bool) {
         }
         agent_transcript(
             original,
+            app.state(),
             app.state(),
             "owned-source".into(),
             "codex".into(),
@@ -376,6 +382,7 @@ async fn reported_source(
 ) -> Value {
     agent_reported_history(
         lease.clone(),
+        app.state(),
         app.state(),
         session.into(),
         agent_session.into(),
@@ -421,7 +428,7 @@ async fn verify_reported_history(
             "metadata capture/lookup must not open or create transcript files"
         );
     }
-    let snapshot = agent_snapshot(lease.clone(), app.state(), id.into())
+    let snapshot = agent_snapshot(lease.clone(), app.state(), app.state(), id.into())
         .await
         .unwrap()
         .into_inner()
@@ -457,19 +464,25 @@ async fn reported_history_id_validation_precedes_session_lookup_and_quotes_liter
     let (_directory, state) = fixture_state();
     let app = tauri::test::mock_app();
     app.manage(state);
+    app.manage(crate::local::LocalState::default());
     for id in [
         String::new(),
         "\n".into(),
         "x".repeat(1025),
         "世".repeat(257),
     ] {
-        let error =
-            agent_reported_history(access_lease(), app.state(), "missing-session".into(), id)
-                .await
-                .err()
-                .unwrap()
-                .into_inner()
-                .unwrap();
+        let error = agent_reported_history(
+            access_lease(),
+            app.state(),
+            app.state(),
+            "missing-session".into(),
+            id,
+        )
+        .await
+        .err()
+        .unwrap()
+        .into_inner()
+        .unwrap();
         assert_eq!(error.kind, "invalid_input");
     }
 }
