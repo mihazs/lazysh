@@ -385,9 +385,9 @@ async function showDialog(page:Page,highlighted:number|undefined) {
   },highlighted);
 }
 /** The /model picker card open at Haiku: large targets that fit the screen. Returns the card and the Sonnet option to tap. */
-async function modelCard(page:Page,agent:Locator) {
+async function modelCard(page:Page,agent:Locator,timeout=10000) {
   const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
-  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:10000});
+  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout});
   await expect(dialog.getByRole('button',{name:/^Haiku/})).toHaveAttribute('aria-current','true');
   const sonnet=dialog.getByRole('button',{name:/^Sonnet/});
   await expect(sonnet).toBeEnabled();
@@ -1308,8 +1308,8 @@ test('shows model, plan mode and context left in one header row without taking c
 async function openZellij(page:Page,testInfo:{project:{name:string}}) {
   await installBaseHost(page);
   await page.addInitScript(()=>{
-    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown};
-    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0};
+    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown;state:string;screen:string[];onKeys?:(input:Record<string,unknown>)=>void};
+    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0,state:'working',screen:[]};
     const path='/home/owner/.claude/projects/work/a.jsonl';
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
@@ -1317,8 +1317,10 @@ async function openZellij(page:Page,testInfo:{project:{name:string}}) {
       if(command==='multiplexer_sessions')return [{name:'work'}];
       if(command==='attach_multiplexer')return {sessionId:'display-work'};
       if(command==='tmux_chat'||command==='herdr_chat'){record.tmuxCalls++;throw new Error('Zellij never uses a tmux or Herdr input');}
-      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
+      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});record.onKeys?.(args.input as Record<string,unknown>);return;}
+      // The viewport of the agent's own pane, as the host reads it.
+      if(command==='zellij_agent_screen')return record.screen;
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:record.state,updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
         {sessionId:'other-thread',agent:'Codex',project:'/other',state:'done',updatedAt:new Date().toISOString(),summary:'Done',paneId:'zellij:another:1',eventCount:2}]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',path,reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
       if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
@@ -1358,6 +1360,25 @@ test('Zellij: the Agent view follows the agent of the attached session and sends
   await expect(field).toHaveValue('Next step');
   await expectInViewport(page,notice);
   expect((await zellijFixture(page)).tmuxCalls).toBe(0);expect((await zellijFixture(page)).inputs).toHaveLength(2);
+});
+
+test('Zellij: a list dialog open in the agent pane is read from that pane and answered with the keys a person presses, sent to the pane the report names',async({page},testInfo)=>{
+  await openZellij(page,testInfo);
+  // The agent stopped and its pane shows the /model list, drawn narrow: Zellij's own screen, the one the terminal shows, is not what the card reads.
+  await page.evaluate(()=>{
+    const record=(window as unknown as {zellijFixture:{state:string;screen:string[];onKeys?:(input:Record<string,unknown>)=>void}}).zellijFixture;
+    const rule='─'.repeat(32),names=['Default (recommended)','Opus','Sonnet','Haiku'];
+    const dialog=(at:number)=>[rule,'  Select model','  Pick the model.','',...names.map((name,index)=>`${index===at?'  ❯ ':'    '}${index+1}. ${name}`),'','  Enter to confirm · Esc to cancel'];
+    let at=3;
+    record.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)record.screen=['> /model','Set model','$ '];else{at+=input.rows as number;record.screen=dialog(at);}};
+    record.screen=dialog(at);record.state='done';
+  });
+  const {dialog,sonnet}=await modelCard(page,agentView(page),20000);
+  await sonnet.click();
+  await expect(dialog).toHaveCount(0,{timeout:10000});
+  const target={zellijSession:'work',pane:7,agent:'claude'};
+  expect((await zellijFixture(page)).inputs).toEqual([{target,input:{kind:'pick',rows:-1,enter:false}},{target,input:{kind:'pick',rows:0,enter:true}}]);
+  expect((await zellijFixture(page)).tmuxCalls).toBe(0);
 });
 
 test('live: an older page loads above the reader while a live append arrives, and the line being read does not move',async({page})=>{

@@ -6,7 +6,14 @@
 //! presses Enter as two separate calls. The check and the write are different host calls, so a pane replaced between them
 //! is the one window left open, as for stock Herdr. A failure of the first write proves nothing was typed; a failure after
 //! it is reported as unconfirmed.
-use crate::herdr_stock_input::{agent_input_command, run_agent_input};
+//!
+//! A dialog answer is the keys a person presses (an option's digit, Up, Down, Enter) sent with Zellij's own `send-keys`, which
+//! encodes an arrow for the cursor-key mode of that pane, or one typed line and its Enter. `zellij_agent_screen` reads the
+//! pane's own viewport (`dump-screen`) so the Agent view can show the dialog that is open and read the highlight back between
+//! keys; it grants nothing.
+use crate::herdr_stock_input::{
+    agent_input_command, agent_screen_command, run_agent_input, screen_rows,
+};
 use crate::ssh::{self, quote, Result, Session, SshError};
 use crate::{app_lock::AccessLease, tmux_jump::chat::Input};
 
@@ -93,13 +100,14 @@ fn ready(listing: &str, target: &Target) -> Result<()> {
         None => Err(stale("The Zellij pane of this agent is gone")),
     }
 }
-/// The one or two host calls of an input, in order. Escape is the byte 27, Enter the byte 13. Dialog answers, long pastes
-/// and mode keys have no Zellij profile and stay in the terminal.
+/// The one or two host calls of an input, in order. Escape is the byte 27, Enter the byte 13. Long pastes and mode keys have
+/// no Zellij profile and stay in the terminal.
 fn steps(target: &Target, input: &Input) -> Option<Vec<String>> {
     let pane = target.pane_arg();
     let enter = target.action(&format!("write {pane} 13"));
     match input {
-        Input::Send { text } => {
+        // A typed answer is one validated line: it goes in like a prompt, line and Enter.
+        Input::Send { text } | Input::Type { text } => {
             // A multi-line prompt goes in as one bracketed paste, so its newlines are not Enter; a line is typed.
             let verb = if text.contains(['\n', '\t']) {
                 "paste"
@@ -112,8 +120,30 @@ fn steps(target: &Target, input: &Input) -> Option<Vec<String>> {
             ])
         }
         Input::RequestStop => Some(vec![target.action(&format!("write {pane} 27"))]),
+        // Named keys, not bytes: Zellij writes an arrow as the pane's program asked for it (`ESC [ B`, or `ESC O B` in application mode).
+        Input::Select { .. } | Input::Submit { .. } | Input::Pick { .. } => Some(vec![target
+            .action(&format!(
+                "send-keys {pane} {}",
+                input.dialog_keys().join(" ").to_lowercase()
+            ))]),
         _ => None,
     }
+}
+
+/// The host call that prints the viewport of the one pane the target names.
+fn screen_command(target: &Target) -> String {
+    target.action(&format!("dump-screen {}", target.pane_arg()))
+}
+/// Re-reads the session's panes and proves the target is a live terminal pane running the agent. Nothing is written yet: a host
+/// that does not answer, or a session that is gone, is a plain refusal.
+async fn live(session: &Session, lease: &AccessLease, target: &Target) -> Result<()> {
+    let listing = ssh::exec_for_access(session, list_command(target), lease)
+        .await
+        .map_err(|error| match error.kind() {
+            "remote_command_failed" => stale(error.message()),
+            _ => error,
+        })?;
+    ready(&listing, target)
 }
 
 pub(crate) async fn deliver(
@@ -125,14 +155,7 @@ pub(crate) async fn deliver(
     let steps = steps(target, input)
         .filter(|_| target.valid() && input.validate().is_ok())
         .ok_or_else(invalid)?;
-    // Nothing is written yet: a host that does not answer, or a session that is gone, is a plain refusal.
-    let listing = ssh::exec_for_access(session, list_command(target), lease)
-        .await
-        .map_err(|error| match error.kind() {
-            "remote_command_failed" => stale(error.message()),
-            _ => error,
-        })?;
-    ready(&listing, target)?;
+    live(session, lease, target).await?;
     for (index, step) in steps.into_iter().enumerate() {
         ssh::exec_for_access(session, step, lease)
             .await
@@ -147,11 +170,33 @@ pub(crate) async fn deliver(
     Ok(())
 }
 
+/// Reads the viewport of the followed agent's pane as rows of text, only while the pane still runs the agent. Display only: the pane
+/// is checked again before every key.
+pub(crate) async fn screen(
+    session: &Session,
+    lease: &AccessLease,
+    target: &Target,
+) -> Result<Vec<String>> {
+    if !target.valid() {
+        return Err(invalid());
+    }
+    live(session, lease, target).await?;
+    let output = ssh::exec_for_access(session, screen_command(target), lease).await?;
+    Ok(screen_rows(&output))
+}
+
 agent_input_command!(
     /// Delivers one message (or Escape) to the pane of the followed agent in a Zellij session.
     zellij_agent_input,
     Target,
     deliver
+);
+
+agent_screen_command!(
+    /// Reads the viewport of the followed agent's pane, as rows of text.
+    zellij_agent_screen,
+    Target,
+    screen
 );
 
 #[cfg(test)]
@@ -189,14 +234,56 @@ mod tests {
             steps(&target(), &Input::RequestStop).unwrap(),
             ["zellij --session='it'\\''s' action write --pane-id terminal_7 27"]
         );
-        // Dialog keys, long pastes and any later key kind have no Zellij profile and never reach the host.
-        for input in [
-            Input::Select { option: 1, of: 3 },
-            Input::Submit { of: 3 },
-            Input::SendLong { text: "x".into() },
+        // A dialog answer is the keys a person presses, named for Zellij to encode for the pane; a typed answer is a line and its Enter.
+        for (input, keys) in [
+            (Input::Select { option: 3, of: 4 }, "3"),
+            (Input::Submit { of: 2 }, "down down down enter"),
+            (
+                Input::Pick {
+                    rows: -2,
+                    enter: false,
+                },
+                "up up",
+            ),
+            (
+                Input::Pick {
+                    rows: 0,
+                    enter: true,
+                },
+                "enter",
+            ),
         ] {
+            assert_eq!(
+                steps(&target(), &input).unwrap(),
+                [format!(
+                    "zellij --session='it'\\''s' action send-keys --pane-id terminal_7 {keys}"
+                )]
+            );
+        }
+        assert_eq!(
+            steps(
+                &target(),
+                &Input::Type {
+                    text: "-x it's".into()
+                }
+            )
+            .unwrap(),
+            [
+                "zellij --session='it'\\''s' action write-chars --pane-id terminal_7 -- '-x it'\\''s'",
+                "zellij --session='it'\\''s' action write --pane-id terminal_7 13"
+            ]
+        );
+        // Long pastes and the mode key have no Zellij profile and never reach the host.
+        for input in [Input::SendLong { text: "x".into() }, Input::CycleMode {}] {
             assert_eq!(steps(&target(), &input), None);
         }
+    }
+    #[test]
+    fn the_screen_command_reads_only_the_one_pane_the_target_names() {
+        assert_eq!(
+            screen_command(&target()),
+            "zellij --session='it'\\''s' action dump-screen --pane-id terminal_7"
+        );
     }
     #[test]
     fn accepts_only_a_named_session_that_cannot_pass_as_an_option() {
@@ -317,6 +404,17 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&started.stderr)
         );
+        // A background session answers its first `run` with nothing until its first terminal pane exists.
+        for _ in 0..250 {
+            let panes = run(&format!(
+                "zellij --session={} action list-panes --json",
+                quote(&name)
+            ));
+            if String::from_utf8_lossy(&panes.stdout).contains("\"is_plugin\": false") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         // The fixture agent is a script named for it that copies what its terminal receives to a file.
         let out = temp.path().join("received");
         let script = temp.path().join("claude");
@@ -398,6 +496,65 @@ mod tests {
         });
         // Escape stays in the line the agent has not finished reading; a bracketed paste keeps its newline as text.
         received(b"it's $(not run) -x\n--help\n\x1btwo\nlines\n");
+        // A dialog answer reaches the pane as the keys a person presses: Zellij writes the arrows for this pane's cursor-key mode, and a typed
+        // answer is its line and Enter. The terminal holds them until the Enter, as it holds any line.
+        deliver(Input::Pick {
+            rows: 2,
+            enter: false,
+        });
+        deliver(Input::Select { option: 2, of: 3 });
+        deliver(Input::Pick {
+            rows: 0,
+            enter: true,
+        });
+        deliver(Input::Type {
+            text: "-x it's".into(),
+        });
+        received(b"it's $(not run) -x\n--help\n\x1btwo\nlines\n\x1b[B\x1b[B2\n-x it's\n");
+        // The screen read prints the viewport of the agent's own pane: a fixture Codex draws a question and the read gets its rows back.
+        let codex = temp.path().join("codex");
+        std::fs::write(
+            &codex,
+            "#!/bin/sh\nprintf '  Question 1/1 (1 unanswered)\\n  Which color?\\n\\n  › 1. Red  Choose red.\\n    2. Green  Choose green.\\n\\n  tab to add notes | enter to submit answer | esc to interrupt\\n'\nsleep 600\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&codex, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let drawn: u32 = String::from_utf8(
+            run(&format!(
+                "zellij --session={} run --name codex -- {}",
+                quote(&name),
+                quote(codex.to_str().unwrap())
+            ))
+            .stdout,
+        )
+        .unwrap()
+        .trim()
+        .strip_prefix("terminal_")
+        .unwrap()
+        .parse()
+        .unwrap();
+        let asker = Target {
+            agent: "codex".into(),
+            ..target(drawn)
+        };
+        let mut rows = Vec::new();
+        for _ in 0..250 {
+            rows = screen_rows(&String::from_utf8_lossy(
+                &run(&screen_command(&asker)).stdout,
+            ));
+            if rows.iter().any(|row| row.contains("to interrupt")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let text = |row: &str| rows.iter().any(|line| line.trim_end() == row);
+        assert!(text("  Question 1/1 (1 unanswered)"), "{rows:?}");
+        assert!(text("  › 1. Red  Choose red."), "{rows:?}");
+        assert!(
+            text("  tab to add notes | enter to submit answer | esc to interrupt"),
+            "{rows:?}"
+        );
         // A pane running something else (a shell would take the prompt as a command) and a missing pane are refused.
         let other = String::from_utf8(
             run(&format!(

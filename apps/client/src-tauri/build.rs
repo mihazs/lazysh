@@ -135,6 +135,7 @@ fn main() {
         "herdr_agent_input",
         "herdr_agent_screen",
         "zellij_agent_input",
+        "zellij_agent_screen",
         "herdr_tree",
         "agent_herdr_conversation",
         "agent_watch_start",

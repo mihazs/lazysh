@@ -265,6 +265,7 @@ pub fn run() {
                 herdr_stock_input::herdr_agent_input,
                 herdr_stock_input::herdr_agent_screen,
                 zellij_input::zellij_agent_input,
+                zellij_input::zellij_agent_screen,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,
                 transcript_watch::agent_watch_start,

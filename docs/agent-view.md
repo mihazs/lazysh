@@ -487,8 +487,16 @@ The first write failing is a plain refusal; a failure after it, or a lost connec
 and is never resent. The listing and the write are separate host calls, so a pane replaced between them is
 the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
 
-Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
-key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
+A dialog the followed agent has open (Claude Code's or Codex's list dialogs, an AskUserQuestion, a Codex question) is answered from the
+Agent view like on tmux and Herdr. The host reads the agent's own pane with `zellij action dump-screen --pane-id` (`zellij_agent_screen`;
+the terminal shows Zellij's composite screen, so its buffer is not what the dialog card reads), only while the report names the agent as not
+working, and the answer is the keys a person presses sent with `zellij action send-keys --pane-id`: a digit, Up, Down and Enter, which Zellij
+encodes for the cursor-key mode of that pane, or one typed line and its Enter. The pane is listed and proven to run the agent before every
+call, the card reads the screen again between the arrows and Enter, and the report must still name the same session in the same pane.
+
+Limits: a prompt is at most 4,096 bytes (no long paste), the mode key stays in the terminal, a permission request of a Zellij pane is
+answered from the Agents board (the Agent view's approval dock needs the exact-pane binding of #1536), and the pane test reads only the first two words
+of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
 refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
 agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.

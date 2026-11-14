@@ -96,6 +96,7 @@
     "allow-herdr-repository",
     "allow-zellij-action",
     "allow-zellij-agent-input",
+    "allow-zellij-agent-screen",
     "allow-zellij-tabs",
     "allow-generate-identity",
     "allow-inspect-identity",
