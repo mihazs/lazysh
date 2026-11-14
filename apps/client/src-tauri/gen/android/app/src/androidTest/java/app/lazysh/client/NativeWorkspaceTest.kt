@@ -4754,6 +4754,88 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** One raw HTTP/1.0 GET to this device's loopback, or null when the connection is refused (cleartext policy does not apply to a socket). */
+    private fun deviceLoopbackGet(port: Int): String? = try {
+        java.net.Socket().use { socket ->
+            socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 3_000)
+            socket.soTimeout = 10_000
+            socket.getOutputStream().apply { write("GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n".toByteArray(Charsets.US_ASCII)); flush() }
+            socket.getInputStream().bufferedReader(Charsets.UTF_8).readText()
+        }
+    } catch (_: java.net.ConnectException) { null }
+
+    private fun awaitLoopbackRefused(port: Int, stage: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (deviceLoopbackGet(port) != null) {
+            assertTrue("Device loopback port still forwards after $stage", System.nanoTime() < deadline)
+            Thread.sleep(200)
+        }
+    }
+
+    @Test fun ownedSshPreviewForwardsAndTearsDownThroughRealUi() {
+        val name = "Parity preview"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val preview = parity.fixture.getJSONObject("preview")
+            val remote = preview.getInt("listener")
+            val proof = preview.getString("proof")
+            val panel = ".preview-panel"
+            fun clickPreviewButton(label: String) = onWebView().withElement(findElement(Locator.XPATH,
+                "//section[contains(@class,'preview-panel')]//button[@aria-label='$label' or (not(@aria-label) and normalize-space(text())='$label')]"))
+                .perform(webScrollIntoView()).perform(webClick())
+            /** Opens the discovered listener and returns the device loopback port its forward serves. */
+            // Discover and Open are disabled while the panel is busy, and a click on a disabled button does nothing.
+            fun awaitIdle(stage: String) = awaitDocument(scenario, "$stage: preview panel idle", "!document.querySelector('$panel [role=status]')")
+            fun openDiscovered(stage: String): Int {
+                awaitIdle(stage)
+                clickPreviewButton("Discover listeners")
+                awaitDocument(scenario, "$stage: exactly the allowed listener discovered", """
+                    (()=>{const rows=Array.from(document.querySelectorAll('$panel .preview-listeners button'));
+                      return rows.length===1 && rows[0].textContent.includes('127.0.0.1:$remote') && !document.querySelector('$panel [role=status]');})()
+                """)
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel .preview-listeners button")).perform(webScrollIntoView()).perform(webClick())
+                clickPreviewButton("Open preview")
+                val address = "document.querySelector('$panel .tool-bar code')?.textContent"
+                awaitDocument(scenario, "$stage: forward address shown", "/^http:\\/\\/127\\.0\\.0\\.1:[0-9]+\\/$/.test($address||'')")
+                assertEquals("$stage: the tab names the host port", "true", evaluate(scenario,
+                    "document.querySelector('$panel .preview-tabs button[aria-pressed=true]')?.textContent==='Host :$remote'"))
+                val local = evaluate(scenario, "Number(($address).match(/:([0-9]+)\\//)[1])").toInt()
+                assertTrue("$stage: the forward must listen on a valid device port", local in 1..65535)
+                return local
+            }
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("preview"))
+            parity.mark("preview")
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, preview.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("preview"), "127.0.0.1:${parity.port("preview")}")
+            proveOwnedShell(scenario, parity, parity.prompt("preview"), "PREVIEW")
+            sessionView(scenario, "Preview")
+            awaitDocument(scenario, "preview panel", present(panel))
+            replaceNativeText(scenario, "$panel .preview-filter input:not([type=checkbox])", remote.toString())
+            closeSoftKeyboard()
+            val first = openDiscovered("first open")
+            // The page is loaded by the WebView's iframe through the forward; the host listener and sshd both see it.
+            val loaded = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (parity.control("preview").getInt("iframeLoads") < 1) {
+                assertTrue("The iframe never reached the host listener through the forward", System.nanoTime() < loaded)
+                Thread.sleep(200)
+            }
+            val body = deviceLoopbackGet(first)
+            assertTrue("The device loopback forward must serve the host listener's page", body != null && body.contains(proof))
+            val facts = parity.observe("preview")
+            assertTrue("sshd must have opened a direct-tcpip channel to the listener: $facts", parityList(facts, "directTcpipTargets").contains(remote.toString()))
+            clickPreviewButton("Close preview $remote")
+            awaitDocument(scenario, "closed preview leaves no tab", "document.querySelectorAll('$panel .preview-tabs button').length===0")
+            awaitLoopbackRefused(first, "closing the preview")
+            val second = openDiscovered("second open")
+            assertTrue("A new forward must serve the page again", deviceLoopbackGet(second)?.contains(proof) == true)
+            sessionView(scenario, "Terminal")
+            endOwnedConnection(scenario, name)
+            awaitLoopbackRefused(second, "ending the session")
+            println("lazysh parity: a preview was discovered, forwarded to device loopback and loaded, then closed and ended with the session, leaving no forward")
+        }
+    }
+
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
         val fixture = "Instrumentation ${UUID.randomUUID()}"
         val selector = "button[aria-label='Connect to $fixture']"

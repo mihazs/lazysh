@@ -1094,7 +1094,8 @@ jobs:
           retention-days: 3
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion and agent-forwarding
-  # parity cases (#985) on the emulator; separate so their verdict is attributable.
+  # parity cases (#985) and the browser preview forward and teardown case (#994) on the
+  # emulator; separate so their verdict is attributable.
   native-android-ssh-parity:
     needs: changes
     if: needs.changes.outputs.android == 'true'
