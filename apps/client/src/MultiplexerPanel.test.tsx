@@ -7,7 +7,7 @@ import {applyAccessStatus,captureAccess} from './access';
 import type {DesktopMux} from './useDesktopLaunch';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
-const tree = { tmuxAvailable: true, herdrAvailable: false, zellijAvailable: false, sessions: [{ id: '$3', name: 'work', windows: [{ id: '@7', name: 'agent', index: 0, active: true, panes: [{ id: '%9', index: 0, active: true, command: 'claude', path: '/project' }] }] }] };
+const tree = { tmuxAvailable: true, herdrAvailable: false, zellijAvailable: false, sessions: [{ id: '$3', name: 'work', windows: [{ id: '@7', name: 'agent', index: 0, active: true, panes: [{ id: '%9', index: 0, active: true, command: 'claude', path: '/project', width: 80, height: 24, title: 'build' }] }] }] };
 let generation=0;
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked,reason:'',generation:String(++generation),...(locked?{}:{nonce:'a'.repeat(64)})});
@@ -50,6 +50,41 @@ it('targets the stable pane ID and leaves attachment on its own terminal', async
   await waitFor(() => expect(screen.getByRole('button', { name: 'Attach work' }).hasAttribute('disabled')).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Attach work' }));
   await waitFor(() => expect(attach).toHaveBeenCalledWith('work'));
+});
+const tmuxActions = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === 'tmux_action').map(([, args]) => (args as { action: unknown }).action);
+it('closes a pane or session only after a confirmation that names it, and cancelling sends nothing', async () => {
+  vi.mocked(invoke).mockResolvedValue(tree);
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Close %9' }));
+  expect((await screen.findByRole('alertdialog')).textContent).toContain('Close pane %9 (claude in /project)?');
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  expect(tmuxActions()).toEqual([]);
+  fireEvent.click(screen.getByRole('button', { name: 'Close %9' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Close it' }));
+  await waitFor(() => expect(tmuxActions()).toEqual([{ type: 'closePane', target: '%9' }]));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
+  expect(screen.getByRole('alertdialog').textContent).toContain('Close session work?');
+  fireEvent.click(screen.getByRole('button', { name: 'Close it' }));
+  await waitFor(() => expect(tmuxActions()).toEqual([{ type: 'closePane', target: '%9' }, { type: 'closeSession', target: '$3' }]));
+});
+it('renames a pane title and moves its divider by exact id', async () => {
+  vi.mocked(invoke).mockResolvedValue(tree);
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
+  expect((await screen.findByText(/80×24 · build/)).textContent).toContain('/project');
+  fireEvent.click(screen.getByRole('button', { name: 'Rename %9' }));
+  expect(screen.getByLabelText('Name')).toHaveProperty('value', 'build');
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: "ci '$(touch NO)';" } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
+  await waitFor(() => expect(tmuxActions()).toEqual([{ type: 'renamePane', target: '%9', title: "ci '$(touch NO)';" }]));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Move %9 divider left' })).toHaveProperty('disabled', false));
+  for (const direction of ['left', 'right', 'up', 'down']) {
+    fireEvent.click(screen.getByRole('button', { name: `Move %9 divider ${direction}` }));
+    await waitFor(() => expect(tmuxActions().at(-1)).toEqual({ type: 'resizePane', target: '%9', direction, amount: 5 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Move %9 divider left' })).toHaveProperty('disabled', false));
+  }
+  expect(tmuxActions()).toHaveLength(5);
 });
 it('creates a named workspace in the explicit project directory', async () => {
   vi.mocked(invoke).mockResolvedValue(tree);

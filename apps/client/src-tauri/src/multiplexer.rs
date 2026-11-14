@@ -298,7 +298,7 @@ pub async fn multiplexer_sessions(
         .await
 }
 
-const PANE_FORMAT: &str = "#{session_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}";
+const PANE_FORMAT: &str = "#{session_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_width}\t#{pane_height}\t#{pane_title}";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -409,6 +409,9 @@ pub struct MuxPane {
     active: bool,
     command: String,
     path: String,
+    width: u32,
+    height: u32,
+    title: String,
 }
 
 fn id(value: &str, prefix: char) -> Result<()> {
@@ -491,8 +494,9 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
                 "More than 4096 multiplexer panes",
             ));
         }
-        let f = line.split('\t').collect::<Vec<_>>();
-        if f.len() != 11 {
+        // The title is last and program-set, so a stray tab stays inside it instead of shifting the fields.
+        let f = line.splitn(14, '\t').collect::<Vec<_>>();
+        if f.len() != 14 {
             return Err(SshError::new(
                 "invalid_output",
                 "Multiplexer names or paths contain unsupported control characters",
@@ -556,11 +560,26 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
             active: active(f[8])?,
             command: f[9].into(),
             path: f[10].into(),
+            width: number(f[11])?,
+            height: number(f[12])?,
+            title: f[13]
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect(),
         });
     }
     Ok(tree)
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum TmuxAction {
@@ -586,6 +605,21 @@ pub enum TmuxAction {
     },
     SelectPane {
         target: String,
+    },
+    CloseSession {
+        target: String,
+    },
+    ClosePane {
+        target: String,
+    },
+    RenamePane {
+        target: String,
+        title: String,
+    },
+    ResizePane {
+        target: String,
+        direction: ResizeDirection,
+        amount: u32,
     },
     SplitPane {
         target: String,
@@ -654,6 +688,42 @@ pub(crate) fn action_command_for(
         TmuxAction::SelectPane { target } => {
             id(target, '%')?;
             format!("select-pane -t {}", quote(target))
+        }
+        TmuxAction::CloseSession { target } => {
+            id(target, '$')?;
+            format!("kill-session -t {}", quote(target))
+        }
+        TmuxAction::ClosePane { target } => {
+            id(target, '%')?;
+            format!("kill-pane -t {}", quote(target))
+        }
+        TmuxAction::RenamePane {
+            target,
+            title: value,
+        } => {
+            id(target, '%')?;
+            text(value, 200)?;
+            format!("select-pane -t {} -T {}", quote(target), quote(value))
+        }
+        TmuxAction::ResizePane {
+            target,
+            direction,
+            amount,
+        } => {
+            id(target, '%')?;
+            if !(1..=500).contains(amount) {
+                return Err(SshError::new("invalid_target", "Resize by 1 to 500 cells"));
+            }
+            format!(
+                "resize-pane -t {} -{} {amount}",
+                quote(target),
+                match direction {
+                    ResizeDirection::Left => 'L',
+                    ResizeDirection::Right => 'R',
+                    ResizeDirection::Up => 'U',
+                    ResizeDirection::Down => 'D',
+                }
+            )
         }
         TmuxAction::SplitPane {
             target,
@@ -804,14 +874,31 @@ mod tests {
     }
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
-        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\n").unwrap();
+        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\t80\t24\tbuild\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\t40\t24\ta\tb\x1b[31m\n").unwrap();
         assert_eq!(tree.sessions[0].windows[0].panes.len(), 2);
-        assert_eq!(tree.sessions[0].windows[0].panes[1].id, "%5");
+        let panes = &tree.sessions[0].windows[0].panes;
+        assert_eq!(panes[1].id, "%5");
+        assert_eq!(
+            (panes[0].width, panes[0].height, panes[0].title.as_str()),
+            (80, 24, "build")
+        );
+        // A program-set title keeps a stray tab and drops control characters; it never shifts the other fields.
+        assert_eq!((panes[1].width, panes[1].title.as_str()), (40, "ab[31m"));
         assert!(parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nmalformed\n").is_err());
         assert!(parse_tree(
-            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\n"
+            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\t80\t24\t\n"
         )
         .is_err());
+        // The pre-geometry eleven-field rows and a non-numeric size are refused, not guessed.
+        for row in [
+            "$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tzsh\t/work",
+            "$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tzsh\t/work\twide\t24\t",
+        ] {
+            assert!(
+                parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{row}\n")).is_err(),
+                "{row}"
+            );
+        }
     }
     #[test]
     fn real_version_outputs_map_to_support_levels() {
@@ -975,6 +1062,111 @@ mod tests {
         );
     }
     #[test]
+    fn layout_actions_build_one_command_by_exact_id_with_literal_titles() {
+        let command = |action| action_command(&action).unwrap();
+        assert_eq!(
+            command(TmuxAction::ClosePane {
+                target: "%12".into()
+            }),
+            "tmux -u -L 'default' kill-pane -t '%12'"
+        );
+        assert_eq!(
+            command(TmuxAction::CloseSession {
+                target: "$3".into()
+            }),
+            "tmux -u -L 'default' kill-session -t '$3'"
+        );
+        assert_eq!(
+            command(TmuxAction::RenamePane {
+                target: "%1".into(),
+                title: "a'$(touch nope)#{pane_id};".into()
+            }),
+            "tmux -u -L 'default' select-pane -t '%1' -T 'a'\\''$(touch nope)##{pane_id}\\;'"
+        );
+        for (direction, flag) in [
+            (ResizeDirection::Left, 'L'),
+            (ResizeDirection::Right, 'R'),
+            (ResizeDirection::Up, 'U'),
+            (ResizeDirection::Down, 'D'),
+        ] {
+            assert_eq!(
+                command(TmuxAction::ResizePane {
+                    target: "%1".into(),
+                    direction,
+                    amount: 5
+                }),
+                format!("tmux -u -L 'default' resize-pane -t '%1' -{flag} 5")
+            );
+        }
+        let refused = |action| action_command(&action).is_err();
+        for bad in ["", "1", "%", "%1;kill-server", "$1", "@1", "%1 %2", "-a"] {
+            assert!(
+                refused(TmuxAction::ClosePane { target: bad.into() }),
+                "{bad}"
+            );
+            assert!(
+                refused(TmuxAction::RenamePane {
+                    target: bad.into(),
+                    title: "t".into()
+                }),
+                "{bad}"
+            );
+            assert!(
+                refused(TmuxAction::ResizePane {
+                    target: bad.into(),
+                    direction: ResizeDirection::Up,
+                    amount: 1
+                }),
+                "{bad}"
+            );
+        }
+        assert!(refused(TmuxAction::CloseSession {
+            target: "%1".into()
+        }));
+        assert!(refused(TmuxAction::CloseSession {
+            target: "$1;x".into()
+        }));
+        assert!(refused(TmuxAction::RenamePane {
+            target: "%1".into(),
+            title: "".into()
+        }));
+        assert!(refused(TmuxAction::RenamePane {
+            target: "%1".into(),
+            title: "a\nb".into()
+        }));
+        for amount in [0, 501] {
+            assert!(
+                refused(TmuxAction::ResizePane {
+                    target: "%1".into(),
+                    direction: ResizeDirection::Left,
+                    amount
+                }),
+                "{amount}"
+            );
+        }
+    }
+    #[test]
+    fn the_bridge_accepts_only_the_listed_layout_actions_and_directions() {
+        let action = |value| serde_json::from_value::<TmuxAction>(value);
+        assert!(action(
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"left","amount":3})
+        )
+        .is_ok());
+        assert!(action(
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"sideways","amount":3})
+        )
+        .is_err());
+        assert!(action(
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"left","amount":-1})
+        )
+        .is_err());
+        assert!(
+            action(serde_json::json!({"type":"closePane","target":"%1","force":true})).is_err()
+        );
+        assert!(action(serde_json::json!({"type":"renamePane","target":"%1","title":"x"})).is_ok());
+        assert!(action(serde_json::json!({"type":"closeSession","target":"$1"})).is_ok());
+    }
+    #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
     fn real_tmux_lifecycle_and_literal_names() {
         use std::process::Command;
@@ -1056,6 +1248,79 @@ mod tests {
         assert_eq!(
             tree.sessions[0].windows[1].name,
             "new #{session_name} title;"
+        );
+        // Pane title, geometry and close, each read back from the parsed tree.
+        let first = &tree.sessions[0].windows[0];
+        assert_eq!(first.panes.len(), 2);
+        let (left, right) = (first.panes[0].id.clone(), first.panes[1].id.clone());
+        // The earlier zoom is still on: undo it so both panes have their own geometry.
+        run(action_command(&TmuxAction::ZoomPane {
+            target: left.clone(),
+        })
+        .unwrap());
+        run(action_command(&TmuxAction::RenamePane {
+            target: left.clone(),
+            title: "build #{pane_id} 'x';".into(),
+        })
+        .unwrap());
+        let widths = |tree: &MultiplexerTree| {
+            let panes = &tree.sessions[0].windows[0].panes;
+            (panes[0].width, panes[1].width)
+        };
+        let before = read_tree();
+        assert_eq!(
+            before.sessions[0].windows[0].panes[0].title,
+            "build #{pane_id} 'x';"
+        );
+        run(action_command(&TmuxAction::ResizePane {
+            target: left,
+            direction: ResizeDirection::Right,
+            amount: 5,
+        })
+        .unwrap());
+        let (grown, shrunk) = widths(&read_tree());
+        assert_eq!(
+            (grown, shrunk),
+            (widths(&before).0 + 5, widths(&before).1 - 5)
+        );
+        run(action_command(&TmuxAction::ClosePane {
+            target: right.clone(),
+        })
+        .unwrap());
+        let panes = read_tree().sessions[0].windows[0].panes.len();
+        assert_eq!(panes, 1);
+        // A pane that is gone is refused by tmux and nothing else is touched.
+        let again = Command::new("sh")
+            .arg("-c")
+            .arg(
+                action_command(&TmuxAction::ClosePane { target: right })
+                    .unwrap()
+                    .replacen(
+                        "tmux ",
+                        &format!("tmux -f /dev/null -S {} ", quote(socket.to_str().unwrap())),
+                        1,
+                    ),
+            )
+            .env_remove("TMUX")
+            .output()
+            .unwrap();
+        assert!(!again.status.success());
+        let tree = read_tree();
+        assert_eq!(tree.sessions[0].windows[0].panes.len(), 1);
+        let doomed = tree.sessions[0].id.clone();
+        run(action_command(&TmuxAction::CreateSession {
+            name: "second".into(),
+            directory: temp.path().to_str().unwrap().into(),
+        })
+        .unwrap());
+        run(action_command(&TmuxAction::CloseSession { target: doomed }).unwrap());
+        let tree = read_tree();
+        assert_eq!(
+            tree.sessions
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["second"]
         );
     }
 }
