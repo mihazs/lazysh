@@ -30,6 +30,22 @@ describe('newScreenLines', () => {
   });
 });
 
+describe('newScreenLines over arbitrary screens', () => {
+  it('only ever speaks non-blank rows of the new screen, never more than it has, and nothing for an unchanged one', () => {
+    let seed = 7;
+    const next = (limit: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % limit; };
+    const words = ['', '', 'ls', '$ ls', 'ok', 'build', 'done', '  indented'];
+    const screen = () => Array.from({length: 1 + next(40)}, () => words[next(words.length)]!);
+    for (let round = 0; round < 300; round++) {
+      const before = screen(), after = next(3) ? screen() : [...before.slice(1 + next(3)), ...screen().slice(0, 3)];
+      const spoken = newScreenLines(before, after), shown = after.map(row => row.trim()).filter(Boolean);
+      expect(spoken.length).toBeLessThanOrEqual(shown.length);
+      for (const line of spoken) expect(shown).toContain(line);
+      expect(newScreenLines(after, after)).toEqual([]);
+    }
+  });
+});
+
 type FakeScreen = {rows: string[]; cursorY: number; following: boolean; selected: string};
 function fakeAdapter(screen: FakeScreen) {
   const listeners = new Set<(event: TerminalEvent) => void>();
