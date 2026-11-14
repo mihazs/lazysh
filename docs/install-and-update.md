@@ -153,6 +153,35 @@ unsigned does not establish publisher identity. Only proceed after independently
 verifying the source and checksum. A later signed channel must document its
 publisher certificate. Never disable system-wide security protection to install.
 
+### Verify the installer checksum
+
+Save `SHA256SUMS` from the **same release** next to the installer; the
+same-release rule and what a matching hash does not prove are in
+[Manual APK installation and verification](#manual-apk-installation-and-verification).
+In PowerShell, from that folder, set `$name` to the installer you downloaded
+(`lazysh-<version>-windows-x64.exe`) and run:
+
+```powershell
+$name = 'lazysh-1.62.0-windows-x64.exe'
+$entry = @(Get-Content .\SHA256SUMS | Where-Object { $_.EndsWith("  $name") })
+if ($entry.Count -ne 1) { throw "SHA256SUMS must list $name exactly once" }
+$expected = $entry[0].Split(' ')[0]
+$actual = (Get-FileHash -LiteralPath ".\$name" -Algorithm SHA256).Hash
+if ($actual -eq $expected) { "MATCH: $actual" } else { "MISMATCH: expected $expected, got $actual" }
+```
+
+`Get-FileHash` prints upper-case hex and `SHA256SUMS` lower-case; `-eq` ignores
+case, so use it instead of comparing by eye. The `throw` means the saved file is
+not this release's `SHA256SUMS` or `$name` is misspelled.
+
+A **mismatch** means the file is not the one this release published under that
+name: an incomplete or corrupted download, a file or `SHA256SUMS` from a
+different version, or a modified installer. Do not run it. Delete it, download
+the installer and `SHA256SUMS` again from the same release page and repeat. If
+the hashes still differ, do not install; open an issue with the version and both
+hashes, and never include a token. A **match** shows the bytes equal the
+published hash. The installer is unsigned, so it does not show who published it.
+
 ## macOS
 
 Public macOS application packages are currently deferred; use a source build.
