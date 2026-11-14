@@ -2,7 +2,8 @@ import {createRoot} from 'react-dom/client';
 import {MuxPanel} from '../../src/MultiplexerPanel';
 import {muxFixture,herdrFixture,remoteMuxName,remoteMuxError} from '../../src/test/multiplexerFixture';
 
-export function mountMultiplexerHarness() {
+/** `rejectActions` keeps the locale spec's failing tmux action; otherwise tmux actions are recorded and succeed. */
+export function mountMultiplexerHarness({rejectActions=true}:{rejectActions?:boolean}={}) {
   const calls:{command:string;args:unknown}[]=[];
   let complete:(()=>void)|undefined;
   Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async(command:string,args:unknown)=>{
@@ -11,7 +12,7 @@ export function mountMultiplexerHarness() {
     if(command==='multiplexer_sessions')return [{name:remoteMuxName}];
     if(command==='herdr_tree')return herdrFixture;
     if(command==='zellij_action')return new Promise<void>(resolve=>{complete=resolve;});
-    if(command==='tmux_action')throw remoteMuxError;
+    if(command==='tmux_action'){if(rejectActions)throw remoteMuxError;return;}
     throw new Error(`Unexpected fixture command: ${command}`);
   }}});
   const container=document.createElement('div');document.body.replaceChildren(container);

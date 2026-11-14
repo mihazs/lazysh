@@ -281,6 +281,7 @@
 - Keep Compose and the expanded D-pad mutually exclusive so the draft stays editable above a mobile keyboard; switching tools preserves the unsent draft.
 
 - Compact the terminal draft editor, prioritize uploaded attachment paths and explicit use, and guide push setup through relay enrollment. Agents opens Live by default; recorded Activity and setup stay available separately, with pending approvals reachable in both views. Connected sessions, drafts, upload protections and notification consent remain intact.
+- Close, rename and resize tmux panes from the Workspaces panel (#1144, part of #1138). Each pane row shows its size and title and gains **Rename** (the pane title), four arrows that move its divider five cells, and **Close**; each session gains **Close session**. Closing asks first, in a confirmation that names the pane (id, command and directory) or the session, and sends one `kill-pane` or `kill-session` by exact id only when you confirm; Cancel sends nothing. Zellij, Herdr and rmux, and closing a tmux window from this panel, are separate slices of #1144. No defaults change.
 
 - Keep recorded Conversation messages readable in constrained workspaces instead of letting the reading region collapse behind its controls.
 
