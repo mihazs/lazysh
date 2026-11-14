@@ -19,6 +19,7 @@ fn text(value: &str, max: usize) -> Result<String> {
     crate::multiplexer::validate_text(value, max, "Invalid Zellij name or path")?;
     Ok(quote(value))
 }
+const SPLIT_SHELL: &str = r#"exec "${SHELL:-sh}""#;
 fn command(session: &str, action: &ZellijAction) -> Result<String> {
     let session = text(session, 200)?;
     let args = match action {
@@ -43,11 +44,21 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
         ZellijAction::NewPane {
             horizontal,
             directory,
-        } => format!(
-            "new-pane --direction {} --cwd={}",
-            if *horizontal { "right" } else { "down" },
-            text(directory, 4096)?
-        ),
+        } => {
+            let direction = if *horizontal { "right" } else { "down" };
+            let quoted = text(directory, 4096)?;
+            // Zellij 0.45.1 and 0.46.0 apply `--cwd` to a new terminal pane only when it runs a command. The default `.`
+            // stays a plain pane (the session's directory); any other directory runs the user's shell as that command,
+            // through `sh -c` so the remote login shell (fish included) never parses it.
+            if directory == "." {
+                format!("new-pane --direction {direction}")
+            } else {
+                format!(
+                    "new-pane --direction {direction} --cwd={quoted} --close-on-exit -- sh -c {}",
+                    quote(SPLIT_SHELL)
+                )
+            }
+        }
         ZellijAction::ZoomPane => "toggle-fullscreen".into(),
     };
     Ok(format!("zellij --session={session} action {args}"))
@@ -134,6 +145,27 @@ mod tests {
         assert!(command("test", &ZellijAction::GoToTab { index: 0 }).is_err());
         assert!(command("test", &ZellijAction::GoToTab { index: 1001 }).is_err());
         assert_eq!(command("a'$(echo x)", &ZellijAction::NewTab { name: "title;$(echo no)".into(), directory: "/a b".into() }).unwrap(), "zellij --session='a'\\''$(echo x)' action new-tab --name='title;$(echo no)' --cwd='/a b'");
+    }
+    #[test]
+    fn splits_keep_the_directory_literal_and_never_hand_it_to_the_login_shell() {
+        let split = |directory: &str| {
+            command(
+                "s",
+                &ZellijAction::NewPane {
+                    horizontal: false,
+                    directory: directory.into(),
+                },
+            )
+        };
+        assert_eq!(
+            split(".").unwrap(),
+            "zellij --session='s' action new-pane --direction down"
+        );
+        assert_eq!(
+            split("/a b'$(touch nope)").unwrap(),
+            r#"zellij --session='s' action new-pane --direction down --cwd='/a b'\''$(touch nope)' --close-on-exit -- sh -c 'exec "${SHELL:-sh}"'"#
+        );
+        assert!(split("").is_err());
     }
     #[test]
     fn lists_tabs_from_the_json_the_cli_prints_and_refuses_anything_else() {
@@ -403,20 +435,72 @@ mod tests {
                 .ok_or_else(|| format!("active tab has no focused terminal pane: {panes}"))
         };
         let first = wait("initial pane focus", &focused_pane, &|_| true);
+        // Zellij ignores `--cwd` for a plain terminal pane, so a split in a chosen directory (one with a space, unlike
+        // the session's own) is the case that must still start its shell there.
+        let split_directory = temp.path().join("split directory");
+        std::fs::create_dir(&split_directory).unwrap();
+        let split_directory = std::fs::canonicalize(split_directory)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let pane_cwd = |id: u64| {
+            let panes = query("list-panes")?;
+            panes
+                .as_array()
+                .and_then(|panes| {
+                    panes
+                        .iter()
+                        .find(|pane| pane["is_plugin"] == false && pane["id"] == id)
+                })
+                .map(|pane| pane["pane_cwd"].as_str().unwrap_or_default().to_owned())
+                .ok_or_else(|| format!("no terminal pane {id}: {panes}"))
+        };
+        let in_directory =
+            |id: u64, directory: &str| pane_cwd(id).map(|cwd| u64::from(cwd == directory));
         run(command(
             &name,
             &ZellijAction::NewPane {
                 horizontal: true,
-                directory,
+                directory: split_directory.clone(),
             },
         )
         .unwrap());
         let second = wait("new pane focus", &focused_pane, &|id| id != first);
+        wait(
+            "split in the chosen directory",
+            &|| in_directory(second, &split_directory),
+            &|found| found == 1,
+        );
         run(command(&name, &ZellijAction::NextPane).unwrap());
         wait("next pane focus", &focused_pane, &|id| id == first);
         run(command(&name, &ZellijAction::PreviousPane).unwrap());
         wait("previous pane focus", &focused_pane, &|id| id == second);
         run(command(&name, &ZellijAction::ZoomPane).unwrap());
+        // The default `.` adds no directory and no command: Zellij opens a plain pane in the session's directory, not
+        // in the focused pane's (the split directory here).
+        run(command(&name, &ZellijAction::ZoomPane).unwrap());
+        run(command(
+            &name,
+            &ZellijAction::NewPane {
+                horizontal: false,
+                directory: ".".into(),
+            },
+        )
+        .unwrap());
+        let third = wait("default split focus", &focused_pane, &|id| {
+            id != first && id != second
+        });
+        let session_directory = std::fs::canonicalize(temp.path())
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        wait(
+            "default split in the session's directory",
+            &|| in_directory(third, &session_directory),
+            &|found| found == 1,
+        );
         let tabs = run(format!(
             "zellij --session={} action list-tabs --json",
             quote(&name)
