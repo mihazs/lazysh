@@ -6,10 +6,23 @@
   let channel = '';
   let enabled = false;
   let overlay;
+  let marker;
+  let selected;
+  let pending;
+  let removalObserver;
+  let markerFrame;
   const blockedKeys = new Set();
   const clean = (value, limit) => String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit);
   const send = (action, extra = {}) => window.parent.postMessage({ type: 'lazysh-picker', token, channel, action, ...extra }, '*');
   const hide = () => { overlay?.remove(); overlay = undefined; };
+  const clearMarker = () => { cancelAnimationFrame(markerFrame); markerFrame = undefined; removalObserver?.disconnect(); removalObserver = undefined; marker?.remove(); marker = undefined; selected = undefined; pending = undefined; };
+  const positionMarker = () => {
+    if (!marker) return;
+    if (!selected?.isConnected) { clearMarker(); return; }
+    const rect = selected.getBoundingClientRect();
+    for (const [key,value] of Object.entries({ left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` })) if (marker.style[key] !== value) marker.style[key] = value;
+  };
+  const trackMarker = () => { positionMarker(); if (marker) markerFrame = requestAnimationFrame(trackMarker); };
   const eligible = element => element instanceof Element && !element.closest('input,textarea,select,option,script,style,noscript,[contenteditable]') && element !== document.documentElement && element !== document.body;
   const visiblyRendered = element => {
     if (!element.getClientRects().length) return false;
@@ -49,9 +62,18 @@
   window.addEventListener('message', event => {
     const data = event.data;
     if (event.source !== window.parent || !data || data.type !== 'lazysh-picker' || data.token !== token || typeof data.channel !== 'string' || !/^[a-f0-9-]{36}$/.test(data.channel)) return;
-    if (data.action === 'init') { channel = data.channel; enabled = false; hide(); send('ready'); }
+    if (data.action === 'init') { channel = data.channel; enabled = false; hide(); clearMarker(); send('ready'); }
     else if (data.channel === channel && data.action === 'start') { enabled = true; send('started'); }
     else if (data.channel === channel && data.action === 'stop') { enabled = false; hide(); }
+    else if (data.channel === channel && data.action === 'clear') clearMarker();
+    else if (data.channel === channel && data.action === 'mark' && pending?.isConnected) {
+      selected = pending; pending = undefined; marker?.remove(); cancelAnimationFrame(markerFrame); removalObserver?.disconnect();
+      marker = document.createElement('div'); marker.dataset.lazyshSelection = ''; marker.setAttribute('aria-hidden', 'true');
+      Object.assign(marker.style, { position: 'fixed', pointerEvents: 'none', zIndex: '2147483646', outline: '3px solid #1680ec', background: 'rgba(22,128,236,.12)' });
+      document.documentElement.append(marker); trackMarker();
+      removalObserver = new MutationObserver(positionMarker);
+      removalObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
   });
   window.addEventListener('pointermove', event => {
     if (!enabled) return;
@@ -75,7 +97,7 @@
   const select = element => {
     if (!eligible(element)) return;
     const rect = element.getBoundingClientRect();
-    enabled = false; hide();
+    enabled = false; hide(); pending = element;
     send('selection', { path: clean(location.pathname, 4096), selector: selector(element), text: visibleText(element), rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
   };
   window.addEventListener('click', event => {
