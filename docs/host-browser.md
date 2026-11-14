@@ -201,15 +201,44 @@ While Control is off, none of this is sent; the client proves it in a test.
 
 ## Controls
 
-- **Address bar** shows the current URL and takes a new one. A typed string without a scheme becomes `https://`.
-  `javascript:`, `data:`, `file:`, `chrome:` and `view-source:` are refused with a reason.
-- **Tabs** list the pages the browser has, with title and URL as text, and switch, open and close them. Popups
-  a page opens appear as tabs. Only the active tab streams (a background tab produced no frames, measured).
-- **Back, forward, reload, stop** from the browser's own history.
-- **Open on this device**: a loopback URL on the host opens as a [Preview](previews.md); another URL opens in
-  the phone's browser after a confirmation that names the host. A URL is never opened without that tap.
-- **Dialogs**: an alert, confirm, prompt or leave-page question appears as a native dialog with the page's text
-  marked untrusted. **Downloads**, **permission prompts** and **file choosers** are denied and reported once.
+Status: the address bar, tab list, navigation, dialogs and notices below exist as client components
+(`apps/client/src/hostBrowser/`) and are exercised against a real Chromium through the developer prototype. They
+are not in the app yet: the product relay and view
+([#1254](https://github.com/mihazs/lazysh/issues/1254)) carry them to users, and **Open on this device** needs the
+app to supply how a Preview and the device's browser are opened. What each part decides:
+
+- **Address bar** shows the current URL and takes a new one. Only `http`, `https` and `about:blank` open.
+  A typed string without a scheme becomes `https://`, except a loopback host (`localhost`, `127.0.0.1`, `[::1]`),
+  which becomes `http://` because a development server rarely speaks TLS. `host:port` is read as an address, not a
+  scheme. Everything else is refused with a reason that names the scheme: `javascript:`, `data:`, `file:`,
+  `chrome:`, `view-source:`, `blob:`, `ftp:`, `about:` pages other than `about:blank`, and an address that is empty,
+  not a web address, or longer than 2048 characters. The accepted address is the URL as the parser serializes it
+  (internationalized names in their ASCII form), so it is also what the relay's own rule accepts. A refusal stays
+  on screen until the address is edited or the page changes, so that a tap on another control is never moved away
+  by it disappearing.
+- **Tabs** list the pages the browser has (`Target.getTargets`, type `page` only), with title and URL as text, and
+  switch, open and close them. A page the shown page opens (a link with `target="_blank"`, `window.open`) appears as
+  a tab and takes the view, like in a browser; a page nothing in this browser opened does not. Closing the last
+  tab opens a blank one first, so the browser never has no page. Only the shown tab streams (a background tab
+  produced no frames, measured), so switching activates the tab, stops the old frames and starts the new ones.
+  Titles are read again from `Target.getTargets` whenever a page settles: Chromium 157 announces a page's title
+  through `Target.targetInfoChanged` for the first page only, not after a later navigation (measured).
+- **Back, forward, reload, stop** from the browser's own history (`Page.getNavigationHistory`); stop replaces
+  reload while the main frame loads.
+- **Open on this device**: a loopback URL on the host opens as a [Preview](previews.md) (`localhost` is forwarded
+  as IPv4; type `[::1]` for a server bound to IPv6 only; Preview forwards bytes and serves HTTP, so a page served
+  over TLS on a loopback port may not render); another URL opens in the phone's browser after a confirmation that
+  names the host (its ASCII form, so a look-alike name shows as `xn--…`). A URL is never opened without that tap.
+- **Dialogs**: an alert, confirm, prompt or leave-page question appears as a native dialog headed "Text from the
+  page, not from lazysh". Its text is bounded to 1000 characters and shown as text, without control or
+  text-reordering characters; Escape picks the safe answer (OK for an alert, Cancel or Stay otherwise). A dialog the
+  person walks away from by switching tabs is dismissed so that its page is not left blocked.
+- **Downloads** and **file choosers** are denied before any page can use them (`Browser.setDownloadBehavior` with
+  `deny`, `Page.setInterceptFileChooserDialog`), and each attempt is reported once as a notice until it is
+  dismissed, however many times the page tries. Nothing is written on the host or the device (checked by looking
+  for the file under the browser's home and profile). **Permission prompts**: the headless browser has no user
+  interface and answers them itself (a notification request resolved `denied`), but the protocol has no event for
+  them, so they are denied without a notice; reporting them needs a different mechanism and is not done.
 - The browser's own address bar and tab strip are not in the frames (a screencast is the page only), so these
   controls are lazysh's.
 
@@ -317,6 +346,13 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
   needs no new relay, and the measurements show why it is not the shipped transport (no authentication on the
   port, exposure to every local account, a web view that cannot set `Host`, and a Content Security Policy that
   allows no loopback WebSocket in the app).
+- **Controls in the prototype.** The viewer shows the address bar, tab list, navigation buttons, dialogs and notices
+  of [Controls](#controls) above its canvas, driven by the same session. The session sends only the methods in its
+  allow list and applies the relay's parameter rules itself (an address must be one the address bar accepts,
+  downloads are only denied, the file chooser is only intercepted). The Playwright test drives a real headless
+  Chromium through a link, a typed address, a second tab opened by a link, switching, back, forward and reload, the
+  refused schemes, a confirm dialog, a denied download (one notice, no file under the browser's home and profile)
+  and a denied file chooser. It does not cover a real SSH hop, a real device, or the native dialog on a phone.
 
 ## What it will not do
 

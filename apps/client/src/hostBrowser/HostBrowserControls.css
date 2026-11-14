@@ -1,0 +1,22 @@
+.host-browser-controls { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.host-browser-bar { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.host-browser-bar .icon-button { width: 40px; height: 40px; }
+.host-browser-address { flex: 1; min-width: 0; min-height: 40px; font-size: 14px; }
+.host-browser-tabs { display: flex; align-items: stretch; gap: 6px; margin: 0; padding: 0 0 4px; list-style: none; overflow-x: auto; }
+.host-browser-tabs > li { display: flex; flex: 0 0 auto; align-items: center; }
+.host-browser-tab { border: 1px solid var(--theme-border, #3f5032); border-radius: 8px; max-width: 220px; }
+.host-browser-tab[data-active="true"] { border-color: var(--accent); }
+.host-browser-tab-open { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; min-height: 44px; padding: 4px 6px 4px 10px; background: transparent; text-align: left; }
+.host-browser-tab-title, .host-browser-tab-url { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-browser-tab-title { font-size: 13px; }
+.host-browser-tab-url { font-size: 11px; color: var(--muted); }
+.host-browser-tab-close { width: 32px; height: 32px; }
+.host-browser-notices { display: flex; flex-direction: column; gap: 6px; }
+.host-browser-notices:empty { display: none; }
+.host-browser-notices p { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 8px 10px; border: 1px solid var(--theme-border, #3f5032); border-radius: 8px; font-size: 13px; }
+.host-browser-dialog .dialog { max-width: 420px; }
+.host-browser-dialog .dialog > p, .host-browser-dialog .dialog > label { margin: 0 24px 12px; }
+.host-browser-untrusted-caption { color: var(--muted); font-size: 12px; }
+.host-browser-page-text { margin: 0 24px 12px; padding: 8px 10px; border-left: 3px solid var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.host-browser-answer { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.host-browser-dialog .dialog-actions { padding: 0 24px 20px; }

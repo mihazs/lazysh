@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HostBrowserSession, pagePoint, parseEndpoint, specialKey, type Frame, type FrameMetadata } from './cdp';
+import { HostBrowserControls } from './HostBrowserControls';
+import { emptyView, type Blocked, type PageDialog, type View } from './model';
 
 const SIZE = { width: 390, height: 700 };
 type Stats = { frames: number; fps: number; tapToChangeMs: number | null };
@@ -20,6 +22,9 @@ export function HostBrowserDev() {
   const [endpoint, setEndpoint] = useState('');
   const [state, setState] = useState('idle');
   const [stats, setStats] = useState<Stats>({ frames: 0, fps: 0, tapToChangeMs: null });
+  const [view, setView] = useState<View>(emptyView);
+  const [dialog, setDialog] = useState<PageDialog | null>(null);
+  const [blocked, setBlocked] = useState<Blocked[]>([]);
   const canvas = useRef<HTMLCanvasElement>(null);
   const sink = useRef<HTMLTextAreaElement>(null);
   const session = useRef<HostBrowserSession | null>(null);
@@ -48,6 +53,8 @@ export function HostBrowserDev() {
     try {
       setState('connecting');
       session.current = await HostBrowserSession.connect(parseEndpoint(endpoint), () => setState('closed'));
+      // A kind is reported once until it is dismissed, however many times the page tries.
+      session.current.listener = { view: setView, dialog: setDialog, blocked: kind => setBlocked(kinds => (kinds.includes(kind) ? kinds : [...kinds, kind])) };
       await session.current.start(SIZE, (frame, acknowledge) => void draw(frame, acknowledge));
       setState('live');
     } catch (error) { setState(`failed: ${(error as Error).message}`); }
@@ -66,6 +73,8 @@ export function HostBrowserDev() {
     <p><button onClick={() => void connect()} disabled={state === 'connecting' || state === 'live'}>Connect</button>{' '}
       <button onClick={() => sink.current?.focus()} disabled={state !== 'live'}>Keyboard</button></p>
     <p role="status" id="hb-state">{state}</p>
+    {session.current && state === 'live' && <HostBrowserControls view={view} dialog={dialog} blocked={blocked} navigation={session.current}
+      onDismiss={kind => setBlocked(kinds => kinds.filter(item => item !== kind))} />}
     <canvas ref={canvas} aria-label="Host browser page" onPointerDown={press} style={{ width: '100%', border: '1px solid #888', touchAction: 'none' }} width={SIZE.width} height={SIZE.height} />
     <textarea ref={sink} aria-label="Keyboard input" style={{ position: 'absolute', opacity: 0, width: 1, height: 1 }} autoCapitalize="off" autoCorrect="off" spellCheck={false}
       onInput={event => { const text = event.currentTarget.value; event.currentTarget.value = ''; if (text) void session.current?.text(text); }}

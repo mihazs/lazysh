@@ -238,6 +238,23 @@ Not tried against any real profile, by design. What is known:
   The dialog is on the host's screen, so a person away from the host cannot approve it. Not verified here.
 - Firefox has no equivalent of the approval mode.
 
+### Tabs, dialogs, downloads and permissions (Chromium 157, headless, measured 2026-11-14)
+
+- A link with `target="_blank"` produced a `Target.targetCreated` for a page whose `openerId` is the opener and whose
+  title and URL are empty at first, then a `targetInfoChanged` with both.
+- After a navigation made with `Page.navigate`, `Target.targetInfoChanged` carried the new URL and a title made of
+  the URL (`127.0.0.1:port/b`) and no later event carried the real `<title>`; `Target.getTargets` had it. The first
+  page of a browser did get a later event. The prototype reads `Target.getTargets` again when a page settles.
+- The main frame of a page has the id of its target, so `Page.frameStartedLoading` and `frameStoppedLoading` for that
+  id are the page's loading state.
+- With `Browser.setDownloadBehavior` `deny` and `eventsEnabled`, a download link produced `Browser.downloadWillBegin`
+  (and a `Page.downloadWillBegin`), a progress event, and a `canceled` event; the server saw the request, and no file
+  appeared under a private `HOME` or the profile. With `allow` and a download path the file appeared there, so the
+  check can fail. `Page.setInterceptFileChooserDialog` produced `Page.fileChooserOpened` on a click.
+- Headless Chromium answered `Notification.requestPermission()` with `denied` without a prompt. The protocol has
+  `Browser.setPermission`, `grantPermissions` and `resetPermissions` but no event for a permission request, so a
+  denied prompt cannot be reported from the protocol.
+
 ## Prototype measurements
 
 The prototype in the repository (`lazysh-agent host-browser` and the Vite-only viewer, see the
