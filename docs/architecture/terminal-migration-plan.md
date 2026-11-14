@@ -1,6 +1,6 @@
 # Terminal migration plan
 
-Status: **in progress; no rollout stage has started.** The xterm.js backend is the default and the only backend a user can run: the native backend is not registered, so no slice released so far changes terminal behaviour. Step 1 (measurement) and step 2 (contract, no behaviour change) are done, step 3 (shared Rust core) is under way. See [Release progress](#release-progress). Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302). Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [runtime](terminal-runtime.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **in progress; no rollout stage has started.** The xterm.js backend is the default and the only backend a user can run: the native backend is not registered, so no slice released so far changes terminal behaviour. Step 1 (measurement) and step 2 (contract, no behaviour change) are done, step 3 (shared Rust core) is under way. See [Release progress](#release-progress). The gate review of 2026-11-14 found no gate met, so no default changes and nothing is removed: see [Acceptance gates and evidence](#acceptance-gates-and-evidence). Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302). Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [runtime](terminal-runtime.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## Rules that apply to every slice
 
@@ -47,6 +47,8 @@ Also released in v1.61.0: the core lifecycle ([#1501](https://github.com/mihazs/
 
 **Release stage reached: step 2 complete, no rollout stage (S0 to S5) entered.** Nothing outside the xterm backend imports `@xterm/*` (an import-graph test enforces it), the adapter's write path costs nothing measurable on the desktop harness, and the first end-to-end native path (core, renderer and input on Linux desktop and Android) is the next thing to ship; it ships behind the opt-in the day it works, not after the other platforms.
 
+**Gate review of 2026-11-14 (origin/main 842454b7): the stage the evidence supports is "none"; S0's entry gate is not met** because no native backend exists on `main`. The next releasable checkpoint is therefore not a default change but the first end-to-end native path behind the opt-in (S0), and the review lists what each later stage still lacks in [Acceptance gates and evidence](#acceptance-gates-and-evidence).
+
 ## Rollout stages
 
 ```mermaid
@@ -69,6 +71,62 @@ flowchart LR
 
 Every stage is reversible by the user-visible preference and a build-time kill switch; the registry records why a backend was or was not chosen ([adapter](terminal-adapter.md#backend-registry-and-selection)).
 
+## Acceptance gates and evidence
+
+A default may change, and xterm.js may be removed, only when the gates below are met on the platform in question. This is the checklist behind the stage table above, mirrored in [epic #1302](https://github.com/mihazs/lazysh/issues/1302) and re-run at every stage decision. How to read it:
+
+- **Evidence counts only if it is on `main`.** An open pull request or a local branch is listed as where the work is, not as a result.
+- **Not measured is not met.** A host microbenchmark does not stand in for a device, and a desktop Chromium baseline does not stand in for an Android WebView.
+- A gate is **Met** only when its row says so with evidence; **Partly** means a real, merged part exists; **Not met** and **Not measured** block the stage.
+
+The review below was taken on 2026-11-14 at `origin/main` 842454b7. What was run that day (Linux x86_64, no Android device, no Apple or Windows host): the client Vitest files for the adapter, registry, import boundary, Herdr navigation cells, links, touch selection, palette and the `src/xterm` modules (9 files, 76 tests, all passing), and `git grep` over `apps` and `packages`. The Rust suites run in the `herdr-native` CI job (Zig), which passed on [#1453](https://github.com/mihazs/lazysh/pull/1453) and [#1501](https://github.com/mihazs/lazysh/pull/1501); they were not re-run locally. The Playwright terminal specs exist only for xterm.js (there is no native backend to run them against) and were not re-run for this review.
+
+| Gate | Requirement (source) | Evidence at 842454b7 | Status | Where it is tracked |
+| --- | --- | --- | --- | --- |
+| G1 | The native backend passes the contract suite, so both backends are held to the same behaviour (S0 entry; [#1305](https://github.com/mihazs/lazysh/issues/1305)) | `terminalAdapter.contract.ts` has 23 cases and one caller, `xtermTerminalAdapter.test.ts`. No `NativeTerminalAdapter` exists on `main`. | **Not met** | [#1321](https://github.com/mihazs/lazysh/issues/1321); PR [#1630](https://github.com/mihazs/lazysh/pull/1630) runs the unchanged suite against a headless xterm stand-in for the core, not the real core |
+| G2 | Native code reaches users only through the opt-in, the developer override and the kill switch (S0, [#1342](https://github.com/mihazs/lazysh/issues/1342)) | The registry registers xterm only (`terminalBackends.ts`). The core is built behind the optional `native-terminal` Cargo feature, which no workflow, script or release build enables. There is no setting and no kill switch; the build-time kill switch and the mid-session switch are on a local branch waiting for #1630. | **Not met**: there is nothing a user could select | [#1342](https://github.com/mihazs/lazysh/issues/1342) |
+| G3 | VT conformance parity (PRD terminal features; [#1314](https://github.com/mihazs/lazysh/issues/1314)) | The core has 94 Rust tests (conformance 35, keys 6, mosh 20, process 1, renderer 19, session 13), green in `herdr-native`. They pin the core to expectations and to a captured xterm.js column for keys; the cross-engine corpus that replays the same fixtures through both engines and registers every divergence is not on `main`. | **Partly** | PR [#1556](https://github.com/mihazs/lazysh/pull/1556) |
+| G4 | Unicode, CJK, emoji, grapheme and font fallback render correctly (PRD; [#1325](https://github.com/mihazs/lazysh/issues/1325)) | The core's cell model has tests for wide cells, combining marks and ZWJ emoji, and the CPU reference renderer has golden images for them. No shipped renderer shapes text or falls back across fonts. | **Not met** | [#1324](https://github.com/mihazs/lazysh/issues/1324) (PR [#1615](https://github.com/mihazs/lazysh/pull/1615)), [#1325](https://github.com/mihazs/lazysh/issues/1325) |
+| G5 | Key, mouse, paste and reply encoding equals what xterm.js sends, wired to the transport ([#1316](https://github.com/mihazs/lazysh/issues/1316)) | Key encoding is compared with captured xterm.js 5.5.0 output (`keys.rs`, [#1471](https://github.com/mihazs/lazysh/pull/1471)); mouse encodings are pinned to the specification, not to xterm.js (the test says so); the Rust write path to the transport and platform key parity are open. | **Partly** | PRs [#1607](https://github.com/mihazs/lazysh/pull/1607), [#1653](https://github.com/mihazs/lazysh/pull/1653) |
+| G6 | IME composition and Android soft and hardware keyboards, with Gboard and SwiftKey, without duplicated or corrupt commits (PRD input; [#1328](https://github.com/mihazs/lazysh/issues/1328)) | xterm.js has `terminal-ime.spec.ts` and `terminal-swiftkey.spec.ts`. Nothing exists for the native surface; the Android proof of concept lists IME, Gboard and SwiftKey as not covered. | **Not met** | [#1328](https://github.com/mihazs/lazysh/issues/1328) (no code yet) |
+| G7 | Selection, search, links and OSC 52 consent match xterm.js (PRD; [#1320](https://github.com/mihazs/lazysh/issues/1320)) | xterm.js has `terminal-selection.spec.ts` and `terminal-clipboard.spec.ts`. The core's selection and link slices are on local branches only. | **Not met** | [#1320](https://github.com/mihazs/lazysh/issues/1320), [#1334](https://github.com/mihazs/lazysh/issues/1334) |
+| G8 | Screen-reader access, or a tested refusal of native while a screen reader is active (PRD; [#1329](https://github.com/mihazs/lazysh/issues/1329), [#1335](https://github.com/mihazs/lazysh/issues/1335)) | Nothing on `main`. The Android proof of concept showed that a virtual accessibility node can be found by UiAutomator; TalkBack was never run. | **Not met** | PR [#1648](https://github.com/mihazs/lazysh/pull/1648) (mirror and refusal rule, not mounted by any backend) |
+| G9 | Mosh canonical resize works on the native path ([#1317](https://github.com/mihazs/lazysh/issues/1317)) | The core applies display frames as a top-anchored resize without reflow ([#1453](https://github.com/mihazs/lazysh/pull/1453): 20 tests on the `mosh-resize-frames.json` fixture the xterm.js `mosh-resize` spec also uses). No native session is connected to a Mosh transport; the spec runs on xterm.js only. | **Partly** | [#1317](https://github.com/mihazs/lazysh/issues/1317) |
+| G10 | Herdr navigation cells and taps work from core state ([#1318](https://github.com/mihazs/lazysh/issues/1318)) | `herdrNavigationCells.test.ts` and the `herdr-switch-tap` spec run on xterm.js only. Row inspection in the core is open. | **Not met** | PR [#1581](https://github.com/mihazs/lazysh/pull/1581) |
+| G11 | No silent byte loss, reordering or unbounded buffer on the native data path (PRD reliability; [#1315](https://github.com/mihazs/lazysh/issues/1315), [#1319](https://github.com/mihazs/lazysh/issues/1319)) | The pooled session service, the SSH, Mosh, ET and local PTY bridge with credit after VT processing ([#1447](https://github.com/mihazs/lazysh/pull/1447)) and the core lifecycle ([#1501](https://github.com/mihazs/lazysh/pull/1501)) are merged and tested with synthetic transports. Verification against real OpenSSH, mosh-server and ET servers is open. | **Partly** | PR [#1564](https://github.com/mihazs/lazysh/pull/1564) |
+| G12 | A renderer is decided by measurement and a working one exists on a platform surface ([#1323](https://github.com/mihazs/lazysh/issues/1323), [#1327](https://github.com/mihazs/lazysh/issues/1327)) | [ADR 0001](adr-0001-terminal-runtime.md) is still Proposed. The shootout has host and Waydroid microbenchmarks and no native text rendering on a device. The Android surface host and the wgpu renderer crate are open. | **Not met** | PRs [#1628](https://github.com/mihazs/lazysh/pull/1628), [#1615](https://github.com/mihazs/lazysh/pull/1615) |
+| G13 | Composition gate passed on a physical Android device (S1 entry; [#1310](https://github.com/mihazs/lazysh/issues/1310), [#1327](https://github.com/mihazs/lazysh/issues/1327)) | [Android proof of concept](android-surface-composition-poc.md): provisionally passed on an emulator with a software GPU only; Waydroid timings are not a device. No physical device has been used. | **Not met** (needs a physical device) | [#1310](https://github.com/mihazs/lazysh/issues/1310) |
+| G14 | Performance not worse than the recorded baseline, and the provisional targets met or the device keeps xterm.js (S3; PRD targets; [#1340](https://github.com/mihazs/lazysh/issues/1340)) | The baseline is headless desktop Chromium. Native figures are host and Waydroid microbenchmarks. No Android device or WebView figure exists for either side; the same-workload native-versus-xterm comparison is open. | **Not measured** | [#1303](https://github.com/mihazs/lazysh/issues/1303) (Android runner), [#1337](https://github.com/mihazs/lazysh/issues/1337) to [#1340](https://github.com/mihazs/lazysh/issues/1340), PR [#1678](https://github.com/mihazs/lazysh/pull/1678) |
+| G15 | Memory not worse than the baseline across 5 and 10 sessions (S3; [#1338](https://github.com/mihazs/lazysh/issues/1338)) | Baseline: about 0.8 to 1.2 MiB JS heap and 7 to 8 MiB renderer resident memory per background xterm session on desktop. The core has a per-session memory microbenchmark on the host; no end-to-end comparison. | **Not measured** | [#1338](https://github.com/mihazs/lazysh/issues/1338) |
+| G16 | Energy at least 20% lower on matched workloads and near-zero idle activity on a device (PRD targets) | Nothing measured for either engine on a device. | **Not measured** | [#1340](https://github.com/mihazs/lazysh/issues/1340) |
+| G17 | The performance gates are enforced in CI ([#1341](https://github.com/mihazs/lazysh/issues/1341)) | Not on `main`. | **Not met** | PR [#1672](https://github.com/mihazs/lazysh/pull/1672) (held) |
+| G18 | Rollback tested: the preference or kill switch returns new sessions to xterm.js, and a mid-session switch restores screen, cursor and modes (S2 exit; [#1342](https://github.com/mihazs/lazysh/issues/1342)) | The rollback is documented below; neither the preference nor the kill switch exists on `main`, so nothing could be tested. | **Not met** | [#1342](https://github.com/mihazs/lazysh/issues/1342) |
+| G19 | Each other platform passes its own composition, input, accessibility and benchmark gates (S4; [#1330](https://github.com/mihazs/lazysh/issues/1330) to [#1336](https://github.com/mihazs/lazysh/issues/1336)) | iOS has no proof of concept ([#1311](https://github.com/mihazs/lazysh/issues/1311)); Linux has an open composition proof of concept; Windows and macOS have nothing. No Apple or Windows hardware is available to the authors, so those two can be validated by CI only, and CI cannot show a composition result or an accessibility behaviour. | **Not met** | PR [#1674](https://github.com/mihazs/lazysh/pull/1674); the rest of the list |
+| G20 | xterm.js is replaced on every shipping platform that used it (S5; [#1343](https://github.com/mihazs/lazysh/issues/1343)) | Every platform still uses xterm.js; it is the only backend. | **Not met** | [#1343](https://github.com/mihazs/lazysh/issues/1343) |
+
+**Verdict.** G1, G2, G6, G7, G8, G10, G12, G13, G17, G18, G19 and G20 are not met; G14, G15 and G16 are not measured; G3, G5, G9 and G11 are partly met in the core only. No stage is entered. Consequently the Android default stays xterm.js, no platform's default changes, and neither the xterm.js backend nor its workarounds may be removed. The first stage reachable is S0, and it needs G1 and G2: the native adapter registered behind the opt-in, the developer override and the kill switch.
+
+### What each stage still needs
+
+| Stage | Blocked by |
+| --- | --- |
+| S0 developer only | G1, G2 (and the conformance divergences of G3 reviewed) |
+| S1 internal Android | G13 on a physical device, G6 started with Gboard and SwiftKey, G12 on a device, G14 first figures |
+| S2 Android opt-in | G5 to G11 and G18 |
+| S3 Android default | G14, G15, G16 on the supported device set, or that device keeps xterm.js; ADR 0001 moved to Accepted |
+| S4 other platforms | G19 per platform |
+| S5 removal | G20, and the inventory below |
+
+### What removing xterm.js would touch ([#1343](https://github.com/mihazs/lazysh/issues/1343))
+
+Counted at 842454b7, so the removal is a defined change and not a surprise:
+
+- **Runtime dependencies:** `@xterm/xterm` 5.5.0 and `@xterm/addon-fit`.
+- **Modules:** `apps/client/src/xterm/` (links, Mosh resize, renderer candidates, selection, styles, terminal, bold colour, fit, IME), `xtermTerminalAdapter.ts`, `xtermOptions.ts` and their tests. `xtermImportBoundary.test.ts` then asserts that nothing imports `@xterm/*` at all.
+- **Tests that read xterm.js's DOM:** 43 files under `apps/client/e2e` match `.xterm` or `xterm-` (counted with `git grep -l -E '\.xterm|xterm-' -- e2e`). Each needs a native-surface equivalent or an adapter-level probe before the backend goes, otherwise the removal deletes the coverage it relies on.
+- **The recorded baseline and the xterm.js comparisons.** The baseline harness (`apps/client/bench/terminalBench.ts`) and several test fixtures under `e2e/fixtures` import `src/xterm/terminal` and the adapter, and the cross-engine comparisons use xterm.js 5.5.0 as their oracle. The dev-only dependencies `@xterm/headless` (`bench/wasmVt.mjs`), `@xterm/addon-webgl` and `@xterm/addon-canvas` (`src/xterm/rendererCandidates.ts`) serve the shootout. Removing the backend from the product must not silently remove the means to reproduce the baseline that [Acceptance of a candidate](terminal-benchmarks.md#acceptance-of-a-candidate) compares against: either keep xterm.js as a dev-only oracle, or archive the harness at a pinned commit with its procedure before the removal.
+- **Bundle size** (the one measurement #1343 asks for) has not been taken; it needs a before and after build.
+
 ## Switching implementations
 
 xterm and Ghostty state are not losslessly transferable. Therefore:
@@ -80,6 +138,8 @@ xterm and Ghostty state are not losslessly transferable. Therefore:
 ## Rollback
 
 Switching the preference to xterm.js (or the kill switch) returns to the unchanged backend for new sessions. Steps 2 and 3 add code paths but do not alter the xterm path, so reverting a native slice does not affect users who never enabled it. User data and host state are untouched by any slice.
+
+The preference and the kill switch are not built yet ([gate G18](#acceptance-gates-and-evidence)); until they are, the rollback is that no build lets anyone select native. After a default flip (S3), the rollback is the preference and the kill switch, both of which must have been exercised before the flip. After the xterm.js backend is removed (S5) neither can return users to it, so the removal is one revertable pull request merged only after at least one release has shipped native as the default on every platform it covers, and the previous release (which still contains xterm.js) stays installable as the documented way back.
 
 ## Release policy
 
