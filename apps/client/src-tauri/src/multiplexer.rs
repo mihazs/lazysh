@@ -28,6 +28,42 @@ pub(crate) fn tmux_arg(value: &str) -> String {
     quote(&tmux_word(value))
 }
 
+/// The server-scoped user option that names one tmux server instance. tmux reuses `$0` and `%0` after a server restart,
+/// so a close, rename or resize carries the token its confirmation was read under and tmux itself refuses it on a
+/// replacement server (#2044). The token is random per read and set only when unset (`set-option -o`), so concurrent
+/// reads converge and a replacement server, which never saw it, differs.
+const SERVER_TOKEN: &str = "@lazysh_server";
+fn server_token(value: &str) -> Result<&str> {
+    if value.len() == 32 && value.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        Ok(value)
+    } else {
+        Err(SshError::new("invalid_target", "Invalid tmux server identity"))
+    }
+}
+fn fresh_server_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+/// One tmux command string, the words quoted for tmux's own parser (single quotes, `#` doubled for formats).
+fn tmux_command_string(words: &[&str]) -> String {
+    words
+        .iter()
+        .map(|word| format!("'{}'", word.replace('#', "##").replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+/// Runs `inner` only on the tmux server that carries `token`; on any other it fails with "can't find pane" and does
+/// nothing. The check and the command are one tmux invocation, so a server replaced in between cannot be targeted.
+fn fenced(token: &str, inner: &[&str]) -> Result<Vec<String>> {
+    server_token(token)?;
+    Ok(vec![
+        "if-shell".into(),
+        "-F".into(),
+        format!("#{{==:#{{{SERVER_TOKEN}}},{token}}}"),
+        tmux_command_string(inner),
+        "select-pane -t '%lazysh-stale-server'".into(),
+    ])
+}
+
 const HERDR_SESSIONS: &str = "herdr session list --json";
 
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {
@@ -428,7 +464,7 @@ pub async fn multiplexer_sessions(
         .await
 }
 
-const PANE_FORMAT: &str = "#{session_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}";
+const PANE_FORMAT: &str = "#{session_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{@lazysh_server}\t#{pane_width}\t#{pane_height}\t#{pane_title}";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -437,6 +473,9 @@ pub struct MultiplexerTree {
     herdr_available: bool,
     zellij_available: bool,
     tools: Vec<Tool>,
+    /// The identity of the tmux server these rows came from (see `SERVER_TOKEN`); destructive actions carry it back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_token: Option<String>,
     sessions: Vec<MuxSession>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -568,6 +607,9 @@ pub struct MuxPane {
     active: bool,
     command: String,
     path: String,
+    width: u32,
+    height: u32,
+    title: String,
 }
 
 fn id(value: &str, prefix: char) -> Result<()> {
@@ -624,7 +666,7 @@ fn discovery_command(
     positive_unix: bool,
 ) -> String {
     let tmux = server.prefix();
-    format!("{}; {}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), herdr_probe(backend, positive_unix), probe("zellij", "--version"), quote(PANE_FORMAT))
+    format!("{}; {}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} set-option -s -o -q {SERVER_TOKEN} {} && {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), herdr_probe(backend, positive_unix), probe("zellij", "--version"), fresh_server_token(), quote(PANE_FORMAT))
 }
 
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
@@ -655,6 +697,7 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
         herdr_available,
         zellij_available,
         tools,
+        server_token: None,
         sessions: Vec::new(),
     };
     for (index, line) in lines.enumerate() {
@@ -664,8 +707,9 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
                 "More than 4096 multiplexer panes",
             ));
         }
-        let f = line.split('\t').collect::<Vec<_>>();
-        if f.len() != 11 {
+        // The title is last and program-set, so a stray tab stays inside it instead of shifting the fields.
+        let f = line.splitn(15, '\t').collect::<Vec<_>>();
+        if f.len() != 15 {
             return Err(SshError::new(
                 "invalid_output",
                 "Multiplexer names or paths contain unsupported control characters",
@@ -674,6 +718,18 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
         id(f[0], '$')?;
         id(f[2], '@')?;
         id(f[6], '%')?;
+        // Every row of one read names the same server; an empty token means none could be set.
+        if !f[11].is_empty() {
+            server_token(f[11])?;
+        }
+        if index == 0 {
+            tree.server_token = (!f[11].is_empty()).then(|| f[11].to_owned());
+        } else if tree.server_token.as_deref().unwrap_or("") != f[11] {
+            return Err(SshError::new(
+                "invalid_output",
+                "Inconsistent tmux server identity",
+            ));
+        }
         let number = |value: &str| {
             value
                 .parse::<u32>()
@@ -729,11 +785,26 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
             active: active(f[8])?,
             command: f[9].into(),
             path: f[10].into(),
+            width: number(f[12])?,
+            height: number(f[13])?,
+            title: f[14]
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect(),
         });
     }
     Ok(tree)
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum TmuxAction {
@@ -762,6 +833,26 @@ pub enum TmuxAction {
     },
     SelectPane {
         target: String,
+    },
+    // The four below carry the `serverToken` of the tree the person acted on (see `SERVER_TOKEN`).
+    CloseSession {
+        target: String,
+        server: String,
+    },
+    ClosePane {
+        target: String,
+        server: String,
+    },
+    RenamePane {
+        target: String,
+        title: String,
+        server: String,
+    },
+    ResizePane {
+        target: String,
+        direction: ResizeDirection,
+        amount: u32,
+        server: String,
     },
     SplitPane {
         target: String,
@@ -866,6 +957,44 @@ pub(crate) fn action_cmd(
                 word(target),
             ]
         }
+        TmuxAction::CloseSession { target, server } => {
+            id(target, '$')?;
+            fenced(server, &["kill-session", "-t", target])?
+        }
+        TmuxAction::ClosePane { target, server } => {
+            id(target, '%')?;
+            fenced(server, &["kill-pane", "-t", target])?
+        }
+        TmuxAction::RenamePane {
+            target,
+            title: value,
+            server,
+        } => {
+            id(target, '%')?;
+            text(value, 200)?;
+            fenced(server, &["select-pane", "-t", target, "-T", value])?
+        }
+        TmuxAction::ResizePane {
+            target,
+            direction,
+            amount,
+            server,
+        } => {
+            id(target, '%')?;
+            if !(1..=500).contains(amount) {
+                return Err(SshError::new("invalid_target", "Resize by 1 to 500 cells"));
+            }
+            let flag = match direction {
+                ResizeDirection::Left => "-L",
+                ResizeDirection::Right => "-R",
+                ResizeDirection::Up => "-U",
+                ResizeDirection::Down => "-D",
+            };
+            fenced(
+                server,
+                &["resize-pane", "-t", target, flag, &amount.to_string()],
+            )?
+        }
         TmuxAction::SplitPane {
             target,
             horizontal,
@@ -937,6 +1066,11 @@ async fn local_discovery(
             .await?
             .is_some()
     {
+        host.run(
+            access,
+            &server.cmd(&["set-option", "-s", "-o", "-q", SERVER_TOKEN, &fresh_server_token()]),
+        )
+        .await?;
         let panes = server.cmd(&["list-panes", "-a", "-F", PANE_FORMAT]);
         output.push_str(&host.run(access, &panes).await?);
     }
@@ -1129,14 +1263,51 @@ mod tests {
     }
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
-        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\n").unwrap();
+        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\t0123456789abcdef0123456789abcdef\t80\t24\tbuild\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\t0123456789abcdef0123456789abcdef\t40\t24\ta\tb\x1b[31m\n").unwrap();
+        assert_eq!(tree.server_token.as_deref(), Some("0123456789abcdef0123456789abcdef"));
         assert_eq!(tree.sessions[0].windows[0].panes.len(), 2);
-        assert_eq!(tree.sessions[0].windows[0].panes[1].id, "%5");
+        let panes = &tree.sessions[0].windows[0].panes;
+        assert_eq!(panes[1].id, "%5");
+        assert_eq!(
+            (panes[0].width, panes[0].height, panes[0].title.as_str()),
+            (80, 24, "build")
+        );
+        // A program-set title keeps a stray tab and drops control characters; it never shifts the other fields.
+        assert_eq!((panes[1].width, panes[1].title.as_str()), (40, "ab[31m"));
         assert!(parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nmalformed\n").is_err());
         assert!(parse_tree(
-            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\n"
+            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\t\t80\t24\t\n"
         )
         .is_err());
+        // One read names one server: a differing or malformed token is refused, an empty one means none was set.
+        let row = |token: &str, pane: &str| {
+            format!("$0\twork\t@2\t0\tagent\t1\t{pane}\t0\t1\tzsh\t/work\t{token}\t80\t24\tt\n")
+        };
+        let read = |rows: String| {
+            parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{rows}"))
+        };
+        let good = "0123456789abcdef0123456789abcdef";
+        assert!(read(row("", "%4")).unwrap().server_token.is_none());
+        assert!(read(row(good, "%4") + &row("fedcba9876543210fedcba9876543210", "%5")).is_err());
+        assert!(read(row(good, "%4") + &row("", "%5")).is_err());
+        for bad in [
+            "short",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcde'",
+        ] {
+            assert!(read(row(bad, "%4")).is_err(), "{bad}");
+        }
+        // The pre-geometry eleven-field rows and a non-numeric size are refused, not guessed.
+        for row in [
+            "$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tzsh\t/work",
+            "$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tzsh\t/work\t80\t24\tbuild",
+            "$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tzsh\t/work\t\twide\t24\t",
+        ] {
+            assert!(
+                parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{row}\n")).is_err(),
+                "{row}"
+            );
+        }
     }
     #[test]
     fn real_version_outputs_map_to_support_levels() {
@@ -1479,6 +1650,179 @@ mod tests {
             );
         }
     }
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    fn token() -> String {
+        TOKEN.into()
+    }
+    /// What the shell hands tmux: the fence, the inner command quoted for tmux's parser, and the stale-server error.
+    fn fence(inner: &str) -> String {
+        format!(
+            "tmux -u -L default if-shell -F {} {} {}",
+            quote(&format!("#{{==:#{{@lazysh_server}},{TOKEN}}}")),
+            quote(inner),
+            quote("select-pane -t '%lazysh-stale-server'")
+        )
+    }
+    #[test]
+    fn layout_actions_run_only_on_the_server_the_confirmation_was_read_from() {
+        let command = |action| action_command(&action).unwrap();
+        assert_eq!(
+            command(TmuxAction::ClosePane {
+                target: "%12".into(),
+                server: token()
+            }),
+            fence("'kill-pane' '-t' '%12'")
+        );
+        assert_eq!(
+            command(TmuxAction::CloseSession {
+                target: "$3".into(),
+                server: token()
+            }),
+            fence("'kill-session' '-t' '$3'")
+        );
+        // The title is quoted for tmux's own parser inside the fence: no substitution, no second command, one format level.
+        assert_eq!(
+            command(TmuxAction::RenamePane {
+                target: "%1".into(),
+                title: "a'$(touch nope)#{pane_id};".into(),
+                server: token()
+            }),
+            fence("'select-pane' '-t' '%1' '-T' 'a'\\''$(touch nope)##{pane_id};'")
+        );
+        for (direction, flag) in [
+            (ResizeDirection::Left, 'L'),
+            (ResizeDirection::Right, 'R'),
+            (ResizeDirection::Up, 'U'),
+            (ResizeDirection::Down, 'D'),
+        ] {
+            assert_eq!(
+                command(TmuxAction::ResizePane {
+                    target: "%1".into(),
+                    direction,
+                    amount: 5,
+                    server: token()
+                }),
+                fence(&format!("'resize-pane' '-t' '%1' '-{flag}' '5'"))
+            );
+        }
+        let refused = |action| action_command(&action).is_err();
+        for bad in ["", "1", "%", "%1;kill-server", "$1", "@1", "%1 %2", "-a"] {
+            assert!(
+                refused(TmuxAction::ClosePane {
+                    target: bad.into(),
+                    server: token()
+                }),
+                "{bad}"
+            );
+            assert!(
+                refused(TmuxAction::RenamePane {
+                    target: bad.into(),
+                    title: "t".into(),
+                    server: token()
+                }),
+                "{bad}"
+            );
+            assert!(
+                refused(TmuxAction::ResizePane {
+                    target: bad.into(),
+                    direction: ResizeDirection::Up,
+                    amount: 1,
+                    server: token()
+                }),
+                "{bad}"
+            );
+        }
+        // A missing, short, upper-case or quote-carrying token never reaches tmux.
+        for bad in [
+            "",
+            "abc",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcde'",
+            "0123456789abcdef0123456789abcdef;",
+        ] {
+            assert!(
+                refused(TmuxAction::ClosePane {
+                    target: "%1".into(),
+                    server: bad.into()
+                }),
+                "{bad}"
+            );
+            assert!(
+                refused(TmuxAction::CloseSession {
+                    target: "$1".into(),
+                    server: bad.into()
+                }),
+                "{bad}"
+            );
+        }
+        assert!(refused(TmuxAction::CloseSession {
+            target: "%1".into(),
+            server: token()
+        }));
+        assert!(refused(TmuxAction::CloseSession {
+            target: "$1;x".into(),
+            server: token()
+        }));
+        assert!(refused(TmuxAction::RenamePane {
+            target: "%1".into(),
+            title: "".into(),
+            server: token()
+        }));
+        assert!(refused(TmuxAction::RenamePane {
+            target: "%1".into(),
+            title: "a\nb".into(),
+            server: token()
+        }));
+        for amount in [0, 501] {
+            assert!(
+                refused(TmuxAction::ResizePane {
+                    target: "%1".into(),
+                    direction: ResizeDirection::Left,
+                    amount,
+                    server: token()
+                }),
+                "{amount}"
+            );
+        }
+    }
+    #[test]
+    fn the_bridge_accepts_only_the_listed_layout_actions_and_directions() {
+        let action = |value| serde_json::from_value::<TmuxAction>(value);
+        let server = TOKEN;
+        assert!(action(
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"left","amount":3,"server":server})
+        )
+        .is_ok());
+        assert!(action(
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"sideways","amount":3,"server":server})
+        )
+        .is_err());
+        assert!(action(
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"left","amount":-1,"server":server})
+        )
+        .is_err());
+        assert!(action(
+            serde_json::json!({"type":"closePane","target":"%1","server":server,"force":true})
+        )
+        .is_err());
+        // An action without the server identity cannot be built at all.
+        for missing in [
+            serde_json::json!({"type":"closePane","target":"%1"}),
+            serde_json::json!({"type":"closeSession","target":"$1"}),
+            serde_json::json!({"type":"renamePane","target":"%1","title":"x"}),
+            serde_json::json!({"type":"resizePane","target":"%1","direction":"left","amount":3}),
+        ] {
+            assert!(action(missing.clone()).is_err(), "{missing}");
+        }
+        assert!(action(
+            serde_json::json!({"type":"renamePane","target":"%1","title":"x","server":server})
+        )
+        .is_ok());
+        assert!(
+            action(serde_json::json!({"type":"closeSession","target":"$1","server":server}))
+                .is_ok()
+        );
+    }
     #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
     fn real_tmux_lifecycle_and_literal_names() {
@@ -1498,6 +1842,8 @@ mod tests {
         let run =
             |command: String| lazysh_common::test_support::successful_output(&mut scoped(command));
         let read_tree = || {
+            // As a discovery read does: name the server, then list its panes.
+            run(format!("tmux set-option -s -o -q {SERVER_TOKEN} {}", fresh_server_token()));
             let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
             parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
         };
@@ -1638,6 +1984,138 @@ mod tests {
         assert!(!history.truncated);
         assert!(history.text.lines().any(|line| line == "1"));
         assert!(history.lines >= 5000);
+        // Pane title, geometry and close, each read back from the parsed tree.
+        let tree = read_tree();
+        let live = || read_tree().server_token.expect("the server carries its token");
+        let first = &tree.sessions[0].windows[0];
+        assert_eq!(first.panes.len(), 2);
+        let (left, right) = (first.panes[0].id.clone(), first.panes[1].id.clone());
+        // The earlier zoom is still on: undo it so both panes have their own geometry.
+        run(action_command(&TmuxAction::ZoomPane {
+            target: left.clone(),
+        })
+        .unwrap());
+        run(action_command(&TmuxAction::RenamePane {
+            target: left.clone(),
+            title: "build #{pane_id} 'x';$(touch nope)".into(),
+            server: live(),
+        })
+        .unwrap());
+        let widths = |tree: &MultiplexerTree| {
+            let panes = &tree.sessions[0].windows[0].panes;
+            (panes[0].width, panes[1].width)
+        };
+        let before = read_tree();
+        assert_eq!(
+            before.sessions[0].windows[0].panes[0].title,
+            "build #{pane_id} 'x';$(touch nope)"
+        );
+        assert!(!temp.path().join("nope").exists());
+        run(action_command(&TmuxAction::ResizePane {
+            target: left,
+            direction: ResizeDirection::Right,
+            amount: 5,
+            server: live(),
+        })
+        .unwrap());
+        let (grown, shrunk) = widths(&read_tree());
+        assert_eq!(
+            (grown, shrunk),
+            (widths(&before).0 + 5, widths(&before).1 - 5)
+        );
+        run(action_command(&TmuxAction::ClosePane {
+            target: right.clone(),
+            server: live(),
+        })
+        .unwrap());
+        let panes = read_tree().sessions[0].windows[0].panes.len();
+        assert_eq!(panes, 1);
+        // A pane that is gone is refused by tmux and nothing else is touched.
+        let again = scoped(
+            action_command(&TmuxAction::ClosePane {
+                target: right,
+                server: live(),
+            })
+            .unwrap(),
+        )
+        .output()
+        .unwrap();
+        assert!(!again.status.success());
+        let tree = read_tree();
+        assert_eq!(tree.sessions[0].windows[0].panes.len(), 1);
+        let doomed = tree.sessions[0].id.clone();
+        run(action_command(&TmuxAction::CreateSession {
+            name: "second".into(),
+            directory: temp.path().to_str().unwrap().into(),
+        })
+        .unwrap());
+        run(action_command(&TmuxAction::CloseSession {
+            target: doomed,
+            server: live(),
+        })
+        .unwrap());
+        let tree = read_tree();
+        assert_eq!(
+            tree.sessions
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["second"]
+        );
+        // The server is replaced on the same socket: tmux hands out the same ids again, and every action built from
+        // the old server's tree is refused without touching the replacement (#2044).
+        let (stale, old_session, old_pane) = (
+            live(),
+            tree.sessions[0].id.clone(),
+            tree.sessions[0].windows[0].panes[0].id.clone(),
+        );
+        let stale_actions = |token: &str| {
+            [
+                action_command(&TmuxAction::ClosePane {
+                    target: old_pane.clone(),
+                    server: token.into(),
+                }),
+                action_command(&TmuxAction::CloseSession {
+                    target: old_session.clone(),
+                    server: token.into(),
+                }),
+                action_command(&TmuxAction::RenamePane {
+                    target: old_pane.clone(),
+                    title: "stale".into(),
+                    server: token.into(),
+                }),
+                action_command(&TmuxAction::ResizePane {
+                    target: old_pane.clone(),
+                    direction: ResizeDirection::Left,
+                    amount: 1,
+                    server: token.into(),
+                }),
+            ]
+            .map(Result::unwrap)
+        };
+        run("tmux kill-server".into());
+        run(action_command(&TmuxAction::CreateSession {
+            name: "replacement".into(),
+            directory: temp.path().to_str().unwrap().into(),
+        })
+        .unwrap());
+        let replacement = read_tree();
+        assert_eq!(replacement.sessions[0].id, old_session);
+        assert_eq!(replacement.sessions[0].windows[0].panes[0].id, old_pane);
+        assert_ne!(replacement.server_token.as_deref(), Some(stale.as_str()));
+        for command in stale_actions(&stale) {
+            let output = scoped(command.clone()).output().unwrap();
+            assert!(!output.status.success(), "{command}");
+        }
+        let survivors = read_tree();
+        assert_eq!(survivors.sessions[0].name, "replacement");
+        assert!(!survivors.sessions[0].windows[0].panes[0].title.contains("stale"));
+        // The same actions with the replacement's own token run.
+        for command in stale_actions(&live()).into_iter().take(1) {
+            let again = scoped(command).output().unwrap();
+            assert!(again.status.success());
+        }
+        assert!(!scoped("tmux has-session".into()).output().unwrap().status.success());
     }
 
     #[test]
