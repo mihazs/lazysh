@@ -38,7 +38,8 @@ internal object PrivateKeyboard {
             outAttrs.inputType = INPUT_TYPE
             outAttrs.imeOptions = outAttrs.imeOptions or EditorInfoCompat.IME_FLAG_NO_PERSONALIZED_LEARNING
         }
-        return connection
+        // Debug builds log what the keyboard sends (ImeTrace); release builds hand the connection through untouched.
+        return if (connection != null && BuildConfig.DEBUG) ImeTrace(connection) else connection
     }
 
     /** Main thread. A change makes the keyboard ask the focused editor for its setup again, without reconnecting. */
