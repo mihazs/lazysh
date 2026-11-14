@@ -23,8 +23,9 @@
 .agent-pill[data-mode="plan"] { color: var(--accent); }
 .agent-pill[data-low="warn"] { color: var(--theme-warning, var(--accent)); }
 .agent-pill[data-low="danger"] { color: var(--danger); }
-.agent-view-menu { top: 46px; border: 0; border-radius: 18px; background: var(--av-row-hover); box-shadow: 0 12px 32px rgb(0 0 0 / 32%); }
-.agent-view-menu > button { border-radius: 12px; }
+.agent-view-menu { position: absolute; z-index: 5; top: 46px; inset-inline-end: 8px; max-width: min(360px, calc(100% - 16px)); display: grid; gap: 6px; padding: 8px; border: 0; border-radius: 18px; background: var(--av-row-hover); box-shadow: 0 12px 32px rgb(0 0 0 / 32%); }
+.agent-view-menu > :is(p, div) { margin: 4px 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.agent-view-menu > button { min-height: 40px; justify-content: flex-start; text-align: start; border-radius: 12px; }
 
 /* Jump to the latest message: a round button that floats over the end of the timeline, so it never moves a line. The row it sits
  * in has no height; the button is drawn upwards from its edge. "Jump to start" joins it only while earlier messages are not loaded. */
