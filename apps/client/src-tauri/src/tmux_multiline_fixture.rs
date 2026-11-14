@@ -105,7 +105,7 @@ async fn probe(case: &str) {
     };
     let input = json!({"kind":"input","receipt":bound["receipt"],"source":source,"operation":1,"input":{"kind":"send","text":text}});
     let native = state.session(&child).await.unwrap();
-    let binding = native.tmux.lock().unwrap().clone().unwrap();
+    let binding = native.bindings.tmux.lock().unwrap().clone().unwrap();
     let version = std::process::Command::new(&f.tmux)
         .arg("-V")
         .output()

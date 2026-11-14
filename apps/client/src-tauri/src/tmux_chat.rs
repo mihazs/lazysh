@@ -838,6 +838,7 @@ pub async fn tmux_chat(
             action.validate()?;
             let session = state.session(&session_id).await?;
             let binding = session
+                .bindings
                 .tmux
                 .lock()
                 .map_err(|_| unavailable())?

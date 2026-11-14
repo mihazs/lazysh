@@ -4,6 +4,7 @@ use crate::{
     app_lock::AccessLease,
     ssh::{self, AccessResult, AppState, Result, SshError, SshHandle},
 };
+use futures_util::future::BoxFuture;
 use russh::{client, ChannelMsg};
 use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -42,6 +43,11 @@ pub(crate) struct Identity {
     pub(crate) tty: String,
 }
 impl Identity {
+    /// The client of a `tmux attach-session` started directly in a local PTY: its PID is the
+    /// child's, its terminal the PTY's slave. `None` for a PID or terminal name tmux would not report.
+    pub(crate) fn from_pty(pid: u32, tty: &std::path::Path) -> Option<Self> {
+        identity(&pid.to_string(), tty.to_str()?)
+    }
     fn client_condition(&self) -> String {
         let tuple = format!(
             "#{{&&:#{{==:#{{client_pid}},{}}},#{{==:#{{client_tty}},{}}}}}",
@@ -227,8 +233,65 @@ pub(crate) async fn handshake(
     .flatten()
 }
 
-pub(crate) struct Control {
+/// What one read of a control stream produced.
+pub(crate) enum Read {
+    Data(Vec<u8>),
+    /// Flow-control traffic that carries no output.
+    Skip,
+    /// A message that is not output, such as stderr or an exit status.
+    Other,
+    /// The peer ended the stream.
+    End,
+}
+/// The byte stream of one tmux control client: an SSH channel or a local child's pipes.
+pub(crate) trait Wire: Send {
+    /// Starts the command if it is not running yet; returns the bytes read so far.
+    fn start(&mut self) -> BoxFuture<'_, Result<Vec<u8>>>;
+    fn write<'a>(&'a mut self, bytes: &'a [u8]) -> BoxFuture<'a, Result<()>>;
+    /// Ends the write side; tmux leaves control mode on end of input.
+    fn eof(&mut self) -> BoxFuture<'_, Result<()>>;
+    fn read(&mut self) -> BoxFuture<'_, Read>;
+    fn close(&mut self) -> BoxFuture<'_, ()>;
+}
+struct SshWire {
     channel: ssh::OwnedChannel,
+    /// Executed by `start`; fixtures that adopt a running channel have none.
+    command: Option<String>,
+}
+impl Wire for SshWire {
+    fn start(&mut self) -> BoxFuture<'_, Result<Vec<u8>>> {
+        Box::pin(async {
+            if let Some(command) = self.command.take() {
+                self.channel.exec(true, command).await?;
+            }
+            ssh::request_ok(&mut self.channel).await
+        })
+    }
+    fn write<'a>(&'a mut self, bytes: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move { Ok(self.channel.data(bytes).await?) })
+    }
+    fn eof(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(self.channel.eof().await?) })
+    }
+    fn read(&mut self) -> BoxFuture<'_, Read> {
+        Box::pin(async {
+            match self.channel.wait().await {
+                Some(ChannelMsg::Data { data }) => Read::Data(data.to_vec()),
+                Some(ChannelMsg::WindowAdjusted { .. }) => Read::Skip,
+                Some(ChannelMsg::Eof | ChannelMsg::Close) | None => Read::End,
+                _ => Read::Other,
+            }
+        })
+    }
+    fn close(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async {
+            let _ = self.channel.close().await;
+        })
+    }
+}
+
+pub(crate) struct Control {
+    wire: Box<dyn Wire>,
     bytes: Vec<u8>,
     identity: Identity,
     generation: String,
@@ -239,9 +302,21 @@ pub(crate) struct Control {
     chat_before_dispatch: Option<chat::Gate>,
 }
 impl Control {
+    fn new(wire: Box<dyn Wire>, identity: Identity) -> Self {
+        Self {
+            wire,
+            bytes: Vec::new(),
+            identity,
+            generation: uuid::Uuid::new_v4().to_string(),
+            chat: None,
+            partial: false,
+            #[cfg(test)]
+            chat_before_dispatch: None,
+        }
+    }
     async fn write(&mut self, command: &str) -> Result<()> {
         self.partial = true;
-        self.channel.data(format!("{command}\n").as_bytes()).await?;
+        self.wire.write(format!("{command}\n").as_bytes()).await?;
         self.partial = false;
         Ok(())
     }
@@ -249,10 +324,10 @@ impl Control {
     /// alone ends control mode without completing an interrupted command line.
     async fn detach(mut self) {
         let _ = tokio::time::timeout(DETACH, async {
-            if !self.partial && self.channel.data(&b"\n"[..]).await.is_err() {
+            if !self.partial && self.wire.write(b"\n").await.is_err() {
                 return;
             }
-            if self.channel.eof().await.is_err() {
+            if self.wire.eof().await.is_err() {
                 return;
             }
             loop {
@@ -267,15 +342,15 @@ impl Control {
                 if self.bytes.len() > 64 * 1024 {
                     self.bytes.clear();
                 }
-                match self.channel.wait().await {
-                    Some(ChannelMsg::Data { data }) => self.bytes.extend_from_slice(&data),
-                    Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return,
-                    _ => {}
+                match self.wire.read().await {
+                    Read::Data(data) => self.bytes.extend_from_slice(&data),
+                    Read::End => return,
+                    Read::Skip | Read::Other => {}
                 }
             }
         })
         .await;
-        let _ = tokio::time::timeout(RETIREMENT - DETACH, self.channel.close()).await;
+        let _ = tokio::time::timeout(RETIREMENT - DETACH, self.wire.close()).await;
     }
     async fn line(&mut self, budget: &mut usize) -> Result<String> {
         loop {
@@ -290,15 +365,15 @@ impl Control {
             if self.bytes.len() > 64 * 1024 {
                 return Err(protocol());
             }
-            match self.channel.wait().await {
-                Some(ChannelMsg::Data { data }) => {
+            match self.wire.read().await {
+                Read::Data(data) => {
                     if data.len() > LIMIT || self.bytes.len() + data.len() > LIMIT {
                         return Err(protocol());
                     }
                     self.bytes.extend_from_slice(&data);
                 }
-                Some(ChannelMsg::WindowAdjusted { .. }) => {}
-                _ => return Err(unavailable()),
+                Read::Skip => {}
+                Read::Other | Read::End => return Err(unavailable()),
             }
         }
     }
@@ -577,20 +652,20 @@ pub(crate) async fn prepare_command(
     let channel = ssh::open_owned_channel(handle, lease, deadline)
         .await
         .ok()?;
-    let mut control = Control {
+    let wire = SshWire {
         channel,
-        bytes: Vec::new(),
-        identity,
-        generation: uuid::Uuid::new_v4().to_string(),
-        chat: None,
-        partial: false,
-        #[cfg(test)]
-        chat_before_dispatch: None,
+        command: Some(command),
     };
+    establish(Control::new(Box::new(wire), identity), lease, deadline).await
+}
+/// A control client that is up and has proven the displayed client is the one it manages.
+async fn establish(
+    mut control: Control,
+    lease: &AccessLease,
+    deadline: tokio::time::Instant,
+) -> Option<Control> {
     let operation = async {
-        let channel = &mut control.channel;
-        channel.exec(true, command).await?;
-        control.bytes = ssh::request_ok(channel).await?;
+        control.bytes = control.wire.start().await?;
         let mut budget = LIMIT;
         control.block(&mut budget).await?;
         loop {
@@ -716,24 +791,30 @@ fn spawn_actor(
         drop(rx);
     });
 }
-async fn request(
+pub(crate) async fn request(
     lease: &AccessLease,
     state: &AppState,
+    local: &crate::local::LocalState,
     session_id: &str,
     target: Option<(String, String, String)>,
 ) -> Result<Snapshot> {
     lease.check()?;
-    let session = state.session(session_id).await?;
-    if *session.cancel.borrow() {
-        return Err(unavailable());
-    }
-    let binding = session
-        .tmux
-        .lock()
-        .map_err(|_| unavailable())?
-        .clone()
-        .ok_or_else(unavailable)?;
-    let mut cancel = session.cancel.subscribe();
+    let (binding, mut cancel) = if session_id.starts_with("local:") {
+        crate::local::tmux_binding(local, session_id, lease).map_err(|_| unavailable())?
+    } else {
+        let session = state.session(session_id).await?;
+        if *session.cancel.borrow() {
+            return Err(unavailable());
+        }
+        let binding = session
+            .bindings
+            .tmux
+            .lock()
+            .map_err(|_| unavailable())?
+            .clone()
+            .ok_or_else(unavailable)?;
+        (binding, session.cancel.subscribe())
+    };
     binding.call(lease, &mut cancel, target).await
 }
 impl Binding {
@@ -836,31 +917,115 @@ pub(crate) fn start_with_revoked_queue_fixture(
     )
 }
 
+/// A local control client: `tmux -C attach-session` on this device, read and written over pipes.
+#[cfg(desktop)]
+struct ProcessWire {
+    child: tokio::process::Child,
+    stdin: Option<tokio::process::ChildStdin>,
+    stdout: tokio::process::ChildStdout,
+    /// Ends every descendant of the child when the wire is dropped.
+    _tree: lazysh_account_usage::ProcessTree,
+}
+#[cfg(desktop)]
+impl Wire for ProcessWire {
+    fn start(&mut self) -> BoxFuture<'_, Result<Vec<u8>>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn write<'a>(&'a mut self, bytes: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        use tokio::io::AsyncWriteExt;
+        Box::pin(async move {
+            let stdin = self.stdin.as_mut().ok_or_else(unavailable)?;
+            stdin.write_all(bytes).await.map_err(|_| unavailable())?;
+            stdin.flush().await.map_err(|_| unavailable())
+        })
+    }
+    fn eof(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            self.stdin = None;
+            Ok(())
+        })
+    }
+    fn read(&mut self) -> BoxFuture<'_, Read> {
+        use tokio::io::AsyncReadExt;
+        Box::pin(async {
+            let mut buffer = [0u8; 8192];
+            match self.stdout.read(&mut buffer).await {
+                Ok(0) | Err(_) => Read::End,
+                Ok(read) => Read::Data(buffer[..read].to_vec()),
+            }
+        })
+    }
+    fn close(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async {
+            self.stdin = None;
+            let _ = self.child.kill().await;
+        })
+    }
+}
+/// The command that runs a control client for session `name` on this device, with the
+/// environment host commands get; the caller may adjust it before `prepare_local` spawns it.
+#[cfg(desktop)]
+pub(crate) async fn local_control_command(
+    name: &str,
+    server: &crate::tmux_server::TmuxServer,
+) -> tokio::process::Command {
+    let mut command = crate::host::local_command("tmux").await;
+    command.args(["-u", "-L", server.name(), "-C", "attach-session", "-f"]);
+    command.args([
+        "no-output,ignore-size",
+        "-t",
+        &crate::multiplexer::tmux_word(&format!("={name}")),
+    ]);
+    command
+}
+/// Starts `command` as the control client for the displayed client `identity`.
+#[cfg(desktop)]
+pub(crate) async fn prepare_local(
+    mut command: tokio::process::Command,
+    identity: Identity,
+    lease: &AccessLease,
+) -> Option<Control> {
+    use std::process::Stdio;
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    lease.check().ok()?;
+    let (mut child, tree) = lazysh_account_usage::spawn_owned(&mut command).ok()?;
+    let wire = ProcessWire {
+        stdin: child.stdin.take(),
+        stdout: child.stdout.take()?,
+        child,
+        _tree: tree,
+    };
+    establish(Control::new(Box::new(wire), identity), lease, deadline).await
+}
+
 #[cfg(test)]
 pub(crate) fn fixture_control(channel: russh::Channel<client::Msg>, identity: Identity) -> Control {
-    Control {
+    let wire = SshWire {
         channel: channel.into(),
-        bytes: Vec::new(),
-        identity,
-        generation: uuid::Uuid::new_v4().to_string(),
-        chat: None,
-        partial: false,
-        #[cfg(test)]
-        chat_before_dispatch: None,
-    }
+        command: None,
+    };
+    Control::new(Box::new(wire), identity)
 }
 #[tauri::command]
 pub async fn tmux_jump_snapshot(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
 ) -> AccessResult<Snapshot> {
-    lease.run(request(&lease, &state, &session_id, None)).await
+    lease
+        .run(request(&lease, &state, &local, &session_id, None))
+        .await
 }
 #[tauri::command]
 pub async fn tmux_jump(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     generation: String,
     target_session_id: String,
@@ -870,6 +1035,7 @@ pub async fn tmux_jump(
         .run(request(
             &lease,
             &state,
+            &local,
             &session_id,
             Some((generation, target_session_id, window_id)),
         ))

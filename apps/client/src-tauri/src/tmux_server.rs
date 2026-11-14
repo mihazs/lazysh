@@ -1,5 +1,9 @@
 //! Public tmux named-socket selection, never an arbitrary socket path.
-use crate::ssh::{quote, Result, Session, SshError};
+use crate::{
+    bindings::Bindings,
+    ssh::{quote, AppState, Result, Session, SshError},
+};
+use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TmuxServer {
     #[default]
@@ -15,15 +19,28 @@ impl TmuxServer {
             _ => Err(SshError::new("invalid_tmux_server", "tmux server names must be 1–64 UTF-8 bytes without slash/control characters, and not . or ..")),
         }
     }
-    pub(crate) fn prefix(&self) -> String {
-        let name = match self {
+    pub(crate) fn name(&self) -> &str {
+        match self {
             Self::Default => "default",
             Self::Named(name) => name,
-        };
-        format!("tmux -u -L {}", quote(name))
+        }
     }
-    pub(crate) fn for_session(session: &Session, requested: Option<&str>) -> Result<Self> {
-        let attached = session
+    pub(crate) fn prefix(&self) -> String {
+        format!("tmux -u -L {}", quote(self.name()))
+    }
+    /// The session an SSH id names and the server its commands address.
+    pub(crate) async fn for_id(
+        state: &AppState,
+        id: &str,
+        requested: Option<&str>,
+    ) -> Result<(Arc<Session>, Self)> {
+        let session = state.session(id).await?;
+        let server = Self::for_session(&session.bindings, requested)?;
+        Ok((session, server))
+    }
+    /// The server a terminal is attached to, else the requested one.
+    pub(crate) fn for_session(bindings: &Bindings, requested: Option<&str>) -> Result<Self> {
+        let attached = bindings
             .tmux_server
             .lock()
             .map_err(|_| SshError::new("tmux_unavailable", "Cannot read tmux server context"))?;

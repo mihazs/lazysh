@@ -1344,13 +1344,7 @@ async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after
     assert!(Arc::ptr_eq(&parent.handle, &native.handle));
     assert_eq!(native.creation.generation(), parent.creation.generation());
     retire_bootstrap(&state, &source, &parent).await;
-    let bound =
-        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap();
-    let bound = serde_json::to_value(bound).unwrap();
+    let bound = snapshot_value(&app, &lease, &child.session_id).await;
     assert_eq!(bound["sessions"][0]["name"], name);
     assert!(!bound["generation"].as_str().unwrap().is_empty());
     write_stdin(
@@ -1476,8 +1470,8 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 );
             }
             let session = state.session(&display.session_id).await.unwrap();
-            assert!(session.tmux.lock().unwrap().is_none());
-            assert!(session.herdr.lock().unwrap().is_none());
+            assert!(session.bindings.tmux.lock().unwrap().is_none());
+            assert!(session.bindings.herdr.lock().unwrap().is_none());
             disconnect_inner(&state, source.session_id).await.unwrap();
             let ready = if matches!(kind, MultiplexerKind::Herdr) {
                 // The private receipt precedes Herdr's server initialization. Wait
@@ -1565,20 +1559,11 @@ async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_boo
         let (child, mut receiver) =
             mosh_entry_child(&app, &lease, &source, entry(name, create)).await;
         let native = state.session(&child.session_id).await.unwrap();
-        assert!(native.tmux.lock().unwrap().is_some());
+        assert!(native.bindings.tmux.lock().unwrap().is_some());
         assert!(native.file_control.is_some());
         assert!(Arc::ptr_eq(&parent.handle, &native.handle));
         retire_bootstrap(&state, &source, &parent).await;
-        let bound = crate::tmux_jump::tmux_jump_snapshot(
-            lease.clone(),
-            app.state(),
-            child.session_id.clone(),
-        )
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
-        let bound = serde_json::to_value(bound).unwrap();
+        let bound = snapshot_value(&app, &lease, &child.session_id).await;
         let current = bound["sessions"]
             .as_array()
             .unwrap()
@@ -1587,7 +1572,7 @@ async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_boo
             .unwrap();
         assert_eq!(current["name"], name);
         assert_eq!(
-            native.tmux_server.lock().unwrap().as_ref(),
+            native.bindings.tmux_server.lock().unwrap().as_ref(),
             Some(&crate::tmux_server::TmuxServer::Named(server.into()))
         );
         write_stdin(
@@ -1819,6 +1804,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     let state = AppState::new(f.dir.path().join("named-config")).unwrap();
     let app = tauri::test::mock_app();
     app.manage(state.clone());
+    app.manage(crate::local::LocalState::default());
     let authority = AccessState::disabled();
     let lease = authority.lease(None).unwrap();
     state.config().unwrap().hosts.push(f.host.clone());
@@ -1867,10 +1853,10 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     .unwrap();
     let native = state.session(&child.session_id).await.unwrap();
     assert_eq!(
-        TmuxServer::for_session(&native, None).unwrap(),
+        TmuxServer::for_session(&native.bindings, None).unwrap(),
         TmuxServer::parse(Some(hostile)).unwrap()
     );
-    assert!(TmuxServer::for_session(&native, Some("other")).is_err());
+    assert!(TmuxServer::for_session(&native.bindings, Some("other")).is_err());
     for (name, expected) in [
         (hostile, "selected"),
         ("other", "same"),
@@ -1939,13 +1925,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     )
     .await
     .is_err());
-    let snapshot =
-        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap();
-    let snapshot = serde_json::to_value(snapshot).unwrap();
+    let snapshot = snapshot_value(&app, &lease, &child.session_id).await;
     assert_eq!(snapshot["sessions"][0]["name"], "selected");
     multiplexer::tmux_action(
         app.state(),
@@ -1972,14 +1952,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     )
     .await
     .unwrap();
-    let navigation = serde_json::to_value(
-        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap(),
-    )
-    .unwrap();
+    let navigation = snapshot_value(&app, &lease, &child.session_id).await;
     let destination = navigation["sessions"]
         .as_array()
         .unwrap()
@@ -1988,6 +1961,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         .unwrap();
     let jumped = crate::tmux_jump::tmux_jump(
         lease.clone(),
+        app.state(),
         app.state(),
         child.session_id.clone(),
         navigation["generation"].as_str().unwrap().into(),
@@ -2031,18 +2005,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     .unwrap()
     .into_inner()
     .unwrap();
-    let binding = serde_json::to_value(
-        crate::tmux_jump::tmux_jump_snapshot(
-            lease.clone(),
-            app.state(),
-            restored.session_id.clone(),
-        )
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap(),
-    )
-    .unwrap();
+    let binding = snapshot_value(&app, &lease, &restored.session_id).await;
     assert!(binding["sessions"]
         .as_array()
         .unwrap()
@@ -2074,6 +2037,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     );
     assert!(crate::tmux_jump::tmux_jump_snapshot(
         lease.clone(),
+        app.state(),
         app.state(),
         child.session_id.clone()
     )
@@ -2513,7 +2477,7 @@ async fn chat_input_probe() {
     // Hold AFTER real preflight: move only the original display to another
     // session, leaving the retained control client on its old session/pane.
     let native = state.session(&child).await.unwrap();
-    let binding = native.tmux.lock().unwrap().clone().unwrap();
+    let binding = native.bindings.tmux.lock().unwrap().clone().unwrap();
     let clients = servers.direct(
         "chat-a",
         &[
@@ -2567,7 +2531,7 @@ async fn chat_input_probe() {
     eprintln!("tmux chat stage: fresh confirmation after relock");
     let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
     let native = state.session(&child).await.unwrap();
-    let binding = native.tmux.lock().unwrap().clone().unwrap();
+    let binding = native.bindings.tmux.lock().unwrap().clone().unwrap();
     let (ready, release, holding) =
         binding.fixture_gate(renewed.clone(), native.cancel.subscribe(), false);
     timeout(BOUND, ready).await.unwrap().unwrap();
@@ -2824,6 +2788,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     let lease = authority.lease(None).unwrap();
     let first = tauri::test::mock_app();
     first.manage(AppState::new(f.dir.path().join("first-lifetime")).unwrap());
+    first.manage(crate::local::LocalState::default());
     let (child, mut first_events) =
         reconnect_display(&first, &lease, original, saved_server, "same").await;
     assert_reconnected_output(
@@ -2835,13 +2800,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     )
     .await;
     let first_state = first.state::<AppState>();
-    let snapshot =
-        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), first.state(), child.clone())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap();
-    let snapshot = serde_json::to_value(snapshot).unwrap();
+    let snapshot = snapshot_value(&first, &lease, &child).await;
     let saved_name = snapshot["sessions"]
         .as_array()
         .unwrap()
@@ -2897,6 +2856,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     let lease = authority.lease(None).unwrap();
     let second = tauri::test::mock_app();
     second.manage(AppState::new(f.dir.path().join("second-lifetime")).unwrap());
+    second.manage(crate::local::LocalState::default());
     // authenticate() checks the saved exact host fingerprint and authenticates the
     // fixture's ephemeral private key against the real owned OpenSSH server.
     let fresh = f.fresh_handle(&second.state()).await;
@@ -2916,11 +2876,11 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     assert_ne!(restored, child);
     let native = second.state::<AppState>().session(&restored).await.unwrap();
     assert_eq!(
-        crate::tmux_server::TmuxServer::for_session(&native, None).unwrap(),
+        crate::tmux_server::TmuxServer::for_session(&native.bindings, None).unwrap(),
         crate::tmux_server::TmuxServer::parse(Some(saved_server)).unwrap()
     );
     drop(native);
-    crate::tmux_jump::tmux_jump_snapshot(lease, second.state(), restored)
+    crate::tmux_jump::tmux_jump_snapshot(lease, second.state(), second.state(), restored)
         .await
         .unwrap()
         .into_inner()
@@ -2972,6 +2932,27 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         orphans, 0,
         "product SSH retirement must end tmux control mode before closing the transport"
     );
+}
+
+/// `tmux_jump_snapshot` as the renderer calls it, serialized.
+async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
+    app: &M,
+    lease: &AccessLease,
+    id: &str,
+) -> serde_json::Value {
+    serde_json::to_value(
+        crate::tmux_jump::tmux_jump_snapshot(
+            lease.clone(),
+            app.state(),
+            app.state(),
+            id.to_owned(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap(),
+    )
+    .unwrap()
 }
 
 struct HerdrServers<'a> {

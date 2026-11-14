@@ -118,6 +118,7 @@ async fn stopped(receipt: &Receipt, session: &Session) {
 async fn copy(session: &Session, receipt: Arc<Receipt>) -> Result<()> {
     current(&receipt, session)?;
     let permit = session
+        .bindings
         .clipboard
         .copying
         .clone()
@@ -180,7 +181,7 @@ pub(crate) async fn copy_uploaded(
     lease: &AccessLease,
     upload_id: &str,
 ) -> Result<()> {
-    let receipt = session.clipboard.claim(upload_id, lease)?;
+    let receipt = session.bindings.clipboard.claim(upload_id, lease)?;
     copy(session, receipt).await
 }
 #[tauri::command]

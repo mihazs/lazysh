@@ -136,6 +136,7 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
 async fn settled(session: &Session) {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while session
+            .bindings
             .companion_install
             .clone()
             .try_acquire_owned()
@@ -379,6 +380,7 @@ async fn device_fallback(session: &Arc<Session>, directory: &Path) {
     let state = directory.join("state");
     keep_state(&state);
     let busy = session
+        .bindings
         .companion_install
         .clone()
         .try_acquire_owned()

@@ -81,12 +81,14 @@ impl LocalState {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn local_connect(
     lease: AccessLease,
 
     state: State<'_, LocalState>,
     launch: State<'_, crate::desktop_launch::LaunchState>,
     launch_receipt: Option<String>,
+    attach: Option<crate::multiplexer::Entry>,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
@@ -99,11 +101,11 @@ pub async fn local_connect(
                     Some(receipt) => Some(launch.claim(&receipt, &lease)?),
                     None => None,
                 };
-                desktop::connect(&state, lease.clone(), directory, cols, rows, events).await
+                desktop::connect(&state, lease.clone(), directory, attach, cols, rows, events).await
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             {
-                let _ = (state, launch, launch_receipt, cols, rows, events);
+                let _ = (state, launch, launch_receipt, attach, cols, rows, events);
                 Err("Local terminals require the desktop app".into())
             }
         })
@@ -200,6 +202,28 @@ pub(crate) fn usage_session(
         Err("Local terminals are unavailable".into())
     }
 }
+/// The tmux navigation binding of an adopted local terminal and its close signal.
+pub(crate) fn tmux_binding(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<
+    (
+        crate::tmux_jump::Binding,
+        tokio::sync::watch::Receiver<bool>,
+    ),
+    String,
+> {
+    #[cfg(desktop)]
+    {
+        desktop::tmux_binding(state, id, lease)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (state, id, lease);
+        Err("Local terminals are unavailable".into())
+    }
+}
 pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Result<bool, String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
@@ -217,9 +241,17 @@ pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Resu
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub(crate) async fn adopted_test_session(state: &LocalState, lease: AccessLease) -> String {
-    let connected = desktop::connect(state, lease.clone(), None, 80, 24, Channel::new(|_| Ok(())))
-        .await
-        .unwrap();
+    let connected = desktop::connect(
+        state,
+        lease.clone(),
+        None,
+        None,
+        80,
+        24,
+        Channel::new(|_| Ok(())),
+    )
+    .await
+    .unwrap();
     desktop::adopt(state, &connected.session_id, &lease).unwrap();
     connected.session_id
 }
@@ -327,6 +359,7 @@ mod desktop {
         #[cfg(unix)]
         wake: UnixStream,
         renderer_gone: watch::Sender<bool>,
+        bindings: crate::bindings::Bindings,
     }
     impl Session {
         /// Return `bytes` of consumed output credit (a forged or repeated credit is refused).
@@ -358,6 +391,10 @@ mod desktop {
         retiring: Mutex<HashMap<String, Arc<Session>>>,
         slots: Arc<Semaphore>,
         stopped: AtomicBool,
+        /// Variables every host-tool command of a test session receives, so a test can
+        /// keep real multiplexers away from the user's own state.
+        #[cfg(test)]
+        test_env: Mutex<Vec<(String, String)>>,
     }
     impl Inner {
         fn with_sessions<T>(
@@ -423,6 +460,8 @@ mod desktop {
                 retiring: Mutex::new(HashMap::new()),
                 slots: Arc::new(Semaphore::new(SESSION_LIMIT as usize)),
                 stopped: AtomicBool::new(false),
+                #[cfg(test)]
+                test_env: Mutex::new(Vec::new()),
             }))
         }
     }
@@ -460,6 +499,14 @@ mod desktop {
         #[cfg(test)]
         pub(super) fn available_slots(&self) -> usize {
             self.0.slots.available_permits()
+        }
+        #[cfg(test)]
+        pub(crate) fn set_test_env(&self, env: Vec<(String, String)>) {
+            *self.0.test_env.lock().unwrap() = env;
+        }
+        #[cfg(test)]
+        pub(crate) fn test_env(&self) -> Vec<(String, String)> {
+            self.0.test_env.lock().unwrap().clone()
         }
         pub(super) fn clone_inner(&self) -> Arc<Inner> {
             self.0.clone()
@@ -500,6 +547,23 @@ mod desktop {
         master: Option<Box<dyn MasterPty + Send>>,
         #[cfg(windows)]
         drain: Option<ShutdownDrain>,
+    }
+    impl Process {
+        /// The tmux client of a `tmux attach-session` started directly in this PTY: no shell
+        /// sits between, so the child's PID is the client's and the PTY slave is its terminal.
+        fn display_identity(&self) -> Option<crate::tmux_jump::Identity> {
+            #[cfg(unix)]
+            {
+                let pid = self.child.as_ref()?.process_id()?;
+                let tty = self.master.as_ref()?.tty_name()?;
+                crate::tmux_jump::Identity::from_pty(pid, &tty)
+            }
+            // tmux has no native Windows build; a WSL target brings its own identity.
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        }
     }
     impl Drop for Process {
         fn drop(&mut self) {
@@ -616,12 +680,57 @@ mod desktop {
         state: &LocalState,
         creation: AccessLease,
         directory: Option<std::path::PathBuf>,
+        attach: Option<crate::multiplexer::Entry>,
         cols: u32,
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
-        let command = shell_command(directory)?;
-        start_with_access(state, creation, command, cols, rows, events).await
+        let Some(entry) = attach else {
+            let command = shell_command(directory)?;
+            return start_with_access(state, creation, command, cols, rows, events).await;
+        };
+        if directory.is_some() {
+            return Err("Choose a folder or a multiplexer session, not both".into());
+        }
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut command = attach_command(&entry).await?;
+        #[cfg(test)]
+        for (name, value) in state.test_env() {
+            command.env(name, value);
+        }
+        let connected =
+            start_with_access(state, creation.clone(), command, cols, rows, events).await?;
+        if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Tmux) {
+            // As over SSH, a client that cannot be verified leaves the terminal without
+            // navigation; the attach itself stands.
+            let server = entry.server().map_err(|error| error.message().to_owned())?;
+            let _ = bind_tmux(state, &connected.session_id, &entry.name, server, &creation).await;
+        }
+        Ok(connected)
+    }
+    /// The PTY command that attaches `entry` directly: a typed argv, never a shell string.
+    async fn attach_command(entry: &crate::multiplexer::Entry) -> Result<CommandBuilder, String> {
+        // tmux has no native Windows build, and native Zellij and Herdr need their own slice.
+        if cfg!(windows) {
+            return Err(
+                "Multiplexer sessions in local terminals are not available on Windows yet".into(),
+            );
+        }
+        let argv = entry.argv().map_err(|error| error.message().to_owned())?;
+        let mut command = CommandBuilder::new(&argv[0]);
+        command.args(&argv[1..]);
+        command.env("TERM", "xterm-256color");
+        // A lazysh started inside a multiplexer must not hit its nested-session refusal.
+        for name in crate::host::INHERITED {
+            command.env_remove(name);
+        }
+        if let Some(path) = crate::host::login_path().await {
+            command.env("PATH", path);
+        }
+        if let Some(home) = crate::local::home_dir() {
+            command.cwd(home);
+        }
+        Ok(command)
     }
     pub(super) fn shell_command(
         directory: Option<std::path::PathBuf>,
@@ -781,6 +890,7 @@ mod desktop {
             #[cfg(unix)]
             wake,
             renderer_gone: watch::channel(false).0,
+            bindings: crate::bindings::Bindings::default(),
         });
         let id = format!("local:{}", uuid::Uuid::new_v4());
         let registration = session
@@ -1027,11 +1137,13 @@ mod desktop {
             }
         });
     }
-    pub(super) fn usage_session(
+    /// Reads an adopted, live session under the current lease.
+    fn live_session<T>(
         state: &LocalState,
         id: &str,
         lease: &AccessLease,
-    ) -> Result<watch::Receiver<bool>, String> {
+        read: impl FnOnce(&Session) -> Result<T, String>,
+    ) -> Result<T, String> {
         lease
             .with_current(|| {
                 let session = state.0.session(id)?;
@@ -1039,11 +1151,79 @@ mod desktop {
                     || *session.renderer_gone.borrow()
                     || *session.cancel.borrow()
                 {
-                    return Err("Local terminal is disconnected".into());
+                    return Err("Local terminal is disconnected".to_string());
                 }
-                Ok(session.cancel.subscribe())
+                read(&session)
             })
             .map_err(String::from)?
+    }
+    pub(super) fn usage_session(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+    ) -> Result<watch::Receiver<bool>, String> {
+        live_session(state, id, lease, |session| Ok(session.cancel.subscribe()))
+    }
+    #[cfg(all(test, unix))]
+    pub(super) fn display_identity(
+        state: &LocalState,
+        id: &str,
+    ) -> Option<crate::tmux_jump::Identity> {
+        let session = state.0.session(id).ok()?;
+        let process = session.process.lock().ok()?;
+        process.as_ref()?.display_identity()
+    }
+    pub(super) fn tmux_binding(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+    ) -> Result<(crate::tmux_jump::Binding, watch::Receiver<bool>), String> {
+        live_session(state, id, lease, |session| {
+            let binding = session
+                .bindings
+                .tmux
+                .lock()
+                .map_err(|_| "Local terminal lock failed")?
+                .clone()
+                .ok_or("This terminal has no tmux navigation binding")?;
+            Ok((binding, session.cancel.subscribe()))
+        })
+    }
+    async fn bind_tmux(
+        state: &LocalState,
+        id: &str,
+        name: &str,
+        server: crate::tmux_server::TmuxServer,
+        lease: &AccessLease,
+    ) -> Result<(), String> {
+        let session = state.0.session(id)?;
+        *session
+            .bindings
+            .tmux_server
+            .lock()
+            .map_err(|_| "Local terminal lock failed")? = Some(server.clone());
+        let identity = session
+            .process
+            .lock()
+            .map_err(|_| "Local process lock failed")?
+            .as_ref()
+            .and_then(Process::display_identity)
+            .ok_or("This terminal's tmux client cannot be identified")?;
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut command = crate::tmux_jump::local_control_command(name, &server).await;
+        #[cfg(test)]
+        command.envs(state.test_env());
+        let control = crate::tmux_jump::prepare_local(command, identity, lease)
+            .await
+            .ok_or("tmux navigation could not be verified for this terminal")?;
+        lease.check()?;
+        *session
+            .bindings
+            .tmux
+            .lock()
+            .map_err(|_| "Local terminal lock failed")? =
+            Some(crate::tmux_jump::start(control, session.cancel.subscribe()));
+        Ok(())
     }
     pub(super) fn adopt(
         state: &LocalState,
@@ -1172,7 +1352,7 @@ mod desktop {
 mod tests {
     #[cfg(unix)]
     use crate::ssh::test_support::{ready_lease, replacement_lease, unlocked_access};
-    fn access_lease() -> crate::app_lock::AccessLease {
+    pub(super) fn access_lease() -> crate::app_lock::AccessLease {
         crate::app_lock::AccessState::disabled()
             .lease(None)
             .unwrap()
@@ -1180,7 +1360,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc;
-    fn events() -> (
+    pub(super) fn events() -> (
         Channel<SshEvent>,
         mpsc::UnboundedReceiver<serde_json::Value>,
     ) {
@@ -1195,7 +1375,10 @@ mod tests {
             rx,
         )
     }
-    async fn until(rx: &mut mpsc::UnboundedReceiver<serde_json::Value>, needle: &str) -> String {
+    pub(super) async fn until(
+        rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+        needle: &str,
+    ) -> String {
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut bytes = Vec::new();
             loop {
@@ -2295,3 +2478,9 @@ mod tests {
         }
     }
 }
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+#[path = "local_attach_tests.rs"]
+mod attach_tests;

@@ -364,7 +364,7 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         };
         let (child, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
         let native = state.session(&child.session_id).await.unwrap();
-        assert!(native.herdr.lock().unwrap().is_some());
+        assert!(native.bindings.herdr.lock().unwrap().is_some());
         assert!(Arc::ptr_eq(&parent.handle, &native.handle));
         disconnect_inner(&state, source.session_id.clone())
             .await
@@ -775,7 +775,7 @@ async fn real_stock_herdr_probe_keeps_ordinary_attachment_without_input_authorit
     owned_terminal_output(&app, &child.session_id, &mut events, b"STOCK_ORDINARY").await;
     adopt(&app, &lease, &child).await;
     let native = state.session(&child.session_id).await.unwrap();
-    assert!(native.herdr.lock().unwrap().is_none());
+    assert!(native.bindings.herdr.lock().unwrap().is_none());
     assert_eq!(
         guard(&app, &lease, &child, json!({"kind":"status"}))
             .await
