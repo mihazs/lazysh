@@ -8,6 +8,11 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
+mod control;
+pub use control::{
+    ControlModes, ControlSnapshot, ControlState, MouseTracking, RowWindow, ScrollAction,
+};
+
 /// Terminal-generated replies (DSR, DA, ...) waiting for the transport. A peer can spam queries,
 /// so the queue is capped; overflow is counted, not silent.
 const MAX_REPLY_BYTES: usize = 64 * 1024;

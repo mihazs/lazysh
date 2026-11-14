@@ -1,0 +1,883 @@
+{
+ "cases": [
+  {
+   "id": "plain",
+   "about": "Text, a wide pair and an SGR run on a 20x5 screen; the cursor ends on the fourth row",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "one\r\n世界 two\r\n\u001b[31mred\u001b[0m\r\nab",
+   "steps": [],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 2,
+       "y": 3
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 5,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "one",
+       "世界 two",
+       "red",
+       "ab",
+       ""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "mouse-x10",
+   "about": "DECSET 9",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "\u001b[?9h",
+   "steps": [],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 0,
+       "y": 0
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "x10",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 5,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "",
+       "",
+       "",
+       "",
+       ""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "mouse-vt200-and-keys",
+   "about": "Bracketed paste, normal mouse tracking and application cursor keys together",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "\u001b[?2004h\u001b[?1000h\u001b[?1h",
+   "steps": [],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 0,
+       "y": 0
+      },
+      "modes": {
+       "bracketedPaste": true,
+       "mouseTracking": "vt200",
+       "alternateScreen": false,
+       "applicationCursorKeys": true
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 5,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "",
+       "",
+       "",
+       "",
+       ""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "mouse-drag",
+   "about": "DECSET 1002",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "\u001b[?1002h",
+   "steps": [],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 0,
+       "y": 0
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "drag",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 5,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "",
+       "",
+       "",
+       "",
+       ""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "mouse-any",
+   "about": "DECSET 1003 over 1000: the most demanding level wins",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "\u001b[?1000h\u001b[?1003h",
+   "steps": [],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 0,
+       "y": 0
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "any",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 5,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "",
+       "",
+       "",
+       "",
+       ""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "alternate-screen",
+   "about": "The alternate screen has no history and its own cursor",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "shell\r\n\u001b[?1049h\u001b[2J\u001b[1;1Hvim\u001b[3;4Hstatus",
+   "steps": [],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 9,
+       "y": 2
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": true,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 5,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "vim",
+       "",
+       "   status",
+       "",
+       ""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "history",
+   "about": "40 rows through a 5-row screen, then every kind of scroll; the window follows the reader",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "row 0\r\nrow 1\r\nrow 2\r\nrow 3\r\nrow 4\r\nrow 5\r\nrow 6\r\nrow 7\r\nrow 8\r\nrow 9\r\nrow 10\r\nrow 11\r\nrow 12\r\nrow 13\r\nrow 14\r\nrow 15\r\nrow 16\r\nrow 17\r\nrow 18\r\nrow 19\r\nrow 20\r\nrow 21\r\nrow 22\r\nrow 23\r\nrow 24\r\nrow 25\r\nrow 26\r\nrow 27\r\nrow 28\r\nrow 29\r\nrow 30\r\nrow 31\r\nrow 32\r\nrow 33\r\nrow 34\r\nrow 35\r\nrow 36\r\nrow 37\r\nrow 38\r\nrow 39",
+   "steps": [
+    {
+     "kind": "toTop"
+    },
+    {
+     "kind": "lines",
+     "delta": 3
+    },
+    {
+     "kind": "pages",
+     "delta": 1
+    },
+    {
+     "kind": "toRow",
+     "row": 10
+    },
+    {
+     "kind": "lines",
+     "delta": -100
+    },
+    {
+     "kind": "toBottom"
+    },
+    {
+     "kind": "lines",
+     "delta": -2
+    },
+    {
+     "kind": "pages",
+     "delta": -1
+    },
+    {
+     "kind": "toRow",
+     "row": 999
+    }
+   ],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 35,
+       "rows": 5,
+       "length": 40,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 32,
+      "rows": [
+       "row 32",
+       "row 33",
+       "row 34",
+       "row 35",
+       "row 36",
+       "row 37",
+       "row 38",
+       "row 39"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "row 0",
+       "row 1",
+       "row 2",
+       "row 3",
+       "row 4",
+       "row 5",
+       "row 6",
+       "row 7"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 3,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 3,
+      "rows": [
+       "row 3",
+       "row 4",
+       "row 5",
+       "row 6",
+       "row 7",
+       "row 8",
+       "row 9",
+       "row 10"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 7,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 7,
+      "rows": [
+       "row 7",
+       "row 8",
+       "row 9",
+       "row 10",
+       "row 11",
+       "row 12",
+       "row 13",
+       "row 14"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 10,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 10,
+      "rows": [
+       "row 10",
+       "row 11",
+       "row 12",
+       "row 13",
+       "row 14",
+       "row 15",
+       "row 16",
+       "row 17"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "row 0",
+       "row 1",
+       "row 2",
+       "row 3",
+       "row 4",
+       "row 5",
+       "row 6",
+       "row 7"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 35,
+       "rows": 5,
+       "length": 40,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 32,
+      "rows": [
+       "row 32",
+       "row 33",
+       "row 34",
+       "row 35",
+       "row 36",
+       "row 37",
+       "row 38",
+       "row 39"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 33,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 32,
+      "rows": [
+       "row 32",
+       "row 33",
+       "row 34",
+       "row 35",
+       "row 36",
+       "row 37",
+       "row 38",
+       "row 39"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 29,
+       "rows": 5,
+       "length": 40,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 29,
+      "rows": [
+       "row 29",
+       "row 30",
+       "row 31",
+       "row 32",
+       "row 33",
+       "row 34",
+       "row 35",
+       "row 36"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 35,
+       "rows": 5,
+       "length": 40,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 32,
+      "rows": [
+       "row 32",
+       "row 33",
+       "row 34",
+       "row 35",
+       "row 36",
+       "row 37",
+       "row 38",
+       "row 39"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "cursor-while-scrolled",
+   "about": "The cursor is a live-screen position even when the reader is in history",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 8,
+   "write": "row 0\r\nrow 1\r\nrow 2\r\nrow 3\r\nrow 4\r\nrow 5\r\nrow 6\r\nrow 7\r\nrow 8\r\nrow 9\r\nrow 10\r\nrow 11\r\nrow 12\r\nrow 13\r\nrow 14\r\nrow 15\r\nrow 16\r\nrow 17\r\nrow 18\r\nrow 19\r\nrow 20\r\nrow 21\r\nrow 22\r\nrow 23\r\nrow 24\r\nrow 25\r\nrow 26\r\nrow 27\r\nrow 28\r\nrow 29\u001b[3;7Hx",
+   "steps": [
+    {
+     "kind": "toTop"
+    },
+    {
+     "kind": "toBottom"
+    }
+   ],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 7,
+       "y": 2
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 25,
+       "rows": 5,
+       "length": 30,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 22,
+      "rows": [
+       "row 22",
+       "row 23",
+       "row 24",
+       "row 25",
+       "row 26",
+       "row 27x",
+       "row 28",
+       "row 29"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 7,
+       "y": 2
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 30,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "row 0",
+       "row 1",
+       "row 2",
+       "row 3",
+       "row 4",
+       "row 5",
+       "row 6",
+       "row 7"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 7,
+       "y": 2
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 25,
+       "rows": 5,
+       "length": 30,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 22,
+      "rows": [
+       "row 22",
+       "row 23",
+       "row 24",
+       "row 25",
+       "row 26",
+       "row 27x",
+       "row 28",
+       "row 29"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "window-covers-all",
+   "about": "A window larger than the buffer returns every row",
+   "cols": 20,
+   "rows": 5,
+   "scrollback": 200,
+   "window": 64,
+   "write": "row 0\r\nrow 1\r\nrow 2\r\nrow 3\r\nrow 4\r\nrow 5\r\nrow 6\r\nrow 7\r\nrow 8\r\nrow 9\r\nrow 10\r\nrow 11",
+   "steps": [
+    {
+     "kind": "toTop"
+    }
+   ],
+   "snapshots": [
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 7,
+       "rows": 5,
+       "length": 12,
+       "following": true
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "row 0",
+       "row 1",
+       "row 2",
+       "row 3",
+       "row 4",
+       "row 5",
+       "row 6",
+       "row 7",
+       "row 8",
+       "row 9",
+       "row 10",
+       "row 11"
+      ]
+     }
+    },
+    {
+     "state": {
+      "columns": 20,
+      "rows": 5,
+      "cursor": {
+       "x": 6,
+       "y": 4
+      },
+      "modes": {
+       "bracketedPaste": false,
+       "mouseTracking": "none",
+       "alternateScreen": false,
+       "applicationCursorKeys": false
+      },
+      "viewport": {
+       "top": 0,
+       "rows": 5,
+       "length": 12,
+       "following": false
+      }
+     },
+     "window": {
+      "first": 0,
+      "rows": [
+       "row 0",
+       "row 1",
+       "row 2",
+       "row 3",
+       "row 4",
+       "row 5",
+       "row 6",
+       "row 7",
+       "row 8",
+       "row 9",
+       "row 10",
+       "row 11"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

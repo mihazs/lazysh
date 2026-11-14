@@ -647,6 +647,36 @@ Measured with `cargo run --release --example inspect_bench` in `packages/termina
 
 The tap check costs a few microseconds here and scales with the row width (each read visits every column of the row to find the span), so the inspection itself is not where a tap's latency would come from; the bridge round trip, which this does not measure, is. It does not say what a phone costs.
 
+### Control plane: one answer, and how often the adapter asks (host microbenchmark, not a device baseline)
+
+Two measurements for [#1321](https://github.com/mihazs/lazysh/issues/1321). Neither includes the Tauri bridge, so neither is the cost of a call in the app, and no device was used.
+
+**One answer in the core.** `cargo run --release --example control_bench` in `packages/terminal-runtime`: `control_snapshot` (state, cursor, modes, viewport and the text of a window of rows) on a core holding about 10,000 rows (scrollback of 16 MiB). Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3, rustc 1.96.1 release; the load average was not recorded). 5,000 runs per row; microseconds per answer.
+
+| Grid | Window | Reader | p50 | p95 | p99 | max | Row text |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 80x24 | 24 rows | following | 34.6 | 39.4 | 49.8 | 85.8 | 1,058 B |
+| 80x24 | 256 rows | following | 368.2 | 421.2 | 558.9 | 1,400.6 | 11,730 B |
+| 80x24 | 256 rows | scrolled back | 367.1 | 416.7 | 528.4 | 1,343.2 | 11,776 B |
+| 46x30 | 30 rows | following | 29.0 | 30.1 | 38.1 | 439.9 | 1,334 B |
+| 46x30 | 256 rows | following | 249.2 | 281.4 | 363.2 | 678.5 | 11,730 B |
+| 46x30 | 256 rows | scrolled back | 249.2 | 289.2 | 392.8 | 1,131.6 | 11,776 B |
+| 200x60 | 60 rows | following | 177.2 | 206.6 | 254.0 | 730.2 | 2,714 B |
+| 200x60 | 256 rows | following | 764.3 | 945.2 | 1,121.5 | 2,116.4 | 11,730 B |
+| 200x60 | 256 rows | scrolled back | 781.7 | 940.0 | 1,158.8 | 2,748.4 | 11,776 B |
+
+The cost is the row text, about 1.4 microseconds per 80-column row, so a window of 256 rows costs ten times a window of the screen's own rows. A reader scrolled into history costs the same as one following (reading the live cursor moves the viewport to the bottom and back inside the answer). Which window the app asks for is a trade between what the synchronous readers can see (search, selection text) and this cost; the default is 256 until the Android numbers exist.
+
+**How often the adapter asks.** The adapter pulls the state at most once per 16 ms however much output arrives. Measured with the adapter over the headless xterm.js stand-in core (`nativeCoreHeadless.ts`, Bun 1.3.14, same host), which rings the doorbell after every 16 KiB chunk of 80-column lines, one run per row:
+
+| Output | Chunks | Elapsed | Pulls | Pulls per second |
+| --- | --- | --- | --- | --- |
+| 64 KiB | 5 | 18 ms | 2 | 108.6 |
+| 1 MiB | 65 | 101 ms | 7 | 69.0 |
+| 8 MiB | 515 | 649 ms | 41 | 63.2 |
+
+Output grew 128 times and the pull rate fell to about 63 per second: it follows the refresh interval and the answer's latency, not the volume. The adapter's own test bounds it as `pulls <= elapsed / interval + 1` and far below the chunk count. What this does not show: the latency of a Tauri `invoke` (which adds to the 16 ms and lowers the rate), the cost on a phone, or the energy cost of 60 answers per second while output streams; those need the bridge on a device ([#1340](https://github.com/mihazs/lazysh/issues/1340)).
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.

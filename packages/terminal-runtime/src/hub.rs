@@ -515,6 +515,12 @@ impl Session {
         Ok(frame)
     }
 
+    /// Like [`attach`](Self::attach) for a reader of text that draws nothing: [`Hooks::changed`] fires as
+    /// output arrives, and no frame is built.
+    pub fn watch(&self) {
+        self.cell.attached.store(true, Release);
+    }
+
     pub fn detach(&self) {
         self.cell.attached.store(false, Release);
     }

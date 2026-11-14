@@ -106,6 +106,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     if (state.columns !== before.columns || state.rows !== before.rows) this.emit({type: 'geometry', size: {columns: state.columns, rows: state.rows}, authority: 'local'});
     if (JSON.stringify(state.viewport) !== JSON.stringify(before.viewport)) this.emit({type: 'viewport', viewport: state.viewport});
     if (JSON.stringify(state.modes) !== JSON.stringify(before.modes)) this.emit({type: 'modes', modes: state.modes});
+    snapshot.events?.forEach(event => this.onCore(event));
   }
 
   private onCore(event: NativeCoreEvent) {

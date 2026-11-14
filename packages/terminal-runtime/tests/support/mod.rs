@@ -327,3 +327,55 @@ pub fn load_average() -> String {
         .trim()
         .to_string()
 }
+
+/// The cases of `fixtures/<name>.json`, which headless xterm.js wrote and the core must match.
+pub fn fixture_cases(name: &str) -> Vec<serde_json::Value> {
+    let path = format!("{}/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    json["cases"].as_array().unwrap().clone()
+}
+
+/// A runtime sized as `case` says that has been fed the case's bytes.
+pub fn replay(case: &serde_json::Value) -> TerminalRuntime {
+    let number = |key: &str| case[key].as_u64().unwrap();
+    let mut rt = TerminalRuntime::new(Config {
+        size: Size::new(number("cols") as u16, number("rows") as u16),
+        scrollback_bytes: 1 << 20,
+        ..Config::default()
+    })
+    .unwrap();
+    feed(&mut rt, case["write"].as_str().unwrap().as_bytes());
+    rt
+}
+
+/// Microseconds at a few percentiles of repeated runs, printed by the benchmark examples.
+pub struct Timings(Vec<f64>);
+
+impl Timings {
+    pub fn of(runs: usize, mut query: impl FnMut()) -> Self {
+        let mut micros: Vec<f64> = (0..runs)
+            .map(|_| {
+                let started = Instant::now();
+                query();
+                started.elapsed().as_secs_f64() * 1e6
+            })
+            .collect();
+        micros.sort_by(f64::total_cmp);
+        Self(micros)
+    }
+}
+
+impl std::fmt::Display for Timings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let at = |p: f64| self.0[((self.0.len() - 1) as f64 * p).round() as usize];
+        write!(
+            f,
+            "{} runs, p50 {:.1} us, p95 {:.1} us, p99 {:.1} us, max {:.1} us",
+            self.0.len(),
+            at(0.5),
+            at(0.95),
+            at(0.99),
+            self.0[self.0.len() - 1]
+        )
+    }
+}

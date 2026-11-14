@@ -22,6 +22,7 @@
     "**/test-results/**",
     "docs/architecture/benchmarks/**",
     "apps/client/bench/fixtures/**",
+    "packages/terminal-runtime/fixtures/control-plane.json",
     "packages/mosh-transport/vendor/**",
     "packages/mosh-transport/vendor-android/**",
     "packages/portable-pty-vendor/**",

@@ -11,27 +11,8 @@ mod support;
 use std::time::Instant;
 use support::*;
 
-fn percentile(sorted: &[f64], p: f64) -> f64 {
-    sorted[((sorted.len() - 1) as f64 * p).round() as usize]
-}
-
-fn measure(label: &str, mut query: impl FnMut()) {
-    const RUNS: usize = 20_000;
-    let mut micros: Vec<f64> = (0..RUNS)
-        .map(|_| {
-            let started = Instant::now();
-            query();
-            started.elapsed().as_secs_f64() * 1e6
-        })
-        .collect();
-    micros.sort_by(f64::total_cmp);
-    println!(
-        "{label}: {RUNS} runs, p50 {:.1} us, p95 {:.1} us, p99 {:.1} us, max {:.1} us",
-        percentile(&micros, 0.5),
-        percentile(&micros, 0.95),
-        percentile(&micros, 0.99),
-        micros[RUNS - 1],
-    );
+fn measure(label: &str, query: impl FnMut()) {
+    println!("{label}: {}", Timings::of(20_000, query));
 }
 
 fn main() {

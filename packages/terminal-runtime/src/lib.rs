@@ -35,7 +35,8 @@ pub use render::{
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
 pub use runtime::{
-    Config, Error, Events, Geometry, Modes, TerminalRuntime, Viewport, MAX_READ_ROWS,
+    Config, ControlModes, ControlSnapshot, ControlState, Error, Events, Geometry, Modes,
+    MouseTracking, RowWindow, ScrollAction, TerminalRuntime, Viewport, MAX_READ_ROWS,
 };
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 

@@ -19,10 +19,10 @@ export type NativeCoreState = {
 /** The text of a run of absolute rows, trimmed on the right, that the core chose around the viewport. Bounded by the core. */
 export type NativeRowWindow = {first: number; rows: string[]};
 
-/** What every state-changing command answers: the new state and the rows the adapter's synchronous readers serve from. */
-export type NativeCoreSnapshot = {state: NativeCoreState; window: NativeRowWindow};
+/** What every state-changing command answers: the new state and the rows the adapter's synchronous readers serve from, with what the program reported since the last answer. */
+export type NativeCoreSnapshot = {state: NativeCoreState; window: NativeRowWindow; events?: NativeCoreEvent[]};
 
-/** Ordered, one per occurrence. `changed` is a coalesced doorbell: the screen differs, pull a `snapshot`. */
+/** One per occurrence, in order. `changed` is a coalesced doorbell: the screen differs, pull a `snapshot`. The others may arrive in a snapshot's `events` or through `subscribe`. */
 export type NativeCoreEvent =
   | {type: 'changed'}
   | {type: 'title'; title: string}
