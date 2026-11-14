@@ -1,0 +1,36 @@
+name: Exercise Parakeet on Windows x86_64
+description: Verify the pinned model archive, then run the Parakeet manager cases, the combined Whisper link and the real manager on Windows
+runs:
+  using: composite
+  steps:
+    - name: Restore the pinned Parakeet model archive
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-parakeet-model-cache
+        key: lazysh-parakeet-model-1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9
+    - name: Verify the pinned Parakeet model archive
+      shell: bash
+      env:
+        # The runtime's pin: ARCHIVE_SHA256, ARCHIVE_BYTES and ARCHIVE_URL in packages/parakeet-runtime/src/bundle.rs.
+        MODEL_SHA256: 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9
+        MODEL_SIZE: '487211443'
+        MODEL_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2
+      run: |
+        archive="$RUNNER_TEMP/parakeet-v3-int8.tar.bz2"
+        LAZYSH_PINNED_DOWNLOADS="$RUNNER_TEMP/lazysh-parakeet-model-cache" sh .github/scripts/pinned-download.sh "$MODEL_SHA256" "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 900 --max-filesize "$MODEL_SIZE" --retry 3 --retry-delay 10 --retry-all-errors "$MODEL_URL"
+        test "$(stat -c%s "$archive")" -eq "$MODEL_SIZE"
+        printf '%s  %s\n' "$MODEL_SHA256" "$archive" | sha256sum --check --strict
+        echo "LAZYSH_PARAKEET_TEST_ARCHIVE=$archive" >> "$GITHUB_ENV"
+    # Each case below runs after the others have reported, so one failure never hides another.
+    - name: Exercise the Parakeet model cache, ownership and download cases
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: cargo test --locked -p lazysh --lib voice::parakeet:: -- --nocapture
+    - name: Check the combined Whisper and Parakeet native link and clean exit
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: bunx moon run client-native:test-voice-interop-smoke
+    - name: Exercise the real Parakeet manager install, warm reuse and removal
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: bunx moon run client-native:test-parakeet-product

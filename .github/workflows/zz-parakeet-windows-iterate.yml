@@ -27,5 +27,13 @@ jobs:
           cmake --version
           Get-Volume | Format-Table
           (Get-Location).Path
-      - name: Runtime native fixtures
-        run: cargo test --locked -p lazysh-parakeet-runtime --test native -- --nocapture
+      - name: Windows ACL admission
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p lazysh-common --lib windows_acl:: -- --nocapture
+      - name: Runtime tests, lint and format
+        if: ${{ !cancelled() }}
+        run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
+      - name: Exercise Parakeet on Windows x86_64
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        uses: ./.github/actions/windows-parakeet
