@@ -299,7 +299,7 @@ test('source build frees only unused host toolchains before pulling the pinned c
   const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
   const job = workflow.jobs['source-build'], steps = job.steps;
   const cleanup = steps.find((step: any) => step.name === 'Reclaim unused host toolchains for container build');
-  expect(job['runs-on']).toBe('ubuntu-24.04');
+  expect(job['runs-on']).toBe('sengi-basic-4-ubuntu-2404');
   expect(cleanup?.run?.split('\n').map((line: string) => line.trim()).filter((line: string) => line && !line.startsWith('#'))).toEqual([
     'df -h /',
     'sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup',
