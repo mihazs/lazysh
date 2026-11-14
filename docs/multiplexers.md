@@ -20,11 +20,16 @@ this does not establish gesture behavior while those popups are open. Frontend
 tests check gesture routing, rejection and settings
 round-trips. Physical touch and mobile lifecycle acceptance remain open.
 
-This is the bounded Zellij tab/pane part of the reference client's documented
-hierarchy-aware gestures (source URL omitted). Tmux and Herdr
-navigation, workspace/session-level gestures and pane-zoom pinch bindings remain
-separate work. Current Zellij exposes `switch-session`, but lazysh does not yet
-use it or reconcile remembered attachment names after a host-side session switch.
+This is the Zellij-only part of the reference client's documented
+hierarchy-aware gestures (source URL omitted). The level-aware defaults and the
+**Next / previous multiplexer tab or window**, **Next / previous multiplexer
+pane** and **Zoom multiplexer pane** actions (the pane-zoom pinch) cover tmux and
+Herdr as well; see
+[Multiplexer gestures](shortcuts.md#multiplexer-gestures-header-pulls-and-long-press-keys).
+No gesture switches Herdr workspaces: use the [tab strip](#tab-strip) or the
+Workspaces screen. Current Zellij exposes `switch-session`, but lazysh does not
+yet use it or reconcile remembered attachment names after a host-side session
+switch.
 
 Open **Sessions** on an SSH connection. lazysh discovers tmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
 
