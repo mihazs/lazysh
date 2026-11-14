@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.62.0
+
+### Minor Changes
+
+- a3ea715: Add `lazysh-agent update --check` and `--status`: the host companion asks GitHub's release metadata over HTTPS, verified against the release's own digests, whether a newer companion exists, with a JSON result and documented exit codes.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.62.0
+  - @lazysh/common@1.62.0
+  - @lazysh/companion-release@1.62.0
+  - @lazysh/notification-client@1.62.0
+
 ## 1.61.0
 
 ### Patch Changes
