@@ -4,7 +4,7 @@ Status: **proof of concept, not shipped**. Answers the composition gate in [nati
 
 ## What was built
 
-`packages/terminal-runtime/prototypes/linux-surface` is a standalone crate (its own lock file, like the other prototypes; no CI job builds it). It opens a window with **tao 0.37.2 and wry 0.57.1**, the versions in the root `Cargo.lock`, and builds the web view into the window's default box the way Tauri does, so the GTK widget tree is the app's. The page is a fixture: a transparent body, an anchor `div`, a red box that overlaps the anchor's lower right corner, an input field, and a script that reports the anchor's `getBoundingClientRect()` to Rust (the same DOM-to-native hop the [Android host](android-native-surface-host.md) uses). On a request from `scripts/check.py` the probe creates, moves, recreates or removes a **native surface at the anchor**:
+`packages/terminal-runtime/prototypes/linux-surface` is a standalone crate (its own lock file, like the other prototypes; no CI job builds it). It opens a window with **tao 0.37.2 and wry 0.57.1**, the versions in the root `Cargo.lock`, and builds the web view into the window's default box the way Tauri does, so the GTK widget tree is the app's. The page is a fixture: a transparent body, an anchor `div`, a red box that overlaps the anchor's lower right corner, an input field, and a script that reports the anchor's `getBoundingClientRect()` to Rust (the DOM-to-native hop the [Android proof of concept](android-surface-composition-poc.md) describes). On a request from `scripts/check.py` the probe creates, moves, recreates or removes a **native surface at the anchor**:
 
 | Display server | Surface | How it is made |
 | --- | --- | --- |
