@@ -29,7 +29,7 @@ jobs:
           (Get-Location).Path
       - name: Windows ACL admission
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p lazysh-common --lib windows_acl:: -- --nocapture
+        run: "cargo test --locked -p lazysh-common --lib windows_acl:: -- --nocapture"
       - name: Runtime tests, lint and format
         if: ${{ !cancelled() }}
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check

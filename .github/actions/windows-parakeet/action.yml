@@ -25,7 +25,7 @@ runs:
     - name: Exercise the Parakeet model cache, ownership and download cases
       if: ${{ !cancelled() }}
       shell: bash
-      run: cargo test --locked -p lazysh --lib voice::parakeet:: -- --nocapture
+      run: "cargo test --locked -p lazysh --lib voice::parakeet:: -- --nocapture"
     - name: Check the combined Whisper and Parakeet native link and clean exit
       if: ${{ !cancelled() }}
       shell: bash
