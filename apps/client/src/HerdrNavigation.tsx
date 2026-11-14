@@ -9,6 +9,7 @@ import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {herdrStatusKeys,homeRelativePath,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
+import {readMuxLayout,writeMuxLayout,type MuxLayout} from './muxLayout';
 import './HerdrNavigation.css';
 import './HerdrNavigationPresentation.css';
 import './HerdrSpaces.css';
@@ -28,6 +29,9 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const model=useHerdrNavigation({sessionId,herdrSession,visible,reports});
   const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
+  const [layout,setLayout]=useState(readMuxLayout);
+  /** A space the user opened or closed by hand wins over its layout's default until the layout changes. */
+  const [spaceOpen,setSpaceOpen]=useState<Record<string,boolean>>({});
   const [spaceMenu,setSpaceMenu]=useState<string>();
   const [setupView,setSetupView]=useState<{host:string;open:boolean}>();
   const setupTrigger=useRef<HTMLButtonElement>(null);
@@ -77,8 +81,8 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {agentRow && <ChevronRight className="row-chevron" size={18} aria-hidden="true"/>}
     </button>;
   }
-  function disclosure(key:string,name:string,open:boolean) {
-    return <button type="button" className="herdr-disclosure" aria-expanded={open} aria-label={t('herdrNavigationCollapse',{name})} onClick={()=>toggle(key)}><ChevronDown size={18} aria-hidden="true"/></button>;
+  function disclosure(key:string,name:string,open:boolean,onToggle=()=>toggle(key)) {
+    return <button type="button" className="herdr-disclosure" aria-expanded={open} aria-label={t('herdrNavigationCollapse',{name})} onClick={onToggle}><ChevronDown size={18} aria-hidden="true"/></button>;
   }
   function panes(tab:HerdrTree['tabs'][number],workspaceLabel:string) {
     return tree?.panes.filter(pane=>pane.tab_id===tab.tab_id && pane.workspace_id===tab.workspace_id).map(pane=>{
@@ -127,16 +131,17 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {data.server && <>
         <label><span className="sr-only">{t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')}</span><input type="search" placeholder={t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
+        {mode==='spaces' && tree && <label>{t('jumpLayout')}<select value={layout} onChange={event=>{const next=event.target.value as MuxLayout;setLayout(next);setSpaceOpen({});writeMuxLayout(next);}}><option value="list">{t('preferencesList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option></select></label>}
         {mode==='spaces' && tree && !navigationOnly && <HerdrWorkspaceCreate {...create}/>}
-        {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
+        {mode==='spaces' && tree && <ul className={`herdr-navigation-tree herdr-layout-${layout}`}>{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,shownPath(pane.cwd),pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
-          const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || !collapsed.has(key);
+          const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || (spaceOpen[key] ?? (layout!=='accordion' || workspace.focused));
           return <li key={workspace.workspace_id} className="herdr-space">
             <div className="herdr-navigation-heading" onContextMenu={event=>{if(!navigationOnly && !working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
               {row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status,t('herdrTabCount',{total:formatNumber(tabs.length),count:tabs.length}))}
               {!navigationOnly && <HerdrSpaceActions {...create} tree={tree} workspace={workspace} open={spaceMenu===workspace.workspace_id} onOpenChange={value=>setSpaceMenu(value?workspace.workspace_id:undefined)}/>}
-              {disclosure(key,workspace.label,open)}
+              {disclosure(key,workspace.label,open,()=>setSpaceOpen(previous=>({...previous,[key]:!open})))}
             </div>
             {open && <ul>{tabs.map(tab=>{
               const tabKey=JSON.stringify([data.server,tab.tab_id]),count=tree.panes.filter(pane=>pane.tab_id===tab.tab_id && pane.workspace_id===tab.workspace_id).length;

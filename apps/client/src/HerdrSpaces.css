@@ -47,3 +47,6 @@
 /* In the narrowest sidebars a space's status keeps only its dot; the text stays in the row's accessible name. */
 @container (max-width: 300px) { .herdr-space > .herdr-navigation-heading .herdr-row-status { gap: 0; font-size: 0; } }
 @media (prefers-reduced-motion: reduce) { .herdr-disclosure svg { transition: none; } }
+
+/* Grid layout: spaces sit side by side as cards once the sidebar is wide enough for two. */
+.herdr-navigation-tree.herdr-layout-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); align-items: start; }

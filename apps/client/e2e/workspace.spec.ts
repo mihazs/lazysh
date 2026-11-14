@@ -476,6 +476,12 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
   await expect(live.getByRole('heading',{name:'Spaces',exact:true})).toBeVisible();
   await expect(page.locator(nativeHerdrNavigationRow('Development'))).toHaveCount(1);
+  const layout=live.getByRole('combobox',{name:'Jump To layout',exact:true});
+  await layout.selectOption('grid');
+  await expect(live.locator('.herdr-navigation-tree')).toHaveClass(/herdr-layout-grid/);
+  expect(await page.evaluate(()=>localStorage.getItem('lazysh.multiplexer.layout'))).toBe('grid');
+  expect(await live.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await layout.selectOption('list');
   const collapse=live.getByRole('button',{name:'Expand or collapse Development',exact:true});
   await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeHidden();
   await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
