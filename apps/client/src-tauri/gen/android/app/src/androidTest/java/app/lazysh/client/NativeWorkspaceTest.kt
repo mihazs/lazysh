@@ -4705,6 +4705,112 @@ class NativeWorkspaceTest {
         }
     }
 
+    private val parityOptions = "[role=dialog] .connection-options"
+
+    /** Opens the connection options and chooses the transport through the real native popup. */
+    private fun chooseOwnedTransport(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, transport: String) {
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$parityOptions > summary")).perform(webScrollIntoView()).perform(webClick())
+        selectNativeOption(scenario, parity.nonce, "$parityOptions select", transport)
+    }
+
+    /** Waits for the transport the workspace footer names, which is the one the session really uses. */
+    private fun awaitOwnedTransport(scenario: ActivityScenario<MainActivity>, shown: String) =
+        awaitDocument(scenario, "owned session over $shown", """
+            document.querySelector('.workspace-footer > span:last-of-type')?.textContent.startsWith(${JSONObject.quote(shown)}) &&
+              Boolean(document.querySelector('.terminal-canvas .xterm-screen'))
+        """)
+
+    /**
+     * Sets a number option the way React reads it. These fields are controlled: clearing one shows 0 again,
+     * so typing after a clear could never produce exactly the intended digits.
+     */
+    private fun setOwnedNumber(scenario: ActivityScenario<MainActivity>, selector: String, value: Int) =
+        assertEquals("Owned number option must take $value", "true", evaluate(scenario, """(()=>{
+            const input=document.querySelector(${JSONObject.quote(selector)});
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSONObject.quote(value.toString())});
+            input.dispatchEvent(new Event('input',{bubbles:true}));
+            return input.value===${JSONObject.quote(value.toString())};})()"""))
+
+    /** Proves a shell whose prompt is not known (ET and Mosh start the account's own login shell) by a fresh command's output. */
+    private fun proveOwnedCommand(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, tag: String) {
+        val proof = "PARITY_${tag}_${parity.nonce}"
+        val command = "printf 'PARITY_%s_%s\\n' '$tag' '${parity.nonce}'"
+        require(!command.contains(proof)) { "Owned $tag proof must not appear in its input" }
+        sendOwnedCommand(scenario, command, parity.label)
+        awaitDocument(scenario, "owned $tag shell proof", terminalScreenContains(proof))
+    }
+
+    @Test fun ownedSshAutoFallsBackToSshThroughRealUi() {
+        val name = "Parity auto fallback"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val port = parity.port("transport")
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port)
+            openOwnedConnect(scenario, name)
+            chooseOwnedTransport(scenario, parity, "auto")
+            // Neither helper exists on the host: both bootstraps exit at once instead of hanging on a shell.
+            replaceNativeText(scenario, "$parityOptions > fieldset:nth-of-type(1) input[maxlength='4096']", "/nonexistent/lazysh-mosh-server")
+            replaceNativeText(scenario, "$parityOptions > fieldset:nth-of-type(2) input[maxlength='4096']", "/nonexistent/lazysh-etterminal")
+            chooseOwnedPrivateKey(scenario, parity.fixture.getJSONObject("transport").getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("transport"), "127.0.0.1:$port")
+            proveOwnedShell(scenario, parity, parity.prompt("transport"), "AUTO")
+            awaitOwnedTransport(scenario, "SSH")
+            val notice = evaluate(scenario, "document.querySelector('.browser-banner[role=status]')?.textContent||''")
+            assertTrue("Auto must say it selected SSH: $notice", notice.contains("Auto selected SSH."))
+            val mosh = notice.indexOf("Mosh: Mosh server failed to start.")
+            val et = notice.indexOf("Eternal Terminal: ET helper did not start.")
+            assertTrue("Auto must report Mosh, then Eternal Terminal, as skipped: $notice", mosh in 0 until et)
+            println("lazysh parity: Auto tried Mosh then ET, kept the trusted SSH terminal and said why")
+        }
+    }
+
+    @Test fun ownedSshForcedEternalTerminalThroughRealUi() {
+        val name = "Parity forced ET"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val port = parity.port("transport")
+            val et = parity.fixture.getJSONObject("et")
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port)
+            openOwnedConnect(scenario, name)
+            chooseOwnedTransport(scenario, parity, "et")
+            replaceNativeText(scenario, "$parityOptions input[maxlength='4096']", et.getString("terminal"))
+            setOwnedNumber(scenario, "$parityOptions input[type=number]", et.getInt("port"))
+            chooseOwnedPrivateKey(scenario, parity.fixture.getJSONObject("transport").getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("transport"), "127.0.0.1:$port")
+            awaitOwnedTransport(scenario, "ET")
+            proveOwnedCommand(scenario, parity, "ET")
+            val facts = parity.control("et")
+            assertTrue("etserver must have started a terminal for this client: $facts", facts.getInt("sessions") >= 1)
+            println("lazysh parity: forced Eternal Terminal reached the owned etserver and ran a shell command")
+        }
+    }
+
+    @Test fun ownedSshMoshCustomServerPathAndPortRangeThroughRealUi() {
+        val name = "Parity Mosh options"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val mosh = parity.fixture.getJSONObject("mosh")
+            val host = mosh.getString("host")
+            val udpPort = mosh.getInt("udpPort")
+            addOwnedHost(scenario, name, host, parity.username, mosh.getInt("port"))
+            openOwnedConnect(scenario, name)
+            chooseOwnedTransport(scenario, parity, "mosh")
+            // The host's real mosh-server sits behind this wrapper; the default path would never reach it.
+            replaceNativeText(scenario, "$parityOptions input[maxlength='4096']", mosh.getString("serverPath"))
+            setOwnedNumber(scenario, "$parityOptions > fieldset label:nth-of-type(2) input", udpPort)
+            setOwnedNumber(scenario, "$parityOptions > fieldset label:nth-of-type(3) input", udpPort)
+            chooseOwnedPrivateKey(scenario, mosh.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("mosh"), "$host:${mosh.getInt("port")}")
+            awaitOwnedTransport(scenario, "Mosh")
+            proveOwnedCommand(scenario, parity, "MOSH")
+            val facts = parity.control("mosh")
+            val range = "$udpPort:$udpPort"
+            assertEquals("The custom server path must be bootstrapped once with the single-port range: $facts", listOf(range), parityList(facts, "ranges"))
+            assertEquals("The server must hold exactly the configured UDP port: $facts", listOf(udpPort.toString()), parityList(facts, "udpPorts"))
+            println("lazysh parity: Mosh ran the custom server path on the one configured UDP port")
+        }
+    }
+
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
         val fixture = "Instrumentation ${UUID.randomUUID()}"
         val selector = "button[aria-label='Connect to $fixture']"

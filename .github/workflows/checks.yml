@@ -828,7 +828,7 @@ jobs:
           targets: x86_64-linux-android
       - &android-owned-host-dependencies
         name: Install native Mosh fixture dependencies
-        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap libnss-wrapper protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
+        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap libnss-wrapper protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl libsodium-dev libunwind-dev libutempter-dev
       - &android-owned-namespace
         name: Verify native GUI namespace prerequisites
         env:
@@ -836,6 +836,10 @@ jobs:
         run: *native-fixture-namespace
       - *pinned-download-cache
       - *official-mosh-fixture
+      - name: Build the pinned official ET 7.0.0 fixture outside the checkout
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
+        timeout-minutes: 15
+        run: sh .github/scripts/build-official-et.sh
       - name: Install the distribution tmux and pinned tmux build dependencies
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
         run: sudo sh .github/scripts/apt-install.sh --no-update tmux libevent-dev bison
@@ -1018,13 +1022,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-  # Owned OpenSSH password, encrypted-key, rotated-key, bastion and agent-forwarding
-  # parity cases (#985) on the emulator; separate so their verdict is attributable.
+  # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback
+  # and forced-ET parity cases (#985) on the emulator; separate so their verdict is attributable.
   native-android-ssh-parity:
     needs: changes
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Includes the official ET 7.0.0 build.
+    timeout-minutes: 45
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: ssh-parity
@@ -1151,17 +1156,7 @@ jobs:
         run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish libncurses-dev libevent-dev bison
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
-        # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
-        run: |
-          et_root=$(mktemp -d "$RUNNER_TEMP/lazysh-et-7.0.0-XXXXXX")
-          sh .github/scripts/pinned-download.sh 3065d282c552bc40b8f0d455e1cae2089847c9c4f7f9b4ca07b89f7c653af98e "$et_root/et_7.0.0.orig.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 300 --max-filesize 29021963 https://github.com/MisterTea/EternalTerminal/releases/download/et-v7.0.0/et_7.0.0.orig.tar.gz
-          test "$(stat -c%s "$et_root/et_7.0.0.orig.tar.gz")" -eq 29021963
-          printf '%s  %s\n' '3065d282c552bc40b8f0d455e1cae2089847c9c4f7f9b4ca07b89f7c653af98e' "$et_root/et_7.0.0.orig.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$et_root/et_7.0.0.orig.tar.gz" --directory "$et_root" --no-same-owner --no-same-permissions
-          cmake -S "$et_root/MisterTea-EternalTerminal-7656a32" -B "$et_root/build" -DCMAKE_BUILD_TYPE=Release -DDISABLE_VCPKG=ON -DDISABLE_TELEMETRY=ON -DBUILD_TESTING=OFF
-          cmake --build "$et_root/build" --parallel 4 --target etserver etterminal
-          test "$("$et_root/build/etserver" --version)" = 'et version 7.0.0'
-          printf '%s\n' "ET_SERVER_BIN=$et_root/build/etserver" "ET_TERMINAL_BIN=$et_root/build/etterminal" >> "$GITHUB_ENV"
+        run: sh .github/scripts/build-official-et.sh
       - name: Build the newest pinned official tmux 3.8 outside the checkout
         timeout-minutes: 10
         # Release asset digest: https://api.github.com/repos/tmux/tmux/releases/tags/3.8
