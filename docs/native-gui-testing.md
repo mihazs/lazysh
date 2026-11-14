@@ -59,6 +59,25 @@ The Ubuntu 22.04 producer in [run 40827931880, job 123295170436](https://github.
 
 
 
+## Windows installed-application GUI
+
+`tests/windows-installed-gui.test.ts` installs the packaged NSIS application on the GitHub-hosted Windows VM that `native-desktop` already builds it on, and drives the installed WebView2 window. It runs after the install, repair and uninstall maintenance case and independently of the other native steps (`.github/actions/windows-installed-gui`). It never runs on a developer machine: it refuses any job that is not an owned GitHub-hosted Windows runner, and the portable helper cases run everywhere.
+
+The case:
+
+- rejects any ambient installation or application data before starting (the roaming and local `app.lazysh.client` roots, the legacy local `lazysh` root, shortcuts, install, protocol and autostart registry entries) and only ever removes roots that were absent at that point;
+- installs `/S /NS` into a fresh directory under `RUNNER_TEMP` and requires the installed `lazysh.exe` to have the predicted NSIS image size and SHA-256 (the same model the maintenance case uses);
+- starts `tauri-driver` 2.1.0 (installed with `cargo install --locked --version 2.1.0`, checked against Cargo's install receipt) with the official `msedgedriver.exe`, which is downloaded from `msedgedriver.microsoft.com` for the exact version of the installed WebView2 runtime, must carry a valid Microsoft Authenticode signature and must report that same version;
+- creates the session for the installed executable and requires exactly one process with that image path below the driver, with a native main window handle, while the build output `target/release/lazysh.exe` is not running;
+- finds the sidebar About button, clicks it through WebDriver and requires the bundled version and the source revision shown by the About panel to equal the checkout the job built;
+- closes the session, requires the application, then the driver and everything below it, to retire within 15 seconds, uninstalls, and requires the host to match its initial state again.
+
+The EdgeDriver is not pinned to one version because the hosted image's WebView2 runtime moves independently of this repository; a driver that does not match the runtime exactly fails the case instead. The ports are fresh loopback ports, but their listeners are not attributed to the driver process the way the Linux suite attributes socket inodes.
+
+The `native-desktop` step is `continue-on-error` until the first hosted run records a pass on [#492](https://github.com/mihazs/lazysh/issues/492); only then is it made blocking. A skipped or failed run proves nothing about the installed application.
+
+This establishes startup, window ownership and bundled identity of the installed application only. SSH, saved hosts, singleton delivery, ConPTY and a real terminal session on Windows remain open ([#492](https://github.com/mihazs/lazysh/issues/492), [#457](https://github.com/mihazs/lazysh/issues/457)). No Windows hardware was used; the result is whatever the hosted run reports.
+
 ## Acceptance limits
 
 The suite covers Linux singleton handoff through the real WebView/native IPC,

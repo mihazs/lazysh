@@ -720,6 +720,7 @@ jobs:
         if: runner.os == 'Windows'
         run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
       - name: Exercise actual Windows install, same-version repair and uninstall
+        id: windows-installer
         if: runner.os == 'Windows'
         timeout-minutes: 10
         env:
@@ -751,6 +752,12 @@ jobs:
         run: bunx moon run display-idle:test-rust
       - name: Exercise native resume policy persistence and cancellation
         run: bunx moon run client-native:test-resume-policy
+      # Last, and keyed on the installer step, so an unrelated native failure neither hides nor causes it.
+      # Non-blocking until its first qualifying hosted pass is recorded on #492; then remove continue-on-error.
+      - name: Exercise the installed Windows application GUI
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/windows-installed-gui
 
   native-android:
     needs: changes

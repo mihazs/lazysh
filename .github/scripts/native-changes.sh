@@ -62,8 +62,9 @@ classify() {
     # native-linux also runs the namespaced SSH host case.
     tests/android-ssh-host.test.ts | tests/support/androidSsh.ts | tests/support/sshFixture.ts) add client android ;;
     tests/android-*.test.ts | tests/support/android*.ts) add android ;;
-    # native-desktop runs release consistency and the Windows installer cases.
-    tests/release-consistency.test.ts | tests/release-artifacts.test.ts) add client ;;
+    # native-desktop runs release consistency, the Windows installer cases and the installed GUI.
+    tests/release-consistency.test.ts | tests/release-artifacts.test.ts | \
+      tests/windows-installed-gui.test.ts | tests/support/windowsGui.ts) add client ;;
     # Checked only by the always-running client and agent jobs, or by fdroid.yml. main-verdict.yml
     # runs on pushes to main alone, and tests/main-verdict.test.ts is part of test:ci.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
