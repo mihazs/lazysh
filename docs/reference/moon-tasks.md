@@ -76,7 +76,7 @@ so `apps/client/src-tauri/moon.yml` declares `agent`, `mosh-transport`, `portabl
 | `test-native-gui` | namespaced Vitest GUI run, Linux only; builds `build-native` first | no |
 | `build-native` | `tauri build --no-bundle` | no |
 | `build-android`, `-emulator`, `-fdroid`, `-fdroid-emulator` | `tauri android build` | no |
-| `test-android`, `-theme-links`, `-ssh`, `-ssh-parity`, `-herdr-navigation`, `-tmux`, `-qr`, `-biometric`, `-fdroid`, `-ntfy`, `-push-artifact` | Gradle or `bun test` acceptance, each depending on the build it needs | no |
+| `test-android`, `-theme-links`, `-ssh`, `-ssh-parity`, `-herdr-navigation`, `-tmux`, `-qr`, `-biometric`, `-fdroid`, `-ntfy`, `-ntfy-google`, `-push-artifact` | Gradle or `bun test` acceptance, each depending on the build it needs | no |
 | `init-ios`, `build-ios`, `test-ios-workspace` | Tauri and Xcode, macOS only | no |
 
 Android `build-*` and `test-android-*` tasks set their constants (`WHISPER_DONT_GENERATE_BINDINGS`,
