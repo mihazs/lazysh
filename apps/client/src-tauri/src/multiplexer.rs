@@ -153,21 +153,23 @@ impl Entry {
         } else {
             false
         };
+        let unavailable_when_refused = |error: SshError| {
+            if error.kind() == "remote_command_failed" {
+                unavailable()
+            } else {
+                error
+            }
+        };
         crate::ssh::exec_for_access(session, self.preflight_command(positive_unix)?, lease)
             .await
-            .map_err(|error| {
-                if error.kind() == "remote_command_failed" {
-                    unavailable()
-                } else {
-                    error
-                }
-            })?;
+            .map_err(unavailable_when_refused)?;
         if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
             let command = match self.kind {
                 MultiplexerKind::Herdr => "herdr session list --json",
                 MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
                 MultiplexerKind::Tmux => unreachable!(),
             };
+            // Zellij exits with an error, not an empty list, when no session is left.
             let output = crate::ssh::exec_for_access(
                 session,
                 if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
@@ -177,7 +179,8 @@ impl Entry {
                 },
                 lease,
             )
-            .await?;
+            .await
+            .map_err(unavailable_when_refused)?;
             if !persistent_sessions(self.kind, &output)?
                 .iter()
                 .any(|target| target.name == self.name)
@@ -186,6 +189,15 @@ impl Entry {
             }
         }
         Ok(())
+    }
+}
+/// A target that must already exist: reconnect and restore never create it.
+pub(crate) fn reattach_entry(kind: MultiplexerKind, value: &str) -> Entry {
+    Entry {
+        kind,
+        name: value.into(),
+        tmux_server: None,
+        create_if_missing: false,
     }
 }
 // Saved defaults create only their explicitly named target in the default namespace.

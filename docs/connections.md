@@ -56,7 +56,9 @@ that display; the remote persistent session follows the multiplexer's normal lif
 
 Workspace restoration retains the exact Mosh/Auto entry intention, multiplexer
 name and tmux server context. It authenticates afresh and never restores tickets,
-terminal contents or input authority. Zellij restoration remains manual.
+terminal contents or input authority. Zellij is restored the same way: it
+reattaches with `zellij attach <name>` and never creates the session, so a session
+that no longer exists fails instead of starting empty.
 Ordinary Herdr restoration follows its existing name-based CLI semantics: if the
 named server disappears after preflight, Herdr can create a new server with that
 name. A saved name is not an immutable server identity or proof of resumed agents.

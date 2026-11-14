@@ -511,7 +511,7 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
     );
     let kind = crate::multiplexer::MultiplexerKind::Herdr;
     let (child, mut events) =
-        multiplexer_child(&app, &lease, &source, "guard-left", kind, false).await;
+        multiplexer_child(&app, &lease, &source, "guard-left", kind, Some(false)).await;
     displays.keep(&state, &child).await;
     let output = owned_terminal_output(&app, &child.session_id, &mut events, b"GUARD_LEFT").await;
     assert!(!output
@@ -541,7 +541,7 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
     let pid = fixture.dir.path().join("guarded-input-pid");
     let original_pid = install_capture(&servers, "guard-left", pane, &bytes, &pid, false).await;
     let (other, mut other_events) =
-        multiplexer_child(&app, &lease, &source, "guard-right", kind, false).await;
+        multiplexer_child(&app, &lease, &source, "guard-right", kind, Some(false)).await;
     displays.keep(&state, &other).await;
     owned_terminal_output(&app, &other.session_id, &mut other_events, b"GUARD_RIGHT").await;
     adopt(&app, &lease, &other).await;
@@ -768,7 +768,7 @@ async fn real_stock_herdr_probe_keeps_ordinary_attachment_without_input_authorit
         &source,
         "stock",
         crate::multiplexer::MultiplexerKind::Herdr,
-        false,
+        Some(false),
     )
     .await;
     displays.keep(&state, &child).await;
