@@ -169,9 +169,9 @@ export class SshFixture {
     return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',this.ownedBinary(name),...args],this.directory,this.environment);
   }
   /** Observe the system tmux of a `tmux:true` fixture through only its private socket directory. */
-  tmux(args:string[]) {
+  tmux(args:string[],server='default') {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
-    return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
+    return new OwnedProcess('tmux',['-L',server,...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
   /** Run the pinned Zellij of a `zellijBinary` fixture against its private runtime directory only. */
   zellij(args:string[]) {
