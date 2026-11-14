@@ -386,7 +386,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Editable draft mode | verified | verified | `VoicePanel.tsx:417-420,777-785`. `e2e/voice-composition.spec.ts:4,26` (PW). | — |
 | Optional auto-send | implemented | implemented | `VoicePanel.tsx:422-430,746-753`; `voiceDelivery.ts`. Mocked `e2e/direct-dictation.spec.ts:5,38`. | Dictated text plus Enter reaching a real PTY. |
 | Transcription history | verified | verified | `apps/client/src/voiceHistory.ts`, `VoiceHistoryPanel.tsx`. `e2e/voice-history.spec.ts:59,112` (PW). | — |
-| Model removal | implemented | implemented | `voice.rs:332-344`; `VoicePanel.tsx:652-661,696`. Unit tests only. | Native removal check. |
+| Model removal | implemented | implemented | `voice.rs` `remove_model`; `VoicePanel.tsx:652-661,696`. Real-file Rust case `voice::tests::model_removal_deletes_only_the_named_model_and_frees_its_quota` (NL `cargo test`): deletes only the named model, refuses a running transcription, a path outside the model directory and a missing model, and the freed slot accepts a new import under the three-model limit. Passes locally; Desktop becomes `verified` once NL runs it green on `main`. | Android removal case in NAR; the Tauri command wrapper and its access lease are not exercised. |
 
 ## Attachments
 
