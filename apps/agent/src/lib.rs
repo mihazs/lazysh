@@ -10,6 +10,7 @@ pub mod hook_setup;
 pub mod hooks;
 pub mod host_browser;
 pub mod installation;
+pub mod kimi_code;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
@@ -125,6 +126,8 @@ pub enum Agent {
     Gemini,
     Droid,
     Kimi,
+    /// Kimi Code 2.4 approval requests only; reads through `kimi_code::read`, not `normalize`.
+    KimiCode,
     Copilot,
     Cursor,
     Amp,
@@ -267,6 +270,8 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
         return Err(Error::InvalidEvent);
     }
     let event = match agent {
+        // Its approvals need the correlation ledger, which a stateless event cannot carry.
+        Agent::KimiCode => return Err(Error::InvalidArgument),
         Agent::Generic => {
             if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
                 return Err(Error::InvalidEvent);
@@ -588,6 +593,7 @@ fn apply_schema(
         reported_history::SCHEMA,
         hooks::AIDER_HEALTH_SCHEMA,
         WAITING_SCHEMA,
+        kimi_code::SCHEMA,
     ] {
         transaction
             .execute_batch(schema)
@@ -658,6 +664,83 @@ fn state_file_present(path: &Path, nonempty: bool) -> bool {
         |error| error.kind() != io::ErrorKind::NotFound,
         |metadata| !nonempty || metadata.len() > 0,
     )
+}
+
+/// Write one lifecycle report and admit its relay transition, inside the caller's transaction.
+fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64) -> Result<()> {
+    let prior: Option<String> = transaction
+        .query_row(
+            "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
+            params![event.agent, event.session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?;
+    // An open wait keeps its specific kind and start when a generic notification repeats it.
+    let open: Option<(String, f64)> = transaction
+        .query_row(
+            "SELECT kind,since FROM session_waiting WHERE agent=?1 AND session_id=?2",
+            params![event.agent, event.session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?
+        .filter(|_| prior.as_deref() == Some(SessionState::NeedsAttention.as_str()));
+    let waiting = match (
+        event.waiting,
+        open.as_ref().and_then(|(kind, _)| Waiting::parse(kind)),
+    ) {
+        (Some(Waiting::Unknown), Some(kept)) => Some(kept),
+        (waiting, _) => waiting,
+    };
+    let since = open
+        .filter(|(kind, _)| Some(kind.as_str()) == waiting.map(Waiting::as_str))
+        .map_or(now, |(_, since)| since);
+    match waiting {
+            Some(kind) if event.state == SessionState::NeedsAttention => transaction.execute(
+                "INSERT INTO session_waiting VALUES (?1,?2,?3,?4)
+                ON CONFLICT(agent,session_id) DO UPDATE SET kind=excluded.kind,since=excluded.since",
+                params![event.agent, event.session_id, kind.as_str(), since],
+            ),
+            _ => transaction.execute(
+                "DELETE FROM session_waiting WHERE agent=?1 AND session_id=?2",
+                params![event.agent, event.session_id],
+            ),
+        }
+        .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
+    transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
+        ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
+        summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
+        params![event.agent,event.session_id,event.project,event.state.as_str(),event.summary,event.pane_id,now]).map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
+    let kind = match event.state {
+        SessionState::Working => lazysh_notification_client::Kind::Working,
+        SessionState::NeedsAttention => lazysh_notification_client::Kind::NeedsAttention,
+        SessionState::Done => lazysh_notification_client::Kind::Done,
+    };
+    relay::admit_transition(
+        transaction,
+        kind,
+        prior.as_deref() != Some(event.state.as_str()),
+        now as i64,
+    )
+    .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
+
+    Ok(())
+}
+
+/// Drop sessions past retention or the count cap, then the waits and observations of dropped sessions.
+fn apply_retention(transaction: &rusqlite::Transaction<'_>, now: f64) -> Result<()> {
+    transaction
+        .execute(
+            "DELETE FROM sessions WHERE updated_at < ?1",
+            [now - RETENTION_SECONDS],
+        )
+        .map_err(|e| storage_failure(StoragePhase::RetentionAge, e.into()))?;
+    transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+    transaction
+        .execute("DELETE FROM session_waiting WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent=session_waiting.agent AND sessions.session_id=session_waiting.session_id)", [])
+        .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+    Ok(())
 }
 
 impl Store {
@@ -835,76 +918,12 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| storage_failure(StoragePhase::IngestBegin, e.into()))?;
         if let Some(event) = event {
-            let prior: Option<String> = transaction
-                .query_row(
-                    "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
-                    params![event.agent, event.session_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?;
-            // An open wait keeps its specific kind and start when a generic notification repeats it.
-            let open: Option<(String, f64)> = transaction
-                .query_row(
-                    "SELECT kind,since FROM session_waiting WHERE agent=?1 AND session_id=?2",
-                    params![event.agent, event.session_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?
-                .filter(|_| prior.as_deref() == Some(SessionState::NeedsAttention.as_str()));
-            let waiting = match (
-                event.waiting,
-                open.as_ref().and_then(|(kind, _)| Waiting::parse(kind)),
-            ) {
-                (Some(Waiting::Unknown), Some(kept)) => Some(kept),
-                (waiting, _) => waiting,
-            };
-            let since = open
-                .filter(|(kind, _)| Some(kind.as_str()) == waiting.map(Waiting::as_str))
-                .map_or(now, |(_, since)| since);
-            match waiting {
-                Some(kind) if event.state == SessionState::NeedsAttention => transaction.execute(
-                    "INSERT INTO session_waiting VALUES (?1,?2,?3,?4)
-                    ON CONFLICT(agent,session_id) DO UPDATE SET kind=excluded.kind,since=excluded.since",
-                    params![event.agent, event.session_id, kind.as_str(), since],
-                ),
-                _ => transaction.execute(
-                    "DELETE FROM session_waiting WHERE agent=?1 AND session_id=?2",
-                    params![event.agent, event.session_id],
-                ),
-            }
-            .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
-            transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
-            ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
-            summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
-            params![event.agent,event.session_id,event.project,event.state.as_str(),event.summary,event.pane_id,now]).map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
-            let kind = match event.state {
-                SessionState::Working => lazysh_notification_client::Kind::Working,
-                SessionState::NeedsAttention => lazysh_notification_client::Kind::NeedsAttention,
-                SessionState::Done => lazysh_notification_client::Kind::Done,
-            };
-            relay::admit_transition(
-                &transaction,
-                kind,
-                prior.as_deref() != Some(event.state.as_str()),
-                now as i64,
-            )
-            .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
+            write_event(&transaction, event, now)?;
         }
         if let Some(source) = source {
             reported_history::insert(&transaction, source, reported_at)?;
         }
-        transaction
-            .execute(
-                "DELETE FROM sessions WHERE updated_at < ?1",
-                [now - RETENTION_SECONDS],
-            )
-            .map_err(|e| storage_failure(StoragePhase::RetentionAge, e.into()))?;
-        transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
-        transaction
-            .execute("DELETE FROM session_waiting WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent=session_waiting.agent AND sessions.session_id=session_waiting.session_id)", [])
-            .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+        apply_retention(&transaction, now)?;
         transaction
             .commit()
             .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;

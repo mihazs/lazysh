@@ -59,17 +59,29 @@ pub fn droid_config() -> Value {
     config["hooks"].take()
 }
 
-pub fn kimi_config() -> Value {
-    let events = [
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "Notification",
-        "SessionEnd",
-    ];
-    let content = events.iter().map(|event| format!("[[hooks]]\nevent = \"{event}\"\ncommand = \"lazysh-agent ingest --agent kimi\"\ntimeout = 5\n")).collect::<Vec<_>>().join("\n");
+fn kimi_fragment(events: &[&str], agent: &str) -> Value {
+    let content = events.iter().map(|event| format!("[[hooks]]\nevent = \"{event}\"\ncommand = \"lazysh-agent ingest --agent {agent}\"\ntimeout = 5\n")).collect::<Vec<_>>().join("\n");
     json!({"schemaVersion":1,"format":"toml","filename":"config.toml","content":content})
+}
+
+/// Legacy Kimi CLI 1.52 events; kept byte for byte.
+pub fn kimi_config() -> Value {
+    kimi_fragment(
+        &[
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "SessionEnd",
+        ],
+        "kimi",
+    )
+}
+
+/// Kimi Code 2.4 approval requests only; see `kimi_code`.
+pub fn kimi_code_config() -> Value {
+    kimi_fragment(&crate::kimi_code::EVENTS, "kimi-code")
 }
 
 pub fn copilot_config() -> Value {

@@ -44,6 +44,8 @@ libc = "0.2"
 [dev-dependencies]
 lazysh-common = { path = "../../packages/common", features = ["test-support"] }
 rusqlite = { version = "0.41", features = ["trace"] }
+# Parses the printed Kimi config.toml to check it against Kimi's strict hook schema.
+toml = "1.1"
 
 [target.'cfg(unix)'.dev-dependencies]
 lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }
