@@ -857,6 +857,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   are unchanged. Public sharing controls remain separate work.
 
 - Localize agent-board activity, one-request approval controls and companion
+- Mark the Herdr Spaces row that this device's own client shows as current, when the optional guarded Herdr host is attached (#591). Stock Herdr only reports the server's shared focus, which another connection can move, so the marker still follows that focus there. With the guard, the attached client reports its own workspace, tab and pane, and Spaces marks those instead, but only when the report names the server being read; while a Chat turn holds the guard the last reading is kept, and without the guard the marker returns to the shared focus. Needs a guarded Herdr host; it is built from the repository and not distributed yet (#1522). Real two-client acceptance on a device is not part of this change. No defaults change.
   settings in English, Brazilian Portuguese and Spanish. Language changes retain
   reported agent content, pending decisions and unsaved settings; Keep Awake
   controls remain a separate localization task. Defaults are unchanged.
