@@ -1,6 +1,6 @@
 # Terminal benchmarks
 
-Status: **the xterm.js baseline and the xterm.js canvas and WebGL renderer addons are measured on one desktop host, and the native candidates only by microbenchmarks: a wgpu prototype on the host GPU, the Android Canvas on Waydroid and libghostty-vt as WebAssembly in Node.** No Android, iOS, Windows or macOS device has been measured, none of the native candidates is a complete renderer (no text pipeline, no window surface, no bridge), and none of their figures ranks anything on a device. The measured rows below come from the harness described in [Baseline harness](#baseline-harness-xterm-js-dom-renderer), run in headless desktop Chromium, which is **not an Android WebView**. A number may be quoted elsewhere in `docs/architecture` only if it comes from this suite, with its environment block. Tracking: harness [#1303](https://github.com/mihazs/lazysh/issues/1303), renderer shootout [#1323](https://github.com/mihazs/lazysh/issues/1323), CI regression [#1341](https://github.com/mihazs/lazysh/issues/1341), Android energy [#1340](https://github.com/mihazs/lazysh/issues/1340). Related: [PRD](terminal-performance-prd.md) · [native rendering](native-rendering.md).
+Status: **the xterm.js baseline and the xterm.js canvas and WebGL renderer addons are measured on one desktop host, and the native candidates only by microbenchmarks: a wgpu prototype on the host GPU (Vulkan, OpenGL and OpenGL ES backends), the Android Canvas on Waydroid and libghostty-vt as WebAssembly in Node.** No Android, iOS, Windows or macOS device has been measured, none of the native candidates is a complete renderer (no text pipeline, no window surface, no bridge), and none of their figures ranks anything on a device. The measured rows below come from the harness described in [Baseline harness](#baseline-harness-xterm-js-dom-renderer), run in headless desktop Chromium, which is **not an Android WebView**. A number may be quoted elsewhere in `docs/architecture` only if it comes from this suite, with its environment block. Tracking: harness [#1303](https://github.com/mihazs/lazysh/issues/1303), renderer shootout [#1323](https://github.com/mihazs/lazysh/issues/1323), CI regression [#1341](https://github.com/mihazs/lazysh/issues/1341), Android energy [#1340](https://github.com/mihazs/lazysh/issues/1340). Related: [PRD](terminal-performance-prd.md) · [native rendering](native-rendering.md).
 
 ## Principles
 
@@ -586,6 +586,59 @@ What this says, and does not say:
 - **Instances are much smaller than pixels**: the reference copies 6.5 to 11.3 times more bytes per run than the wgpu prototype uploads. Both counters are bytes handed to the presentation target, but they mean different things (pixel rows against instance data), so they say little about energy.
 - **Memory is the cost to look at.** The first GPU context added about 61 MiB resident on this driver, against 7 to 8 MiB of renderer resident memory per background xterm.js session in the [renderer shootout](#renderer-shootout-xtermjs-renderers-1323); the 63 MiB is a Mesa driver on a desktop and is not an Android number. Four more renderers added about 3.1 MiB each (80x24).
 - Not shown: any Android or mobile GPU (driver quality, Vulkan on Android, surface loss in practice), a window surface and compositor, presentation timing and tearing, idle wake-ups and energy, text (glyph rasterization, shaping, font fallback, atlas growth and eviction), selection and cursor behaviour with real fonts, binary size, and Metal or Direct3D 12. CI keeps this crate compiling (`cargo fmt --check` and `cargo clippy` in the `herdr-native` job) but has no GPU to run it, so the parity tests were run locally.
+
+### wgpu on its OpenGL and OpenGL ES backends against Vulkan (same host GPU, not a device)
+
+Measured with the unmodified `wgpu_bench` of the [prototype above](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device) ([#1323](https://github.com/mihazs/lazysh/issues/1323)), on one machine and one GPU through three wgpu backends: the question is what the OpenGL ES path costs next to Vulkan, which is the path a phone falls back to where Vulkan is missing or poor. No source changed. The prototype creates its wgpu instance with every backend allowed and the default run picks Vulkan, so the other two are selected from outside the process:
+
+| Label | How it was selected | What wgpu reported (`adapter:` line of each raw file) |
+| --- | --- | --- |
+| Vulkan | nothing set | `backend: "Vulkan"`, `radv Mesa 26.2.6`, discrete GPU |
+| GL 4.6 | `VK_DRIVER_FILES=/nonexistent`: the Vulkan loader finds no driver, so wgpu uses its GL backend | `backend: "Gl"`, `4.6 (Core Profile) Mesa 26.2.6`, radeonsi |
+| GLES 3.2 | the same and `MESA_GL_VERSION_OVERRIDE=2.1`: Mesa refuses the desktop core context wgpu asks for first, so wgpu falls back to an OpenGL ES context | `backend: "Gl"`, `OpenGL ES 3.2 Mesa 26.2.6`, radeonsi |
+
+Environment: AMD Radeon RX 5500 XT for all three (RADV for Vulkan, radeonsi for the other two), Mesa 26.2.6, wgpu 30.0.2, Linux 7.3.3, rustc 1.96.1 release profile, headless and offscreen (no display server, no window surface); the CPU is the Ryzen 9 5900X host of the other measurements, shared with other builds and agents (load average at the start of the six runs 9.6, 11.3, 12.0, 12.8, 17.0 and 25.0). Six runs of the whole bench in the order Vulkan, GL, GLES, GLES, GL, Vulkan, so that two runs per backend sit on both sides of a drifting load: raw outputs [Vulkan 1](benchmarks/terminal-wgpu-vulkan-bench-1.txt) and [6](benchmarks/terminal-wgpu-vulkan-bench-6.txt), [GL 2](benchmarks/terminal-wgpu-gl-bench-2.txt) and [5](benchmarks/terminal-wgpu-gl-bench-5.txt), [GLES 3](benchmarks/terminal-wgpu-gles-bench-3.txt) and [4](benchmarks/terminal-wgpu-gles-bench-4.txt). Everything else is as in the [wgpu section](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device): 16 MiB per workload, 5 runs inside each invocation, 8x16 pixel cells, a frame after every 16 KiB chunk or every 256 KiB, draw plus present per frame.
+
+**Correctness.** `cargo test --release --test vs_reference` (4 tests, the pixel-for-pixel comparison with the CPU reference renderer, including incremental frames, wide and combining clusters, cursor shapes, selection and recovery from a lost device) passed under all three settings. That test prints no adapter, so which backend it ran on is established by the bench: the same variables gave the adapter lines in the table above, and with no Vulkan driver the test cannot have used Vulkan.
+
+Frame cost of the 16 stream rows, p50 (first run / second run of each backend, draw plus present in milliseconds), then p99:
+
+| grid | workload | frame cadence | Vulkan p50 | GL 4.6 p50 | GLES 3.2 p50 | Vulkan p99 | GL 4.6 p99 | GLES 3.2 p99 |
+|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | per chunk | 0.32 / 0.31 | 0.36 / 0.33 | 0.36 / 0.42 | 0.58 / 0.47 | 1.25 / 0.83 | 6.14 / 1.33 |
+| 80x24 | plain text | per window | 0.31 / 0.33 | 0.37 / 0.34 | 0.56 / 0.35 | 2.13 / 2.82 | 3.28 / 2.87 | 6.43 / 2.96 |
+| 80x24 | ANSI + truecolor | per chunk | 0.26 / 0.25 | 0.28 / 0.27 | 0.29 / 0.28 | 0.47 / 0.39 | 0.82 / 0.73 | 3.00 / 0.84 |
+| 80x24 | ANSI + truecolor | per window | 0.31 / 0.31 | 0.32 / 0.32 | 0.31 / 0.32 | 1.82 / 1.90 | 2.47 / 2.72 | 2.41 / 2.40 |
+| 80x24 | full-screen redraw | per chunk | 0.26 / 0.26 | 0.27 / 0.33 | 0.26 / 0.26 | 0.53 / 0.48 | 0.79 / 1.15 | 0.40 / 0.50 |
+| 80x24 | full-screen redraw | per window | 0.31 / 0.27 | 0.30 / 0.31 | 0.29 / 0.28 | 1.96 / 1.73 | 2.48 / 2.79 | 2.56 / 2.46 |
+| 80x24 | CJK/emoji/combining | per chunk | 0.28 / 0.28 | 0.28 / 0.28 | 0.27 / 0.27 | 0.52 / 0.54 | 0.68 / 0.58 | 0.64 / 0.75 |
+| 80x24 | CJK/emoji/combining | per window | 0.34 / 0.34 | 0.38 / 0.33 | 0.34 / 0.30 | 2.02 / 1.83 | 2.91 / 2.78 | 2.56 / 2.63 |
+| 152x38 | plain text | per chunk | 0.50 / 0.51 | 0.71 / 0.71 | 0.71 / 0.54 | 0.95 / 0.94 | 2.37 / 3.94 | 1.81 / 0.80 |
+| 152x38 | plain text | per window | 0.52 / 0.53 | 0.56 / 0.58 | 0.67 / 0.58 | 2.27 / 2.27 | 3.05 / 3.15 | 3.26 / 3.06 |
+| 152x38 | ANSI + truecolor | per chunk | 0.40 / 0.42 | 0.52 / 0.56 | 0.48 / 0.49 | 0.68 / 0.85 | 1.43 / 1.75 | 1.01 / 1.61 |
+| 152x38 | ANSI + truecolor | per window | 0.45 / 0.46 | 0.67 / 0.79 | 1.50 / 0.54 | 1.97 / 1.99 | 3.46 / 7.61 | 18.11 / 3.02 |
+| 152x38 | full-screen redraw | per chunk | 0.30 / 0.30 | 0.44 / 0.44 | 0.33 / 0.34 | 0.49 / 0.46 | 1.93 / 2.58 | 0.57 / 0.60 |
+| 152x38 | full-screen redraw | per window | 0.33 / 0.33 | 0.46 / 0.45 | 0.36 / 0.36 | 2.08 / 1.89 | 2.92 / 3.62 | 2.77 / 2.75 |
+| 152x38 | CJK/emoji/combining | per chunk | 0.43 / 0.43 | 0.52 / 0.56 | 0.47 / 0.49 | 0.76 / 0.64 | 1.24 / 1.55 | 0.95 / 1.29 |
+| 152x38 | CJK/emoji/combining | per window | 0.47 / 0.53 | 0.64 / 0.53 | 0.70 / 0.51 | 1.96 / 2.94 | 3.12 / 3.00 | 3.14 / 2.78 |
+
+Full repaint of the 64 screens of each workload (80x24, 20 passes after a warm-up pass), draw plus present p50 / p99 in milliseconds, first run then second run of each backend; the CPU reference column is the range of its p50 over all six runs and is the control: it ran in the same process and was constant to within 5 % in 12 of the 20 rows (stream and repaint) and moved by 6 to 76 % in the other 8, which are the rows a loaded host disturbed:
+
+| workload | CPU reference | Vulkan | GL 4.6 | GLES 3.2 |
+|---|---|---|---|---|
+| plain text | 0.802 to 1.195 | 0.370 / 1.212 ; 0.298 / 0.806 | 0.331 / 0.642 ; 0.316 / 0.485 | 0.328 / 0.800 ; 0.323 / 0.586 |
+| ANSI + truecolor | 0.440 to 0.444 | 0.280 / 1.636 ; 0.227 / 0.385 | 0.243 / 0.361 ; 0.250 / 0.535 | 0.256 / 0.524 ; 0.245 / 0.470 |
+| full-screen redraw | 0.453 to 0.651 | 0.272 / 2.115 ; 0.222 / 0.310 | 0.248 / 0.368 ; 0.255 / 0.504 | 0.249 / 0.345 ; 0.251 / 0.431 |
+| CJK/emoji/combining | 0.573 to 0.581 | 0.252 / 0.476 ; 0.233 / 0.523 | 0.254 / 0.607 ; 0.258 / 0.746 | 0.251 / 0.353 ; 0.273 / 0.861 |
+
+What this says, and does not say:
+
+- **At the phone-sized grid the three backends cost the same per frame.** At 80x24 the median p50 of GL was 1.07 times Vulkan's (range 1.00 to 1.14 over the 8 rows) and GLES's 1.00 times (0.95 to 1.42); the full repaints were 0.97 to 1.08 times. The medians are 0.25 to 0.56 ms for the stream rows and 0.22 to 0.37 ms for the repaints, far inside a 16.7 ms frame, and the differences are of the size of the host noise (the reference control moved by up to 76 % between runs in some rows), so no ranking of the three can be drawn from them.
+- **A larger grid is dearer through GL.** At 152x38 the median p50 was 1.36 times Vulkan's for GL 4.6 (1.09 to 1.60) and 1.19 times for GLES 3.2 (1.11 to 2.25). The 2.25 is one cell, 152x38 ANSI per window, where one GLES run measured 1.50 ms and the other 0.54 ms; the first was taken at load average 12.8 and its CPU reference was also slower in that cell (1.30 ms against 1.17 and 1.19 ms in the Vulkan runs), so that cell says little.
+- **The tail was worse than Vulkan's.** The p99 of GL was higher than Vulkan's in 16 of 16 rows (median 1.7 times, up to 4.7) and GLES's in 15 of 16 (median 1.4 times, up to 7.1). The worst of the 120 p99 cells of the six runs was 18.1 ms (GLES 3.2, 152x38 ANSI, one frame per 256 KiB, in the run taken at load average 12.8; the same cell of the other GLES run was 3.0 ms); every other cell was 7.6 ms or less (GL 4.6 peaked at 7.6 ms in the same row), and the Vulkan runs peaked at 2.9 ms.
+- **Pipeline throughput through GL was about as good as through Vulkan at 80x24 and lower at 152x38**: the median ratio of MiB/s was 0.96 (GL) and 1.01 (GLES) at 80x24 and 0.74 and 0.88 at 152x38 (rows 0.61 to 1.12). It includes the VT and the host load, so it is the weakest of these figures.
+- **Memory was within a few MiB.** The first GPU context added 65.5 and 65.7 MiB resident (GL 4.6), 65.3 and 65.3 MiB (GLES 3.2) and 61.1 and 60.5 MiB (Vulkan); four more renderers added 10.7 and 10.7 MiB (GL), 10.6 and 10.6 MiB (GLES) and 12.6 and 12.6 MiB (Vulkan). Creating the first renderer took 175 and 40 ms (GL), 179 and 84 ms (GLES) and 234 and 243 ms (Vulkan); one invocation each says little about startup, but no backend was slower to start than Vulkan in these runs.
+- **Not shown, and what it does not tell about an Android device.** The GLES context here is Mesa's radeonsi on a desktop GPU, forced by an environment variable, so these figures say that wgpu's GL backend adds no large cost next to Vulkan on one desktop driver and give nothing on an Android GLES driver (Adreno, Mali, PowerVR, ANGLE), whose quality, shader compiler and context-loss behaviour differ. Also not shown: wgpu on Android at all (the vendored `ghostty-vt` build has no Android target, see [Amendment 2](adr-0001-terminal-runtime.md#amendment-2-2026-11-13-native-candidates-measured-on-the-host-and-on-waydroid)), a window surface and EGL display on a device, presentation timing, energy, text, and idle wake-ups. The host load differed between runs (9.6 to 25), so a ratio below about 1.1 cannot be told from noise.
 
 ### Android Canvas drawing of the shared layout (Waydroid, not a device)
 
