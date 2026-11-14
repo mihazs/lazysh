@@ -1051,9 +1051,25 @@ settings, database contents or running agents.
 Windows inspect returns `supported: false` and
 `reason: "windowsInstallerUnsupported"`; install rejects before filesystem
 inspection or mutation. Windows binary downloads and normal CLI/storage checks
-remain supported. Native SID/DACL ownership, busy-executable replacement and a
-Windows OpenSSH shell adapter remain tracked in issue #490; the complete in-app
-installer remains issue #476.
+remain supported. Busy-executable replacement and a Windows OpenSSH shell
+adapter remain tracked in issue #490; the complete in-app installer remains
+issue #476.
+
+Issue #490 starts with the check Windows installation will rely on, which is not
+used by any command yet: `lazysh_common::windows_acl` decides from an object's
+owner SID and DACL whether it is private to the current user. The owner must be
+that user, the administrators group or the system. A file or directory is
+admitted as **no foreign change** when no other account holds an allowed right
+that writes data, appends, writes attributes or extended attributes, deletes the
+object or a child, or changes its DACL or owner (an executable others may still
+read and run), and as **private** when no other account holds any allowed right.
+Deny entries and inherit-only entries are ignored, a NULL DACL is refused, and
+the system, administrators and `OWNER RIGHTS` entries never count as foreign.
+Reading a path first refuses symbolic links, junctions and every other reparse
+point. The decision is a pure function over the owner and the entries, tested on
+every platform; the Windows reader and the decisions on real files and `icacls`
+grants run in the hosted Windows desktop job. No Windows host was available to
+the author, so that job is the first execution of the reader.
 
 ## Listening ports for sign-in callbacks
 
