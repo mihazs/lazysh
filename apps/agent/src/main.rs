@@ -362,6 +362,11 @@ enum SettingsCommand {
         #[command(subcommand)]
         command: NotificationsCommand,
     },
+    /// Switches an older companion sharing the state directory must not see in `settings.json`.
+    Features {
+        #[command(subcommand)]
+        command: FeaturesCommand,
+    },
     Update {
         #[arg(long)]
         expected_revision: u64,
@@ -407,6 +412,21 @@ enum NotificationsCommand {
         suppress_while_desktop_unlocked: bool,
     },
 }
+#[derive(Subcommand)]
+enum FeaturesCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        simulator_streaming_enabled: bool,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        port_scan_enabled: bool,
+    },
+}
+fn json(value: impl serde::Serialize) -> lazysh_agent::Result<serde_json::Value> {
+    serde_json::to_value(value).map_err(|_| Error::InvalidEvent)
+}
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     let operation = match &cli.command {
         Command::Discover { .. } | Command::History { .. } | Command::ReportedHistory { .. } => {
@@ -418,6 +438,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     };
     if let Some(operation) = operation {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
+    }
+    if matches!(&cli.command, Command::Devices { command } if command.is_stream()) {
+        lazysh_agent::host_features::read(&lazysh_agent::state_directory()?)?
+            .check_simulator_streaming()?;
     }
     let output = match cli.command {
         Command::BrowserOpen { .. } => None,
@@ -467,50 +491,67 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         )?),
         Command::Settings { command } => {
             let directory = lazysh_agent::state_directory()?;
-            let settings = match command {
+            Some(match command {
                 SettingsCommand::HostBrowser { command } => {
                     use lazysh_agent::host_browser::settings;
-                    serde_json::to_value(match command {
-                        HostBrowserSettingsCommand::Show => settings::read(&directory)?,
+                    match command {
+                        HostBrowserSettingsCommand::Show => json(settings::read(&directory)?)?,
                         HostBrowserSettingsCommand::Update {
                             expected_revision,
                             host_browser_enabled,
-                        } => settings::update(&directory, expected_revision, host_browser_enabled)?,
-                    })
+                        } => json(settings::update(
+                            &directory,
+                            expected_revision,
+                            host_browser_enabled,
+                        )?)?,
+                    }
                 }
                 SettingsCommand::Notifications { command } => {
                     use lazysh_agent::notification_policy as policy;
-                    serde_json::to_value(match command {
-                        NotificationsCommand::Show => policy::read(&directory)?,
+                    match command {
+                        NotificationsCommand::Show => json(policy::read(&directory)?)?,
                         NotificationsCommand::Update {
                             expected_revision,
                             nested_agent_suppression_enabled,
                             suppress_while_desktop_unlocked,
-                        } => policy::update(
+                        } => json(policy::update(
                             &directory,
                             expected_revision,
                             nested_agent_suppression_enabled,
                             suppress_while_desktop_unlocked,
-                        )?,
-                    })
+                        )?)?,
+                    }
                 }
-                SettingsCommand::Show => {
-                    serde_json::to_value(lazysh_agent::settings::read(&directory)?)
-                }
+                SettingsCommand::Show => json(lazysh_agent::settings::read(&directory)?)?,
                 SettingsCommand::Update {
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                } => serde_json::to_value(lazysh_agent::settings::update(
+                } => json(lazysh_agent::settings::update(
                     &directory,
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                )?),
-            };
-            Some(settings.map_err(|_| Error::InvalidEvent)?)
+                )?)?,
+                SettingsCommand::Features {
+                    command: FeaturesCommand::Show,
+                } => json(lazysh_agent::host_features::read(&directory)?)?,
+                SettingsCommand::Features {
+                    command:
+                        FeaturesCommand::Update {
+                            expected_revision,
+                            simulator_streaming_enabled,
+                            port_scan_enabled,
+                        },
+                } => json(lazysh_agent::host_features::update(
+                    &directory,
+                    expected_revision,
+                    simulator_streaming_enabled,
+                    port_scan_enabled,
+                )?)?,
+            })
         }
         Command::Usage {
             agent,

@@ -49,7 +49,7 @@ it('rejects invalid ports without invoking native forwarding', async () => {
   expect(vi.mocked(invoke).mock.calls.every(([command]) => command === 'list_previews')).toBe(true);
 });
 it('shows actual listener process metadata and applies only the explicit allowlist', async () => {
-  vi.mocked(invoke).mockImplementation(async command => command === 'list_previews' ? [] : [{ port: 3000, address: '127.0.0.1', process: 'node', pid: 123, http: true }]);
+  vi.mocked(invoke).mockImplementation(async command => command === 'list_previews' ? [] : command === 'get_host_features' ? null : [{ port: 3000, address: '127.0.0.1', process: 'node', pid: 123, http: true }]);
   render(<PreviewPanel sessionId="ssh-one" />);
   await waitFor(() => expect((screen.getByRole('button', { name: 'Discover listeners' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.change(screen.getByLabelText('Discover ports'), { target: { value: '3000,8000-8001' } });
@@ -61,7 +61,7 @@ it('shows actual listener process metadata and applies only the explicit allowli
 });
 
 async function discoverFramework(framework: unknown, http = true) {
-  vi.mocked(invoke).mockImplementation(async command => command === 'list_previews' ? [] : [{ port: 3000, address: '127.0.0.1', process: 'node', pid: 123, http, framework }]);
+  vi.mocked(invoke).mockImplementation(async command => command === 'list_previews' ? [] : command === 'get_host_features' ? null : [{ port: 3000, address: '127.0.0.1', process: 'node', pid: 123, http, framework }]);
   render(<PreviewPanel sessionId="ssh-one" />);
   const discover = screen.getByRole('button', { name: 'Discover listeners' });
   await waitFor(() => expect((discover as HTMLButtonElement).disabled).toBe(false));

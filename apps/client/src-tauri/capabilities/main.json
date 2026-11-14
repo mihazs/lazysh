@@ -173,6 +173,8 @@
     "allow-update-companion-settings",
     "allow-get-host-browser-settings",
     "allow-update-host-browser-settings",
+    "allow-get-host-features",
+    "allow-update-host-features",
     "allow-agent-transcript",
     "allow-agent-transcripts",
     "allow-agent-history",

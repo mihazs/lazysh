@@ -11,6 +11,7 @@ pub mod herdr_pane_input;
 pub mod hook_setup;
 pub mod hooks;
 pub mod host_browser;
+pub mod host_features;
 pub mod installation;
 pub mod kimi_code;
 pub mod listeners;

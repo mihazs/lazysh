@@ -45,22 +45,13 @@ impl Settings {
             Err(Error::Settings(reason))
         }
     }
-    fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 || self.revision > private_json::MAX_REVISION {
-            return Err(Error::InvalidArgument);
-        }
-        Ok(())
-    }
 }
 
 /// Absent settings return compatibility defaults without creating any file.
 pub fn read(directory: &Path) -> Result<Settings> {
-    let Some(bytes) = private_json::read(directory, "settings.json")? else {
-        return Ok(Settings::default());
-    };
-    let settings: Settings = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidArgument)?;
-    settings.validate()?;
-    Ok(settings)
+    private_json::read_or_default(directory, "settings.json", |settings: &Settings| {
+        settings.schema_version == 1 && settings.revision <= private_json::MAX_REVISION
+    })
 }
 
 pub fn update(
