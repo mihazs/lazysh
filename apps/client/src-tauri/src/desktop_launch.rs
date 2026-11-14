@@ -29,32 +29,47 @@ pub(crate) enum MuxTarget {
         #[serde(rename = "tmuxServer")]
         server: String,
     },
+    Rmux {
+        #[serde(rename = "tmuxServer")]
+        server: String,
+    },
     Herdr,
 }
 impl MuxTarget {
     #[cfg(desktop)]
     fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "herdr" => Ok(Self::Herdr),
-            "tmux" => Ok(Self::Tmux {
-                server: "default".into(),
-            }),
-            value if value.starts_with("tmux:") => {
-                let server = crate::tmux_server::TmuxServer::parse(Some(&value[5..]))
-                    .map_err(|_| "Invalid tmux server name for --mux.".to_owned())?;
-                let server = match server {
-                    crate::tmux_server::TmuxServer::Default => "default".into(),
-                    crate::tmux_server::TmuxServer::Named(name) => name,
+        let (family, label) = match value.split_once(':') {
+            Some((family, label)) => (family, Some(label)),
+            None => (value, None),
+        };
+        match (family, label) {
+            ("herdr", None) => Ok(Self::Herdr),
+            ("tmux" | "rmux", _) => {
+                let binary = if family == "rmux" {
+                    crate::tmux_server::Binary::Rmux
+                } else {
+                    crate::tmux_server::Binary::Tmux
                 };
-                Ok(Self::Tmux { server })
+                let server = crate::tmux_server::TmuxServer::parse_for(binary, label)
+                    .map_err(|_| format!("Invalid {family} server name for --mux."))?
+                    .label()
+                    .to_owned();
+                Ok(if family == "rmux" {
+                    Self::Rmux { server }
+                } else {
+                    Self::Tmux { server }
+                })
             }
-            _ => Err("Use --mux tmux, tmux:SERVER or herdr with --host SAVED_ID.".into()),
+            _ => Err(
+                "Use --mux tmux, tmux:SERVER, rmux, rmux:SERVER or herdr with --host SAVED_ID."
+                    .into(),
+            ),
         }
     }
 }
 #[cfg(desktop)]
 const USAGE: &str =
-    "Use --dir PATH alone, or --host SAVED_ID with optional --mux tmux|tmux:SERVER|herdr. Single-dash forms are also accepted.";
+    "Use --dir PATH alone, or --host SAVED_ID with optional --mux tmux|tmux:SERVER|rmux|rmux:SERVER|herdr. Single-dash forms are also accepted.";
 
 #[cfg(desktop)]
 fn owned_flag(value: &str) -> bool {
@@ -902,6 +917,18 @@ mod tests {
                     server: "世界 '$(printf NO);".into(),
                 },
             ),
+            (
+                "rmux",
+                MuxTarget::Rmux {
+                    server: "default".into(),
+                },
+            ),
+            (
+                "rmux:世界 '$(printf NO);",
+                MuxTarget::Rmux {
+                    server: "世界 '$(printf NO);".into(),
+                },
+            ),
             ("herdr", MuxTarget::Herdr),
         ] {
             for args in [
@@ -930,6 +957,7 @@ mod tests {
             vec!["--host", "saved", "--mux", "tmux", "--mux", "herdr"],
             vec!["--mux", "herdr", "--host", "saved", "--host", "other"],
             vec!["--host", "saved", "--mux", "zellij"],
+            vec!["--host", "saved", "--mux", "herdr:other"],
             vec![
                 "--mux",
                 "herdr",
@@ -956,11 +984,13 @@ mod tests {
             &"a".repeat(65),
             &"世".repeat(22),
         ] {
-            assert!(parse(
-                arguments(&["--host", "saved", "--mux", &format!("tmux:{name}")]),
-                || unreachable!()
-            )
-            .is_err());
+            for family in ["tmux", "rmux"] {
+                assert!(parse(
+                    arguments(&["--host", "saved", "--mux", &format!("{family}:{name}")]),
+                    || unreachable!()
+                )
+                .is_err());
+            }
         }
     }
     #[test]
@@ -974,6 +1004,10 @@ mod tests {
             (
                 "tmux:世界 '$(printf NO);",
                 serde_json::json!({"kind":"tmux","tmuxServer":"世界 '$(printf NO);"}),
+            ),
+            (
+                "rmux:世界 '$(printf NO);",
+                serde_json::json!({"kind":"rmux","tmuxServer":"世界 '$(printf NO);"}),
             ),
             ("herdr", serde_json::json!({"kind":"herdr"})),
         ] {

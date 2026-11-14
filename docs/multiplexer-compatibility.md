@@ -121,23 +121,23 @@ implemented without full evidence, *part* means partial.
 
 | Capability | tmux | Zellij | Herdr | rmux |
 | --- | --- | --- | --- | --- |
-| Discovery | yes | impl → yes #1145 | yes | no → #1140 |
-| Attach, reattach | yes | yes | yes | no → #1140 |
-| Navigation, Jump To, current marker | yes; pane rows → #1146 | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
-| Create in a directory | yes | part → #1141 | yes | no → #1140 |
+| Discovery | yes | impl → yes #1145 | yes | yes |
+| Attach, reattach | yes | yes | yes | attach yes; reattach → #1677 |
+| Navigation, Jump To, current marker | yes; pane rows → #1146 | numbered tabs only → #1145 | yes; marker assertion #990 | tree and window and pane actions yes; Jump To → #1675 |
+| Create in a directory | yes | part → #1141 | yes | yes |
 | Create in a worktree | no → #1141 | no → #1141 | yes | no → #1141 |
 | Agent launch | no → #1141 | no → #1141 | yes | no → #1141 |
-| Rename | session, window; pane → #1144 | no → #1144 | workspace, tab; pane → #1144 | no → #1140, #1144 |
+| Rename | session, window; pane → #1144 | no → #1144 | workspace, tab; pane → #1144 | session, window; pane → #1144 |
 | Close | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
-| Split, zoom | yes | yes | yes | no → #1140 |
+| Split, zoom | yes | yes | yes | yes |
 | Resize | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
 | History | prefix+[ only → #1147 | no → #1147 | no → #1147 | no → #1147 |
 | OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
-| Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
+| Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1675 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
 | Notification opens the pane | part → #1146 | no → #1146 | part → #1146 | no → #1146 |
-| Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | no → #1140 (while the daemon lives) |
-| Version detection | yes | yes | version yes; API schema → #1159 | no → #1140 |
+| Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | impl → #1677 (while the daemon lives) |
+| Version detection | yes | yes | version yes; API schema → #1159 | yes (Limited until #1675) |
 
 Restore after a host reboot is not offered for rmux (in-memory daemon) or Zellij;
 lazysh offers to recreate the session instead.

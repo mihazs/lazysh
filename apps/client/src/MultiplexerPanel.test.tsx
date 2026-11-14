@@ -150,7 +150,7 @@ it('lists discovered versions, explains each limited multiplexer and reports the
   ];
   vi.mocked(invoke).mockResolvedValue({...tree,herdrAvailable:true,zellijAvailable:true,tools});const onTools=vi.fn();
   render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} onTools={onTools}/>);
-  expect(await screen.findByText('tmux 3.2a (Limited) · Herdr 0.8.2 (Limited) · Zellij (Limited)')).toBeTruthy();
+  expect(await screen.findByText('tmux 3.2a (Limited) · rmux not installed · Herdr 0.8.2 (Limited) · Zellij (Limited)')).toBeTruthy();
   expect(screen.getAllByRole('note').map(note=>note.textContent)).toEqual([
     'Jump To and Chat input need tmux 3.4 or newer.',
     'Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.',
@@ -181,4 +181,46 @@ it('explains why a requested limited Herdr session cannot be attached', async ()
   render(<MuxPanel sessionId="ssh1" requested={request({kind:'herdr'})} onAttach={vi.fn()}/>);
   expect(await screen.findByText('Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.')).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
+});
+
+const rmuxTool = {kind:'rmux',version:'0.10.0',support:'degraded',missing:['jump','confirmedInput']};
+const rmuxTree = {...tree,tmuxAvailable:false,rmuxAvailable:true,sessions:[{...tree.sessions[0],name:'rmux work'}]};
+it('browses, labels and attaches rmux sessions on their own server and lists no Jump To',async()=>{
+  vi.mocked(invoke).mockImplementation(async (command,args)=>command==='multiplexer_tree'
+    ? (args as {kind?:string}).kind==='rmux' ? {...rmuxTree,tools:[rmuxTool]} : {...tree,rmuxAvailable:true,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]},rmuxTool]} : undefined);
+  const attach=vi.fn().mockResolvedValue(undefined);
+  render(<MuxPanel sessionId="ssh1" onAttach={attach}/>);
+  expect(await screen.findByText('tmux 3.4 (Supported) · rmux 0.10.0 (Limited) · Herdr not installed · Zellij not installed')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Browse rmux sessions'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Attach rmux work'}));
+  await waitFor(()=>expect(attach).toHaveBeenCalledWith('rmux work','rmux',undefined));
+  expect(screen.getByText('rmux: rmux work', {exact:false})).toBeTruthy();
+  expect(screen.getByText('rmux server')).toBeTruthy();
+  expect(screen.getByRole('note').textContent).toContain('Jump To and Chat input are not available for rmux yet.');
+  expect(invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'ssh1',kind:'rmux'},expect.anything());
+  fireEvent.click(screen.getByRole('button',{name:'Select %9'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('tmux_action',{sessionId:'ssh1',action:{type:'selectPane',target:'%9'},kind:'rmux'},expect.anything()));
+});
+it('keeps an attached rmux terminal on its labelled server and offers the tmux-family prefix shortcuts',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...rmuxTree,tools:[rmuxTool]});
+  const attach=vi.fn().mockResolvedValue(undefined);
+  render(<MuxPanel sessionId="ssh1" attached={{kind:'rmux',name:'rmux work',tmuxServer:'lab'}} onAttach={attach}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Attach rmux work'}));
+  await waitFor(()=>expect(attach).toHaveBeenCalledWith('rmux work','rmux','lab'));
+  expect(invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'ssh1',tmuxServer:'lab',kind:'rmux'},expect.anything());
+  expect(screen.queryByRole('button',{name:'Browse tmux sessions'})).toBeNull();
+  expect(screen.getByRole('region',{name:'rmux prefix shortcuts'})).toBeTruthy();
+});
+it('says to restart the rmux daemon when it refuses this client and offers no rmux sessions',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...tree,rmuxAvailable:true,tools:[{kind:'rmux',version:'0.10.0',support:'unsupported',missing:[],reason:'daemonWire'}]});
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()}/>);
+  expect(await screen.findByText('Restart the rmux daemon after upgrading.')).toBeTruthy();
+  expect(screen.getByText(/rmux 0.10.0 \(Unsupported\)/)).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Browse rmux sessions'})).toBeNull();
+});
+it('opens the requested rmux label from a desktop launch and reports it missing when the host has none',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...tree,rmuxAvailable:false});
+  render(<MuxPanel sessionId="ssh1" requested={request({kind:'rmux',tmuxServer:'agents'})} onAttach={vi.fn()}/>);
+  expect(await screen.findByText('rmux is not installed on this host. The SSH terminal remains available.')).toBeTruthy();
+  expect(invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'ssh1',tmuxServer:'agents',kind:'rmux'},expect.anything());
 });
