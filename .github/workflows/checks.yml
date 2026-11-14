@@ -1289,6 +1289,12 @@ jobs:
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
+      - name: Create a saved Zellij default, reattach it without creating and refuse a vanished session over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap
+        run: *exact-ignored-case
       - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:

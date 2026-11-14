@@ -171,7 +171,7 @@ test('workspace restore details disclose without connecting and leave Dismiss re
   expect(await banner.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
   await details.click();
   await expect(details).toHaveAttribute('aria-expanded','true');
-  await expect(banner.getByText('Uses saved credentials; tmux and Herdr reattach. Open Zellij sessions from Sessions.',{exact:true})).toBeVisible();
+  await expect(banner.getByText('Uses saved credentials; tmux, Herdr and Zellij reattach to their sessions.',{exact:true})).toBeVisible();
   expect(await page.evaluate(()=>(window as Window & {restoreCommands:string[]}).restoreCommands)).toEqual([]);
   await expect(dismiss).toBeInViewport();
   await banner.screenshot({path:testInfo.outputPath('workspace-restore.png')});

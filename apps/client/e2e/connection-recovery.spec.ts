@@ -80,6 +80,23 @@ test('a lost tmux session retries with backoff and reattaches the same tmux sess
   await expect(page.getByText(/Session ended/)).toHaveCount(0);
 });
 
+test('a lost Zellij session reconnects by attaching the same session without creating it',async({page})=>{
+  await open(page,[{hostId:'box',attached:{kind:'zellij',name:'notes'}}]);
+  await expect(terminal(page,'Agent box / notes')).toBeVisible();
+  const first=await calls(page,'attach_multiplexer');
+  expect(first.map(({args})=>({kind:args.kind,name:args.name,createIfMissing:args.createIfMissing}))).toEqual([{kind:'zellij',name:'notes',createIfMissing:false}]);
+
+  await close(page,'native-2',{message:'Connection reset by peer',lost:true});
+  const lost=lostBanner(page,'Agent box / notes');
+  await expect(lost).toContainText('Connection lost.');
+  // The first scheduled attempt reconnects on its own after about a second.
+  await expect(lost).toHaveCount(0,{timeout:8000});
+  const attaches=await calls(page,'attach_multiplexer');
+  expect(attaches).toHaveLength(2);
+  expect({sessionId:attaches[1].args.sessionId,kind:attaches[1].args.kind,name:attaches[1].args.name,createIfMissing:attaches[1].args.createIfMissing}).toEqual({sessionId:'native-3',kind:'zellij',name:'notes',createIfMissing:false});
+  await expect(page.locator('.terminal-canvas')).toHaveCount(1);
+});
+
 test('Close on the lost-connection banner ends the session and stops retrying',async({page})=>{
   await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents'}}]);
   await expect.poll(async()=>(await calls(page,'attach_tmux')).length).toBe(1);

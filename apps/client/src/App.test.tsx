@@ -1220,9 +1220,9 @@ it('keeps restore gated on host loading and explicit action while exposing its l
   expect(restore).toHaveProperty('disabled',true);
   const details=screen.getByRole('button',{name:'Workspace details'});
   expect(details.getAttribute('aria-expanded')).toBe('false');
-  expect(screen.queryByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeNull();
+  expect(screen.queryByText(t('appUsesSavedCredentialsMultiplexersReattach'))).toBeNull();
   await user.click(details);
-  expect(screen.getByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeTruthy();
+  expect(screen.getByText(t('appUsesSavedCredentialsMultiplexersReattach'))).toBeTruthy();
   expect(mocks.api.connect).not.toHaveBeenCalled();
   await act(async()=>loaded([host])); await waitFor(()=>expect(restore).toHaveProperty('disabled',false));
   await user.click(restore);
@@ -1244,21 +1244,20 @@ it('dismisses saved restoration without disconnecting or replacing the current w
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();
 });
 
-it.each([undefined, "agents"])("restores the exact tmux workspace on server %s without sending shell text", async tmuxServer => {
-  vi.mocked(localStorage.getItem).mockReturnValue(
-    JSON.stringify([
-      { hostId: "home", attached: { kind: "tmux", name: "durable-agent", ...(tmuxServer===undefined?{}:{tmuxServer}) } },
-    ]),
-  );
+/** Offers the saved workspace, restores it on the click and waits for its live terminal. */
+async function restoreSaved(saved: unknown[]) {
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify(saved));
   mocks.api.connect.mockResolvedValue({ sessionId: "temporary-shell" });
-  mocks.api.attachTmux.mockResolvedValue({ sessionId: "restored-agent" });
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole("button", { name: "Connect to Home" });
-  await user.click(
-    screen.getByRole("button", { name: "Restore previous workspace" }),
-  );
+  await user.click(screen.getByRole("button", { name: "Restore previous workspace" }));
   expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
+}
+
+it.each([undefined, "agents"])("restores the exact tmux workspace on server %s without sending shell text", async tmuxServer => {
+  mocks.api.attachTmux.mockResolvedValue({ sessionId: "restored-agent" });
+  await restoreSaved([{ hostId: "home", attached: { kind: "tmux", name: "durable-agent", ...(tmuxServer===undefined?{}:{tmuxServer}) } }]);
   expect(mocks.api.connect).toHaveBeenCalledWith(
     "home",
     {},
@@ -1279,6 +1278,15 @@ it.each([undefined, "agents"])("restores the exact tmux workspace on server %s w
       { hostId: "home", attached: { kind: "tmux", name: "durable-agent", ...(tmuxServer===undefined?{}:{tmuxServer}) } },
     ]),
   );
+});
+
+it("restores a saved Zellij session by reattaching it without creating one", async () => {
+  mocks.api.attachMultiplexer.mockResolvedValue({ sessionId: "restored-zellij" });
+  await restoreSaved([{ hostId: "home", attached: { kind: "zellij", name: "notes" } }]);
+  // The trailing `true` is the reattach flag: the host never creates the session.
+  expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith("temporary-shell", "zellij", "notes", expect.any(Function), true);
+  expect(mocks.api.write).not.toHaveBeenCalled();
+  expect(localStorage.setItem).toHaveBeenLastCalledWith("lazysh.workspace.v1", JSON.stringify([{ hostId: "home", attached: { kind: "zellij", name: "notes" } }]));
 });
 
 it("exports a protected key only on explicit request and clears it when forgotten", async () => {
@@ -2466,7 +2474,7 @@ it('restores a Herdr session when discovery confirms restore support', async () 
   const user=userEvent.setup();render(<App/>);
   await screen.findByRole('button',{name:'Connect to Home'});
   await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
-  await waitFor(()=>expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('temporary-shell','herdr','work',expect.any(Function)));
+  await waitFor(()=>expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('temporary-shell','herdr','work',expect.any(Function),true));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
 });
 

@@ -250,7 +250,7 @@ async function selectTransport(
           ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
           : entry.kind==='tmux'
             ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
-            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent)
+            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent,true)
         : kind === 'mosh'
           ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent,...(entry?[entry] as const:[]))
           : await api.connectEt(shell.session.id, options.et, child.onEvent);
@@ -1420,8 +1420,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     const host=hosts.find(item=>item.id===lost?.hostId);
     if(!lost || !host || !mounted.current || !lease.current())return {retry:false,hint:'appConnectionClosed'};
     const intent=sessionIntent(lost);
-    // Restore does not reattach Zellij either; the host shell comes back and Sessions reopens it.
-    if(intent.attached?.kind==='zellij')delete intent.attached;
     if(!host.credentialsStored){setSignInRecovery({sessionId:id,host,intent});return {retry:false,hint:'recoverySignInToReconnect'};}
     const owned=new PendingSessions();
     const fresh=await openSavedIntent(intent,host,owned);
@@ -1742,7 +1740,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       child = await prepareSession(host.id, `${host.name} / ${intent.attached.name}`, shell.session.destination, lease);
       const attached = intent.attached.kind === "tmux"
         ? await api.attachTmux(shell.session.id, intent.attached.name, child.onEvent, intent.attached.tmuxServer)
-        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent);
+        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent, true);
       child.establish(attached.sessionId);
       owned.add(attached.sessionId);
       if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
@@ -1787,7 +1785,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         continue;
       }
       const host = hosts.find((item) => item.id === intent.hostId);
-      if (!host || intent.attached?.kind === "zellij") {
+      if (!host) {
         remaining.push(intent);
         continue;
       }
@@ -2144,7 +2142,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       }}
     ><X size={18} aria-hidden="true" /></button>
     </div>
-    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
+    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsMultiplexersReattach")}</p>}
   </>;
   /** The tool groups of the phone control surfaces: the Workspace tools sheet pages them, the side menu stacks them. */
   const workspaceToolsPages: WorkspaceToolPage[] = [

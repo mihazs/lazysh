@@ -3668,8 +3668,18 @@ pub async fn attach_multiplexer(
                 ));
             }
             check_size(cols, rows)?;
-            let ordinary_command = crate::multiplexer::attach_command(kind, &name)?;
+            // `Some(false)` is a reattach (reconnect or restore): Zellij then needs the session to exist
+            // instead of silently creating an empty one. Herdr keeps its name-based attach until #990.
+            let reattach = (create_if_missing == Some(false) && matches!(kind, crate::multiplexer::MultiplexerKind::Zellij))
+                .then(|| crate::multiplexer::reattach_entry(kind, &name));
+            let ordinary_command = match &reattach {
+                Some(entry) => entry.command()?,
+                None => crate::multiplexer::attach_command(kind, &name)?,
+            };
             let parent = state.session(&session_id).await?;
+            if let Some(entry) = &reattach {
+                entry.prepare(&parent, &lease).await?;
+            }
             let guarded = matches!(kind, crate::multiplexer::MultiplexerKind::Herdr)
                 && crate::herdr_guard::available(&parent, &name, &lease).await;
             lease.check()?;
@@ -6072,6 +6082,84 @@ mod tests {
         parent_session.cancel.send(true).unwrap();
         parent_session.output_credits.close();
         server_task.abort();
+    }
+
+    /// Attaches Zellij `notes` as the Sessions panel (`None`) or reconnect and restore (`Some(false)`) do, against a host
+    /// whose `list-sessions` and probes answer `listing`; returns the attach result and every command the host received.
+    async fn attach_zellij(
+        create_if_missing: Option<bool>,
+        listing: &str,
+    ) -> (&'static str, Vec<String>) {
+        use tauri::Manager;
+        let (host, server, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let (events, _rx) = event_channel(|json| json);
+        let parent = password_terminal(&state, &host, events).await;
+        *server.scripted_exec.lock().unwrap() = Some((vec![listing.as_bytes().to_vec()], 0));
+        server.commands.lock().unwrap().clear();
+        let app = tauri::test::mock_app();
+        app.manage(state.clone());
+        let attached = attach_multiplexer(
+            access_lease(),
+            app.state(),
+            parent.session_id.clone(),
+            None,
+            crate::multiplexer::MultiplexerKind::Zellij,
+            "notes".into(),
+            80,
+            24,
+            Channel::new(|_| Ok(())),
+            create_if_missing,
+        )
+        .await;
+        let commands = server.commands.lock().unwrap().clone();
+        let outcome = match attached {
+            Ok(connected) => {
+                // The scripted host may already have closed the terminal.
+                if let Ok(child) = state
+                    .session(&connected.into_inner().unwrap().session_id)
+                    .await
+                {
+                    child.cancel.send_replace(true);
+                    child.output_credits.close();
+                }
+                "attached"
+            }
+            Err(error) => error.into_inner().unwrap().kind(),
+        };
+        server_task.abort();
+        (outcome, commands)
+    }
+    #[tokio::test]
+    async fn a_zellij_reattach_needs_the_session_and_never_creates_it() {
+        let (outcome, commands) = attach_zellij(Some(false), "other\n").await;
+        assert_eq!(
+            outcome, "multiplexer_unavailable",
+            "a vanished session must fail instead of starting an empty one"
+        );
+        assert!(
+            commands.iter().all(|command| !command.contains("attach")),
+            "{commands:?}"
+        );
+        let (outcome, commands) = attach_zellij(Some(false), "other\nnotes\n").await;
+        assert_eq!(outcome, "attached");
+        let attach = commands
+            .iter()
+            .find(|command| command.contains("attach"))
+            .unwrap();
+        assert!(attach.ends_with("zellij attach 'notes'"), "{attach}");
+    }
+    #[tokio::test]
+    async fn a_zellij_attach_from_sessions_still_creates_a_new_session() {
+        let (outcome, commands) = attach_zellij(None, "").await;
+        assert_eq!(outcome, "attached");
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.ends_with("zellij attach --create 'notes'")),
+            "{commands:?}"
+        );
     }
 
     #[tokio::test]

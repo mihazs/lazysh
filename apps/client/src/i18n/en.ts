@@ -871,7 +871,7 @@ export const english = {
   "appToConnect": "to connect.",
   "appRestoring": "Restoring…",
   "appRestorePreviousWorkspace": "Restore previous workspace",
-  "appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij": "Uses saved credentials; tmux and Herdr reattach. Open Zellij sessions from Sessions.",
+  "appUsesSavedCredentialsMultiplexersReattach": "Uses saved credentials; tmux, Herdr and Zellij reattach to their sessions.",
   "appDismiss": "Dismiss",
   "appDismissError": "Dismiss error",
   "appTerminalConnections": "Terminal connections",

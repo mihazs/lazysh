@@ -256,7 +256,7 @@ drafts and do not dispatch actions, and retired owners cannot publish late resul
 The manual 1–1000 native index bound is unchanged. This implements the documented
 reference client numbered selector affordance (source URL omitted)
 without inheriting its documented multi-digit chord timing dependency. It does
-not establish current tabs, exact-client binding, automatic restoration, or physical
+not establish current tabs, exact-client binding, or physical
 device/runtime acceptance. Hiding/persisting this row remains separate work.
 
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
@@ -325,7 +325,7 @@ created. Fish is skipped with a message when absent; CI installs it in
 
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 
-The client workspace handles saved tmux/Herdr attachment intents separately from these controls. Zellij restoration remains manual, matching the documented initial-attach boundary. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
+The client workspace handles saved tmux, Herdr and Zellij attachment intents separately from these controls. Reconnect and restore reattach a saved Zellij session with `zellij attach <name>` and never `--create`: they first confirm the name is among `zellij list-sessions --short`, so a session that no longer exists (a host restart, a kill) fails with the multiplexer-unavailable message instead of starting an empty one. Attaching from **Sessions** still creates a new session. `ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap` runs this over owned OpenSSH with the pinned Zellij 0.45.1 in `native-linux-runtimes`: the second entry reattaches the same server and shell, and a reattach after the session is killed fails and leaves no session behind. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
 
 
 ### Owned SSH Herdr acceptance
@@ -401,4 +401,4 @@ not establish remote command exit, pending-buffer sizes or the failure cause.
 
 The Linux native GUI case `native-e2e/restore.spec.ts` runs the bundled app against an owned OpenSSH server whose tmux uses a private `TMUX_TMPDIR` inside the server's PID namespace. It saves the key in a disposable Secret Service, enters a saved tmux default and records the pane's `TMUX_PANE` and shell PID. After WebKit has written the workspace descriptor to the private on-disk profile, the test sends `SIGKILL` to the app and starts it again on the same profile. The relaunched app only offers **Restore previous workspace**: no terminal opens and no tmux client attaches until the click. Restoring uses the saved credentials and reattaches the same named session; the display must show the output written before the kill, and the same pane ID and shell PID. The credential item is unchanged.
 
-This case covers process death and GUI relaunch on Linux. It does not cover Herdr, Android process death, OS-vault prompts or network changes. The mocked Playwright case `e2e/workspace-relaunch.spec.ts` checks the restore order for tmux, Herdr, Zellij and plain-shell descriptors in both projects.
+This case covers process death and GUI relaunch on Linux. It does not cover Herdr, Android process death, OS-vault prompts or network changes. The mocked Playwright case `e2e/workspace-relaunch.spec.ts` checks the restore order for tmux, Herdr, Zellij and plain-shell descriptors in both projects, including that Zellij restores with `createIfMissing:false`; a Zellij variant of this native case is still open (#1145).

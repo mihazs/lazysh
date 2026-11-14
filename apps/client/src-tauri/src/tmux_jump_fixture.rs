@@ -1337,7 +1337,7 @@ async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after
         &source,
         name,
         crate::multiplexer::MultiplexerKind::Tmux,
-        true,
+        Some(true),
     )
     .await;
     let native = state.session(&child.session_id).await.unwrap();
@@ -1431,7 +1431,7 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
 async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display() {
     use crate::multiplexer::{Entry, MultiplexerKind};
     let stock = std::env::var("LAZYSH_TEST_HERDR_STOCK").expect("absolute stock Herdr binary");
-    let zellij = std::env::var("LAZYSH_TEST_ZELLIJ").unwrap_or_else(|_| "/usr/bin/zellij".into());
+    let zellij = zellij_binary();
     for (kind, binary, user_install) in [
         (MultiplexerKind::Herdr, stock.as_str(), false),
         (MultiplexerKind::Herdr, stock.as_str(), true),
@@ -1644,6 +1644,11 @@ fn owned_herdr_shell_config(fixture: &Fixture) {
     }
 }
 
+/// The Zellij under test: the pinned CI binary, or the distribution's when none is named.
+fn zellij_binary() -> String {
+    std::env::var("LAZYSH_TEST_ZELLIJ").unwrap_or_else(|_| "/usr/bin/zellij".into())
+}
+
 fn owned_zellij_layout(f: &Fixture) {
     // Zellij creates HOME/.config before choosing its writable config path.
     // Pre-create it in this owned HOME so its first-run wizard cannot intercept input.
@@ -1656,16 +1661,17 @@ fn owned_zellij_layout(f: &Fixture) {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned local OpenSSH sshd and installed Zellij; saved default first-entry acceptance"]
+#[ignore = "requires owned local OpenSSH sshd and Zellij (LAZYSH_TEST_ZELLIJ or /usr/bin/zellij); saved default first-entry and reattach acceptance"]
 async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
-    let f = Fixture::with_herdr(Some(std::path::Path::new("/usr/bin/zellij"))).await;
+    let binary = zellij_binary();
+    let f = Fixture::with_herdr(Some(std::path::Path::new(&binary))).await;
     owned_zellij_layout(&f);
     let name = "direct-zellij-literal";
     struct OwnedZellij<'a>(&'a Fixture, &'a str);
     impl Drop for OwnedZellij<'_> {
         fn drop(&mut self) {
             // Exact name in fresh private socket/storage roots, including on panic.
-            let command = Command::new("/usr/bin/zellij")
+            let command = Command::new(zellij_binary())
                 .args(["kill-session", "--", self.1])
                 .env_clear()
                 .envs(self.0.environment.iter().map(|(key, value)| (*key, value)))
@@ -1690,7 +1696,9 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
     let mut shell_pid = None;
     let shell_identity = f.dir.path().join("zellij-shell-pid");
     for attempt in 0..2 {
-        let (child, mut events) = multiplexer_child(&app, &lease, &source, name, kind, true).await;
+        // The first entry creates the saved default; the second reattaches, as reconnect and restore do.
+        let (child, mut events) =
+            multiplexer_child(&app, &lease, &source, name, kind, Some(attempt == 0)).await;
         let native = state.session(&child.session_id).await.unwrap();
         let bootstrap = state.session(&source.session_id).await.unwrap();
         disconnect_inner(&state, source.session_id.clone())
@@ -1774,6 +1782,39 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
             source = reopened;
         }
     }
+    // The session is gone: a reattach fails and never starts an empty replacement.
+    let (gone, _) = herdr_echo_source(&f, &state, &lease).await;
+    let bootstrap = state.session(&gone.session_id).await.unwrap();
+    let refused = attach_multiplexer(
+        lease.clone(),
+        app.state(),
+        gone.session_id.clone(),
+        None,
+        kind,
+        name.into(),
+        80,
+        24,
+        super::test_support::json_events().0,
+        Some(false),
+    )
+    .await
+    .expect_err("a reattach to a vanished session must fail");
+    assert_eq!(
+        refused.into_inner().unwrap().kind(),
+        "multiplexer_unavailable"
+    );
+    let listed = exec_for_access(
+        &bootstrap,
+        "zellij list-sessions --short --no-formatting || true".into(),
+        &lease,
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed.trim(), "", "no session may have been created");
+    disconnect_inner(&state, gone.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &gone.session_id, &bootstrap, true).await;
     drop(owned);
     for pid in [server_pid.unwrap(), shell_pid.unwrap()] {
         retired_process(pid)
@@ -3268,7 +3309,7 @@ async fn multiplexer_child(
     source: &Connected,
     selected: &str,
     kind: crate::multiplexer::MultiplexerKind,
-    default_entry: bool,
+    create_if_missing: Option<bool>,
 ) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
     let (events, receiver) = super::test_support::json_events();
     let child = attach_multiplexer(
@@ -3281,7 +3322,7 @@ async fn multiplexer_child(
         80,
         24,
         events,
-        Some(default_entry),
+        create_if_missing,
     )
     .await
     .unwrap()
@@ -3521,7 +3562,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     assert!(process_pid > 1);
     eprintln!("owned Herdr stages: requested_host_kind=true explicit_nonfirst_selection=true workload_started=true");
     let (child, mut child_events) =
-        multiplexer_child(&app, &lease, &source, &selected, kind, false).await;
+        multiplexer_child(&app, &lease, &source, &selected, kind, Some(false)).await;
     owned_terminal_output(&app, &child.session_id, &mut child_events, b"PICKED").await;
     adopt_session(
         lease.clone(),
@@ -3572,7 +3613,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     .await;
     eprintln!("owned Herdr stages: separate_child_display=true source_independent=true durable_after_detach=true");
     let (pending, mut pending_events) =
-        multiplexer_child(&app, &lease, &source, &selected, kind, false).await;
+        multiplexer_child(&app, &lease, &source, &selected, kind, Some(false)).await;
     owned_terminal_output(&app, &pending.session_id, &mut pending_events, b"PICKED").await;
     let pending_native = state.session(&pending.session_id).await.unwrap();
     assert!(!*pending_native.finished.borrow());
@@ -3732,7 +3773,7 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
         &source,
         "owned-default",
         MultiplexerKind::Herdr,
-        true,
+        Some(true),
     )
     .await;
     owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_DEFAULT").await;
