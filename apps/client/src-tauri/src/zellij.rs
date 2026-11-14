@@ -55,6 +55,12 @@ pub enum ZellijAction {
         directory: String,
     },
     ZoomPane,
+    /// Jump To: a tab by its stable id. `go-to-tab-by-id` names no client, so it is refused unless exactly one client
+    /// is attached (#2046); a pane is not a destination because `focus-pane-id` leaves the attached client where it was.
+    Jump {
+        #[serde(rename = "tabId")]
+        tab_id: u32,
+    },
 }
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -179,6 +185,7 @@ fn command(session: &str, action: &ZellijAction) -> Result<Cmd> {
             format!("--cwd={}", text(directory, 4096)?),
         ],
         ZellijAction::ZoomPane => vec!["toggle-fullscreen".into()],
+        ZellijAction::Jump { tab_id } => vec!["go-to-tab-by-id".into(), tab_id.to_string()],
     };
     session_command(session, args)
 }
@@ -312,6 +319,41 @@ pub async fn zellij_tabs(
         })
         .await
 }
+/// The clients attached to the session: the rows of `list-clients` below its header.
+fn attached_clients(listing: &str) -> usize {
+    listing
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+/// What Jump To shows: the tabs and how many clients are attached. Zellij cannot address a client from the command
+/// line, so with more than one the current tab of this terminal is unknown and a jump could move another client (#2046).
+#[derive(Debug, Serialize)]
+pub struct ZellijJumpTabs {
+    tabs: Vec<ZellijTab>,
+    clients: usize,
+}
+#[tauri::command]
+pub async fn zellij_jump_tabs(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    session_id: String,
+    name: String,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<ZellijJumpTabs> {
+    access
+        .run(async {
+            let tabs = tabs_command(&name)?;
+            let clients = session_command(&name, vec!["list-clients".into()])?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            Ok(ZellijJumpTabs {
+                tabs: parse_tabs(&host.run(&access, &tabs).await?)?,
+                clients: attached_clients(&host.run(&access, &clients).await?),
+            })
+        })
+        .await
+}
 /// The terminal pane the attached client has focused: the first row of `list-clients` (`CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND`).
 fn client_focus(listing: &str) -> Option<u32> {
     listing
@@ -409,6 +451,15 @@ pub async fn zellij_action(
             let command = command(&name, &action);
             let host = Host::resolve(&state, &local, &session_id, &access).await?;
             let command = command?;
+            if matches!(action, ZellijAction::Jump { .. }) {
+                let clients = session_command(&name, vec!["list-clients".into()])?;
+                if attached_clients(&host.run(&access, &clients).await?) != 1 {
+                    return Err(SshError::new(
+                        "zellij_client_ambiguous",
+                        "Another client is attached to this Zellij session, so a tab jump could move it instead of this terminal",
+                    ));
+                }
+            }
             // A Zellij resize has no cell count (it is one fixed step), so `amount` runs the step that many times.
             for _ in 0..match &action {
                 ZellijAction::ResizePane { amount, .. } => *amount,
@@ -726,6 +777,40 @@ mod tests {
             tabs_command("a'$(touch nope)").unwrap().render(),
             "zellij '--session=a'\\''$(touch nope)' action list-tabs --json"
         );
+    }
+    #[test]
+    fn jumps_to_a_tab_by_id_and_keeps_hostile_session_names_literal() {
+        let hostile = "a'$(touch nope);x";
+        assert_eq!(
+            command(hostile, &ZellijAction::Jump { tab_id: 7 })
+                .unwrap()
+                .render(),
+            "zellij '--session=a'\\''$(touch nope);x' action go-to-tab-by-id 7"
+        );
+        let typed: ZellijAction = serde_json::from_str(r#"{"type":"jump","tabId":2}"#).unwrap();
+        assert_eq!(
+            command("s", &typed).unwrap().render(),
+            "zellij '--session=s' action go-to-tab-by-id 2"
+        );
+        for bad in [
+            r#"{"type":"jump","tabId":-1}"#,
+            r#"{"type":"jump","tabId":"1; id"}"#,
+            r#"{"type":"jump","tabId":1,"paneId":5}"#,
+            r#"{"type":"jump"}"#,
+        ] {
+            assert!(serde_json::from_str::<ZellijAction>(bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn counts_the_clients_that_a_tab_jump_could_move() {
+        let header = "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n";
+        assert_eq!(attached_clients(header), 0);
+        assert_eq!(attached_clients(&format!("{header}1 terminal_2 bash\n")), 1);
+        assert_eq!(
+            attached_clients(&format!("{header}1 terminal_2 bash\n2 plugin_1 N/A\n")),
+            2
+        );
+        assert_eq!(attached_clients(""), 0);
     }
     #[test]
     fn navigation_is_fixed_and_keeps_hostile_session_names_literal() {
