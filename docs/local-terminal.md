@@ -6,6 +6,10 @@ Choose **Open local terminal** in Hosts, or **Local terminal · this device** in
 
 Local sessions use the existing terminal input, UTF-8 display, selection, search, clipboard, keyboard and dictation composer. The session is labelled **Local PTY**. **Files** and **Diff** work on this device (see [Files and repository review](#files-and-repository-review)). Host agent queries, uploads, remote previews, usage reports, Apple host status and remote multiplexer tools are unavailable for local sessions. Terminal I/O routes through a separate local registry; SSH-only bridge helpers reject local session IDs. Local sessions are excluded from remote agent notification polling. The planned parity work that lifts the remaining limits is specified in [Local workspace](local-workspace.md).
 
+## Agents board, transcripts, usage and notifications
+
+When `local_capability` reports `tools.companion` for the `default` target, a local session shows the same companion views as a host: **Agents** (the board, approvals, companion settings and hook setup), **Transcript** (Chat), **Usage** reports and **Apple status**, and the notification inbox includes it. The companion runs on this device from `lazysh-agent` as argv, with no SSH (see [local workspace](local-workspace.md#local-companion)), so the setup section offers no SSH install and says where `lazysh-agent` is looked up. Reports group under **This device**; every local tab on the target shares the host key `local:default`, so the board archive is shared and the inbox polls the companion once per target, not once per tab. A target that does not report the companion hides these views, and the session details say that `lazysh-agent` was not found on this device. The Agent view, the Herdr navigation and the multiplexer tools are separate slices (#1133, #1131).
+
 ## Files and repository review
 
 `local_capability` reports a `default` target with its `tools`: `files` on every desktop build and `repository` when `git` (`git.exe` on Windows) is on the `PATH` local commands receive. The views a local session shows come from that list, so **Diff** stays hidden without Git.

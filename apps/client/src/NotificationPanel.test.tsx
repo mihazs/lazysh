@@ -8,6 +8,7 @@ import NotificationPanel, { NotificationMonitor } from './NotificationPanel';
 import PreferencesPanel from './PreferencesPanel';
 import { openSettingsPages } from './test/preferencesPanel';
 import { getInbox, updateInbox } from './notificationStore';
+import { localHostKey } from './localHost';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
 vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted: vi.fn(), requestPermission: vi.fn(), registerActionTypes: vi.fn().mockResolvedValue(undefined), onAction: vi.fn().mockResolvedValue({ unregister: vi.fn() }) }));
@@ -116,4 +117,17 @@ it('offers Android notification recovery in application settings', async () => {
   render(<PreferencesPanel />);
   fireEvent.click(openSettingsPages('Android notifications').getByRole('button', { name: 'Open Android notification settings' }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('open_notification_settings', undefined, expect.anything()));
+});
+
+it('polls this device once for every local tab and names its attention events This device', async () => {
+  vi.mocked(isPermissionGranted).mockResolvedValue(true);
+  vi.mocked(invoke).mockResolvedValue({ schemaVersion: 1, sessions: [event] });
+  updateInbox({ monitoring: true, notifications: true });
+  const tabs = ['local:one', 'local:two'].map(id => ({ id, hostId: localHostKey(), name: 'Local terminal', connected: true, local: true }));
+  render(<><NotificationMonitor sessions={tabs} /><NotificationPanel sessions={tabs} /></>);
+  const row = await screen.findByRole('article', { name: 'Claude' });
+  expect(within(row).getByText('This device')).toBeTruthy();
+  expect(within(row).queryByText('Local terminal')).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'agent_snapshot')).toHaveLength(1);
+  expect(getInbox().rows.map(item => item.hostId)).toEqual(['local:default']);
 });
