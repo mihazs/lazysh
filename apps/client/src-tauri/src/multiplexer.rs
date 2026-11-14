@@ -264,6 +264,16 @@ impl Entry {
         Ok(())
     }
 }
+/// A target that must already exist: reconnect and restore never create it.
+pub(crate) fn reattach_entry(kind: MultiplexerKind, value: &str) -> Entry {
+    Entry {
+        kind,
+        name: value.into(),
+        tmux_server: None,
+        create_if_missing: false,
+        backend: None,
+    }
+}
 // Saved defaults create only their explicitly named target in the default namespace.
 pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Result<String> {
     Entry {
