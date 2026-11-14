@@ -92,6 +92,8 @@
     "allow-herdr-action",
     "allow-herdr-workspace-plan",
     "allow-herdr-workspace-create",
+    "allow-multiplexer-launch-plan",
+    "allow-multiplexer-launch",
     "allow-herdr-agent-kinds",
     "allow-herdr-repository",
     "allow-zellij-action",

@@ -125,8 +125,8 @@ implemented without full evidence, *part* means partial.
 | Attach, reattach | yes | yes | yes | no → #1140 |
 | Navigation, Jump To, current marker | yes; pane rows → #1146 | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
-| Create in a worktree | no → #1141 | no → #1141 | yes | no → #1141 |
-| Agent launch | no → #1141 | no → #1141 | yes | no → #1141 |
+| Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
+| Agent launch | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
 | Rename | session, window; pane → #1144 | no → #1144 | workspace, tab; pane → #1144 | no → #1140, #1144 |
 | Close | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
 | Split, zoom | yes | yes | yes | no → #1140 |

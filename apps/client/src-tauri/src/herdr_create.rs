@@ -1,12 +1,15 @@
-//! Explicit Herdr workspace, Git worktree and agent creation.
+//! Explicit agent launch and Git worktree creation in a Herdr, tmux or Zellij session.
 //!
 //! Every remote step is an exact argv run by `sh` as `"$@"`; the SSH login
 //! shell parses each element as one quoted word and nothing else (see
-//! [`script`]), and nothing is typed into an existing pane. An
-//! agent starts only through `herdr agent start` in the new workspace's root
-//! pane after the renderer showed this plan and the user confirmed it.
+//! [`script`]), and nothing is typed into an existing pane. An agent starts
+//! only after the renderer showed this plan and the user confirmed it: through
+//! `herdr agent start` in a new workspace's root pane, as the argv of a new tmux
+//! window (`new-window`) or as the argv of a new Zellij pane (`run`).
 use crate::app_lock::AccessLease;
-use crate::ssh::{quote, AppState, Result, SshError};
+use crate::multiplexer::{tmux_word, Entry, MultiplexerKind};
+use crate::ssh::{quote, AppState, Result, Session, SshError};
+use crate::tmux_server::TmuxServer;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::State;
@@ -181,14 +184,49 @@ fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|v| (*v).to_owned()).collect()
 }
 
+/// The multiplexer session a launch runs in.
+pub(crate) enum Host<'a> {
+    Herdr(&'a str),
+    Tmux(&'a str, TmuxServer),
+    Zellij(&'a str),
+}
+impl<'a> Host<'a> {
+    /// A launch needs the session a terminal is attached to, so it never creates
+    /// one. Given the SSH session, tmux uses the server that terminal is bound to.
+    pub(crate) fn of(entry: &'a Entry, session: Option<&Session>) -> Result<Self> {
+        entry.validate()?;
+        if entry.create_if_missing {
+            return Err(invalid("Start agents in an existing multiplexer session"));
+        }
+        Ok(match entry.kind {
+            MultiplexerKind::Herdr => Self::Herdr(&entry.name),
+            MultiplexerKind::Tmux => Self::Tmux(
+                &entry.name,
+                match session {
+                    Some(session) => {
+                        TmuxServer::for_session(session, entry.tmux_server.as_deref())?
+                    }
+                    None => entry.server()?,
+                },
+            ),
+            MultiplexerKind::Zellij => Self::Zellij(&entry.name),
+        })
+    }
+}
+/// tmux expands formats in window names and start directories; `##` is a literal `#`.
+fn literal_format(value: &str) -> String {
+    tmux_word(&value.replace('#', "##"))
+}
+
 struct Validated<'a> {
     label: &'a str,
     directory: &'a str,
     worktree: Option<[&'a str; 4]>,
     agent: Option<(&'static str, &'static str, &'a str, Option<&'a str>)>,
 }
-fn validate<'a>(name: &str, request: &'a CreateRequest) -> Result<Validated<'a>> {
-    server(name)?;
+/// `multiline` lets a prompt hold line breaks and tabs: only an argv word of a
+/// tmux or Zellij launch carries them verbatim; Herdr's `agent start` takes one line.
+fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
     let (label, directory, worktree) = match &request.target {
         Target::Directory { label, directory } => {
             text(label, 200, "Enter a workspace label")?;
@@ -227,11 +265,18 @@ fn validate<'a>(name: &str, request: &'a CreateRequest) -> Result<Validated<'a>>
                 if !prompts {
                     return Err(invalid("This agent does not accept an initial prompt"));
                 }
-                text(
-                    prompt,
-                    2000,
-                    "Enter a single-line prompt without backslashes",
-                )?;
+                let (checked, message) = if multiline {
+                    (
+                        prompt.replace(['\n', '\t'], " "),
+                        "Enter a prompt without control characters or backslashes",
+                    )
+                } else {
+                    (
+                        prompt.to_owned(),
+                        "Enter a single-line prompt without backslashes",
+                    )
+                };
+                text(&checked, 2000, message)?;
                 if prompt.starts_with('-') {
                     return Err(invalid("A prompt cannot start with -"));
                 }
@@ -246,8 +291,21 @@ fn validate<'a>(name: &str, request: &'a CreateRequest) -> Result<Validated<'a>>
         agent,
     })
 }
-fn plan_steps(name: &str, request: &CreateRequest, pane: &str) -> Result<Vec<Step>> {
-    let valid = validate(name, request)?;
+fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<Step>> {
+    let valid = validate(request, !matches!(host, Host::Herdr(_)))?;
+    if let Host::Herdr(name) = host {
+        server(name)?;
+    }
+    // A tmux or Zellij launch is the agent's own argv: `executable [prompt]`.
+    let launch = match (host, valid.agent) {
+        (Host::Herdr(_), _) => vec![],
+        (_, None) => return Err(invalid("Choose an agent to start")),
+        (_, Some((_, executable, _, prompt))) => {
+            let mut argv = vec![executable];
+            argv.extend(prompt);
+            argv.into_iter().map(str::to_owned).collect()
+        }
+    };
     let mut steps = vec![];
     // A missing agent fails before anything exists on the host.
     if let Some((_, executable, _, _)) = valid.agent {
@@ -264,6 +322,42 @@ fn plan_steps(name: &str, request: &CreateRequest, pane: &str) -> Result<Vec<Ste
             ]),
         ));
     }
+    let name = match host {
+        Host::Herdr(name) => name,
+        Host::Tmux(session, server) => {
+            let mut argv = server.argv();
+            argv.extend(args(&[
+                "new-window",
+                "-d",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                &tmux_word(&format!("={session}:")),
+                "-n",
+                &literal_format(valid.label),
+                "-c",
+                &literal_format(valid.directory),
+                "--",
+            ]));
+            argv.extend(launch.iter().map(|word| tmux_word(word)));
+            steps.push(step("window", argv));
+            return Ok(steps);
+        }
+        Host::Zellij(session) => {
+            let mut argv = args(&[
+                "zellij",
+                &format!("--session={session}"),
+                "run",
+                &format!("--cwd={}", valid.directory),
+                &format!("--name={}", valid.label),
+                "--",
+            ]);
+            argv.extend(launch);
+            steps.push(step("pane", argv));
+            return Ok(steps);
+        }
+    };
     steps.push(step(
         "workspace",
         args(&[
@@ -433,16 +527,29 @@ fn started(text: &str, name: &str) -> bool {
     })
 }
 
-/// Runs the confirmed plan. A failure before the worktree or workspace exists
-/// is an error (nothing was created); later failures are reported with what
-/// already exists, which is kept as-is: no worktree, branch or workspace is
-/// removed automatically.
+/// The new tmux (`%<n>`) or Zellij (`terminal_<n>`) pane as the last line of a
+/// launch reply, which merges stderr into stdout.
+fn new_pane(text: &str, prefix: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())?
+        .trim();
+    let number = line.strip_prefix(prefix)?;
+    (!number.is_empty() && number.len() < 20 && number.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| line.to_owned())
+}
+
+/// Runs the confirmed plan. A failure before the worktree, workspace, window or
+/// pane exists is an error (nothing was created); later failures are reported
+/// with what already exists, which is kept as-is: no worktree, branch or
+/// workspace is removed automatically.
 pub(crate) async fn execute(
     remote: &mut impl Remote,
-    name: &str,
+    host: &Host<'_>,
     request: &CreateRequest,
 ) -> Result<Outcome> {
-    let mut steps = plan_steps(name, request, NEW_PANE)?;
+    let mut steps = plan_steps(host, request, NEW_PANE)?;
     let mut outcome = Outcome::default();
     let fail = |stage, message: String, outcome: Outcome, first: bool| {
         if first {
@@ -488,6 +595,20 @@ pub(crate) async fn execute(
                     return fail(stage, message, outcome, first);
                 }
             },
+            "window" | "pane" if output.status == 0 => {
+                let prefix = if stage == "window" { "%" } else { "terminal_" };
+                match new_pane(&output.text, prefix) {
+                    Some(pane) => {
+                        outcome.pane_id = Some(pane);
+                        outcome.agent = request.agent.as_ref().map(|agent| agent.name.clone());
+                    }
+                    None => {
+                        let message =
+                            bounded(&format!("Unrecognized {stage} reply: {}", output.text));
+                        return fail(stage, message, outcome, first);
+                    }
+                }
+            }
             "agentCheck" if output.status == 0 => {}
             "agentCheck" => {
                 let executable = steps[index].argv[3].clone();
@@ -645,8 +766,23 @@ impl Remote for Ssh<'_> {
 #[tauri::command]
 pub fn herdr_workspace_plan(name: String, request: CreateRequest) -> Result<Plan> {
     Ok(Plan {
-        steps: plan_steps(&name, &request, NEW_PANE)?,
+        steps: plan_steps(&Host::Herdr(&name), &request, NEW_PANE)?,
     })
+}
+/// The plan [`multiplexer_launch`] runs in the session's multiplexer.
+#[tauri::command]
+pub fn multiplexer_launch_plan(multiplexer: Entry, request: CreateRequest) -> Result<Plan> {
+    Ok(Plan {
+        steps: plan_steps(&Host::of(&multiplexer, None)?, &request, NEW_PANE)?,
+    })
+}
+async fn run_plan(
+    session: &Session,
+    access: &AccessLease,
+    host: &Host<'_>,
+    request: &CreateRequest,
+) -> Result<Outcome> {
+    execute(&mut Ssh { session, access }, host, request).await
 }
 #[tauri::command]
 pub async fn herdr_workspace_create(
@@ -658,17 +794,26 @@ pub async fn herdr_workspace_create(
 ) -> crate::ssh::AccessResult<Outcome> {
     access
         .run(async {
-            validate(&name, &request)?;
             let session = state.session(&session_id).await?;
-            execute(
-                &mut Ssh {
-                    session: &session,
-                    access: &access,
-                },
-                &name,
-                &request,
-            )
-            .await
+            run_plan(&session, &access, &Host::Herdr(&name), &request).await
+        })
+        .await
+}
+/// Prepares the worktree (if asked) and starts the agent in the multiplexer
+/// session the terminal is attached to.
+#[tauri::command]
+pub async fn multiplexer_launch(
+    state: State<'_, AppState>,
+    session_id: String,
+    multiplexer: Entry,
+    request: CreateRequest,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<Outcome> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let host = Host::of(&multiplexer, Some(&session))?;
+            run_plan(&session, &access, &host, &request).await
         })
         .await
 }
@@ -712,6 +857,6 @@ pub async fn herdr_repository(
         .await
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "herdr_create_tests.rs"]
 pub(crate) mod tests;
