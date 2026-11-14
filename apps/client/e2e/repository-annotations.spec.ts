@@ -1,17 +1,23 @@
-import {expect,test} from '@playwright/test';
+import {expect,test,type Page} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import type {mountFileReview} from './fixtures/FileReviewHarness';
 import {fileReviewName,fileReviewRoot,fileReviewSession} from '../src/test/fileReviewData';
 declare global{interface Window{repositoryNotesFixture:ReturnType<typeof mountFileReview>;}}
-test('diff-side notes retain their observed references and drafts until explicit staging',async({page})=>{
+async function openUnstagedDiff(page:Page,patch?:string){
   await openLocalizedApp(page,'en');
-  await page.evaluate(async()=>{const {mountFileReview}=await import('/e2e/fixtures/FileReviewHarness.tsx');window.repositoryNotesFixture=mountFileReview();});
+  await page.evaluate(async patch=>{
+    const {mountFileReview}=await import('/e2e/fixtures/FileReviewHarness.tsx');window.repositoryNotesFixture=mountFileReview();
+    const internals=(window as unknown as {__TAURI_INTERNALS__:{invoke:(command:string,args:unknown)=>Promise<unknown>}}).__TAURI_INTERNALS__;
+    const recorded=internals.invoke;
+    if(patch)internals.invoke=(command,args)=>command==='repository_diff'?Promise.resolve({binary:false,patch}):recorded(command,args);
+  },patch);
   const repo=page.getByRole('region',{name:'Repository review',exact:true});
   await repo.getByRole('button',{name:'Open repository',exact:true}).click();
   await repo.getByRole('button',{name:'Unstaged diff',exact:true}).click();
-  const table=repo.getByRole('table',{name:'Side by side diff',exact:true});
-  await expect(table.getByText('before literal',{exact:true})).toBeVisible();
-  await repo.getByRole('button',{name:'Highlight syntax',exact:true}).click();
+  return {repo,table:repo.getByRole('table',{name:'Side by side diff',exact:true})};
+}
+test('diff-side notes retain their observed references and drafts until explicit staging',async({page})=>{
+  const {repo,table}=await openUnstagedDiff(page);
   await expect(table.getByText('before literal',{exact:true})).toBeVisible();
   const calls=await page.evaluate(()=>window.repositoryNotesFixture.calls);
   await repo.getByRole('button',{name:'Comment on Before line 1',exact:true}).click();
@@ -32,5 +38,17 @@ test('diff-side notes retain their observed references and drafts until explicit
   await expect(repo.getByText('Comments staged for your next prompt. Review before sending.',{exact:true})).toBeVisible();
   await expect(repo.locator('img,script,iframe')).toHaveCount(0);
   expect(await page.evaluate(()=>window.repositoryNotesFixture.calls.some(row=>row.command==='write_stdin'))).toBe(false);
+  await page.evaluate(()=>window.repositoryNotesFixture.dispose());
+});
+test('diff hunks highlight syntax on demand and keep file text inert',async({page})=>{
+  const {repo,table}=await openUnstagedDiff(page,'@@ -1 +1 @@\n-const before = "<img src=x>";\n+const after = "<script>";');
+  await expect(table.locator('.hljs-keyword')).toHaveCount(0);
+  await repo.getByRole('button',{name:'Highlight syntax',exact:true}).click();
+  await expect(table.locator('.hljs-keyword')).toHaveCount(2);
+  await expect(table.locator('pre').first()).toHaveText('const before = "<img src=x>";');
+  await expect(table.locator('pre').last()).toHaveText('const after = "<script>";');
+  await expect(repo.locator('img,script,iframe')).toHaveCount(0);
+  await repo.getByRole('button',{name:'Show plain text',exact:true}).click();
+  await expect(table.locator('.hljs-keyword')).toHaveCount(0);
   await page.evaluate(()=>window.repositoryNotesFixture.dispose());
 });

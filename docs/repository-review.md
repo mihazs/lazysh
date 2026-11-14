@@ -12,6 +12,18 @@ This implements the documented reference client diff font behavior (source URL o
 without a subscription gate. Desktop/phone Chromium acceptance checks actual
 loaded font styles; physical native WebView rendering is not established by them.
 
+**Highlight syntax** above a side-by-side diff colours the hunks on demand; **Show
+plain text** turns it off. Each side uses its own file type, so a renamed file is
+coloured by its old extension before and its new extension after, and a side
+whose type is unknown stays plain. The same bound as source previews applies:
+highlighting is offered only for known file types and diffs of at most 100,000
+characters and 2,000 rows. Because a diff shows hunks rather than whole files,
+the highlighter starts fresh at each hunk, so a comment or string that begins
+above a hunk may not be coloured. Only text and highlighter colour classes are
+rendered; file text is never interpreted as markup. The diff text and line
+numbers stay the same, so notes refer to the same lines either way. Review has no
+command-line entry point.
+
 Select a commit to browse its files without checking it out or changing the working tree. History loads in pages of 50 commits, anchored to the first loaded commit so new commits do not shift subsequent pages. Historical trees load one directory at a time. File search filters the current directory; the parent control returns to the enclosing directory. The connection's selected repository and file are remembered in session storage, without retaining file contents.
 
 Text files render as escaped source. Syntax highlighting loads on demand for supported languages and files no larger than 100,000 characters. Markdown rendering omits remote images and active links; raw HTML is never executed. PNG, JPEG, GIF and WebP previews read bytes through the verified SSH connection. SVG and HTML are not image-preview formats.
