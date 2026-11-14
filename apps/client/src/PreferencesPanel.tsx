@@ -6,6 +6,7 @@ import FontDownloadPanel from "./FontDownloadPanel";
 import AppIconPanel from "./AppIconPanel";
 import {useMountedAccess,useProtectedInvoke} from './access';
 import {isAndroidApp} from './isAndroidApp';
+import {useOptionAsMetaSupport} from './useOptionAsMetaSupport';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
@@ -39,6 +40,7 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
   const preferences = usePreferences();
   const topBar = useShowTopBar();
   const invoke = useProtectedInvoke();
+  const optionAsMetaSupport = useOptionAsMetaSupport();
   const locale=useNativeLocale();
   const owner=useMountedAccess();
   const current=()=>owner.mounted.current && owner.access.current();
@@ -123,7 +125,7 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
 {id:"input",section:"input",title:t("preferencesCategoryInput"),content:<>
 
     <h3 className="settings-group-title">{t("settingsGroupKeyboard")}</h3>
-    <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>
+    {(optionAsMetaSupport==='supported'||optionAsMetaSupport==='unknown') && <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>}
     <label><input type="checkbox" checked={preferences.composerSendEnter} onChange={e => update({composerSendEnter: e.target.checked})} />{t("preferencesComposerSendEnter")}</label>
     {isAndroidApp() && <>
       <label><input type="checkbox" checked={preferences.privateKeyboard === true} aria-describedby="private-keyboard-help" onChange={e => update({privateKeyboard: e.target.checked || undefined})} />{t("preferencesPrivateKeyboard")}</label>
