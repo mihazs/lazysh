@@ -1565,6 +1565,40 @@ mod tests {
     }
     #[cfg(unix)]
     #[tokio::test]
+    async fn dictated_text_stays_a_draft_in_the_owned_pty_until_enter_arrives() {
+        // The payloads are what `dictationInput` builds: the dictated line, plus `\r` only with auto-send on.
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let connected=desktop::start(&state,shell("stty -echo; printf READY; while IFS= read -r line; do printf 'RAN:%s\\n' \"$line\"; done"),80,24,event).await.unwrap();
+        until(&mut rx, "READY").await;
+        desktop::write(
+            &state,
+            &connected.session_id,
+            "echo 世界".into(),
+            access_lease(),
+        )
+        .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), until(&mut rx, "RAN:"))
+                .await
+                .is_err(),
+            "dictation without Enter must not reach the shell as a command"
+        );
+        desktop::write(&state, &connected.session_id, "\r".into(), access_lease()).unwrap();
+        until(&mut rx, "RAN:echo 世界\r\n").await;
+        desktop::write(
+            &state,
+            &connected.session_id,
+            "pwd\r".into(),
+            access_lease(),
+        )
+        .unwrap();
+        until(&mut rx, "RAN:pwd\r\n").await;
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
+    }
+    #[cfg(unix)]
+    #[tokio::test]
     async fn real_local_utf8_resize_and_isolated_close() {
         let state = LocalState::default();
         let (event, mut rx) = events();
