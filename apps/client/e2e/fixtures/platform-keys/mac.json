@@ -1,0 +1,376 @@
+[
+  {
+    "name": "a plain letter",
+    "optionAsMeta": false,
+    "xterm": "a",
+    "core": "a",
+    "raw": {
+      "type": "key",
+      "code": "KeyA",
+      "key": "a",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyA",
+      "key": "a",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Ctrl+C",
+    "optionAsMeta": false,
+    "xterm": "\u0003",
+    "core": "\u0003",
+    "raw": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": true,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": true,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "the platform key, which belongs to the app (copy, paste, search)",
+    "optionAsMeta": false,
+    "xterm": "",
+    "core": "",
+    "raw": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": true
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": true
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+L types a character",
+    "optionAsMeta": false,
+    "xterm": "¬",
+    "core": "¬",
+    "raw": {
+      "type": "key",
+      "code": "KeyL",
+      "key": "¬",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyL",
+      "key": "¬",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+1 types a character",
+    "optionAsMeta": false,
+    "xterm": "¡",
+    "core": "¡",
+    "raw": {
+      "type": "key",
+      "code": "Digit1",
+      "key": "¡",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "Digit1",
+      "key": "¡",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+L is Meta+L",
+    "optionAsMeta": true,
+    "xterm": "\u001bl",
+    "core": "\u001bl",
+    "raw": {
+      "type": "key",
+      "code": "KeyL",
+      "key": "¬",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyL",
+      "key": "l",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+Shift+B is Meta+B",
+    "optionAsMeta": true,
+    "xterm": "\u001bB",
+    "core": "\u001bB",
+    "raw": {
+      "type": "key",
+      "code": "KeyB",
+      "key": "ı",
+      "mods": {
+        "shift": true,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyB",
+      "key": "B",
+      "mods": {
+        "shift": true,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+1 is Meta+1",
+    "optionAsMeta": true,
+    "xterm": "\u001b1",
+    "core": "\u001b1",
+    "raw": {
+      "type": "key",
+      "code": "Digit1",
+      "key": "¡",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "Digit1",
+      "key": "1",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+. is Meta+.",
+    "optionAsMeta": true,
+    "xterm": "\u001b.",
+    "core": "\u001b.",
+    "raw": {
+      "type": "key",
+      "code": "Period",
+      "key": "≥",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "Period",
+      "key": ".",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+Left moves back a word",
+    "optionAsMeta": false,
+    "xterm": "\u001bb",
+    "core": "\u001bb",
+    "raw": {
+      "type": "key",
+      "code": "ArrowLeft",
+      "key": "ArrowLeft",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyB",
+      "key": "b",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Option+Right moves forward a word",
+    "optionAsMeta": false,
+    "xterm": "\u001bf",
+    "core": "\u001bf",
+    "raw": {
+      "type": "key",
+      "code": "ArrowRight",
+      "key": "ArrowRight",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyF",
+      "key": "f",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  }
+]

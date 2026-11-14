@@ -1,0 +1,275 @@
+[
+  {
+    "name": "a plain letter",
+    "optionAsMeta": false,
+    "xterm": "a",
+    "core": "a",
+    "raw": {
+      "type": "key",
+      "code": "KeyA",
+      "key": "a",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyA",
+      "key": "a",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Ctrl+C",
+    "optionAsMeta": false,
+    "xterm": "\u0003",
+    "core": "\u0003",
+    "raw": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": true,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": true,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "the platform key, which belongs to the app (copy, paste, search)",
+    "optionAsMeta": false,
+    "xterm": "",
+    "core": "",
+    "raw": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": true
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyC",
+      "key": "c",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": true
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Alt+B",
+    "optionAsMeta": false,
+    "xterm": "\u001bb",
+    "core": "\u001bb",
+    "raw": {
+      "type": "key",
+      "code": "KeyB",
+      "key": "b",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyB",
+      "key": "b",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Alt+Left",
+    "optionAsMeta": false,
+    "xterm": "\u001b[1;5D",
+    "core": "\u001b[1;3D",
+    "why": "xterm.js turns Alt+arrow into Ctrl+arrow; the core sends the standard Alt form (also listed in tests/keys.rs)",
+    "raw": {
+      "type": "key",
+      "code": "ArrowLeft",
+      "key": "ArrowLeft",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "ArrowLeft",
+      "key": "ArrowLeft",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "AltGr+Q on a German layout types @",
+    "optionAsMeta": false,
+    "xterm": "@",
+    "core": "@",
+    "raw": {
+      "type": "key",
+      "code": "KeyQ",
+      "key": "@",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyQ",
+      "key": "@",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "AltGr+E on a German layout types the euro sign",
+    "optionAsMeta": false,
+    "xterm": "€",
+    "core": "€",
+    "raw": {
+      "type": "key",
+      "code": "KeyE",
+      "key": "€",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyE",
+      "key": "€",
+      "mods": {
+        "shift": false,
+        "ctrl": false,
+        "alt": false,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  },
+  {
+    "name": "Ctrl+Alt+Q as a chord",
+    "optionAsMeta": false,
+    "xterm": "\u001b\u0011",
+    "core": "\u001b\u0011",
+    "raw": {
+      "type": "key",
+      "code": "KeyQ",
+      "key": "q",
+      "mods": {
+        "shift": false,
+        "ctrl": true,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    },
+    "input": {
+      "type": "key",
+      "code": "KeyQ",
+      "key": "q",
+      "mods": {
+        "shift": false,
+        "ctrl": true,
+        "alt": true,
+        "meta": false
+      },
+      "repeat": false,
+      "release": false,
+      "composing": false
+    }
+  }
+]
