@@ -997,6 +997,7 @@ jobs:
             capture cpu-load adb shell dumpsys cpuinfo;
             capture lastanr adb shell dumpsys activity lastanr;
             capture lastanr-traces adb shell dumpsys activity lastanr-traces;
+            capture adb-server-log tail -c 1048576 "${TMPDIR:-/tmp}/adb.$(id -u).log";
             fi;
             kill %1 2>/dev/null || true;
             wait "$collector_pid"; local collector_result=$?;
