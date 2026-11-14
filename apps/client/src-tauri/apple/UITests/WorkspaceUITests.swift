@@ -58,10 +58,14 @@ final class WorkspaceUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [drawer], timeout: 10), .completed,
                        "The drawer must finish opening before interacting with its controls")
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Opened native host drawer"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
+        attach(app.screenshot(), named: "Opened native host drawer")
+    }
+
+    private func attach(_ screenshot: XCUIScreenshot, named name: String) {
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor
@@ -74,8 +78,19 @@ final class WorkspaceUITests: XCTestCase {
         let field = resolve()
         XCTAssertTrue(field.waitForExistence(timeout: 10), "Host form field must exist: " + label)
         XCTAssertTrue(field.isHittable, "Host form field must accept real input: " + label)
-        field.tap()
-        field.typeText(text)
+        // Each action waits for XCTest's idle notification; when it never arrives the call blocks for
+        // 60 s while the app, WebContent and keyboard host sit idle (run 43391171381, Username, #298).
+        // Keep the screen of such a stall without adding any element query that would wait again.
+        func timed(_ action: String, _ body: () -> Void) {
+            let began = ProcessInfo.processInfo.systemUptime
+            body()
+            let elapsedMs = Int(max(0, min(120, ProcessInfo.processInfo.systemUptime - began)) * 1000)
+            guard let record = inputStallRecord(field: label, action: action, elapsedMs: elapsedMs) else { return }
+            print(record)
+            attach(XCUIScreen.main.screenshot(), named: "Stalled native input: " + inputFieldName(label) + " " + action)
+        }
+        timed("tap") { field.tap() }
+        timed("typeText") { field.typeText(text) }
         let original = NSPredicate(format: "value == %@", text)
         let start = ProcessInfo.processInfo.systemUptime
         var samples: [[String: Any]] = []
@@ -103,9 +118,10 @@ final class WorkspaceUITests: XCTestCase {
         }
         let settled = XCTNSPredicateExpectation(predicate: traced, object: field)
         let result = XCTWaiter.wait(for: [settled], timeout: 5)
+        // The rendered pixels at the failed poll share the XCTest clock that the AX samples use.
+        if result != .completed { attach(XCUIScreen.main.screenshot(), named: "Typing settle failure: " + inputFieldName(label)) }
         if !samples.isEmpty {
-            let fieldName = ["Name", "Hostname or IP", "Username"].contains(label) ? label : "other"
-            let fields: [String: Any] = ["field": fieldName, "completed": result == .completed, "samples": samples]
+            let fields: [String: Any] = ["field": inputFieldName(label), "completed": result == .completed, "samples": samples]
             let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
             let payload = data.flatMap { $0.count <= 4096 ? String(data: $0, encoding: .utf8) : nil }
             let attachment = XCTAttachment(string: payload ?? "Typing value observation unavailable")
@@ -131,6 +147,18 @@ final class WorkspaceUITests: XCTestCase {
         let payload = try XCTUnwrap(String(data: data, encoding: .utf8))
         for secret in [actual, expected, placeholder] { XCTAssertFalse(payload.contains(secret)) }
         XCTAssertLessThan(data.count, 2048)
+    }
+
+    func testInputStallRecordIsBoundedAndOmitsPrivateText() throws {
+        XCTAssertNil(inputStallRecord(field: "Username", action: "tap", elapsedMs: 9_999))
+        XCTAssertNil(inputStallRecord(field: "Username", action: "tap", elapsedMs: -1))
+        XCTAssertEqual(inputStallRecord(field: "Username", action: "typeText", elapsedMs: 60_050),
+                       #"LAZYSH_INPUT_STALL {"action":"typeText","elapsedMs":60050,"field":"Username"}"#)
+        XCTAssertEqual(inputStallRecord(field: "Hostname or IP", action: "tap", elapsedMs: 10_000),
+                       #"LAZYSH_INPUT_STALL {"action":"tap","elapsedMs":10000,"field":"Hostname or IP"}"#)
+        let capped = try XCTUnwrap(inputStallRecord(field: "PRIVATE-LABEL", action: "PRIVATE-ACTION", elapsedMs: Int.max))
+        XCTAssertEqual(capped, #"LAZYSH_INPUT_STALL {"action":"other","elapsedMs":120000,"field":"other"}"#)
+        XCTAssertFalse(capped.contains("PRIVATE"))
     }
 
     @MainActor
@@ -165,4 +193,17 @@ private func typingValueObservation(_ value: Any?, expected: String, placeholder
     let length = text.utf16.prefix(257).count
     return ["kind": "string", "utf16Length": min(length, 256), "lengthCapped": length > 256,
             "matchesExpected": text == expected, "matchesPlaceholder": text == placeholder]
+}
+
+private func inputFieldName(_ label: String) -> String {
+    ["Name", "Hostname or IP", "Username"].contains(label) ? label : "other"
+}
+
+/// One bounded log line for a native input action that blocked, else nil. Carries no typed text.
+private func inputStallRecord(field label: String, action: String, elapsedMs: Int) -> String? {
+    guard elapsedMs >= 10_000 else { return nil }
+    let fields: [String: Any] = ["field": inputFieldName(label), "elapsedMs": min(elapsedMs, 120_000),
+                                 "action": ["tap", "typeText"].contains(action) ? action : "other"]
+    let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+    return data.flatMap { String(data: $0, encoding: .utf8) }.map { "LAZYSH_INPUT_STALL " + $0 }
 }
