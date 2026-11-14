@@ -3,6 +3,9 @@ import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation} from './support/androidTmux';
 import {listening,OwnedProcess} from './support/androidSsh';
+import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
+import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
+import {connect,createServer} from 'node:net';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
   const row=(index:number,name:string,active:number,dead=0)=>`@${index+1}|${index}|${name}|${active}|%${index}|${100+index}|${dead}`;
@@ -44,6 +47,48 @@ test('tmux command failures and supervisor status keep only fixed classes and bo
   expect(tmuxServerStatus({exitCode:139,signalCode:null})).toEqual({state:'exited',exit:139,signal:'none'});
   expect(tmuxServerStatus({exitCode:null,signalCode:'SIGUSR1'})).toEqual({state:'exited',exit:null,signal:'other'});
   expect(tmuxServerStatus()).toEqual({state:'absent',exit:null,signal:'none'});
+});
+
+test('lost-connection control answers only its nonce, cuts and restores a real relayed route and reports closed facts',async()=>{
+  const upstream=createServer(socket=>{socket.on('error',()=>{});socket.pipe(socket);});
+  await new Promise<void>(resolve=>upstream.listen(0,'127.0.0.1',resolve));
+  const relay=await OwnedSshRelay.start((upstream.address() as {port:number}).port);
+  let clients=1;
+  const control=lostConnectionControl(relay,{observe:async()=>clients},'owner');
+  const open=()=>new Promise<'echoed'|'closed'>(resolve=>{
+    const socket=connect({host:'127.0.0.1',port:relay.port});
+    socket.on('error',()=>{});
+    socket.once('data',()=>{socket.destroy();resolve('echoed');});
+    socket.once('close',()=>resolve('closed'));
+    socket.once('connect',()=>socket.write('ping'));
+  });
+  try {
+    for(const request of [undefined,{nonce:'foreign',action:'cut'},{nonce:'owner',action:'remove'}])await expect(control.reply(request)).rejects.toThrow();
+    expect(relay.refused).toBe(0);
+    expect(await open()).toBe('echoed');
+    const held=connect({host:'127.0.0.1',port:relay.port});held.on('error',()=>{});
+    await new Promise(resolve=>held.once('connect',resolve));
+    expect(await control.reply({nonce:'owner',action:'observe'})).toEqual({clients:1,refused:0,active:1});
+    const lost=new Promise<void>(resolve=>held.once('close',()=>resolve()));
+    await control.reply({nonce:'owner',action:'cut'});
+    await lost;
+    expect(await open()).toBe('closed');
+    clients=0;
+    expect(await control.reply({nonce:'owner',action:'observe'})).toEqual({clients:0,refused:1,active:0});
+    await control.reply({nonce:'owner',action:'restore'});
+    expect(await open()).toBe('echoed');
+  } finally {
+    await relay.stop();
+    await new Promise<void>(resolve=>upstream.close(()=>resolve()));
+  }
+});
+
+test('lost-connection report counts only its case passing exactly once',()=>{
+  const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;
+  const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
+  expect(validateLostConnectionReport(report([row(lostConnectionCase)]))).toBe(1);
+  for(const rows of [[],[row('ownedTmuxThroughRealUi')],[row(lostConnectionCase),row(lostConnectionCase)],[row(lostConnectionCase,'<skipped/>')],[row(lostConnectionCase,'<failure message="x"/>')]])
+    expect(()=>validateLostConnectionReport(report(rows))).toThrow();
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
@@ -131,3 +176,8 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await owned.stop();
   }
 },60_000);
+
+// Separate cut-route owner in the same tmux job: the pinned tmux fixture behind a relay the host can cut.
+test.skipIf(process.platform!=='linux' || process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android app shows the lost-connection banner, retries a cut route, reattaches the same tmux pane and closes without reconnecting',async()=>{
+  await androidLostConnectionAcceptance();
+},610_000);

@@ -3086,6 +3086,75 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
 
+    /**
+     * Lost connection on a saved-credential tmux host (#1640). tests/support/androidLostConnection.ts runs the pinned
+     * tmux behind a relay it can cut; this case only asks it to `cut`, `restore` and `observe`, and drives the real UI.
+     */
+    @Test fun ownedTmuxLostConnectionThroughRealUi() {
+        val name = "Parity lost route"
+        val label = "$name / owned-tmux"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val tmux = parity.fixture.getJSONObject("tmux")
+            require(tmux.getString("name") == "owned-tmux") { "Owned tmux fixture required" }
+            val alpha = tmux.getJSONArray("windows").getJSONObject(0).getString("marker")
+            require(Regex("TMUX_ALPHA_[a-f0-9]{32}").matches(alpha)) { "Owned tmux alpha marker required" }
+            val port = parity.port("primary")
+            val banner = "Array.from(document.querySelectorAll('section.connection-banner')).some(x=>" +
+                "x.querySelector('h2')?.textContent.trim()===${JSONObject.quote("Connection lost for $label")} && x.textContent.includes('Connection lost.'))"
+            fun awaitFact(stage: String, seconds: Long, accept: (JSONObject) -> Boolean): JSONObject {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+                while (true) {
+                    val facts = parity.control("observe")
+                    if (accept(facts)) return facts
+                    assertTrue("Owned lost-connection host fact not reached at $stage: $facts", System.nanoTime() < deadline)
+                    Thread.sleep(250)
+                }
+            }
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port) {
+                // The default transport is Auto, which would try Mosh first; this case is about the SSH route.
+                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
+                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='herdr'])", "tmux")
+                typeInto(scenario, "[role=dialog] input[maxlength='200']", "owned-tmux")
+            }
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+            // Saved credentials are what lets the app reconnect on its own; the key is never typed again below.
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//*[@role='dialog']//label[contains(normalize-space(.),'Save credentials on this device')]/input[@type='checkbox']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:$port")
+            awaitDocument(scenario, "owned tmux pane before the route is cut", terminalScreenContains(alpha))
+            assertEquals("Exactly one tmux client before the cut", 1, awaitFact("attached", 20) { it.getInt("clients") == 1 }.getInt("clients"))
+
+            parity.control("cut")
+            awaitDocument(scenario, "lost-connection banner after the route is cut", banner)
+            awaitFact("tmux client gone with the route", 30) { it.getInt("clients") == 0 }
+            // The host's observe call also proved the original tmux server and pane processes are still alive.
+            val refused = awaitFact("automatic retry refused by the cut route", 60) { it.getInt("refused") >= 1 }.getInt("refused")
+            assertEquals("The banner must stay while the route is down", "true", evaluate(scenario, banner))
+
+            parity.control("restore")
+            awaitDocument(scenario, "banner closes by itself after the route returns", "!($banner)")
+            awaitDocument(scenario, "reattached tmux pane shows its original output", terminalScreenContains(alpha))
+            val back = awaitFact("tmux client reattached", 30) { it.getInt("clients") == 1 }
+            assertTrue("Reconnect must not need a new credential or a dialog: $back refused=$refused",
+                evaluate(scenario, present("[role=dialog]")) == "false")
+
+            // Close ends the session; a restored route must not bring it back.
+            parity.control("cut")
+            awaitDocument(scenario, "lost-connection banner before Close", banner)
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "section.connection-banner button[aria-label='Close $label']")).perform(webClick())
+            awaitDocument(scenario, "banner gone after Close", "!($banner)")
+            parity.control("restore")
+            Thread.sleep(8_000)
+            val idle = parity.control("observe")
+            assertEquals("A closed session must not reattach tmux: $idle", 0, idle.getInt("clients"))
+            assertEquals("A closed session must not reconnect: $idle", 0, idle.getInt("active"))
+            println("lazysh lost connection: banner, refused automatic retry, same tmux pane after the route returned, and Close without reconnecting")
+        }
+    }
+
     // The toolbar editor's Agents and Workspaces keys open each view for the real
     // connection, and the destination heading's back control returns to the terminal.
     private fun verifyNavigationToolbarKeys(scenario: ActivityScenario<MainActivity>) {

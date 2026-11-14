@@ -196,6 +196,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-parity-ui"
         }
     }
+    if (providers.gradleProperty("lazyshLostConnectionAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/lost-connection-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/lost-connection-ui"
+        }
+    }
     if (providers.gradleProperty("lazyshDeniedNotificationAcceptance").orNull == "true") {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/denied-notification-ui"

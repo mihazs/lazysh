@@ -148,7 +148,7 @@ export class TmuxFixture {
     const current=saved && await identity(saved.pid);
     return !!current && current.start===saved?.start && current.parent===saved?.parent && !['Z','X'].includes(current.state);
   }
-  /** One host sample: the original server and both pane processes, plus display clients. */
+  /** One host sample: the original server and both pane processes, plus display clients. Returns the current display-client count. */
   async observe() {
     if(!await this.server?.liveIdentity() || !await this.alive(this.serverPid) || !this.windows.length)throw new Error('Owned tmux server identity changed');
     for(const window of this.windows)if(!await this.alive(window.pane))throw new Error('Owned tmux pane identity changed');
@@ -157,6 +157,7 @@ export class TmuxFixture {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
       this.history.push(count);
     }
+    return count;
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
   diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}

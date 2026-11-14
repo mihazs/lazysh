@@ -3,7 +3,7 @@ import {chmod,copyFile,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs
 import {join,resolve} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
-import {SshFixture,OwnedProcess,androidSshCleanup,nativeReportCases,ownedSoftwareKeyboard} from './androidSsh';
+import {SshFixture,OwnedProcess,androidSshCleanup,nativeReportCases,ownedDeviceCleanup,ownedEmulator,ownedSoftwareKeyboard} from './androidSsh';
 import {availablePort,sshCommand} from './sshFixture';
 
 /** The owned SSH parity instrumentation cases (#985), run together in one Gradle invocation. */
@@ -43,7 +43,7 @@ export function validateSshParityReport(text:string) {
 }
 
 type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture};
-type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
+export type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
 /**
  * The instrumentation's only host channel. Requests carry the case nonce and one closed
  * action; replies are closed facts. `rotate` points the pinned device port at a second sshd.
@@ -64,7 +64,7 @@ export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<
   }};
 }
 
-async function listen(control:Control) {
+export async function listen(control:Control) {
   const server=createServer(socket=>{
     let buffer='';
     socket.setEncoding('utf8');
@@ -85,7 +85,7 @@ async function listen(control:Control) {
   await new Promise<void>((resolve_,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve_);});
   return {server,port:(server.address() as {port:number}).port};
 }
-const close=(server:Server)=>new Promise<void>((resolve_,reject)=>server.close(error=>error?reject(error):resolve_()));
+export const close=(server:Server)=>new Promise<void>((resolve_,reject)=>server.close(error=>error?reject(error):resolve_()));
 
 /** A passphrase-encrypted copy of the primary user key, as `ssh-keygen -p` writes it. */
 async function encryptedIdentity(primary:SshFixture,passphrase:string) {
@@ -105,11 +105,7 @@ async function encryptedIdentity(primary:SshFixture,passphrase:string) {
  * second-key sshd for rotation, then runs the parity cases with the host control channel.
  */
 export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'../..')) {
-  if(process.platform!=='linux')throw new Error('Owned Android SSH parity acceptance requires Linux');
-  const serial=process.env.ANDROID_SERIAL;
-  if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
-  const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
-  const device=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
+  const {adb,device}=ownedEmulator('SSH parity acceptance');
   const password=randomBytes(16).toString('hex'),passphrase=randomBytes(12).toString('hex');
   const started:SshFixture[]=[];
   const reverses:number[]=[];
@@ -155,10 +151,8 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
   } catch(error){primary=true;throw error;}
   finally {
     await androidSshCleanup(primary,[
-      ['software-keyboard',()=>keyboard?.restore()??Promise.resolve()],
-      ...reverses.map(port=>['reverse',()=>device(['reverse','--remove',`tcp:${port}`])] as const),
+      ...ownedDeviceCleanup(device,{keyboard,reverses,remote}),
       ['control',()=>control?close(control):Promise.resolve()],
-      ['fixture-file',()=>remote?device(['shell','rm','-rf','--',remote]):Promise.resolve()],
       ...started.map(fixture=>['SSH',()=>fixture.stop()] as const),
     ]);
   }
