@@ -516,7 +516,10 @@ pub async fn upload_cancel(
                 .uploads
                 .cancel_with(&upload_id, &session_id, &lease, || {
                     session.is_some_and(|session| {
-                        session.clipboard.cancel(&upload_id, lease.generation())
+                        session
+                            .bindings
+                            .clipboard
+                            .cancel(&upload_id, lease.generation())
                     })
                 })
         })
@@ -547,9 +550,11 @@ pub async fn upload_file(
             work.run_published(
                 ssh::transfer_file(&session, &work.job.access, destination, data, &work),
                 |uploaded| {
-                    session
-                        .clipboard
-                        .publish(upload_id, uploaded.path.clone(), lease.clone())
+                    session.bindings.clipboard.publish(
+                        upload_id,
+                        uploaded.path.clone(),
+                        lease.clone(),
+                    )
                 },
             )
             .await

@@ -319,7 +319,14 @@ impl AppState {
         // channel. Disconnecting first would strand the client on tmux < 3.8.
         let bindings = sessions
             .iter()
-            .filter_map(|session| session.tmux.lock().ok().and_then(|tmux| tmux.clone()))
+            .filter_map(|session| {
+                session
+                    .bindings
+                    .tmux
+                    .lock()
+                    .ok()
+                    .and_then(|tmux| tmux.clone())
+            })
             .collect::<Vec<_>>();
         let _ = timeout(
             crate::tmux_jump::RETIREMENT,
@@ -774,8 +781,7 @@ impl Drop for SshHandle {
 }
 pub(crate) struct Session {
     pub(crate) handle: Arc<SshHandle>,
-    pub(crate) clipboard: crate::host_clipboard::UploadSlot,
-    pub(crate) companion_install: Arc<Semaphore>,
+    pub(crate) bindings: crate::bindings::Bindings,
     file_control: Option<file_control::Control>,
     pub(crate) access: AccessState,
     creation: AccessLease,
@@ -790,9 +796,6 @@ pub(crate) struct Session {
     finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
     validate_size: fn(u32, u32) -> Result<()>,
-    pub(crate) tmux: StdMutex<Option<crate::tmux_jump::Binding>>,
-    pub(crate) herdr: StdMutex<Option<crate::herdr_guard::Binding>>,
-    pub(crate) tmux_server: StdMutex<Option<crate::tmux_server::TmuxServer>>,
 }
 impl Session {
     fn ssh_handles(&self) -> Vec<Arc<SshHandle>> {
@@ -820,15 +823,11 @@ impl Session {
     ) -> Self {
         Self {
             handle,
-            clipboard: crate::host_clipboard::UploadSlot::default(),
-            companion_install: Arc::new(Semaphore::new(1)),
+            bindings: crate::bindings::Bindings::default(),
             file_control: None,
             input,
             cancel,
             validate_size,
-            tmux: StdMutex::new(None),
-            herdr: StdMutex::new(None),
-            tmux_server: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
             core: Default::default(),
@@ -3574,8 +3573,7 @@ pub async fn list_multiplexer_sessions(
 ) -> AccessResult<Vec<MuxSession>> {
     lease.run(async {
 
-    let session = state.session(&session_id).await?;
-    let server = crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
+    let (session, server) = crate::tmux_server::TmuxServer::for_id(&state, &session_id, tmux_server.as_deref()).await?;
     let text=exec(&session, &lease,format!("{} list-sessions -F '#{{session_id}}\t#{{session_name}}\t#{{session_windows}}\t#{{session_attached}}'", server.prefix())).await?;
     Ok(text
         .lines()
@@ -3700,7 +3698,7 @@ pub async fn attach_multiplexer(
             }
             if let Some(startup) = startup {
                 let child = state.session(&connected.session_id).await?;
-                *child.herdr.lock().map_err(|_| SshError::new("herdr_chat_unavailable", "Cannot bind Herdr display"))? =
+                *child.bindings.herdr.lock().map_err(|_| SshError::new("herdr_chat_unavailable", "Cannot bind Herdr display"))? =
                     Some(crate::herdr_guard::start(startup, child.handle.clone(), child.cancel.subscribe()));
             }
             Ok(connected)
@@ -3749,11 +3747,13 @@ async fn attach_tmux_inner(
     .await?;
     let child = state.session(&connected.session_id).await?;
     *child
+        .bindings
         .tmux_server
         .lock()
         .map_err(|_| SshError::new("tmux_unavailable", "Cannot bind tmux server"))? = Some(server);
     if let Some(control) = control {
         *child
+            .bindings
             .tmux
             .lock()
             .map_err(|_| SshError::new("tmux_unavailable", "Cannot bind tmux display"))? =
