@@ -124,7 +124,7 @@ The server runs with `--allow-insecure=uiautomator2:chromedriver_autodownload` o
 | App data | cleared at session start (`noReset: false`); one session per spec file |
 | Hosts | created per test with a per-run nonce name, removed in `afterEach` |
 | Window size, density, navigation mode, IME, animations, rotation, permissions | change only through `support/device.ts`; baseline recorded, restored in `after` even on failure |
-| Shared device | advisory lock per serial; a second run waits and prints the owner, it does not interleave |
+| Shared device | advisory lock per serial; a second run waits (`LAZYSH_E2E_LOCK_TIMEOUT_S`, default 600) and prints the owner, it does not interleave; when the wait ends the run fails at once naming the owner's pid and age, with no worker started |
 | Owned hosts | `SshFixture`, `HerdrFixture`, `TmuxFixture` from `tests/support`; never a personal Herdr, tmux or SSH server |
 | Endpoints and keys | mode-0600 file under the run directory, never committed, never logged |
 

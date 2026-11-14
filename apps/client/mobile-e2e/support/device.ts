@@ -130,7 +130,7 @@ async function takeLock(path: string, timeoutMs: number, pollMs: number, log: (m
     const unreadableAndStale = !owner && Date.now() - (await stat(path).then(info => info.mtimeMs, () => 0)) > 5000;
     // shortcut: advisory lock, a dead owner is taken over without a compare-and-swap; two waiters racing here is not guarded.
     if (owner ? !alive(owner.pid) : unreadableAndStale) { await rm(path, {force: true}); continue; }
-    const heldBy = owner ? `pid ${owner.pid} since ${owner.started}` : 'a run that is still starting';
+    const heldBy = owner ? `pid ${owner.pid} since ${owner.started} (${Math.max(0, Math.round((Date.now() - Date.parse(owner.started)) / 60_000))} min ago)` : 'a run that is still starting';
     if (Date.now() >= deadline) throw new Error(`Device is busy: lock ${path} is held by ${heldBy}`);
     if (!announced) log(`Waiting for the device lock held by ${heldBy}`);
     announced = true;

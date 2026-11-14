@@ -34,7 +34,7 @@ none. The endpoint, fingerprint and private key are in a mode-0600 file in a per
 The run clears the app's data at the start of every spec file (`appium:noReset: false`). It takes an advisory lock for the
 serial, records window size, density, navigation mode, IME, animation scale, rotation and the app's runtime permissions, and
 restores them after each spec file and at the end. After a crashed run the next one refuses until you restore the device
-or set `LAZYSH_E2E_RECOVER=1`. Set `LAZYSH_E2E_CHROMEDRIVER` to pin a ChromeDriver instead of the automatic download, and `LAZYSH_E2E_APPIUM_PORT` when port 4723 is taken.
+or set `LAZYSH_E2E_RECOVER=1`. A lock still held after `LAZYSH_E2E_LOCK_TIMEOUT_S` seconds (default 600) fails the run at once, naming the holder. Set `LAZYSH_E2E_CHROMEDRIVER` to pin a ChromeDriver instead of the automatic download, and `LAZYSH_E2E_APPIUM_PORT` when port 4723 is taken.
 
 ## Check without a device
 
