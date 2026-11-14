@@ -44,18 +44,27 @@ it('builds the Herdr focus command only for a workspace, tab or pane that still 
   for(const gone of [{kind:'workspace',workspace:'w9'},{kind:'tab',workspace:'w2',tab:'w1:t1'},{kind:'pane',workspace:'w2',tab:'w2:t1',pane:'w2:p1',terminal:'other'}] as const)
     expect(()=>herdrFocusAction(tree,gone)).toThrow();
 });
-it('offers a rename and a new tab only where the multiplexer layer has the typed command, and starts a Herdr tab where its workspace is working',()=>{
+it('offers rename, close and a new tab only where the multiplexer layer has the typed command, and starts a Herdr tab where its workspace is working',()=>{
   const herdr=herdrStrip({...tree,panes:[{...tree.panes[0],cwd:'/srv/app'}]})!;
   expect(herdr.tabs.map(tab=>tab.rename)).toEqual([{kind:'herdr',type:'renameTab',target:'w2:t1'},{kind:'herdr',type:'renameTab',target:'w2:t2'}]);
+  expect(herdr.tabs.map(tab=>tab.close)).toEqual([{kind:'herdr',type:'closeTab',target:'w2:t1'},{kind:'herdr',type:'closeTab',target:'w2:t2'}]);
+  // A workspace is renamed from the list, never closed from it; closing the only tab of a workspace is not offered.
   expect(herdr.group.choices.map(item=>item.rename)).toEqual(['w1','w2','w3'].map(target=>({kind:'herdr',type:'renameWorkspace',target})));
+  expect(herdr.group.choices.map(item=>item.close)).toEqual([undefined,undefined,undefined]);
+  expect(herdrStrip(tree)!.tabs.length).toBe(2);
+  expect(herdrStrip({...tree,tabs:tree.tabs.slice(0,1)})!.tabs.map(tab=>tab.close)).toEqual([undefined]);
   expect(herdr.create).toEqual({edit:{kind:'herdr',type:'createTab',workspace:'w2'},directory:'/srv/app'});
   expect(herdrStrip(tree)!.create?.directory).toBe('.');
-  // Zellij has no rename-tab command: a long press there would have nothing to ask for.
-  const zellij=zellijStrip('build',[{position:0,name:'shell',active:true}]);
-  expect(zellij.tabs[0].rename).toBeUndefined();
+  // Zellij addresses a tab by the stable id it reports: a Zellij that reports none can select but not rename or close.
+  const zellij=zellijStrip('build',[{position:1,name:'logs',active:false,id:9},{position:0,name:'shell',active:true,id:4}]);
+  expect(zellij.tabs.map(tab=>[tab.rename,tab.close])).toEqual([[{kind:'zellij',type:'renameTab',id:4},{kind:'zellij',type:'closeTab',id:4}],[{kind:'zellij',type:'renameTab',id:9},{kind:'zellij',type:'closeTab',id:9}]]);
+  expect(zellijStrip('build',[{position:0,name:'a',active:true},{position:1,name:'b',active:false}]).tabs.map(tab=>[tab.rename,tab.close])).toEqual([[undefined,undefined],[undefined,undefined]]);
+  expect(zellijStrip('build',[{position:0,name:'shell',active:true,id:4}]).tabs[0]).toMatchObject({rename:{kind:'zellij',type:'renameTab',id:4},close:undefined});
   expect(zellij.create).toEqual({edit:{kind:'zellij',type:'newTab'},directory:'.'});
   const snapshot:TmuxJumpSnapshot={generation:'g'.repeat(36),current:{sessionId:'$2',windowId:'@5'},sessions:[{id:'$2',name:'work',restoreName:null,windows:[{id:'@5',index:0,name:'vim'}]}]};
-  expect(tmuxStrip(snapshot)!.tabs[0].rename).toEqual({kind:'tmux',type:'renameWindow',target:'@5'});
+  expect(tmuxStrip(snapshot)!.tabs[0]).toMatchObject({rename:{kind:'tmux',type:'renameWindow',target:'@5'},close:undefined});
+  const two:TmuxJumpSnapshot={...snapshot,sessions:[{...snapshot.sessions[0],windows:[{id:'@5',index:0,name:'vim'},{id:'@6',index:1,name:'zsh'}]}]};
+  expect(tmuxStrip(two)!.tabs.map(tab=>tab.close)).toEqual([{kind:'tmux',type:'closeWindow',target:'@5'},{kind:'tmux',type:'closeWindow',target:'@6'}]);
   expect(tmuxStrip(snapshot)!.create).toEqual({edit:{kind:'tmux',type:'createWindow',target:'$2'},directory:'.'});
 });
 it("builds each multiplexer's own typed action from a name, and refuses a Herdr workspace or tab that has gone",()=>{
@@ -65,6 +74,11 @@ it("builds each multiplexer's own typed action from a name, and refuses a Herdr 
   expect(muxEditAction({kind:'zellij',type:'newTab'},'logs','/srv/app')).toEqual({type:'newTab',name:'logs',directory:'/srv/app'});
   expect(muxEditAction({kind:'tmux',type:'renameWindow',target:'@5'},'edit','/ignored')).toEqual({type:'renameWindow',target:'@5',name:'edit'});
   expect(muxEditAction({kind:'tmux',type:'createWindow',target:'$2'},'edit','/srv/app')).toEqual({type:'createWindow',target:'$2',name:'edit',directory:'/srv/app'});
-  for(const gone of [{kind:'herdr',type:'renameTab',target:'w9:t9'},{kind:'herdr',type:'renameWorkspace',target:'w9'},{kind:'herdr',type:'createTab',workspace:'w9'}] as const)
+  // A close carries only its exact target: no name, no directory.
+  expect(muxEditAction({kind:'herdr',type:'closeTab',target:'w2:t2'},'','.',tree)).toEqual({type:'closeTab',target:'w2:t2'});
+  expect(muxEditAction({kind:'tmux',type:'closeWindow',target:'@5'},'','.')).toEqual({type:'closeWindow',target:'@5'});
+  expect(muxEditAction({kind:'zellij',type:'closeTab',id:9},'','.')).toEqual({type:'closeTab',id:9});
+  expect(muxEditAction({kind:'zellij',type:'renameTab',id:9},'api','/ignored')).toEqual({type:'renameTab',id:9,name:'api'});
+  for(const gone of [{kind:'herdr',type:'renameTab',target:'w9:t9'},{kind:'herdr',type:'closeTab',target:'w9:t9'},{kind:'herdr',type:'renameWorkspace',target:'w9'},{kind:'herdr',type:'createTab',workspace:'w9'}] as const)
     expect(()=>muxEditAction(gone,'x','.',tree)).toThrow();
 });
