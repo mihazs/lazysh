@@ -2,6 +2,7 @@ package app.lazysh.client
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.content.pm.ActivityInfo
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -71,6 +72,7 @@ class NativeTerminalSurfaceTest {
 
     @After fun cleanUp() {
         runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
+        runCatching { scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED } }
         runCatching { scenario.onActivity { TerminalSurfaces.remove(session) } }
         PageDriver.removeAnchor()
         TerminalSurfaces.clientFactory = factoryBefore
@@ -252,6 +254,37 @@ class NativeTerminalSurfaceTest {
         }
         assertFalse("the surface takes no focus, so no IME is served to it", ui { view.isFocusable || view.hasFocus() })
         assertFalse("and it is not announced as a second terminal", ui { view.isImportantForAccessibility })
+    }
+
+    @Test fun aPausedWindowThatIsStillVisibleKeepsItsSurfaceAndItsClient() {
+        place(PageDriver.anchor("left:10%;top:25%;width:50%;height:30%"))
+        awaitReady(1)
+        scenario.moveToState(Lifecycle.State.STARTED)
+        Thread.sleep(1_000)
+        assertEquals("nothing is told lost or ready while the window is only paused", listOf("ready 1"), recorder.events.map { it.split(' ').take(2).joinToString(" ") })
+        assertTrue(state().getBoolean("ready"))
+        scenario.moveToState(Lifecycle.State.RESUMED)
+        assertEquals(1, state().getInt("generation"))
+        awaitBackground()
+    }
+
+    @Test fun aRotationResizesTheSameSurfaceOnceThePageHasPlacedItAgain() {
+        val anchor = PageDriver.anchor("left:10%;top:25%;width:50%;height:30%")
+        place(anchor)
+        awaitReady(1)
+        val upright = webRect()
+        val wanted = if (upright.width() >= upright.height()) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        ui { it.requestedOrientation = wanted }
+        PageDriver.poll("the window turning") { webRect().takeIf { it.width() != upright.width() } }
+        // The page lays itself out again for the new size and places the surface at its new anchor, as the anchor tracker does.
+        val turned = PageDriver.anchor("left:10%;top:25%;width:50%;height:30%")
+        place(turned)
+        val expected = expectedRect(turned)
+        PageDriver.poll("the surface at the turned anchor") { surfaceView()?.let { if (PageDriver.near(screenRect(it), expected)) it else null } }
+        PageDriver.poll("the client told of the new size") { recorder.events.takeIf { it.contains("changed 1 ${expected.width()}x${expected.height()}") } }
+        assertEquals("a rotation is a resize, not a new surface", 1, state().getInt("generation"))
+        assertFalse("no loss on the way", recorder.events.any { it.startsWith("lost") })
+        awaitBackground()
     }
 
     @Test fun removingTheSessionEndsItsSurfaceAndItsCount() {
