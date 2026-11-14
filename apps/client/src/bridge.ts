@@ -2,6 +2,7 @@ import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from '.
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
 import type { AuthHint } from './authHints';
 import { registerSessionOutput } from './pendingSessions';
+import { zellijSnapshot, type ZellijJumpTabs } from './zellijJump';
 
 export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
 export type UsageFreshness = "fresh" | "stale" | "unknown";
@@ -67,6 +68,8 @@ export type TmuxJumpPane = { id: string; index: number; title: string; command: 
 export type TmuxJumpSnapshot = {
   generation: string;
   current: { sessionId: string; windowId: string; paneId?: string };
+  /** Zellij only: another client is attached, so no row is current for this terminal and a jump is refused (#2046). */
+  sharedClients?: true;
   sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string; zoomed?: boolean; panes?: TmuxJumpPane[] }[] }[];
 };
 
@@ -200,6 +203,9 @@ export const api = {
     invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
+  zellijJumpSnapshot: async (sessionId: string, name: string) => zellijSnapshot(name, await remoteInvoke<ZellijJumpTabs>('zellij_jump_tabs', { sessionId, name })),
+  /** Jumps to a tab by its stable id; Zellij applies it a moment later, so the result is the caller's to show. */
+  zellijJump: (sessionId: string, name: string, tabId: number) => remoteInvoke<void>('zellij_action', { sessionId, name, action: { type: 'jump', tabId } }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
   tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string, paneId?: string) =>
     remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId, ...(paneId === undefined ? {} : { paneId }) }),

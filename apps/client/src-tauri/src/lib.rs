@@ -352,6 +352,7 @@ pub fn run() {
                 zellij::zellij_action,
                 zellij::zellij_tabs,
                 zellij::zellij_panes,
+                zellij::zellij_jump_tabs,
                 multiplexer::multiplexer_sessions,
                 multiplexer::tmux_action,
                 ssh::attach_multiplexer,
