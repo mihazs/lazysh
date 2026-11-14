@@ -207,6 +207,17 @@ describe('when the stream cannot be had',()=>{
   });
 });
 
+describe('a session larger than the companion reads',()=>{
+  it('says earlier messages are not shown where it would say the session starts',async()=>{
+    render_();await advance(0);await send(hello);
+    await send(snapshot(1,1,first.map(message=>entry(message))));
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+    await send({...snapshot(1,2,first.map(message=>entry(message))),session:{earlierOmitted:true}});
+    expect(screen.queryByText('Start of the session')).toBeNull();
+    expect(screen.getByText('Earlier messages are not shown: this session is larger than the host companion reads.')).toBeTruthy();
+  });
+});
+
 describe('a conversation the companion reports as too large',()=>{
   it('says so once and stops reading it instead of polling a file that will never open',async()=>{
     watchFails=true;

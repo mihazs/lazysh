@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{BufReader, Cursor, Read},
+    io::{BufReader, Cursor, Read, Seek, SeekFrom},
     path::Path,
 };
 
@@ -51,9 +51,48 @@ fn conversation_options(
     if !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }
-    let mut page = project_claude(capture(path)?, limit, inline_images, window)?;
+    // A source over the snapshot bound is read from its newest part, and the page says that earlier messages are not shown.
+    let (bytes, omitted) = match capture(path) {
+        Err(Error::TooLarge) => (capture_tail(path)?, true),
+        bytes => (bytes?, false),
+    };
+    let mut page = project_claude(bytes, limit, inline_images, window)?;
+    if omitted {
+        page.session.get_or_insert_with(|| json!({}))["earlierOmitted"] = json!(true);
+    }
     super::work::attach_children(&mut page, path);
     Ok(page)
+}
+
+/// How much of a source over the snapshot bound a conversation read keeps: the newest bytes.
+const TAIL: u64 = 8 * 1024 * 1024;
+
+/// The last `TAIL` bytes of the source from the start of the first line inside them, with the checks `capture` makes: the same
+/// file still stands at the path and has not shrunk. `shortcut`: growth while reading is not compared byte for byte, upgrade when
+/// an agent rewrites a transcript in place without changing its length.
+pub(super) fn capture_tail(path: &Path) -> Result<Vec<u8>> {
+    let open = || open_transcript(path);
+    let mut file = open()?;
+    let before = super::SourceSnapshot::capture(&file)?;
+    drop(selected_with(&open, &file, &before)?);
+    // One byte before the window says whether it starts on a line.
+    let start = before.len().saturating_sub(TAIL + 1);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(before.len() - start)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != before.len() - start {
+        return Err(Error::InvalidEvent);
+    }
+    drop(selected_with(&open, &file, &before)?);
+    // A source whose newest 8 MiB hold no line break has no record to read.
+    let first = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or(Error::TooLarge)?;
+    bytes.drain(..=first);
+    Ok(bytes)
 }
 
 pub(super) fn project_claude(
@@ -164,7 +203,7 @@ pub(super) fn project_claude_bounded(
                 }
                 records.push((offset, record));
                 if records.len() > record_limit {
-                    return Err(Error::InvalidArgument);
+                    return Err(Error::TooLarge);
                 }
             }
         }

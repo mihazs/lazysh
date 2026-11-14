@@ -439,6 +439,46 @@ fn codex_text_that_escapes_to_a_larger_message_still_fits_one_page() {
         .all(|message| serde_json::to_vec(message).unwrap().len() < 512 * 1024));
 }
 #[test]
+fn a_claude_transcript_over_the_size_bound_opens_from_its_newest_part_and_says_earlier_messages_are_not_shown(
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    // 17 MiB of records the conversation ignores sit between the first message and the newest ones.
+    let filler = format!(
+        "{}\n",
+        json!({"type":"api-request-blob","payload":"f".repeat(1000)})
+    );
+    let mut text = format!(
+        "{}\n",
+        message("first", None, "user", "the very first prompt")
+    );
+    text.push_str(&filler.repeat(17 * 1024));
+    text.push_str(&format!(
+        "{}\n",
+        message("recent", Some("first"), "assistant", "the newest answer")
+    ));
+    fs::write(&path, &text).unwrap();
+    assert!(text.len() > 16 * 1024 * 1024);
+    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
+    // The parent of the newest record is outside the window, so the chain starts at it.
+    assert_eq!(ids(&page), vec!["recent"]);
+    assert_eq!(page.session.as_ref().unwrap()["earlierOmitted"], true);
+    // A conversation under the bound says nothing of the kind.
+    write(&path, &[message("first", None, "user", "short")]);
+    assert!(conversation(&path, TranscriptAgent::Claude, 100)
+        .unwrap()
+        .session
+        .is_none());
+    // A source whose newest 8 MiB hold no line break has no record to read.
+    fs::write(&path, vec![b'x'; 17 * 1024 * 1024]).unwrap();
+    assert_eq!(
+        conversation(&path, TranscriptAgent::Claude, 100)
+            .unwrap_err()
+            .class(),
+        "TooLarge"
+    );
+}
+#[test]
 fn a_rollout_over_the_size_bound_is_reported_as_too_large() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rollout.jsonl");
@@ -446,10 +486,8 @@ fn a_rollout_over_the_size_bound_is_reported_as_too_large() {
         .unwrap()
         .set_len(16 * 1024 * 1024 + 1)
         .unwrap();
-    for agent in [TranscriptAgent::Codex, TranscriptAgent::Claude] {
-        let error = conversation(&path, agent, 100).unwrap_err();
-        assert_eq!(error.class(), "TooLarge");
-    }
+    let error = conversation(&path, TranscriptAgent::Codex, 100).unwrap_err();
+    assert_eq!(error.class(), "TooLarge");
 }
 #[test]
 fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {

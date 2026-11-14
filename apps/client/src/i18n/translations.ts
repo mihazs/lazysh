@@ -1390,6 +1390,7 @@ const translations = {
   chatHistoryNewer: ["Carregar mensagens posteriores", "Cargar mensajes posteriores"],
   chatHistoryJumpStart: ["Ir para o início", "Ir al inicio"],
   chatHistoryStart: ["Início da sessão", "Inicio de la sesión"],
+  chatHistoryTrimmed: ["As mensagens anteriores não são mostradas: esta sessão é maior do que o companion do servidor lê.", "Los mensajes anteriores no se muestran: esta sesión es mayor de lo que lee el companion del servidor."],
   chatConversation: ["Mensagens da conversa", "Mensajes de la conversación"],
   chatStep: ["Etapa {{index}}", "Paso {{index}}"],
   chatRecordMetadata: ["Origem: {{source}} · Tipo: {{type}} · Status: {{status}}", "Origen: {{source}} · Tipo: {{type}} · Estado: {{status}}"],

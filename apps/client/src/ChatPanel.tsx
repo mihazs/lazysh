@@ -874,7 +874,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           else if (history.newer && element.scrollHeight - element.clientHeight - element.scrollTop <= 80) loadNewer();
         }
       }}>
-        {opened?.view === 'conversation' && <ChatHistoryControls edge="top" more={history.older} first={messages.length > 0} busy={busy} onMore={loadOlder} onJumpStart={() => readSlice({kind: 'start'})} />}
+        {opened?.view === 'conversation' && <ChatHistoryControls edge="top" more={history.older} first={messages.length > 0} omitted={session?.earlierOmitted} busy={busy} onMore={loadOlder} onJumpStart={() => readSlice({kind: 'start'})} />}
         {timeline ? turns.map((turn, index) => <section key={turn.key} data-anchor={turn.key} data-running={turnRunning && index === turns.length - 1 || undefined} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}

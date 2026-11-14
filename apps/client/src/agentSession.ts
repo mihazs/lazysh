@@ -12,6 +12,8 @@ export type AgentSessionInfo = {
   /** Last component of the working directory, the git branch and the worktree name: names, never paths. */
   folder?: string; branch?: string; worktree?: string;
   usage?: {usedTokens: number; limitTokens?: number}; cost?: {usd: number}; rateLimits?: RateLimit[];
+  /** The source is larger than the host companion reads, so only its newest part is shown. */
+  earlierOmitted?: true;
 };
 
 const label = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 64 ? value : undefined;
@@ -51,6 +53,7 @@ export function parseSession(value: unknown): AgentSessionInfo | undefined {
   const session: AgentSessionInfo = {};
   const info = parseRoster(raw.info);
   if (info) session.info = info;
+  if (raw.earlierOmitted === true) session.earlierOmitted = true;
   for (const key of ['model', 'mode', 'effort', 'approval', 'sandbox'] as const) {
     const text = label(raw[key]);
     if (text) session[key] = text;

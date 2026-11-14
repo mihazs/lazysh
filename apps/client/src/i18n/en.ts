@@ -1384,6 +1384,7 @@ export const english = {
   chatHistoryNewer: "Load later messages",
   chatHistoryJumpStart: "Jump to start",
   chatHistoryStart: "Start of the session",
+  chatHistoryTrimmed: "Earlier messages are not shown: this session is larger than the host companion reads.",
   chatConversation: "Conversation messages",
   chatStep: "Step {{index}}",
   chatRecordMetadata: "Source: {{source}} · Type: {{type}} · Status: {{status}}",
