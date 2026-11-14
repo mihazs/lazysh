@@ -299,7 +299,7 @@ the PTY directly.
 
 | Action | Answer path, first available |
 | --- | --- |
-| Send prompt | Guarded `send` (exists). Else Stage in terminal. |
+| Send prompt | Guarded `send` (exists), held while the agent has a dialog open (the report says it waits for an approval, a question, a plan or a menu, or the screen lift shows a dialog): the text and its Enter would go into the dialog, so the draft waits. Else Stage in terminal. |
 | Send while the agent works | Per-agent profile: queue (shown as a queued card until the transcript shows it) or steer. |
 | Interrupt | Live protocol interrupt. Else guarded `request_stop`. Two taps on phone. |
 | Approval | Agent's own decision channel (Claude hook decision, Codex/OpenCode protocol reply). Else keys. |

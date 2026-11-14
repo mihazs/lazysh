@@ -2209,6 +2209,7 @@ export const english = {
   agentQueued: "Queued",
   agentComposerCommands: "Slash commands",
   agentComposerFiles: "Files and folders",
+  agentComposerAnswerFirst: "The agent is waiting for your answer. Answer it first: a message sent now would go into its dialog.",
   agentComposerOpensPicker: "Opens a picker",
   agentComposerPickerNote: "{{command}} opens a dialog. Send it, then choose in the dialog card here or in the terminal.",
   agentModeBash: "Shell command",

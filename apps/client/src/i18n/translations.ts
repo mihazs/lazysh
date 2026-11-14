@@ -2212,6 +2212,7 @@ const translations = {
   agentQueued: ["Na fila", "En cola"],
   agentComposerCommands: ["Comandos com barra", "Comandos con barra"],
   agentComposerFiles: ["Arquivos e pastas", "Archivos y carpetas"],
+  agentComposerAnswerFirst: ["O agente espera a sua resposta. Responda primeiro: uma mensagem enviada agora iria para o diálogo dele.", "El agente espera tu respuesta. Responde primero: un mensaje enviado ahora iría a su diálogo."],
   agentComposerOpensPicker: ["Abre um seletor", "Abre un selector"],
   agentComposerPickerNote: ["{{command}} abre um diálogo. Envie-o e escolha no cartão do diálogo aqui ou no terminal.", "{{command}} abre un diálogo. Envíalo y elige en la tarjeta del diálogo aquí o en el terminal."],
   agentModeBash: ["Comando de shell", "Comando de shell"],

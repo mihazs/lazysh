@@ -1134,6 +1134,21 @@ describe('a list dialog open on the terminal',()=>{
     expect(within(screen.getByRole('region',{name:'Dialog in the terminal'})).getByRole('status').textContent).toBe('The agent is waiting for you in the terminal.');
     expect(keys()).toEqual([]);
   });
+  it('holds the message box while the dialog is open, so Enter cannot choose a row of it, and releases the kept draft when it closes',async()=>{
+    const screenOf=await open(modelScreen(5));
+    const draft=()=>screen.getByRole('textbox',{name:'Draft for this terminal'}) as HTMLTextAreaElement;
+    const send=()=>screen.getByRole('button',{name:'Send to the agent'}) as HTMLButtonElement;
+    fireEvent.change(draft(),{target:{value:'Run the tests'}});await advance(0);
+    expect(screen.getByText(/The agent is waiting for your answer/)).toBeTruthy();
+    expect(send().disabled).toBe(true);
+    fireEvent.keyDown(draft(),{key:'Enter'});await advance(0);
+    expect(keys()).toEqual([]);expect(draft().value).toBe('Run the tests');
+    screenOf.set(dialogScreen('model-closed'));await advance(400);
+    expect(screen.queryByText(/The agent is waiting for your answer/)).toBeNull();
+    expect(send().disabled).toBe(false);
+    fireEvent.click(send());await advance(0);
+    expect(keys()).toEqual([{kind:'send',text:'Run the tests'}]);
+  });
   it('leaves a permission prompt to the approval card, which the hook report names',async()=>{
     await open(dialogScreen('permission'),'needs_attention');
     expect(screen.queryByRole('region',{name:'Dialog in the terminal'})).toBeNull();
@@ -1160,6 +1175,34 @@ it('shows a message typed while the agent works as a queued card until the agent
   expect(screen.getAllByRole('region',{name:'Turn'})).toHaveLength(2);
   reply={...taken,queued:undefined};await advance(2500);
   expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
+});
+
+describe('a dialog open in the agent',()=>{
+  const sendFromComposer=async(text:string)=>{
+    fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:text}});await advance(0);
+    const send=screen.getByRole('button',{name:'Send to the agent'}) as HTMLButtonElement;
+    const held=send.disabled;
+    if(!held)fireEvent.click(send);await advance(0);
+    return held;
+  };
+  const inputs=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string}}).action).filter(action=>action.kind==='input');
+  const mount=()=>render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+
+  it.each([['an approval','Bash'],['a question','AskUserQuestion'],['a plan decision','ExitPlanMode']])('holds the message while the agent waits for %s, so Enter cannot answer it',async(_name,summary)=>{
+    host('claude',[{...row('Claude Code','%3','needs_attention'),summary}],'available',[turn('First prompt','First answer')]);
+    mount();await advance(0);
+    expect(await sendFromComposer('no, use the trash instead')).toBe(true);
+    expect(screen.getByText(/The agent is waiting for your answer/)).toBeTruthy();
+    expect(inputs()).toEqual([]);
+  });
+
+  it('sends as usual while the agent only waits at its prompt or works',async()=>{
+    host('claude',[{...row('Claude Code','%3','needs_attention'),summary:'Agent needs attention'}],'available',[turn('First prompt','First answer')]);
+    mount();await advance(0);
+    expect(await sendFromComposer('Run the tests')).toBe(false);
+    expect(inputs()).toHaveLength(1);
+    expect(screen.queryByText(/The agent is waiting for your answer/)).toBeNull();
+  });
 });
 
 it('ignores a malformed queue from the companion and shows no card',async()=>{
