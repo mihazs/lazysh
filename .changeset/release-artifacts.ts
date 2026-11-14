@@ -28,6 +28,24 @@ export const artifactTargets = {
   'windows-agent-x64': ['exe'],
 } as const;
 export type ArtifactTarget = keyof typeof artifactTargets;
+const MiB = 1024 * 1024;
+/**
+ * Per-package size ceilings in MiB: 1.5 times the sizes measured on v1.62.0, rounded up (docs/release-artifacts.md,
+ * "Measured release size"). Raise one only with a new measurement. Targets with no published build keep the 2 GiB bound.
+ */
+export const packageBudgetsMiB: { [T in ArtifactTarget]?: { [extension: string]: number } } = {
+  'linux-x64': { deb: 33, AppImage: 143 },
+  'windows-x64': { exe: 12 },
+  'android-google-arm64': { apk: 47 },
+  'android-foss-arm64': { apk: 47 },
+  'linux-agent-x64': { bin: 18 },
+  'linux-agent-arm64': { bin: 15 },
+  'macos-agent-x64': { bin: 16 },
+  'macos-agent-arm64': { bin: 14 },
+  'windows-agent-x64': { exe: 16 },
+};
+export const packageMaximumBytes = (target: ArtifactTarget, extension: string) =>
+  (packageBudgetsMiB[target]?.[extension] ?? 2048) * MiB;
 export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64',
   ...Object.keys(companionTargets) as CompanionTarget[]];
 type Identity = { sha: string; version: string };
@@ -65,7 +83,7 @@ export function validateReceipt(value: unknown, identity: Identity): ArtifactRec
     const file = data.files[index];
     requireArtifact(file && file.name === artifactName(identity, data.target, extension)
       && Number.isSafeInteger(file.bytes) && file.bytes > 0
-      && file.bytes <= (Object.hasOwn(companionTargets, data.target) ? companionMaximumBytes : 2_147_483_648)
+      && file.bytes <= packageMaximumBytes(data.target, extension)
       && whole(/^[a-f0-9]{64}$/, file.sha256), 'malformed package receipt');
   }
   return data;
@@ -92,7 +110,7 @@ export async function stagePackages(identity: Identity, target: ArtifactTarget, 
   const files: ArtifactFile[] = [];
   for (const [index, extension] of extensions.entries()) {
     const name = artifactName(identity, target, extension);
-    const maximum = Object.hasOwn(companionTargets, target) ? companionMaximumBytes : 2_147_483_648;
+    const maximum = packageMaximumBytes(target, extension);
     const original = await digestFile(sources[index], maximum);
     const destination = join(directory, name);
     await copyFile(sources[index], destination);

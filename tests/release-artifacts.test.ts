@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, symlink, truncate, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
+import { aggregatePackages, artifactName, artifactTargets, packageBudgetsMiB, releaseTargets, digestFile, stagePackages,
   validateReceipt, releaseNotes, publishedTagVersions, type ArtifactTarget } from '../.changeset/release-artifacts';
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
@@ -88,6 +88,35 @@ test('linked, empty and missing native outputs cannot be staged', () => fixture(
   await expect(digestFile(source)).rejects.toThrow('missing, linked or oversized');
   await mkdir(join(root, 'directory'));
   await expect(digestFile(join(root, 'directory'))).rejects.toThrow('missing, linked or oversized');
+}));
+
+// Bytes of every asset published with v1.62.0 (docs/release-artifacts.md, "Measured release size").
+const measuredV162 = [['linux-x64', 'deb', 22_969_294], ['linux-x64', 'AppImage', 99_629_560], ['windows-x64', 'exe', 7_968_622],
+  ['android-google-arm64', 'apk', 32_819_374], ['android-foss-arm64', 'apk', 32_333_758],
+  ['linux-agent-x64', 'bin', 12_067_504], ['linux-agent-arm64', 'bin', 9_917_088], ['macos-agent-x64', 'bin', 11_035_248],
+  ['macos-agent-arm64', 'bin', 9_222_720], ['windows-agent-x64', 'exe', 10_532_352]] as const;
+function receiptWith(target: ArtifactTarget, extension: string, bytes: number) {
+  const files = artifactTargets[target].map(each => ({ name: artifactName(identity, target, each),
+    bytes: each === extension ? bytes : 1, sha256: 'b'.repeat(64) }));
+  const signing = target.startsWith('macos-') ? 'ad-hoc' : target.startsWith('android-') ? 'signed' : 'unsigned';
+  return { ...identity, schema: 1, target, signing, files };
+}
+test('the size budgets admit the measured public release and refuse a package past its ceiling', () => {
+  for (const [target, extension, bytes] of measuredV162) validateReceipt(receiptWith(target, extension, bytes), identity);
+  for (const [target, byExtension] of Object.entries(packageBudgetsMiB) as [ArtifactTarget, Record<string, number>][])
+    for (const [extension, mebibytes] of Object.entries(byExtension)) {
+      const ceiling = mebibytes * 1024 * 1024;
+      validateReceipt(receiptWith(target, extension, ceiling), identity);
+      expect(() => validateReceipt(receiptWith(target, extension, ceiling + 1), identity)).toThrow('malformed package receipt');
+    }
+});
+test('an oversized native package is refused at staging and no receipt is written', () => fixture(async root => {
+  const source = join(root, 'windows.exe');
+  await Bun.write(source, 'x');
+  await truncate(source, packageBudgetsMiB['windows-x64']!.exe * 1024 * 1024 + 1);
+  const directory = join(root, 'incoming');
+  await expect(stagePackages(identity, 'windows-x64', 'unsigned', [source], directory)).rejects.toThrow('oversized');
+  expect(await Bun.file(join(directory, 'receipt.json')).exists()).toBe(false);
 }));
 
 test('Java signing properties preserve separators, whitespace, controls and surrogate pairs', () => {
