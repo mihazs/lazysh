@@ -255,6 +255,37 @@ test('a toolbar key runs its long-press action from the keys editor while other 
   await touch?.cdp.detach();
 });
 
+test('toolbar auto-hide hides the terminal keys for a fine pointer only, and the header button brings them back for that window',async({page},testInfo)=>{
+  await openHistoryWorkspace(page);
+  await page.evaluate(async()=>{
+    const {getPreferences,savePreferences}=await import('/src/preferences.ts');
+    savePreferences({...getPreferences(),autoHideToolbar:true});
+  });
+  await mount(page);
+  const keys=page.getByLabel('Terminal keys',{exact:true});
+  // Touch screens keep their keys: the setting only applies to desktop pointer layouts.
+  if(testInfo.project.name==='phone'){
+    await expect(keys).toBeVisible();
+    await expect(page.getByRole('button',{name:'Hide terminal keys',exact:true})).toBeVisible();
+    return;
+  }
+  await expect(keys).toBeHidden();
+  await page.getByRole('button',{name:'Show terminal keys',exact:true}).click();
+  await expect(keys).toBeVisible();
+  await page.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
+  await expect(keys).toBeHidden();
+  // The choice is not remembered: a fresh terminal starts hidden again, and turning the setting off shows the keys.
+  await page.getByRole('button',{name:'Show terminal keys',exact:true}).click();
+  await page.evaluate(()=>window.gestures.dispose());
+  await mount(page);
+  await expect(keys).toBeHidden();
+  await page.evaluate(async()=>{
+    const {getPreferences,savePreferences}=await import('/src/preferences.ts');
+    savePreferences({...getPreferences(),autoHideToolbar:false});
+  });
+  await expect(keys).toBeVisible();
+});
+
 test('gesture settings offer level-aware defaults, multiplexer pinch and header pull depths, and reset to them',async({page})=>{
   await openHistoryWorkspace(page);
   await (await workspaceControl(page,'Preferences')).click();
