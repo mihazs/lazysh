@@ -64,16 +64,28 @@ language changes, and actual importer admission after delayed decoding/DB reads.
 Playwright uses the actual native CSP response header on a pure-module fixture,
 proving the fixed path is admitted and an unrelated font path is blocked.
 
-The explicitly enabled public-asset acceptance is:
+The success case runs in the `client` CI job against the pinned asset. The job
+restores `LAZYSH_NOTO_CACHE`, a directory keyed by the font module's hash; the
+spec checks the cached copy (or fetches the pinned URL into the directory) against
+the pinned length and SHA-256, and serves it to the page at that URL. To run it
+locally:
+
+```sh
+LAZYSH_NOTO_CACHE=/tmp/lazysh-noto bun run --cwd apps/client test:e2e e2e/font-download.spec.ts
+```
+
+The explicitly enabled public-asset acceptance, where the page itself fetches the
+real upstream font, stays available:
 
 ```sh
 CI=true LAZYSH_NOTO_LIVE=1 bun run --cwd apps/client test:e2e e2e/font-download.spec.ts
 ```
 
-Its two Chromium viewport cases fetch and verify the real upstream font, decode
-and store it, keep selection explicit, select the CJK face, check Latin metrics,
-reselect while offline, and delete the local entry. Default suites skip those two
-network cases; controlled negative UI/CSP cases do not fetch an actual font.
+Either way its two Chromium viewport cases decode and store the real font, keep
+selection explicit, select the CJK face, check Latin metrics, reselect while
+offline, and delete the local entry; the app still verifies the downloaded bytes
+itself. Without either variable the default suites skip those two cases;
+controlled negative UI/CSP cases never fetch an actual font.
 Offline reselection is not an offline cold-app-launch test. Browser/font API
 behavior, CORS, memory pressure and glyph/grid fidelity on actual Android/iOS
 WebViews and physical devices remain acceptance work under #16. Native builds

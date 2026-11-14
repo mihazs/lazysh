@@ -132,7 +132,15 @@ jobs:
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
+      # The font-download success case serves the pinned 16 MiB asset from this directory; the spec fetches it, checked against its pinned length and SHA-256, on a miss.
+      - name: Restore the pinned CJK font for the download success case
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lazysh-noto-font
+          key: noto-font-${{ hashFiles('apps/client/src/fontDownload.ts') }}
       - run: bunx moon run client:test-e2e
+        env:
+          LAZYSH_NOTO_CACHE: ${{ runner.temp }}/lazysh-noto-font
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4

@@ -3,6 +3,7 @@ import {expect,test} from '@playwright/test';
 import {readFileSync} from 'node:fs';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {notoFont} from '../src/fontDownload';
+import {pinnedFont} from './fixtures/pinnedFont';
 import type {policy} from './fixtures/FontPolicyHarness';
 declare global{interface Window{notoPolicy:typeof policy;}}
 const config=JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json',import.meta.url),'utf8'));
@@ -34,9 +35,15 @@ test('actual native CSP admits only the pinned font path and blocks an unrelated
   const denied=await page.evaluate(async url=>{try{await fetch(url,{credentials:'omit',redirect:'error'});return false;}catch{return true;}},notoFont.url.replace('Regular.otf','Bold.otf'));
   expect(denied).toBe(true);expect(requests).toEqual([notoFont.url]);
 });
+// LAZYSH_NOTO_CACHE names a directory holding the pinned asset (CI restores it from its cache); LAZYSH_NOTO_LIVE=1 lets the page fetch it from upstream itself.
+const cache=process.env.LAZYSH_NOTO_CACHE;
 test('actual official pinned CJK bytes decode, remain opt-in, reselect offline and delete through the existing store',async({page,context})=>{
-  test.skip(process.env.LAZYSH_NOTO_LIVE!=='1','Explicit public16MiB asset acceptance only; default suites never fetch a font.');
+  test.skip(!cache&&process.env.LAZYSH_NOTO_LIVE!=='1','Explicit public16MiB asset acceptance only; default suites never fetch a font.');
   test.setTimeout(150_000); // Existing120s transfer budget plus browser decode/storage acceptance.
+  if(cache){
+    const body=await pinnedFont(cache);
+    await page.route(notoFont.url,route=>route.fulfill({status:200,headers:{'access-control-allow-origin':'*'},body}));
+  }
   let requests=0;
   page.on('request',request=>{if(request.url()===notoFont.url)requests++;});
   await preferences(page);
