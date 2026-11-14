@@ -1,6 +1,6 @@
 //! `TerminalRuntime::read_rows` against the xterm.js 5.5.0 results the adapter's `readRows` gives
 //! (`translateToString(true, start, end)` then `trimEnd`) for the same bytes. The expectations in
-//! `fixtures/read-rows.json` come from xterm itself: `apps/client/src/readRowsFixture.test.ts`
+//! `fixtures/read-rows.json` come from xterm itself: `apps/client/src/xterm/readRowsFixture.test.ts`
 //! replays the same bytes through xterm.js and fails if they drift (`UPDATE_READ_ROWS=1` rewrites
 //! them). Herdr's phone-layout detection, `herdrNavigationCells.ts`, reads nothing else.
 
