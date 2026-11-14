@@ -17,10 +17,10 @@ concurrency:
 
 jobs:
   release-tools:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: useblacksmith/checkout@v1
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-release
       - run: bun install --frozen-lockfile
       - run: bun run test:release
@@ -28,13 +28,13 @@ jobs:
   version-pr:
     needs: release-tools
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - uses: useblacksmith/checkout@v1
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-release

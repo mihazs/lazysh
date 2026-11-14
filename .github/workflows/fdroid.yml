@@ -23,9 +23,9 @@ concurrency:
 
 jobs:
   metadata-and-scanner:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: useblacksmith/checkout@v1
+      - uses: actions/checkout@v4
         with:
           # The recipe names an immutable earlier source commit.
           fetch-depth: 0

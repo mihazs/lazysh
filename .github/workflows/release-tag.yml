@@ -33,7 +33,7 @@ env:
 # installation builds start together, then one job aggregates, tags and publishes.
 jobs:
   source-build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     outputs:
       enabled: ${{ steps.prepare.outputs.enabled }}
@@ -41,7 +41,7 @@ jobs:
       BUILD_CONTAINER: lazysh-fdroid-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - &checkout-candidate
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -131,7 +131,7 @@ jobs:
   # while the builds run, so a branch at the exact candidate is created now, while it is still main's
   # tip, and `publish` removes it after publication (docs/release-tag-gate.md, Ref writes and workflow files).
   reserve:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -146,7 +146,7 @@ jobs:
   publish:
     needs: [source-build, artifacts, reserve]
     if: needs.source-build.outputs.enabled == 'true' && needs.source-build.result == 'success' && needs.artifacts.result == 'success' && needs.reserve.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
