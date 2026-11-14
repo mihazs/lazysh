@@ -173,6 +173,43 @@ header (sequence, width, height, scroll offset, timestamp), so the client never 
 
 Everything else is dropped with a counter, and the browser's protocol is not otherwise reachable.
 
+### Relay wire format
+
+`lazysh-agent host-browser serve [--binary PATH] [--no-sandbox]` is the relay. It is hidden from `--help`, fails
+before it starts anything while the host browser switch is off, and speaks one format in both directions on its
+standard input and output (the SSH exec channel): `length:u32be tag:u8 body`, where `length` counts the tag and
+the body.
+
+| Tag | Direction | Body |
+| --- | --- | --- |
+| 1 | both | A UTF-8 JSON object. |
+| 2 | relay to client | A frame: `sequence:u32be width:u16be height:u16be scrollY:f32be timestampMs:u64be`, then the JPEG bytes as they are. `width` and `height` are the page's viewport in CSS pixels, the space a tap is mapped into. |
+
+Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome", headed?, viewport: {width,
+height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
+scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause` and `resume`. Anything else,
+including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
+than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
+browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
+111 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
+`page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (sent at
+count 1, 2, 4, 8 and so on), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
+`BrowserExited`, `PageCrashed`, `ProtocolViolation`, or the class of a failure before the stream started
+(`HostBrowserDisabled`, `BrowserNotFound`, `AddressRefused`, `ViewportInvalid`, and so on).
+
+Pacing is the relay's job. It acknowledges the browser's screencast frame at once and keeps only the newest
+frame for the device; at most two frames are unacknowledged, and the client sends `ack` after it decoded a frame,
+so a slow device sees fewer frames, not a queue. `pause` stops the screencast at the browser and holds nothing;
+`resume` starts it again. The browser's title and address are read when they change and once a second while the
+view is shown, because Chrome announces an address change but not a title that the page sets later.
+
+The browser is started with `--remote-debugging-pipe`, a private profile and `--headless=new` (so no port exists
+on the host), and its standard output and error are discarded because they can name pages. It ends, with its
+helpers and its profile, when standard input closes, on SIGINT, SIGTERM or SIGHUP, when the browser exits and
+when the page closes; on Linux the kernel also stops it if the relay is killed outright, and the next start
+removes the profile that a killed relay left. `--no-sandbox` is for containers and CI runners that cannot create a
+sandbox. There is no Windows relay: a Windows host is refused with `HostBrowserUnsupported`.
+
 ### What the relay may send to the browser
 
 The relay maps its own fixed messages onto a closed list of protocol methods and asks the list before it sends
@@ -189,10 +226,10 @@ accident. A refusal names a class, never the page, and is counted; it is not wri
 | Addresses | `file:`, `chrome:`, `view-source:`, `javascript:`, `data:`, `blob:` and any scheme but `http`, `https` and `about:blank`, in `Page.navigate` and `Target.createTarget`, and a first URL |
 | Everything else | `Browser.close`, `Target.setAutoAttach`, `Security.*`, `Page.setBypassCSP`, any unknown method |
 
-The relay, which ships with the Chrome viewer ([#1254](https://github.com/mihazs/lazysh/issues/1254)), sets the
-download behavior to `deny` and intercepts the file chooser (the browser reports it, no file is supplied) when it
-starts a browser, which is how those two are "denied and reported once". Today only the list and the address rule
-exist, and the hidden developer launcher applies the address rule to its first page.
+The relay ([#1254](https://github.com/mihazs/lazysh/issues/1254)) sets the download behavior to `deny` and
+intercepts the file chooser (the browser reports it, no file is supplied) when it starts a browser, which is how
+those two are "denied and reported once", and it sends every command through the list; the hidden developer
+launcher applies the address rule to its first page.
 
 ### Adapters and capabilities
 
@@ -287,7 +324,7 @@ Design from those facts:
 | --- | --- | --- | --- |
 | 1 | This specification, the feasibility measurements, and a developer-flagged Chrome prototype with a CI test (done) | [#1250](https://github.com/mihazs/lazysh/issues/1250) | No. Prototype off by default and hidden. |
 | 2 | Opt-in gate, managed profile, lifecycle, limits | [#1258](https://github.com/mihazs/lazysh/issues/1258) slices A to C | With the viewer below |
-| 2 | Chrome relay and viewer, view-only | [#1254](https://github.com/mihazs/lazysh/issues/1254) | Yes, off until enabled |
+| 2 | Chrome relay and viewer, view-only. The host relay (`host-browser serve`) is done; the app's bridge and viewer are the remaining slices. | [#1254](https://github.com/mihazs/lazysh/issues/1254) | Yes, off until enabled |
 | 3 | Chrome input | [#1255](https://github.com/mihazs/lazysh/issues/1255) | Yes |
 | 4 | Address bar, tabs, navigation, open on device | [#1256](https://github.com/mihazs/lazysh/issues/1256) | Yes |
 | 5 | Adaptive rate and quality, pause when hidden | [#1259](https://github.com/mihazs/lazysh/issues/1259) | Yes |
