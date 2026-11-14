@@ -335,7 +335,11 @@ impl TerminalRuntime {
         self.terminal.scroll_viewport_delta(delta);
     }
 
-    pub fn scroll_to_bottom(&mut self) {
+    /// Whether the viewport moved (it was already on the live screen otherwise).
+    pub fn scroll_to_bottom(&mut self) -> bool {
+        let offset = |terminal: &Terminal| terminal.scrollbar().map(|bar| bar.offset).ok();
+        let before = offset(&self.terminal);
         self.terminal.scroll_viewport_bottom();
+        before != offset(&self.terminal)
     }
 }
