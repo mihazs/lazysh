@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, readdir, readFile, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { digestFile } from '../.changeset/release-artifacts';
@@ -151,10 +151,8 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows install
     expect((await processTable()).filter(row => sameImage(row.path, installed))).toEqual([]);
 
     const [port, nativePort] = await freePorts(2);
-    const log = join(results, 'tauri-driver.log');
-    await writeFile(log, '');
-    driver = launch(driverTool, ['--port', String(port), '--native-port', String(nativePort), '--native-host', '127.0.0.1', '--native-driver', edgeDriver], log);
-    owner = await until('driver process identity', async () => (await processTable()).find(row => row.pid === driver!.pid));
+    driver = launch(driverTool, ['--port', String(port), '--native-port', String(nativePort), '--native-driver', edgeDriver]);
+    owner = await until('driver process identity', async () => (await processTable()).find(row => row.pid === driver!.child.pid));
     browser = new WebDriver(`http://127.0.0.1:${port}`);
     await until('driver readiness', async () => browser!.request('GET', '/status', undefined, 5000).then(() => true, () => undefined));
     await browser.create(installed);
@@ -184,7 +182,7 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows install
     await browser.quit();
     browser = undefined;
     await until('application retirement', async () => (await alive(app!)) ? undefined : true, 15_000);
-    driver.kill();
+    driver.child.kill();
     await until('driver tree retirement', async () => {
       const now = await processTable();
       return now.some(row => row.pid === owner!.pid && row.created === owner!.created) || descendantsOf(now, owner!).length ? undefined : true;
@@ -192,14 +190,17 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows install
     console.info(`Windows installed GUI evidence: shutdown in ${Math.round(performance.now() - closing)}ms`);
   } catch (error) {
     failed = true;
-    console.error(`Windows installed GUI failure; driver log:\n${(await readFile(join(results, 'tauri-driver.log'), 'utf8').catch(() => '')).slice(-6000)}`);
+    await writeFile(join(results, 'tauri-driver.log'), driver?.output() ?? '');
+    console.error(`Windows installed GUI failure; driver output:\n${driver?.output().slice(-6000)}`);
+    if (browser?.session) console.error(`Windows installed GUI page: ${JSON.stringify(await browser.script(
+      'return {url: location.href, title: document.title, text: document.body.innerText.slice(0, 1500)}').catch(() => null))}`);
     if (browser?.session) await browser.screenshot().then(png => writeFile(join(results, 'window.png'), Buffer.from(png, 'base64'))).catch(() => undefined);
     const tree = owner ? descendantsOf(await processTable().catch(() => []), owner) : [];
     console.error(`Windows installed GUI driver tree: ${JSON.stringify(tree)}`);
     throw error;
   } finally {
     if (owner) await killOwned(owner);
-    else driver?.kill();
+    else driver?.child.kill();
     if (app) await until('retired application', async () => (await alive(app!)) ? undefined : true, 15_000).catch(() => undefined);
     try { await uninstall(directory, before); }
     catch (error) { if (!failed) throw error; console.error(`Windows installed GUI cleanup failed: ${error}`); }

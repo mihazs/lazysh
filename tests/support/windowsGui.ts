@@ -1,5 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, join, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -129,10 +128,12 @@ export const sameImage = (path: string | null, image: string) => path !== null &
 export const mainWindow = async (pid: number) =>
   Number(await powershell(`(Get-Process -Id ${Math.trunc(pid)}).MainWindowHandle.ToInt64()`));
 
-export function launch(program: string, args: string[], log: string): ChildProcess {
-  const fd = openSync(log, 'a');
-  try { return spawn(program, args, { stdio: ['ignore', fd, fd], windowsHide: true, env: { ...process.env, TAURI_WEBVIEW_AUTOMATION: 'true' } }); }
-  finally { closeSync(fd); }
+/** Start a long-lived tool whose most recent 64 KiB of output is kept for failure reports. */
+export function launch(program: string, args: string[]) {
+  let output = '';
+  const child = spawn(program, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { output = (output + chunk).slice(-65_536); });
+  return { child, output: () => output };
 }
 /** Terminate the driver and whatever is still below it, matched by PID and start time so no recycled PID is touched. */
 export async function killOwned(owner: ProcessRow) {
