@@ -372,7 +372,32 @@ mod tests {
                 .ok_or_else(|| format!("attached client has no active tab: {tabs}"))
         };
         wait("attached first tab", &active_tab, &|position| position == 0);
-        let directory = temp.path().to_str().unwrap().to_owned();
+        // A directory with a space, different from the session's own, proves `--cwd` reaches the new tab's shell.
+        let chosen = temp.path().join("chosen directory");
+        std::fs::create_dir(&chosen).unwrap();
+        // Zellij reports the resolved path, so compare against it.
+        let directory = std::fs::canonicalize(&chosen)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let focused_terminal = |tab: u64| {
+            let panes = query("list-panes")?;
+            panes
+                .as_array()
+                .and_then(|panes| {
+                    panes.iter().find(|pane| {
+                        pane["is_focused"] == true
+                            && pane["is_plugin"] == false
+                            && pane["tab_position"] == tab
+                    })
+                })
+                .cloned()
+                .ok_or_else(|| format!("tab {tab} has no focused terminal pane: {panes}"))
+        };
+        let in_chosen_directory = |tab: u64| {
+            focused_terminal(tab).map(|pane| u64::from(pane["pane_cwd"] == directory.as_str()))
+        };
         run(command(
             &name,
             &ZellijAction::NewTab {
@@ -382,6 +407,11 @@ mod tests {
         )
         .unwrap());
         wait("new tab focus", &active_tab, &|position| position == 1);
+        wait(
+            "new tab in the chosen directory",
+            &|| in_chosen_directory(1),
+            &|found| found == 1,
+        );
         run(command(&name, &ZellijAction::GoToTab { index: 1 }).unwrap());
         wait("first tab by index", &active_tab, &|position| position == 0);
         run(command(&name, &ZellijAction::NextTab).unwrap());
@@ -389,18 +419,11 @@ mod tests {
         run(command(&name, &ZellijAction::PreviousTab).unwrap());
         wait("previous tab", &active_tab, &|position| position == 0);
         let focused_pane = || {
-            let panes = query("list-panes")?;
-            panes
-                .as_array()
-                .and_then(|panes| {
-                    panes.iter().find(|pane| {
-                        pane["is_focused"] == true
-                            && pane["is_plugin"] == false
-                            && pane["tab_position"] == 0
-                    })
-                })
-                .and_then(|pane| pane["id"].as_u64())
-                .ok_or_else(|| format!("active tab has no focused terminal pane: {panes}"))
+            focused_terminal(0).and_then(|pane| {
+                pane["id"]
+                    .as_u64()
+                    .ok_or_else(|| format!("focused terminal pane has no id: {pane}"))
+            })
         };
         let first = wait("initial pane focus", &focused_pane, &|_| true);
         run(command(
