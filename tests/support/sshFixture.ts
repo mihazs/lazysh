@@ -80,15 +80,27 @@ async function retireDescendants(parent:OwnedPid) {
   }
   if((await Promise.all(owned.map(same))).some(Boolean))throw new Error('Owned SSH descendants survived teardown');
 }
+// A root that died moments ago can still be an unreaped zombie without an exit code; give Node one bounded turn to observe it.
+async function exitedCleanly(daemon:OwnedProcess) {
+  const {child}=daemon;
+  if(child.pid && child.exitCode===null && child.signalCode===null) {
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    await Promise.race([new Promise<void>(resolve=>{child.once('exit',()=>resolve());}),new Promise<void>(resolve=>{timer=setTimeout(resolve,1000);})]);
+    clearTimeout(timer);
+  }
+  return child.exitCode===0;
+}
 export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'|'tmux'='SSH',cleanSupervisorExit=false) {
   let primary:unknown;
   try {
     const root=await daemon.liveIdentity();
-    if(!root)throw new Error(`Owned ${label} root identity unavailable`);
-    await retireDescendants(root);
-    // The explicit mount supervisor exits cleanly when its owned child is
-    // retired. A root missing before retirement still fails the check above.
-    if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
+    if(root) {
+      await retireDescendants(root);
+      // The explicit mount supervisor exits cleanly when its owned child is retired.
+      if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
+    // A supervisor that already exited cleanly left no root to retire. Its children are reparented
+    // and cannot be walked here, so callers still prove no survivor (stopOwnedServer's `survived`).
+    } else if(!(cleanSupervisorExit && await exitedCleanly(daemon)))throw new Error(`Owned ${label} root identity unavailable`);
   } catch(error){primary=error;}
   try{await daemon.stop();}catch(error){primary??=error;}
   if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':label==='tmux'?'tmux-stop':'ssh-stop');throw primary;}

@@ -8,7 +8,7 @@ import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
 import {commandLine,moonTask} from './support/moon';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
-import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
+import {reportOwnedSshPromptFailure,receiverProbeErrors,stopOwnedTree,stopOwnedServer} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
@@ -62,6 +62,49 @@ test.skipIf(process.platform!=='linux')('owned deadline stops its process group'
   const pid=child.child.pid!;
   await expect(child.finish('synthetic timeout',30)).rejects.toThrow('Owned fixture deadline: synthetic timeout');
   expect(()=>process.kill(pid,0)).toThrow();
+});
+
+test.skipIf(process.platform!=='linux')('a supervisor that already exited cleanly is stopped; a failed, signaled or unflagged exit still fails',async()=>{
+  const exited=async(code:number)=>{const child=new OwnedProcess('sh',['-c',`exit ${code}`]);await child.done;return child;};
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await stopOwnedTree(await exited(0),'Herdr',true);
+    await expect(stopOwnedTree(await exited(0),'Herdr')).rejects.toThrow('Owned Herdr root identity unavailable');
+    await expect(stopOwnedTree(await exited(3),'Herdr',true)).rejects.toThrow('Owned Herdr root identity unavailable');
+    const killed=new OwnedProcess('sleep',['120']);
+    process.kill(killed.child.pid!,'SIGKILL');await killed.done;
+    await expect(stopOwnedTree(killed,'Herdr',true)).rejects.toThrow('Owned Herdr root identity unavailable');
+  } finally {warning.mockRestore();}
+});
+
+test.skipIf(process.platform!=='linux')('a clean supervisor exit that Node has not reaped yet is still stopped',async()=>{
+  const child=new OwnedProcess('sh',['-c','exit 0']);
+  // Block the event loop until the child is a zombie, so no exit code has been observed.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);
+  await stopOwnedTree(child,'Herdr',true);
+  expect(child.child.exitCode).toBe(0);
+});
+
+test.skipIf(process.platform!=='linux')('server teardown accepts an exited supervisor but fails when its receiver escaped',async()=>{
+  let sshStops=0;
+  const ssh={stop:async()=>{sshStops++;}} as unknown as SshFixture;
+  const clean=new OwnedProcess('sh',['-c','exit 0']);
+  await clean.done;
+  await stopOwnedServer(ssh,clean,'Herdr',async()=>false);
+  expect(sshStops).toBe(1);
+  const server=new OwnedProcess('sh',['-c','sleep 120 </dev/null >/dev/null 2>&1 & echo $!; exit 0']);
+  await server.done;
+  const pid=Number(server.stdout.trim());
+  const escaped=await identity(pid);
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    expect(escaped).toBeDefined();
+    await expect(stopOwnedServer(ssh,server,'Herdr',async()=>(await identity(pid))?.start===escaped!.start)).rejects.toThrow('Owned Herdr receiver survived teardown');
+    expect(sshStops).toBe(2);
+  } finally {
+    warning.mockRestore();
+    if(escaped && (await identity(pid))?.start===escaped.start)process.kill(pid,'SIGKILL');
+  }
 });
 
 test.skipIf(process.platform!=='linux')('background escape is unsupported and never reported as proven clean',async()=>{
