@@ -67,6 +67,22 @@ enum Command {
         #[command(subcommand)]
         command: SettingsCommand,
     },
+    /// Open a URL on the attached device, or with the next real opener (what the managed
+    /// `xdg-open` and `lazysh-open` wrappers run).
+    BrowserOpen {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    /// Stream browser-open requests of host programs to the app; ends when stdin closes.
+    BrowserWatch {
+        /// Frame version; an older companion answers an unknown option with exit status 2.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=1))]
+        protocol: u8,
+        #[arg(long, hide = true, default_value_t = 15, value_parser = clap::value_parser!(u64).range(1..=60))]
+        heartbeat_seconds: u64,
+    },
+    /// Install, inspect or remove the host browser shim (off until you install it).
+    BrowserShim(lazysh_agent::browser::ShimArgs),
     /// Read live account quotas using the built-in collectors or compatible ai-usagebar.
     AccountUsage {
         /// Stop when this private command channel closes its input.
@@ -308,6 +324,28 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::BrowserOpen { .. } => None,
+        Command::BrowserWatch {
+            heartbeat_seconds, ..
+        } => {
+            lazysh_agent::browser::watch(heartbeat_seconds)?;
+            None
+        }
+        Command::BrowserShim(arguments) => {
+            let report = lazysh_agent::browser::shim(arguments.command)?;
+            let mut stdout = io::stdout().lock();
+            if arguments.json {
+                serde_json::to_writer(&mut stdout, &report).map_err(|_| Error::InvalidEvent)?;
+                writeln!(stdout)?;
+            } else {
+                write!(stdout, "{}", lazysh_agent::browser::render(&report))?;
+            }
+            // The report is already out; a partial install must still fail.
+            if report["complete"] == false {
+                return Err(Error::Browser("BrowserShimIncomplete"));
+            }
+            None
+        }
         Command::HerdrFocusPane { session, pane } => {
             Some(lazysh_agent::herdr::focus_pane(&session, &pane)?)
         }
@@ -679,9 +717,16 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_account_usage::worker_main() {
         return code;
     }
+    // The managed wrappers are links to this binary named like the opener they stand in for.
+    if let Some(code) = lazysh_agent::browser::invoked_as_launcher() {
+        return code;
+    }
     let cli = Cli::parse();
     if let Command::Update(args) = cli.command {
         return lazysh_agent::update::run(args);
+    }
+    if let Command::BrowserOpen { args } = &cli.command {
+        return lazysh_agent::browser::open("browser-open", args);
     }
     match execute(cli) {
         Ok(()) => std::process::ExitCode::SUCCESS,

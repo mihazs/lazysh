@@ -40,3 +40,7 @@ Replace `0` with the revision actually returned by `show`; review all three valu
 `lazysh-agent auto-update enable` installs a user-level timer (systemd user timer, launchd agent or Scheduled Task) and `disable` removes it; `status` shows whether it is present or has drifted. If the host has no user service manager, `enable` reports that and changes nothing.
 
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.
+
+## Host browser shim
+
+The browser shim (host browser requests opened on your device) is not one of these switches. It is installed, inspected and removed on the host with `lazysh-agent browser-shim install|status|uninstall`, is off until installed, and the app's own policy for it (ask, always or never, per host and per device) is not stored in the host settings. See [Open host browser requests on your device](companion.md#open-host-browser-requests-on-your-device-browser-shim).

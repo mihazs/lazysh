@@ -1046,6 +1046,67 @@ At most 256 entries are printed, sorted by port; when more exist the snapshot ca
 
 With `--watch` the command prints the snapshot, then one `{"event":"listen","listener":{...}}` or `"close"` line each time a listener appears or disappears (polled every `--interval-ms`, default 1000), and `{"event":"heartbeat"}` after 5 seconds without another line. It ends when its standard input closes. A companion that predates the command answers with exit status 2; the app then falls back to the `ss` or `lsof` discovery that Previews uses.
 
+## Open host browser requests on your device (browser shim)
+
+Tracking: [#1512](https://github.com/mihazs/lazysh/issues/1512), part of the sign-in tunnel work in [#1504](https://github.com/mihazs/lazysh/issues/1504) (design: ADR 0004, `docs/architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md`). This is the host half. A program on the host that wants a browser (`aws sso login`, `gcloud auth login`, `az login`, `codex login`, `claude`, Python's `webbrowser`, a script calling `xdg-open`) asks a launcher; the shim makes that launcher hand the link to the app so it can open it on your phone or desktop. The app does not read these requests yet ([#1513](https://github.com/mihazs/lazysh/issues/1513), [#1514](https://github.com/mihazs/lazysh/issues/1514)), so today an installed shim behaves as described under "With no device attached".
+
+Linux and macOS hosts. It is off until you install it, installs only under your home directory and never needs root.
+
+```sh
+lazysh-agent browser-shim install     # create the wrappers and the shell startup blocks
+lazysh-agent browser-shim status      # what is installed, and whether a device is attached
+lazysh-agent browser-shim uninstall   # remove exactly what install wrote
+```
+
+Add `--json` for the report the app reads (`schemaVersion`, `action`, `complete`, `shims`, `startup`, and for `status` `installed` and `watcher.attached`). A partial result exits non-zero and says which file failed and why.
+
+### What install writes
+
+- **Wrappers**: symbolic links to the companion binary in `lazysh/companion/shims/` below the user data directory (`~/.local/share` on Linux): `lazysh-open`, `xdg-open`, `sensible-browser`, `x-www-browser` and, on macOS only, `open`. The binary behaves as the launcher whose name it was started under. A wrapper is a link, so removing or replacing the companion binary never breaks a host: a dangling link is skipped by the shell and the next opener on `PATH` runs. An existing file with a wrapper's name is never replaced (reported as `conflict`).
+- **One marked block** (between `# >>> lazysh browser shim >>>` and `# <<< lazysh browser shim <<<`) in `~/.profile` (created if missing), and in `~/.bashrc`, `~/.bash_profile`, `~/.zshrc` (or `$ZDOTDIR/.zshrc`) and fish's `conf.d/lazysh-browser.fish` when they exist. For interactive shells only, the block puts the wrapper directory first on `PATH`, remembers your own `BROWSER` in `LAZYSH_ORIGINAL_BROWSER` and sets `BROWSER=lazysh-open`. `BROWSER` alone is not enough (`npm` ignores it) and `PATH` alone is not enough (Python's `webbrowser`, `claude` and `codex` consult `BROWSER`), so both are set.
+- Install is idempotent. A startup file that is a link (a dotfiles repository) is edited through the link only when the target is inside your home; otherwise it is skipped (`outsideHome`). Read-only files, files over 1 MiB and files with an unterminated block are left alone and reported. Files are replaced atomically with their mode kept.
+- Uninstall removes the blocks byte for byte (each file returns to its previous bytes), deletes a file that only install created and that is empty afterwards, removes the wrapper links, and removes the directories it created when they are empty. Anything it did not write stays.
+
+Behaviour change to expect with the shim installed: a tool that falls back to a device code when the host has no browser launcher now finds one and starts its browser flow. `az login` is the measured example; it then listens on a localhost port for the redirect. Pair it with the tunnel work in #1504 or uninstall the shim.
+
+### What a launcher does
+
+The wrapper takes the last `http` or `https` argument (launchers receive more, such as `--new-window URL`; macOS `open` only counts a lone URL, because it also opens files and applications). The URL must be at most 4096 bytes of printable ASCII, with no credentials, spaces, control characters or backslashes, the same rule as the app's own link opener. Anything else (a file, `mailto:`, an app scheme, an invalid URL) goes to the real opener unchanged.
+
+| Situation | Result |
+| --- | --- |
+| A device is attached and takes the link | Exit status 0, nothing printed. The answer comes within 100 ms or the launcher stops waiting. |
+| A device is attached and refuses the link (rate limit, queue full) | Exit status 1 and `lazysh: the device did not take the link (REASON)` on stderr. The host's own desktop is not used instead. |
+| No device attached, or it did not answer | The next real opener runs with the original arguments: the real tool of the same name, then your own `BROWSER` (entries separated by `:`, `%s` is the URL), then `xdg-open`, `sensible-browser`, `x-www-browser`, `wslview` (macOS: `open`). It runs with the wrapper directory removed from `PATH` and your own `BROWSER` restored, so an opener that calls `$BROWSER` or `xdg-open` itself cannot come back into the shim. |
+| Nothing can open the URL | `lazysh: open this on your device: URL` on stderr and exit status 0, so the terminal's link detection offers a tap target. With no URL, exit status 3 (the status `xdg-open` uses for a missing tool). |
+
+### The `browser-watch` channel
+
+`lazysh-agent browser-watch --protocol 1` is what the app starts after it connects (only when its per-host policy for host browser requests is not Never and the companion advertises it; exit status 2 from an older companion means update it). Like the other channel commands it runs until its stdin closes and prints one JSON object per line:
+
+| Frame | Fields |
+| --- | --- |
+| `hello` | `protocol`, `version`, `pid` |
+| `open` | `id`, `url`, `launcher` (which wrapper ran), `pid` (the launcher's), `chain` (process names from the launcher's parent upward, never arguments), `listeners` (unprivileged loopback or wildcard TCP ports opened by those processes: `port`, `address`, `process`; Linux only, empty on macOS), `at` |
+| `heartbeat` | `at`, every 15 seconds |
+| `end` | `reason`: `stdin-closed`, `terminated` (SIGTERM, SIGINT or SIGHUP), `replaced` (another watcher attached later: one device at a time, the last to attach wins) or `failed` |
+
+Limits: 6 opens per minute, an identical URL is delivered once per 10 seconds, a queue of 8, entries older than 2 minutes are dropped, requests are read up to 8 KiB, and 128 launcher connections are served at a time. The URL is never logged; it appears only on this channel and, in the last row above, on your own terminal.
+
+The launcher reaches the watcher over a Unix socket in `$XDG_RUNTIME_DIR/lazysh/` when that variable is set, else `/run/user/UID/lazysh/` (the session directory the system makes, so a tmux pane that lost the variable still finds the watcher), else `/tmp/lazysh-UID/`: a directory owned by you with mode 0700, never a link; the socket is mode 0600 and both sides refuse a peer whose uid is not yours. Nothing is written to disk and no network port is opened on the host.
+
+### Multiplexers and Mosh
+
+The request does not travel through the terminal. tmux 3.8 (with the default `allow-passthrough off`), Zellij 0.46.0 and Herdr 0.9.5 drop unknown OSC and DCS sequences and `mosh-server` 1.4.0 keeps only OSC 0, 1, 2 and 52 (measured and read from source in the design research), so an escape sequence would be lost exactly where lazysh is used. The launcher talks to the watcher, a separate exec channel of the same SSH connection, and the wrapper is chosen at run time from `PATH`, so a tmux, Zellij or Herdr pane (which keeps its server's environment, not your SSH session's) works as long as its shell read the startup block.
+
+### Limits
+
+- No Windows hosts, and no `gio` or `wslview` wrapper (`gio` has many unrelated subcommands). A program that runs with a cleaned `PATH` or `BROWSER`, or a shell that skips the startup files (a non-interactive `ssh host command`), reaches the real opener.
+- `gcloud auth login` launches a browser only when it sees `DISPLAY`, `WAYLAND_DISPLAY` or `MIR_SOCKET`; the shim does not fake one.
+- The last device to attach receives every request; there is no per-device routing.
+- A connection that drops without closing leaves the watcher running until the SSH server notices (`ServerAliveInterval`); links asked for in that time are accepted and expire after 2 minutes without reaching a device.
+- A request nobody answers within the deadline is also given to the real opener, so on a host with a desktop a very slow device can mean the link opens in both places.
+
 ## Live Herdr discovery
 
 The Agents view also reads live agent metadata directly from Herdr through the
