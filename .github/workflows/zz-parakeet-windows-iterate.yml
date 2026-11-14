@@ -1,7 +1,7 @@
 name: zz-parakeet-windows-iterate
 on:
   push:
-    branches: [feat/parakeet-windows-x86-64]
+    branches: [feat/parakeet-windows-x86-64-full]
 permissions:
   contents: read
 concurrency:
