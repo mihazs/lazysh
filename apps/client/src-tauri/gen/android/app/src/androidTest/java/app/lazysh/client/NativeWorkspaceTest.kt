@@ -4044,9 +4044,10 @@ class NativeWorkspaceTest {
             val observe = { remaining: Long -> evaluate(scenario, "JSON.stringify({needs:$rows('needs_attention'),working:$rows('working'),done:$rows('done'),approvals:$approvals,alert:document.querySelector('.approval-panel [role=alert]')?.textContent??''})", remaining) }
             hostHooks("board")
             openReportedActivity()
-            // Five events from three sessions: Working, Needs you and Done, and the three
-            // events of board-alpha collapse into its one Done row.
-            awaitDocument(scenario, "real hook events rendered on the board",
+            // Six events from four sessions: Working, Needs you and Done, and the three events of
+            // board-alpha collapse into its one Done row. The host dated board-aged back eight days
+            // after its hook ran, so the companion drops it when the board reads: it is no fourth row.
+            awaitDocument(scenario, "real hook events rendered on the board without the aged report",
                 "$rows('needs_attention')==='Agent needs attention|beta' && $rows('working')==='Working on your prompt|delta' && $rows('done')==='Turn finished|alpha'" +
                 " && document.querySelectorAll(${JSONObject.quote("$board .agent-card")}).length===3", observe = observe)
             assertEquals("Hook prompt and tool input must stay on the host", "false", evaluate(scenario,
@@ -4079,7 +4080,7 @@ class NativeWorkspaceTest {
             }
             // The host ends approval-host once both decisions reached their hooks; the next refresh drops it.
             awaitDocument(scenario, "request answered at the host cleared", "$cards.length===0 && !document.querySelector('.approval-panel [role=alert]')", observe = observe)
-            println("lazysh companion board: real hook events rendered by state with one row per session; device Allow and Deny accepted; host-answered request cleared")
+            println("lazysh companion board: real hook events rendered by state with one row per session and no aged report; device Allow and Deny accepted; host-answered request cleared")
         }
         fun verifyCompanionInstallation() {
             val companion = fixture.getJSONObject("companion")

@@ -5,7 +5,9 @@ import {join} from 'node:path';
  * Owned Claude hook inputs for the Android companion case. The device types only
  * `sh board` and `sh approvals` in its terminal: each runs the client-installed
  * companion on the host exactly as a configured Claude hook does, with the event on
- * stdin and the tmux pane it would inherit. Nothing here writes companion state.
+ * stdin and the tmux pane it would inherit. The one thing `board` writes to the companion's
+ * store itself is the age of `board-aged`: after the real hook reported it, its row is dated
+ * eight days back, past the seven-day retention, as if the report had been made then.
  */
 const boardEvents=[
   ['%3',{hook_event_name:'UserPromptSubmit',session_id:'board-alpha',cwd:'/work/alpha',prompt:'PRIVATE-PROMPT'}],
@@ -13,7 +15,10 @@ const boardEvents=[
   ['%3',{hook_event_name:'Stop',session_id:'board-alpha',cwd:'/work/alpha'}],
   ['%4',{hook_event_name:'Notification',notification_type:'permission_prompt',session_id:'board-beta',cwd:'/work/beta'}],
   ['%5',{hook_event_name:'UserPromptSubmit',session_id:'board-delta',cwd:'/work/delta'}],
+  ['%6',{hook_event_name:'Stop',session_id:'board-aged',cwd:'/work/aged'}],
 ] as const;
+// The companion keeps one SQLite row per session (`sessions.updated_at`, seconds since the epoch) and drops rows older than seven days when it reads them.
+const ageReport=`python3 -I -c 'import sqlite3,sys,time;c=sqlite3.connect(sys.argv[1]);n=c.execute("UPDATE sessions SET updated_at=? WHERE session_id=?",(time.time()-8*86400,"board-aged")).rowcount;c.commit();sys.exit(n!=1)' "$LAZYSH_STATE_DIR/events.sqlite3"`;
 const approvals={
   allow:['%7','/work/gamma','git push --dry-run'],
   deny:['%8','/work/zeta','git push --force'],
@@ -30,6 +35,8 @@ export async function prepareAgentBoardHooks(directory:string) {
     await write(`board-${index+1}.json`,JSON.stringify(event));
     board.push(`TMUX_PANE='${pane}' ${companion} ingest --agent claude < "$d/board-${index+1}.json" || exit 1`);
   }
+  // Last, so only the companion's read of the store can drop it: nothing ingests after it.
+  board.push(`(umask 077; ${ageReport}) || exit 1`);
   for(const [name,[pane,cwd,command]] of Object.entries(approvals)) {
     await write(`approval-${name}.json`,JSON.stringify({hook_event_name:'PermissionRequest',session_id:`approval-${name}`,cwd,tool_name:'Bash',tool_input:{command}}));
     waiting.push(`TMUX_PANE='${pane}' ${companion} approval-request --agent claude --timeout-seconds 240 < "$d/approval-${name}.json" > "$d/decision-${name}.json" &`);
