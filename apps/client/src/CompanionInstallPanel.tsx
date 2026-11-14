@@ -128,6 +128,7 @@ export default function CompanionInstallPanel({sessionId,visible=true,ready=fals
   const busy=!!stage || checking;
   return <details data-install-recheck={observation.recheck} data-install-phase={observation.phase} data-install-failure={observation.failure} data-install-route={observation.route} data-install-detail={observation.detail} data-install-outcome={observation.outcome} data-install-reason={observation.reason} data-install-cleanup-stage={result?.cleanupFailure?.stage??'none'} data-install-cleanup-reason={result?.cleanupFailure?.reason??'none'} className="companion-install" hidden={!visible} open={!ready || !!stage || !!result || !!error} aria-label={t('companionInstallTitle')}>
     <summary>{t('companionInstallTitle')}</summary>
+    <p className="agent-note">{t('companionInstallExplain')}</p>
     <div className="tool-bar"><button className="subtle-button" disabled={!visible || busy || !access.current()} onClick={()=>void install('host')}>{stage?t('companionInstallBusy'):t(ready?'companionInstallUpdate':'companionInstallButton')}</button></div>
     <div className="companion-actions">
       <button className="subtle-button" disabled={!visible || busy || !access.current()} onClick={()=>void check()}>{t(checking?'companionCheckBusy':'companionCheckButton')}</button>

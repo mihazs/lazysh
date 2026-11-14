@@ -2,4 +2,4 @@
 "@lazysh/client": patch
 ---
 
-Verify that installing the companion over SSH refuses a host architecture without a published companion on both routes, before anything is fetched or written, and leaves an existing PATH companion working. Test and documentation only; installation behaviour is unchanged.
+Explain the host companion installation before it starts: Agents now says where the companion goes, what the host verifies and that nothing changes until the button is pressed. Cover an unsupported host architecture with an owned OpenSSH test (both routes refuse it before anything is fetched or written). Installation behaviour is unchanged.
