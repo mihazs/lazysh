@@ -66,5 +66,12 @@ LAZYSH_PARAKEET_TEST_ARCHIVE=/private/cache/parakeet-v3-int8.tar.bz2 \
 It downloads nothing, installs through the manager's verified preparation and
 publication path, transcribes the licensed public speech sample twice with the
 same extracted workspace, and removes the model before requiring a clean process
-exit. The implementing PR records actual results. This does not establish mobile,
+exit. The implementing PR records actual results. On Windows the
+`native-desktop` job runs the same real-manager case against the pinned archive
+(downloaded and verified by `.github/actions/windows-parakeet`), the manager cases
+that need no model (including a cache or parent folder other accounts can modify
+being refused), and `test:voice-interop:smoke`, which links and starts Whisper and
+Parakeet in one client process without a model; the runtime's native exception
+and ownership fixtures run there too. Those jobs run on pushes to `main`, not on
+pull requests. This does not establish mobile,
 multilingual accuracy, thermal/battery, long-duration, or power-loss acceptance.
