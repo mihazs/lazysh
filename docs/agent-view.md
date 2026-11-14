@@ -420,8 +420,20 @@ Tests assert behaviour, not source text.
   dynamic workflow are written the way Claude Code 2.1 does (`subagents/agent-*.jsonl` with its meta
   file, `workflows/wf_*.json` and its journal): the companion lists each as running with the child
   file or the agent tree, the child opens as a conversation of its own, and both end by
-  themselves. Still to add: guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
-  `tauri-driver`) and the Android instrumentation case.
+  themselves. The WebView-level run is `apps/client/native-e2e/agentViewReportingAgent.spec.ts`
+  (`bun run test:native-gui`, Xvfb and `tauri-driver`): the same stand-in, started with a fifth
+  argument, also runs the real companion's `ingest --reported-history` hook with its pane's
+  `TMUX_PANE` on each lifecycle event, shows each submitted prompt in its pane and logs every key it
+  reads, in an owned OpenSSH server that also holds the companion and a real tmux (the pinned 3.4 in
+  CI). It covers co-existence cases 1 to 3 below on tmux: the view binds from the hook report; a
+  Terminal, Agent, Terminal round trip while a `hold ...` turn runs keeps the terminal node, the
+  pane (id, PID, tty, scrollback, cursor), the one tmux client and the agent's key log; a prompt
+  sent from the composer reaches the pane once (one submission, its bytes and one Enter) and becomes
+  a turn; a prompt typed in the terminal becomes a turn within 5 s while **Both** shows the two
+  views (the window is 1500 px wide because the sessions list takes 300 px of the 1100 px Both
+  needs). The agent is a stand-in, not Claude Code: provider behaviour, macOS, Windows and Android
+  are not covered by it. Still to add: guarded Herdr (agent detection and the session report) and
+  the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.
 - **Co-existence cases, required in every slice**:
