@@ -93,6 +93,7 @@ bun run bench:terminal -- --project desktop  # one viewport, about 4.5 minutes
 LAZYSH_BENCH_OUT=/tmp/run.json bun run bench:terminal -- --project desktop
 LAZYSH_BENCH_WRITE=adapter bun run bench:terminal -- --project desktop   # every byte through XtermTerminalAdapter.write
 LAZYSH_BENCH_PAIRED=1 bun run bench:terminal -- --project desktop -g paired   # both write paths, stream by stream, about 2 minutes
+LAZYSH_BENCH_PAIRED=1 LAZYSH_BENCH_PAIRED_ROUNDS=40 LAZYSH_BENCH_PAIRED_KINDS=ansi bun run bench:terminal -- --project desktop -g paired   # more streams for one workload (plain, ansi, redraw)
 ```
 
 `bench:terminal` builds the benchmark page with `vite build -c vite.bench.config.ts` (minified, React production) and serves it with `vite preview`; the run is rejected if the page reports a non-production build. Output defaults to `apps/client/bench-results/terminal-baseline-<write path>-<viewport>.json` (git-ignored; a renderer candidate other than `dom` adds `-<candidate>` before the write path). Results worth keeping are copied to [`benchmarks/`](benchmarks/).
@@ -264,7 +265,7 @@ Two comparisons were taken on the same host as the baseline (AMD Ryzen 9 5900X, 
 | W10 renderer resident memory at scrollback 20000, MiB | 196 (186-238) | 194 (193-239) | 0.99 |
 | W0 idle, cursor blink on, main-thread task per 10 s, ms | 111 (72-129) | 92 (80-133) | 0.83 |
 
-**Paired streams.** Because drift between two full runs is larger than the effect being looked for, `e2e/terminal-bench.spec.ts` also has a paired test (`LAZYSH_BENCH_PAIRED=1`, `-g paired`): it loads the page once per stream and alternates the write paths direct, adapter, adapter, direct, direct, ... for 12 streams of each, over W2 (4 MiB plain), W3 (2 MiB ANSI) and W4 (1500 redraw frames), so neighbouring streams share the load. Two runs, one after the other, files `benchmarks/terminal-write-paired-run1-desktop.json` (load average 16.6 at start and 10.2 at end; taken before the paired test was committed, so `source.commit` is its parent and `dirty` is true) and `...-run2-desktop.json` (8.8 and 8.8, clean tree, commit recorded). Median of 12 streams, MiB/s and ack p99 in ms:
+**Paired streams.** Because drift between two full runs is larger than the effect being looked for, `e2e/terminal-bench.spec.ts` also has a paired test (`LAZYSH_BENCH_PAIRED=1`, `-g paired`): it loads the page once per stream and alternates the write paths direct, adapter, adapter, direct, direct, ... for 12 streams of each, over W2 (4 MiB plain), W3 (2 MiB ANSI) and W4 (1500 redraw frames), so neighbouring streams share the load. Two runs, one after the other, files `benchmarks/terminal-write-paired-run1-desktop.json` (load average 16.6 at start and 10.2 at end; taken before the paired test was committed, so `source.commit` is its parent and `dirty` is true) and `...-run2-desktop.json` (8.8 and 8.8, clean tree, commit recorded). Median of 12 streams, MiB/s and ack p99 in ms. Run 3, `...-ansi-run3-desktop.json`, repeats only W3 with 40 streams per path (`LAZYSH_BENCH_PAIRED_ROUNDS=40 LAZYSH_BENCH_PAIRED_KINDS=ansi`), because W3 was the noisy one; it ran at a 1-minute load of 8 to 20 (hence the lower absolute throughput), clean tree, commit recorded:
 
 | Stream | Run | Direct MiB/s | Adapter MiB/s | Adapter / direct | Direct ack p99 | Adapter ack p99 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -274,10 +275,12 @@ Two comparisons were taken on the same host as the baseline (AMD Ryzen 9 5900X, 
 | W3 ANSI | 2 | 1.58 | 1.39 | 0.88 | 29.1 | 27.3 |
 | W4 redraw | 1 | 43.2 | 44.1 | 1.02 | 2.35 | 2.21 |
 | W4 redraw | 2 | 44.2 | 42.4 | 0.96 | 2.16 | 2.21 |
+| W3 ANSI, 40 streams per path | 3 | 0.98 | 1.02 | 1.04 | 40.7 | 40.8 |
 
 What this shows and what it does not:
 
 - **No difference that exceeds the noise was measured.** The paired ratios for the same stream land on both sides of 1.00 between two consecutive runs (W3: 1.06 then 0.88), the min-max ranges of the two paths overlap in every row of the table above, and a throwaway script of the same design (not committed, taken before the two runs above at a load of 3.5 to 10) gave 1.00, 1.24 and 1.01 for W2, W3 and W4. The resolution of this method on this host is therefore about 20 percent for W3, whose stream-to-stream range is 1.0 to 2.3 MiB/s even in one session, and about 5 percent for W2 and W4.
+- **A third, W3-only paired run did not tighten the answer much.** 40 streams per path gave an adapter / direct throughput ratio of 1.04 (bootstrap 95 percent interval 0.84 to 1.33 for the ratio of medians; the median of the 20 neighbour-block ratios is 1.05, interval 0.91 to 1.20, both computed from the committed file with a throwaway script), and the same ack p99. It shows no cost, but at this load its interval still reaches 20 percent either way.
 - **W3 is the one workload where the quieter alternating runs lean the other way** (adapter 0.78 of direct on throughput, 1.24 times the main-thread time), and the paired runs do not reproduce that. This method cannot rule out a W3 cost of up to about 20 percent; it can only say that none was seen consistently. The adapter adds per chunk one Promise and one pending-set insertion and removal. W2 pushes its 256 chunks in about 130 ms and its paired ratios stay within 0.98 to 1.03, so a per-chunk cost above roughly 0.03 ms would have shown there; W3 sends 128 chunks over a stream about ten times longer, where that cost is about 0.3 percent, so it cannot explain a gap of 20 percent. This is an inference from the W2 bound, not a W3 measurement.
 - **Memory is unchanged**: per-session heap 1.06 MiB in every run of both paths, resident memory per background session and at scrollback 20000 within the range of the direct runs.
 - **Input latency is unchanged**: key to render, IME commit and key during sustained output differ by at most 0.2 ms between the medians of the quieter runs.
