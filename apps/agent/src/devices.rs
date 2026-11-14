@@ -21,6 +21,7 @@ const MAX_FRAME: usize = 512 * 1024;
 const SDK_TIMEOUT: Duration = Duration::from_secs(10);
 pub mod android;
 pub mod idb;
+pub mod ui;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]

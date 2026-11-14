@@ -534,7 +534,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Video streaming | partial | partial | iOS `devices/idb.rs:331`; Android screenrecord is view-only (`devices/android.rs:1,145`) and a screenshot stands in for a video frame that has not come for a second (`android.rs` `pipeline`, synthetic tests; Waydroid run; emulator case `owned_emulator_video_delivers_frames_while_idle_and_after_a_change` on `main` only). | Android touch on video; a green emulator run of the video case (#19). |
 | Touch and button control | partial | partial | `DevicePanel.tsx:233-235,451-460,526-532`; `devices.rs:570-650`. Android control through screenshots only. | Real-device control test (#19). |
 | Boot, reboot and shutdown | implemented | implemented | `DevicePanel.tsx:462-474,555-558`; `devices.rs:102-118,598-684`. | Real lifecycle test (#19). |
-| Agent accessibility actions | missing | missing | No accessibility tree or actions. | #19. |
+| Agent accessibility actions | partial | partial | Android only: `devices android ui tree`/`ui act` (`apps/agent/src/devices/ui.rs`; fixture tests there), `DeviceAccessibility.tsx`, Tauri `android_ui_tree`/`android_ui_action`; a real Waydroid guest run is recorded in `docs/devices.md`. | iOS accessibility; scroll and text entry; a CI emulator case (#19). |
 
 ## Notifications
 
