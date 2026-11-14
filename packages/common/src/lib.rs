@@ -10,6 +10,7 @@ pub mod storage_filesystem;
 pub mod storage_namespace;
 #[cfg(feature = "test-support")]
 pub mod test_support;
+pub mod windows_acl;
 
 pub fn valid_name(value: &str) -> bool {
     !value.is_empty()

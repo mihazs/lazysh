@@ -757,6 +757,9 @@ jobs:
       - name: Reject unverified Windows private-file permissions
         if: runner.os == 'Windows'
         run: cargo test --locked -p lazysh-common --features service --lib service_secrets::tests::public_storage_helpers_reject_unverified_host_permissions -- --exact
+      - name: Exercise Windows SID and DACL admission on real files, grants and junctions
+        if: runner.os == 'Windows'
+        run: "cargo test --locked -p lazysh-common --lib windows_acl::"
       - name: Exercise native companion WAL admission and recovery
         run: bun run test:storage
       - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
