@@ -801,12 +801,23 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             reported_history,
         } => {
             let pane = lazysh_agent::pane_identity();
+            // The environment's server belongs to the environment's pane, not to a pane a generic payload names itself.
+            let named = |event: &mut lazysh_agent::Event| {
+                if let Some(server) = lazysh_agent::pane_server().filter(|_| event.pane_id == pane)
+                {
+                    event.pane_server = Some(server);
+                }
+            };
             if reported_history {
                 let (event, source) = lazysh_agent::reported_history::read_hook(
                     io::stdin().lock(),
                     agent,
                     pane.as_deref(),
                 )?;
+                let event = event.map(|mut event| {
+                    named(&mut event);
+                    event
+                });
                 if event.is_some() || source.is_some() {
                     Store::open(&lazysh_agent::state_directory()?)?.ingest_with_reported_history(
                         event.as_ref(),
@@ -815,15 +826,21 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     )?;
                 }
             } else if matches!(agent, Agent::KimiCode) {
-                if let Some(observation) =
+                if let Some(mut observation) =
                     lazysh_agent::kimi_code::read(io::stdin().lock(), pane.as_deref())?
                 {
+                    if let lazysh_agent::kimi_code::Observation::Requested { event, .. } =
+                        &mut observation
+                    {
+                        named(event);
+                    }
                     Store::open(&lazysh_agent::state_directory()?)?
                         .record_kimi_code(&observation, chrono::Utc::now())?;
                 }
-            } else if let Some(event) =
+            } else if let Some(mut event) =
                 lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?
             {
+                named(&mut event);
                 Store::open(&lazysh_agent::state_directory()?)?
                     .ingest(&event, chrono::Utc::now())?;
             }
