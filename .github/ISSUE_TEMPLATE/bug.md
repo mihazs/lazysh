@@ -29,3 +29,6 @@ App version and source revision from About; for companion bugs, `lazysh-agent --
 
 **Relevant logs**
 <!-- Paste relevant app or companion diagnostics. Remove credentials, tokens, host identities and private transcript contents. -->
+
+**Regression test**
+<!-- Filled in when it is fixed: the test that fails before the fix and its row in docs/regression-tests.md, or why none applies. -->

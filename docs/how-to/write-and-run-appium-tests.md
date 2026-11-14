@@ -106,7 +106,10 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
 3. Add a row to [`docs/regression-tests.md`](../regression-tests.md) in the same pull request: bug, symptom, fixing PR, layer,
    test path and title, status. A device-only defect whose Appium test needs fixtures that do not exist yet gets status
    `pending` and a linked follow-up issue; the bug issue stays open until the row is `active`.
-4. Tick the regression-test box in the pull request template (added by the process issue).
+4. Tick the **Added** box under "Regression test" in the pull request template and write `Test: <path and title>`. A fix that an
+   existing test already covers ticks **Not applicable** with a `Reason:`. The `regression-test` check fails a `fix(...)` pull request with
+   neither ([rule](../../AGENTS.md#bug-fixes)), and `sh .githooks/regression-check index` lists the Appium specs by issue and
+   fails when one has no row.
 
 ## Debug a failure
 
