@@ -64,6 +64,16 @@ describe('screen reader mirror', () => {
     expect(spoken()).toEqual([]);
   });
 
+  it('is visually hidden without leaving the accessibility tree or taking pointer input', () => {
+    mountScreenReaderMirror(fakeAdapter(screen(['$'])).adapter, host);
+    const region = host.firstElementChild as HTMLElement;
+    expect(region.style).toMatchObject({position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', pointerEvents: 'none'});
+    for (const hidden of [region, ...region.querySelectorAll('*')]) {
+      expect(hidden.closest('[hidden], [aria-hidden=true]')).toBeNull();
+      expect((hidden as HTMLElement).style.display).not.toBe('none');
+    }
+  });
+
   it('reads the viewport once per settle window however much output arrives', () => {
     const state = screen(['', '$']);
     const {adapter, reads, emit} = fakeAdapter(state);
