@@ -168,6 +168,7 @@ pub fn run() {
                 local::local_resize,
                 local::local_ack,
                 terminal_core::terminal_core_open,
+                terminal_core::terminal_core_input,
                 terminal_core::terminal_core_text,
                 terminal_core::terminal_core_close,
                 local::local_disconnect,

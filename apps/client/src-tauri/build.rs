@@ -33,6 +33,7 @@ fn main() {
         "local_resize",
         "local_ack",
         "terminal_core_open",
+        "terminal_core_input",
         "terminal_core_text",
         "terminal_core_close",
         "local_disconnect",

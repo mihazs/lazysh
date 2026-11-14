@@ -342,6 +342,12 @@ mod desktop {
             self.credits.add_permits(bytes as usize);
             Ok(())
         }
+        /// The native core's replies and encoded input, queued like `local_write`'s.
+        fn queue_core_input(&self, bytes: Vec<u8>, lease: &AccessLease) -> Result<(), String> {
+            self.input
+                .try_send(Input::Data(bytes.into(), lease.clone()))
+                .map_err(|error| error.to_string())
+        }
         fn stop(&self) {
             self.stopped.store(true, Ordering::SeqCst);
             self.cancel.send_replace(true);
@@ -817,6 +823,7 @@ mod desktop {
                 &id,
                 &session.core,
                 crate::terminal_core::credit_to(&session, Session::acknowledge),
+                crate::terminal_core::input_to(&session, Session::queue_core_input),
             );
         }
         watch_adoption(state, &id, &session);
@@ -1735,6 +1742,58 @@ mod tests {
         terminal_core::close(&id);
         assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
     }
+    /// What the terminal driver of a local session handed to a core so far.
+    #[cfg(unix)]
+    async fn seen_by(core: &crate::terminal_core::fake::ChecksumCore, bytes: &[u8]) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !core
+                .seen
+                .lock()
+                .unwrap()
+                .windows(bytes.len())
+                .any(|window| window == bytes)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the core never saw {bytes:?}"));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn what_a_core_writes_reaches_the_pty_byte_for_byte_until_its_lease_is_gone() {
+        use crate::terminal_core::{self, fake::ChecksumCore};
+        let state = LocalState::default();
+        let access = crate::app_lock::AccessState::disabled();
+        let renderer = access.lease(None).unwrap();
+        let (core, prepared, link) = ChecksumCore::linked();
+        let (event, _rx) = events();
+        terminal_core::offer(&event, Box::new(move || Ok(prepared)));
+        // Raw and without echo the driver passes every byte; `cat` returns them as output the core sees.
+        let program = "stty raw -echo; echo READY; exec cat";
+        let connected =
+            desktop::start_with_access(&state, renderer.clone(), shell(program), 80, 24, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        seen_by(&core, b"READY").await;
+        link.use_lease(&renderer);
+        // An X10 mouse report (bytes above 0x7f, a NUL), then a terminal reply: neither is text.
+        let report = [0x1b, b'[', b'M', 0x20, 0xe8, 0xff, 0x00, b'!'];
+        link.write(&report).unwrap();
+        link.write(b"\x1b[?62;22c").unwrap();
+        seen_by(&core, &report).await;
+        seen_by(&core, b"\x1b[?62;22c").await;
+        access.replace_renderer().unwrap();
+        assert!(
+            link.write(b"late").is_err(),
+            "no write after the lease is gone"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!String::from_utf8_lossy(&core.seen.lock().unwrap()).contains("late"));
+        desktop::disconnect(&state, &id);
+        terminal_core::close(&id);
+    }
     #[cfg(unix)]
     #[tokio::test]
     async fn a_launch_that_fails_frees_the_core_the_renderer_offered() {
@@ -1907,6 +1966,53 @@ mod tests {
         let text = real_core_text_with(&id, "done").await;
         let row = text.lines().find(|row| row.ends_with('Y')).expect(&text);
         assert_eq!(row.chars().count(), 25, "{text:?}");
+        terminal_core::close(&id);
+    }
+    /// Needs the `native-terminal` feature (Zig). `cat -v` makes the bytes the program receives visible.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_real_core_answers_queries_and_encodes_paste_and_mouse_into_the_pty() {
+        use crate::terminal_core::{self, CoreInput, MouseAction, MouseButton};
+        let _kept = terminal_core::tests_keeping_cores().read();
+        let state = LocalState::default();
+        let (event, _rx) = events();
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, None)
+            .await
+            .unwrap();
+        // Bracketed paste and mouse tracking on, then a device attributes query: the core answers it
+        // into the PTY before `cat` starts reading, and the tty buffers the answer.
+        let program = r"stty raw -echo; printf '[?2004h[?1000h[c'; exec cat -v";
+        let connected =
+            desktop::start_with_access(&state, access_lease(), shell(program), 120, 24, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        real_core_text_with(&id, "^[[?").await;
+        let send = |input| async {
+            terminal_core::terminal_core_input(access_lease(), id.clone(), input)
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap()
+        };
+        let paste = CoreInput::Paste {
+            text: "a\nb".into(),
+        };
+        assert_eq!(send(paste).await, "\x1b[200~a\rb\x1b[201~".len());
+        // Column 111 in X10 encoding is the byte 0x8f, which is not UTF-8 and reaches the program as is.
+        let press = CoreInput::Mouse {
+            action: MouseAction::Press,
+            button: Some(MouseButton::Left),
+            mods: Default::default(),
+            x: 110.5,
+            y: 1.5,
+        };
+        assert_eq!(send(press).await, 6);
+        let text = real_core_text_with(&id, "M-^O").await;
+        for shown in ["^[[200~a^Mb^[[201~", "^[[M M-^O\""] {
+            assert!(text.contains(shown), "{shown:?} in {text:?}");
+        }
         terminal_core::close(&id);
     }
     /// Needs the `native-terminal` feature (Zig) and a Linux `/proc`; run alone (`--test-threads=1`)
