@@ -6,11 +6,11 @@ type Call={command:string;args:Record<string,unknown>};
 declare global {interface Window {navigationCalls:Call[]}}
 
 /** Connects one synthetic SSH host through the real App; no shell runs, and every native request is recorded. */
-async function openConnectedTerminal(page:Page,testInfo:TestInfo,toolbar?:string[]) {
+async function openConnectedTerminal(page:Page,testInfo:TestInfo,preferences?:Record<string,unknown>) {
   await installNativeBridge(page);
-  await page.addInitScript(toolbar=>{
+  await page.addInitScript(preferences=>{
     const calls:Call[]=[];window.navigationCalls=calls;
-    if(toolbar)localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar}));
+    if(preferences)localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,...preferences}));
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push({command,args});
       if(command==='list_hosts')return [{id:'navigation-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
@@ -29,7 +29,7 @@ async function openConnectedTerminal(page:Page,testInfo:TestInfo,toolbar?:string
       if(['write_stdin','resize','ack_output','disconnect','cancel_credential_auth'].includes(command)||command.startsWith('plugin:'))return command.startsWith('plugin:event|')?1:undefined;
       throw new Error(`Unsupported synthetic navigation request: ${command}`);
     };
-  },toolbar);
+  },preferences);
   await page.goto('/');
   if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Connect to Navigation host',exact:true}).click();
@@ -108,6 +108,35 @@ test('the command palette lists the Agents and Workspaces chords',async({page},t
   await expect(heading(page)).toHaveCount(0);
 });
 
+test('a rebound Agents chord replaces Ctrl+Shift+A, a Workspaces chord that is off stays with the terminal, and the palette follows both',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='desktop','Hardware keyboard chords');
+  await openConnectedTerminal(page,testInfo,{gestureChords:{navigationAgents:'B',navigationWorkspaces:'off'}});
+  await page.locator('.terminal-canvas:visible').click();
+  await page.keyboard.press('Control+Shift+B');
+  await expectOpen(page,false,'Agents');
+  await page.keyboard.press('Control+Shift+B');
+  await expectTerminal(page,false);
+  // The old chords are ordinary terminal keypresses now: they reach the terminal's own handlers unprevented and open nothing.
+  const reached=page.evaluate(()=>new Promise<boolean[]>(resolve=>{
+    const input=document.querySelector('.terminal-canvas .xterm-helper-textarea')!;
+    const seen:boolean[]=[];
+    input.addEventListener('keydown',event=>{if(['a','w'].includes((event as KeyboardEvent).key.toLowerCase())){seen.push(event.defaultPrevented);if(seen.length===2)resolve(seen);}});
+  }));
+  await page.keyboard.press('Control+Shift+A');
+  await page.keyboard.press('Control+Shift+W');
+  expect(await reached).toEqual([false,false]);
+  await expect(heading(page)).toHaveCount(0);
+  await page.keyboard.press('Control+Shift+P');
+  const palette=page.getByRole('listbox',{name:'Commands',exact:true});
+  const agents=palette.getByRole('option').filter({has:page.getByText('Agents',{exact:true})});
+  await expect(agents.locator('kbd')).toHaveText('Ctrl+Shift+B');
+  await expect(agents).toHaveAttribute('aria-keyshortcuts','Control+Shift+B');
+  const workspaces=palette.getByRole('option').filter({has:page.getByText('Workspaces',{exact:true})});
+  await expect(workspaces).toBeVisible();
+  await expect(workspaces.locator('kbd')).toHaveCount(0);
+  await expect(workspaces).not.toHaveAttribute('aria-keyshortcuts');
+});
+
 test('two-finger swipes up and down in a plain terminal open Agents and Workspaces',async({page},testInfo)=>{
   const phone=testInfo.project.name==='phone';
   await openConnectedTerminal(page,testInfo);
@@ -126,7 +155,7 @@ test('two-finger swipes up and down in a plain terminal open Agents and Workspac
 
 test('Agents and Workspaces toolbar keys open their views and return',async({page},testInfo)=>{
   const phone=testInfo.project.name==='phone';
-  await openConnectedTerminal(page,testInfo,['esc','agents','workspaces']);
+  await openConnectedTerminal(page,testInfo,{toolbar:['esc','agents','workspaces']});
   const keys=page.locator('.terminal-keys:visible');
   for(const name of ['Agents','Workspaces'] as const){
     await keys.getByRole('button',{name,exact:true}).click();

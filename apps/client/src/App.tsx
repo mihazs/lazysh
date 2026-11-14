@@ -113,7 +113,8 @@ import { ConnectionRecoveryBanner, NetworkOfflineNotice } from "./ConnectionBann
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 import { focusInboxPane } from "./notificationStore";
 import { attachedPaneServer } from "./agentPaneIdentity";
-import {agentViewShortcut, appShortcut, navigationShortcut, shiftedChordHint, useCapturedShortcut, type NavigationShortcut} from './keyboard';
+import {agentViewShortcut, appShortcut, navigationShortcut, shiftedChordHint, useCapturedShortcut} from './keyboard';
+import {navigationShortcutKeys, type NavigationShortcut} from './navigationShortcuts';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
@@ -1227,7 +1228,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
   const preferencesState = usePreferences();
-  const {sessionLayout,usageItem='follow',usageProvider=''} = preferencesState;
+  const {sessionLayout,usageItem='follow',usageProvider='',gestureChords} = preferencesState;
+  const navigationKeys=navigationShortcutKeys(gestureChords);
   usePrivateKeyboard();
   const shell=useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -1619,7 +1621,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return showNavigation(mode);
   }
   const latestNavigationToggle=useRef(toggleNavigation);latestNavigationToggle.current=toggleNavigation;
-  useCapturedShortcut(navigationShortcut,toggleNavigation);
+  useCapturedShortcut(event=>navigationShortcut(event,navigationKeys),toggleNavigation);
   const toggleAgentView=()=>{
     if(!active || !active.connected || active.local || view!=='terminal' || navigationCovered)return false;
     chooseSessionView(active,activeSessionView==='terminal'?'agent':'terminal');
@@ -2774,7 +2776,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {palette && (
         <Dialog title={t("paletteTitle")} close={closePalette}>
           <CommandPalette query={search} onQuery={setSearch} onDone={closePalette} note={native ? undefined : t("appOpenTheNativeAppToManageSSHHosts")}
-            commands={paletteCommands({native, hosts, sessions, activeId, tools: sessionViews, currentTool: view, navigationBusy: pendingMuxRequest,
+            commands={paletteCommands({native, hosts, sessions, activeId, tools: sessionViews, currentTool: view, navigationBusy: pendingMuxRequest, navigationKeys,
               local: {available: localCapability.available, busy: openingLocal, reason: localCapability.reason},
               run: {host: chooseHost, local: () => void openLocalTerminal(), addHost: () => setEditor("new"), session: chooseLiveSession,
                 tool: id => id === "agents" ? showNavigation("agents") : visitView(id as View), workspaces: () => showNavigation("workspaces"),

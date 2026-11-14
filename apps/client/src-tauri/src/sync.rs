@@ -1581,6 +1581,22 @@ mod tests {
     }
 
     #[test]
+    fn navigation_shortcut_choices_sync_inside_the_existing_gesture_chords_field() {
+        let mut bundle = settings();
+        let chords =
+            serde_json::json!({"twoUp":"C-b","navigationAgents":"B","navigationWorkspaces":"off"});
+        bundle.preferences = Some(serde_json::json!({"version":1,"gestureChords":chords}));
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        let imported: Bundle =
+            serde_json::from_slice(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        assert_eq!(imported.preferences.unwrap()["gestureChords"], chords);
+        // A key of their own would make older peers reject every import that carries it.
+        bundle.preferences =
+            Some(serde_json::json!({"version":1,"navigationShortcuts":{"agents":"B"}}));
+        assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+    }
+
+    #[test]
     fn toolbar_long_press_actions_are_an_accepted_settings_field() {
         let mut bundle = settings();
         bundle.preferences = Some(

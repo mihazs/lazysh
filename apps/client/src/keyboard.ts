@@ -1,5 +1,6 @@
 import {useEffect, useRef} from "react";
 import {terminalEditorSelector} from "./terminalAdapter";
+import {navigationShortcutKeys, navigationShortcutViews, type NavigationShortcut, type NavigationShortcutKeys} from "./navigationShortcuts";
 
 export type AppShortcut = { action: "palette" | "switcher" | "newConnection" | "closeSession" } | { action: "session"; index: number };
 
@@ -31,14 +32,10 @@ export function paletteShortcut(event: KeyboardEvent): boolean {
   return shiftedChord(event) === 'p';
 }
 
-export type NavigationShortcut = 'agents' | 'workspaces';
-/** The letter each Ctrl/Cmd+Shift navigation chord uses. */
-export const navigationShortcutKeys = {agents: 'A', workspaces: 'W'} as const satisfies Record<NavigationShortcut, string>;
-
-/** Ctrl/Cmd+Shift+A toggles Agents and Ctrl/Cmd+Shift+W toggles Workspaces; the shell keeps the unshifted chords. */
-export function navigationShortcut(event: KeyboardEvent): NavigationShortcut | undefined {
+/** Ctrl/Cmd+Shift plus the saved key toggles Agents or Workspaces (A and W by default); the shell keeps the unshifted chords. */
+export function navigationShortcut(event: KeyboardEvent, keys: NavigationShortcutKeys = navigationShortcutKeys()): NavigationShortcut | undefined {
   const key = shiftedChord(event);
-  return (Object.keys(navigationShortcutKeys) as NavigationShortcut[]).find(view => navigationShortcutKeys[view].toLowerCase() === key);
+  return key === undefined ? undefined : navigationShortcutViews.find(view => keys[view]?.toLowerCase() === key);
 }
 
 /** Ctrl/Cmd+Shift+Y toggles the session's Terminal and Agent views. */
