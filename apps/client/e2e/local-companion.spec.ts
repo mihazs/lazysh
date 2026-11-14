@@ -82,6 +82,9 @@ test('two local tabs on one target poll the companion once and an attention even
   await expect.poll(async()=>(await calls(page,'notify_agent_attention')).length).toBe(1);
   expect((await calls(page,'agent_snapshot')).length).toBe(1);
   expect(tabs).toContain((await calls(page,'notify_agent_attention'))[0].sessionId);
+  // The inbox row opens the local session on its Agents page.
+  await inbox.getByRole('article',{name:'Claude Code'}).getByRole('button',{name:'Open connected session',exact:true}).click();
+  await expect(page.getByRole('region',{name:'Agent activity',exact:true})).toBeVisible();
 });
 
 async function openInbox(page:Page) {
