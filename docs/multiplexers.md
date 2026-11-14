@@ -288,6 +288,23 @@ A long press on a tab with both actions opens a two-item menu (**Rename**, **Clo
 The **+** and **Rename** drop a small prompt over the terminal (it takes no layout space): a name, and for a new tab a directory (`.` is the shell's own start directory, as in the Spaces and tmux panels). The prompt is the one thing in the strip that opens the soft keyboard, on purpose, because the user is typing a name. A Herdr workspace or tab that has gone since the strip last read is refused, as a focus is, never renamed or closed by guess. A failed command is reported and keeps the prompt open. A half-typed name ends only with Escape, Cancel or Save, so a stray tap on the terminal does not lose it. The long press is 0.5 s without moving more than 10 px; the tap that ends it does not also select the chip.
 
 
+## Supported versions and degraded capabilities
+
+The Sessions panel shows each multiplexer's version and a **Supported** or **Limited** badge. A Limited multiplexer keeps ordinary terminal access; the capabilities it lacks are not offered, and a notice names the version that adds them. One Rust table (`multiplexer.rs`, `tool`) maps the version to the badge; the frontend never decides from the version string.
+
+| Multiplexer | Version read from | Supported | Otherwise (Limited) | Notice | CI pins |
+| --- | --- | --- | --- | --- | --- |
+| tmux | `tmux -V` | 3.4 or newer (a patch letter is accepted, and `next-3.6` development builds count as 3.6) | No Jump To and no confirmed Chat input | "Jump To and Chat input need tmux 3.4 or newer." | 3.2a (distribution; the degraded case), 3.4 (source, sha256) and 3.8, the newest (source, sha256) |
+| Zellij | `zellij --version` | 0.45.1 only | No workspace tree, close, resize, agent launch or confirmed input | "The workspace tree, close, resize and agent launch need Zellij 0.45.1." | 0.45.1 (release asset, sha256) |
+| Herdr | `herdr --version` | 0.9.3 to 0.9.5 | Navigation only: no create, launch, rename, confirmed input or restore | "Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5." | Stock and guarded 0.9.5 built from the pinned source; 0.9.3 runs locally |
+| rmux | `rmux capabilities --json` (not `-V`, which prints rmux branding) | Not available in a released client | Not available | Not available | Not available |
+
+rmux ([Helvesec/rmux](https://github.com/Helvesec/rmux), a Rust reimplementation of tmux that keeps its flags and targets) is not supported by any released lazysh. Its first slice is tracked in [#1140](https://github.com/mihazs/lazysh/issues/1140); until a release says otherwise, treat rmux as unsupported. The target behaviour, including the 0.10.x range and the "Restart the rmux daemon after upgrading" notice, is in the [compatibility spec](multiplexer-compatibility.md).
+
+Herdr support is decided by the version string alone: the Herdr API `schema_version` is not checked yet ([#1159](https://github.com/mihazs/lazysh/issues/1159)). Restoring sessions after a host reboot is out of scope for every multiplexer.
+
+What each multiplexer does on each client platform, with the CI job and test that prove it, is in the [multiplexer capability checklist](reference/parity-matrix.md#multiplexer-capability-checklist). On Windows, the client's multiplexer code is exercised by unit tests only; no job runs a Windows client against a real multiplexer ([#1747](https://github.com/mihazs/lazysh/issues/1747)).
+
 ## Native checks
 
 With tmux, Herdr and Zellij installed on PATH:
