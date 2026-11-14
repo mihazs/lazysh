@@ -271,6 +271,8 @@ pub fn run() {
                 herdr::herdr_action,
                 herdr_create::herdr_workspace_plan,
                 herdr_create::herdr_workspace_create,
+                herdr_create::multiplexer_launch_plan,
+                herdr_create::multiplexer_launch,
                 herdr_create::herdr_agent_kinds,
                 herdr_create::herdr_repository,
                 zellij::zellij_action,

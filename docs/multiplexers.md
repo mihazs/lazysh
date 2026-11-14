@@ -261,6 +261,47 @@ device/runtime acceptance. Hiding/persisting this row remains separate work.
 
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
 
+## Launch an agent in a tmux window or a Zellij pane
+
+`multiplexer_launch_plan` and `multiplexer_launch` (the commands behind the launcher of
+[#1128](https://github.com/mihazs/lazysh/issues/1128)) generalise the Herdr creation plan above:
+the same agent table, the same `command -v` check and the same literal argv, started in the
+session a terminal is attached to. They take the connection's typed multiplexer entry (kind,
+session name and, for tmux, the server label), never a command string, and refuse an entry
+that asks to create the session. The renderer shows `multiplexer_launch_plan` first and runs
+`multiplexer_launch` only after the user confirmed it.
+
+```sh
+command -v -- <agent>                                                    # missing agent: nothing is created
+git -C <repository> worktree add -b <branch> -- <path> <base>            # worktree only
+tmux -u -L <server> new-window -d -P -F '#{pane_id}' -t =<session>: -n <label> -c <directory> -- <agent> [<prompt>]
+zellij --session=<session> run --cwd=<directory> --name=<label> -- <agent> [<prompt>]
+```
+
+The agent is the executable's own argv, `<agent> [<prompt>]`, so nothing is parsed by a shell:
+tmux and Zellij both `exec` it directly. A prompt may hold quotes, `$(…)`, backticks, tabs and
+line breaks and reaches the agent byte for byte. Only the codex and claude entries of the table take
+an initial prompt; the prompt cannot start with `-`, contain a backslash or other control
+characters, or exceed 2000 bytes. (Herdr's `agent start` still takes one line.) tmux parses an
+argument that ends in `;` as a command separator and expands formats in window names and
+directories, so those layers are escaped separately from the shell's (`\;`, `##`).
+The new pane's ID (tmux `%<n>`, Zellij `terminal_<n>`) is read back from the command's output and
+returned as `paneId`; a reply that is not exactly that ID is a failure, never trusted. tmux
+creates the window with `-d`, so the attached client stays where it is; Zellij focuses the new pane.
+
+A failure before the worktree exists is an error and creates nothing: a missing agent stops the
+plan at the `command -v` step, and a session that does not exist fails at the window or pane
+step. A later failure (the worktree was created and the window or pane was not) is returned with
+what already exists, which is kept: nothing is removed automatically.
+
+The agent runs in the multiplexer server's environment, not in the SSH command's: the
+`command -v` check looks in the SSH login shell's `PATH`, while tmux or Zellij starts the
+agent with the `PATH` the server itself was started with. An agent that only an interactive
+shell's startup file puts on `PATH` can pass the check and still not start. Creating the
+session, splitting an existing pane instead of opening a window, a Zellij tab, and rmux (which
+needs [#1140](https://github.com/mihazs/lazysh/issues/1140), tracked in [#1679](https://github.com/mihazs/lazysh/issues/1679)) are not part of this primitive yet,
+and no screen calls it yet.
+
 ## Tab strip
 
 An attached tmux, Herdr or Zellij terminal shows its tabs in one native row above the terminal (`MultiplexerTabStrip`). One backend-agnostic model feeds it (`multiplexerTabs.ts`: title, active, needs attention, agent state, and the guarded command a chip runs), read by `useMultiplexerStrip`:
@@ -322,6 +363,18 @@ the agent detection test run the generated command strings as `<shell> -c` under
 `;`, `$(…)` and backticks, and assert the argv arrives literally and nothing is
 created. Fish is skipped with a message when absent; CI installs it in
 `native-linux-runtimes` and sets `LAZYSH_REQUIRE_FISH=1` so it cannot be skipped there.
+
+The launch cases (`herdr_create::tests::real_tmux_agent_window` and `real_zellij_agent_pane`)
+run the confirmed plans through the same `sh -c` command strings against a private tmux server
+and a private background Zellij session, with a stub `codex` on the server's `PATH` that records
+its directory and argv. They launch into a directory whose name holds `'`, `$(…)`, `#{…}` and a
+trailing `;` and into a new worktree with a hostile branch name, and assert that the pane exists
+in the directory (or worktree) `list-panes` reports, that the stub's argv is the prompt
+byte for byte (quotes, `$(…)`, a line break and a trailing `;`), that `git worktree list`
+shows the worktree, and that a missing agent or a missing session creates no pane, worktree or
+branch. Zellij runs against the pinned 0.45.1; the same case also passed on 0.46.0. An rmux case
+waits for rmux support (#1679, after #1140). The plan builders have platform-neutral unit tests that also
+run on macOS and Windows.
 
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 
