@@ -435,32 +435,6 @@ test('answers a Codex approval prompt open on the terminal with the keys a perso
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
 });
 
-/** Codex (the base fixture's agent) asks a request_user_input question, as Codex 0.167.0 draws it (a capture). */
-test('answers a question Codex asks with the keys a person presses and offers no Cancel, since Esc interrupts its turn',async({page})=>{
-  await open(page);
-  const agent=await showAgent(page);
-  const rows=readFileSync(new URL('../src/test/agentDialogs/codex-question.txt',import.meta.url),'utf8').split('\n');
-  await page.evaluate(rows=>{
-    const draw=(lines:string[])=>window.agentView.channels['display-work'].onmessage({type:'data',data:[...new TextEncoder().encode(`\x1b[2J\x1b[H${lines.join('\r\n')}`)]});
-    const at=(index:number)=>rows.map(row=>row.replace(/^( {2}[› ]|    ) ?(\d)\. /,(_,_lead,digit)=>`  ${Number(digit)-1===index?'›':' '} ${digit}. `));
-    let current=0;
-    window.agentView.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)draw(['• You selected the answer.','','› ']);else{current+=input.rows as number;draw(at(current));}};
-    draw(at(0));
-  },rows);
-  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
-  await expect(dialog.getByRole('heading',{name:'Which color?'})).toBeVisible({timeout:8000});
-  await expect(dialog.getByRole('button',{name:/^Red/})).toHaveAttribute('aria-current','true');
-  expect(await dialog.getByRole('button').allTextContents()).not.toContain('Cancel the dialog');
-  const green=dialog.getByRole('button',{name:/^Green/});
-  await expect(green).toBeEnabled();
-  expect((await green.boundingBox())!.height).toBeGreaterThanOrEqual(36);
-  const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
-  await green.click();
-  await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
-});
-
 test('picks an option of the open dialog with its digit on a desktop keyboard',async({page},testInfo)=>{
   test.skip(testInfo.project.name==='phone','Hardware digits are covered on desktop.');
   await open(page);await asClaude(page);
@@ -485,6 +459,34 @@ test('says the agent waits in the terminal for a dialog it cannot read exactly, 
   await notice.getByRole('button',{name:'Show terminal',exact:true}).click();
   await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
+});
+
+/** Codex (the base fixture's agent) asks a request_user_input question, drawn as Codex 0.167.0 draws it at a phone's width (a capture, without the rows
+ * that wrap an option's description, which a short terminal would scroll off). */
+test('answers a question Codex asks with the keys a person presses and offers no Cancel, since Esc interrupts its turn',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const rows=readFileSync(new URL('../src/test/agentDialogs/codex-question-narrow.txt',import.meta.url),'utf8').split('\n').filter(row=>!/^ {5,}\S/.test(row));
+  await page.evaluate(rows=>{
+    const draw=(lines:string[])=>window.agentView.channels['display-work'].onmessage({type:'data',data:[...new TextEncoder().encode(`\x1b[2J\x1b[H${lines.join('\r\n')}`)]});
+    const at=(index:number)=>rows.map(row=>row.replace(/^( {2}[› ]|    ) ?(\d)\. /,(_,_lead,digit)=>`  ${Number(digit)-1===index?'›':' '} ${digit}. `));
+    let current=0;
+    window.agentView.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)draw(['• You selected the answer.','','› ']);else{current+=input.rows as number;draw(at(current));}};
+    draw(at(0));
+  },rows);
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('heading',{name:/^Which database should the long running/})).toBeVisible({timeout:8000});
+  await expect(dialog.getByRole('button',{name:/^PostgreSQL 16/})).toHaveAttribute('aria-current','true');
+  expect(await dialog.getByRole('button').allTextContents()).not.toContain('Cancel the dialog');
+  const sqlite=dialog.getByRole('button',{name:/^SQLite/});
+  await expect(sqlite).toBeEnabled();
+  expect((await sqlite.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  await sqlite.click();
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  const sent=(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
+  expect(sent).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
 });
 
 /** A tmux session whose Claude conversation lists one running background shell. */

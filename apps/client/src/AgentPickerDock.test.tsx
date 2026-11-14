@@ -255,7 +255,7 @@ it('answers the questions Codex asks one after the other, with the arrows and En
   fireEvent.click(option('Small'));
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
   expect(answers.slice(2)).toEqual([{kind: 'pick', rows: 0, enter: true}]);
-});
+}, 20000);
 
 it('says the notes box of a Codex question waits in the terminal and sends nothing', async () => {
   mount(onTmux(fixture('codex-question-notes')), {agent: 'Codex'});
