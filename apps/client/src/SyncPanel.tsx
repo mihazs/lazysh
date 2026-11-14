@@ -7,7 +7,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   getPreferences,
   keepDevicePreferences,
-  parsePreferences,
   syncablePreferences,
 } from "./preferences";
 

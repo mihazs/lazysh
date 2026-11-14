@@ -1,4 +1,3 @@
-import type {TerminalAdapter} from './terminalAdapter';
 import {createBackendRegistry, type BackendPreference, type SelectOptions} from './terminalBackendRegistry';
 import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
