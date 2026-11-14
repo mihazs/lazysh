@@ -32,8 +32,32 @@ struct RecordedContext {
     source: &'static str,
     used_tokens: Option<u64>,
     limit_tokens: Option<u64>,
+    remaining_tokens: Option<u64>,
     recorded_at: Option<String>,
     freshness: &'static str,
+}
+impl RecordedContext {
+    /// `remaining_tokens` is only the recorded window minus the recorded last response; it is
+    /// unknown when either is missing or the response exceeds the window.
+    fn new(
+        source: &'static str,
+        used_tokens: Option<u64>,
+        limit_tokens: Option<u64>,
+        recorded_at: Option<String>,
+        freshness: &'static str,
+    ) -> Self {
+        let remaining_tokens = limit_tokens
+            .zip(used_tokens)
+            .and_then(|(limit, used)| limit.checked_sub(used));
+        Self {
+            source,
+            used_tokens,
+            limit_tokens,
+            remaining_tokens,
+            recorded_at,
+            freshness,
+        }
+    }
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +204,10 @@ pub fn from_page(page: TranscriptPage, observed_at: DateTime<Utc>) -> Result<Usa
     if samples.len() > 20 {
         samples.drain(..samples.len() - 20);
     }
+    let recorded_context = match page.agent {
+        TranscriptAgent::Claude => claude_context(samples.last()),
+        _ => None,
+    };
     Ok(UsageSnapshot {
         schema_version: 1,
         agent: page.agent,
@@ -191,7 +219,30 @@ pub fn from_page(page: TranscriptPage, observed_at: DateTime<Utc>) -> Result<Usa
         samples,
         context: json!({"usedTokens":null,"limitTokens":null,"remainingTokens":null}),
         quota: json!({"remaining":null,"resetsAt":null}),
-        recorded_context: None,
+        recorded_context,
         provider_windows: Vec::new(),
     })
+}
+
+/// Claude Code records the whole last response's counters, the same four the Agent view sums
+/// for its context pill. It records no window, so the limit stays unknown; one missing counter
+/// or an all-zero (synthetic) response is unknown, never a partial or zero context.
+fn claude_context(last: Option<&UsageSample>) -> Option<RecordedContext> {
+    let last = last?;
+    let used = [
+        last.input_tokens,
+        last.output_tokens,
+        last.cache_read_tokens,
+        last.cache_write_tokens,
+    ]
+    .into_iter()
+    .try_fold(0u64, |sum, count| sum.checked_add(count?))
+    .filter(|used| (1..=MAX_SAFE_INTEGER).contains(used))?;
+    Some(RecordedContext::new(
+        "claude_last_response",
+        Some(used),
+        None,
+        last.recorded_at.clone(),
+        last.freshness,
+    ))
 }

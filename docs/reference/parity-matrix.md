@@ -300,7 +300,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Freshness timestamps | implemented | implemented | `apps/client/src/accountUsageReport.ts:28-31`; `UsagePanel.tsx:75-81`. `packages/account-usage/tests/report.rs:109`. | Rendered timestamp on a native runtime. |
 | Manual refresh | implemented | implemented | `AccountUsage.tsx:15`; `UsagePanel.tsx:116`. | No runtime test. |
 | Optional background collection | partial | partial | Polls every five minutes only while visible (`apps/client/src/useAccountUsage.ts:4,37`); no host background collector. | Opt-in background collection (#18). |
-| Transcript-supported context remaining | partial | partial | Codex last-response tokens only (`UsagePanel.tsx:50-52`); remaining is always Unknown (`:133`). | Other agents and a computed remaining value (#18). |
+| Transcript-supported context remaining | implemented | implemented | Codex last response against its recorded window, and Claude Code's last response (`apps/agent/src/usage.rs` `claude_context`, `RecordedContext::new`); `remainingTokens` is the recorded window minus that response, unknown when either is missing (`apps/agent/tests/codex_usage.rs`, `tests/usage.rs`; `apps/client/src/UsagePanel.tsx`, `UsagePanel.test.tsx`). Live context stays Unknown. | Claude Code records no window, so its remaining stays unknown; Pi, OMP, jcode, OpenCode and Copilot stay unknown (counter semantics not verified as context in use). Client runtime case (#18). |
 | Missing data stays unknown | implemented | implemented | `UsagePanel.tsx:83`; host tests `apps/agent/tests/usage.rs:42`. | Client runtime. |
 
 ## Native chat

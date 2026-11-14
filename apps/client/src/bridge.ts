@@ -5,7 +5,9 @@ import { registerSessionOutput } from './pendingSessions';
 export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
 export type UsageFreshness = "fresh" | "stale" | "unknown";
 export type RecordedUsageContext = {
-  source: "codex_token_count"; usedTokens: number | null; limitTokens: number | null;
+  source: "codex_token_count" | "claude_last_response"; usedTokens: number | null; limitTokens: number | null;
+  /** The recorded window minus the last response; absent from older companions. */
+  remainingTokens?: number | null;
   recordedAt: string | null; freshness: UsageFreshness;
 };
 export type RecordedProviderWindow = {
