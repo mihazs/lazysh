@@ -699,7 +699,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       await tmux.verifyDetachedAndReattached();
       console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, detach and reattach verified against the original server and pane processes');
     }
-    if(sharedHerdr)await herdr!.expectNavigationBytes();
+    if(sharedHerdr){
+      await herdr!.verifyPanelActions('ANDROID_CREATED_'+fixture.nonce,'ANDROID_RENAMED_'+fixture.nonce);
+      await herdr!.expectNavigationBytes();
+    }
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
     if((herdrMosh || attachments) && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh entry must bootstrap exactly once');
     console.log(sharedHerdr?'Owned stock Herdr shared navigation: all three receiver identities alive and zero bytes verified':herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
