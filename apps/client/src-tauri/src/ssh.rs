@@ -7451,6 +7451,13 @@ mod tests {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
+    async fn openssh_companion_install_refuses_an_unsupported_architecture() {
+        openssh_interoperability(OpenSshCheck::CompanionUnsupportedArchitecture).await;
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires owned OpenSSH and a current-source companion binary"]
@@ -7498,6 +7505,7 @@ mod tests {
         AuthListeners,
         TemporaryAttachments,
         CompanionInstall,
+        CompanionUnsupportedArchitecture,
         #[cfg(target_os = "linux")]
         AgentBoard,
         AccountUsage,
@@ -7578,7 +7586,10 @@ mod tests {
             client_environment_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::AccountUsage) {
             account_usage_fixture::environment(dir.path())
-        } else if matches!(check, OpenSshCheck::CompanionInstall) {
+        } else if matches!(
+            check,
+            OpenSshCheck::CompanionInstall | OpenSshCheck::CompanionUnsupportedArchitecture
+        ) {
             companion_fixture::environment(dir.path())
         } else if matches!(
             check,
@@ -7648,6 +7659,10 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::CompanionInstall) {
             companion_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::CompanionUnsupportedArchitecture) {
+            companion_fixture::unsupported_architecture(&app, &id, dir.path()).await;
             return;
         }
         #[cfg(target_os = "linux")]
