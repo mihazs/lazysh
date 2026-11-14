@@ -1,8 +1,8 @@
 /** Agent harnesses write some "user" records themselves: background-task notices, slash-command echoes, local command output,
  * interruption markers, compaction summaries and context wrappers. The person did not type them, so a conversation view must
  * not show their tags as a chat bubble. This runs in the client so it also works against an older host companion. */
-export const recordedEventKinds = ['goal', 'goalMet', 'planMode', 'planModeExit', 'recap', 'hookFailed'] as const;
-export type InjectedEvent = {kind: 'task' | 'output' | 'interrupted' | 'compacted' | 'answer' | typeof recordedEventKinds[number]; text: string; detail?: string};
+export const recordedEventKinds = ['goal', 'goalMet', 'planMode', 'planModeExit', 'recap', 'hookFailed', 'compacted'] as const;
+export type InjectedEvent = {kind: 'task' | 'output' | 'interrupted' | 'answer' | typeof recordedEventKinds[number]; text: string; detail?: string};
 type Block = {type: string; text?: string; card?: unknown; pasted?: boolean};
 type Shape = {role: string; blocks: Block[]};
 

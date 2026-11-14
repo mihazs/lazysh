@@ -22,6 +22,13 @@ it.each([
 
 it('accepts event messages of a Codex conversation but not of other agents or the records view',()=>{
   expect(parseTranscript(page([goal],'codex')).messages).toHaveLength(1);
-  expect(()=>parseTranscript(page([goal],'opencode'))).toThrow();
+  expect(()=>parseTranscript(page([goal],'gemini'))).toThrow();
   expect(()=>parseTranscript(page([goal],'claude','records'))).toThrow();
+});
+
+// The companion writes this event for a Codex `compacted` record and an OpenCode compaction; the page must not be refused for it.
+it.each(['codex','opencode'])('shows the compaction line the companion writes for %s',agent=>{
+  const compacted={id:'c1',role:'event',blocks:[],event:{kind:'compacted',text:''}};
+  const extra=agent==='opencode'?{branchId:'ses_1',truncated:false,nextOffset:0}:{};
+  expect(parseTranscript({...page([compacted],agent),...extra}).messages.map(message=>message.role)).toEqual(['event']);
 });

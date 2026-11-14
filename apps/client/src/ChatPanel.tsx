@@ -115,7 +115,7 @@ export function parseTranscript(value: unknown): Page {
       typeof message.id !== "string" ||
       message.id.length > 4096 ||
       !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")
-        || (message.role === "event" && ["claude", "codex"].includes(page.agent) && page.view === "active_branch")) ||
+        || (message.role === "event" && ["claude", "codex", "opencode"].includes(page.agent) && page.view === "active_branch")) ||
       !Array.isArray(message.blocks) ||
       message.blocks.length > 1000
     )
