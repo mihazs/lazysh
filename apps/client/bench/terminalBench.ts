@@ -8,6 +8,7 @@ import { createTerminal } from '../src/xterm/terminal';
 import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/rendererCandidates';
 import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { XtermTerminalAdapter } from '../src/xtermTerminalAdapter';
+import { mountScreenReaderMirror } from '../src/terminalScreenReader';
 import type { TerminalAdapter } from '../src/terminalAdapter';
 import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
 
@@ -46,6 +47,21 @@ function put(terminal: Term, data: string | Uint8Array, applied?: () => void) {
   void adapter.write!(typeof data === 'string' ? encoder.encode(data) : data, applied);
 }
 const putAndWait = (terminal: Term, data: string | Uint8Array) => new Promise<void>(resolve => put(terminal, data, resolve));
+/** `?mirror=on` mounts the screen-reader mirror (#1329) on the session's adapter, the way a native backend would while the preference is on; `off` (the default) is the baseline. */
+const mirrored = new URLSearchParams(location.search).get('mirror') === 'on';
+const mirror = { reads: 0, readMs: 0, mutations: 0 };
+let mirrorHost: HTMLElement | undefined;
+function mountMirror(adapter: TerminalAdapter) {
+  // The pane reads rows too (Herdr navigation): count only the mirror's reads, through a view of the adapter that times its own `readRows`.
+  const view = new Proxy(adapter, { get(target, property) {
+    if (property === 'readRows') return (...args: Parameters<NonNullable<TerminalAdapter['readRows']>>) => { const started = performance.now(); try { return target.readRows!(...args); } finally { mirror.reads++; mirror.readMs += performance.now() - started; } };
+    const value = Reflect.get(target, property);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const host = mirrorHost = document.body.appendChild(document.createElement('div'));
+  mountScreenReaderMirror(view, host);
+  new MutationObserver(records => { mirror.mutations += records.length; }).observe(host, { subtree: true, childList: true, characterData: true, attributes: true });
+}
 let harness: Harness | undefined;
 const pending: number[] = [], latencies: number[] = [];
 let echoMode: 'keydown' | 'composition' = 'keydown', echoed = 0, typed = 0, writesAtBegin = 0;
@@ -55,6 +71,7 @@ function open() {
   if (harness) return harness;
   harness = mountTerminalHistoryHarness({ input: data => echo(data) });
   attach(harness.terminal);
+  if (mirrored) mountMirror(harness.session.adapter);
   document.addEventListener('keydown', event => { if (echoMode === 'keydown') pending.push(event.timeStamp); }, true);
   document.addEventListener('compositionend', event => { if (echoMode === 'composition') pending.push(event.timeStamp); }, true);
   return harness;
@@ -140,7 +157,7 @@ async function reset() { harness!.terminal.reset(); await settle(); echoColumn =
 const api = {
   open() {
     const { terminal } = open();
-    return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: `xterm-${candidate}`, writePath: viaAdapter ? 'adapter' : 'direct', canvases: terminal.element?.querySelectorAll('canvas').length ?? 0, gl: candidate === 'webgl' ? glInfo() : null, domNodes: document.getElementsByTagName('*').length };
+    return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: `xterm-${candidate}`, writePath: viaAdapter ? 'adapter' : 'direct', screenReaderMirror: mirrored, canvases: terminal.element?.querySelectorAll('canvas').length ?? 0, gl: candidate === 'webgl' ? glInfo() : null, domNodes: document.getElementsByTagName('*').length };
   },
   /** App features that reach into xterm's DOM renderer: tried on the live terminal, because a different renderer may refuse them. Run after the measurements. */
   seams() {
@@ -150,6 +167,8 @@ const api = {
   /** A lost WebGL context silently reverts to the DOM renderer; the driver rejects a run that saw one. */
   contextLosses() { return contextLosses; },
   mismatch() { return lastMismatch; },
+  /** The mirror's counters since the page loaded: viewport reads and their time, and DOM mutations of its region. Zero unless the page was opened with ?mirror=on. */
+  mirrorStats() { return { ...mirror, mounted: mirrored, listRows: mirrorHost?.querySelectorAll('[role=listitem]').length ?? 0, announced: mirrorHost?.querySelectorAll('[role=log] > div').length ?? 0 }; },
   /** Writes that went through XtermTerminalAdapter.write: zero unless the page was opened with ?write=adapter. */
   adapterWrites() { return adapterWrites; },
   async calibrate() { return calibrate(); },

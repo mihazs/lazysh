@@ -228,3 +228,45 @@ test('terminal write paths, paired streams', async ({ page, browser, browserName
   writeFileSync(out, JSON.stringify(document, null, 2) + '\n');
   await info.attach('terminal-write-paired.json', { path: out });
 });
+
+// The screen-reader mirror (#1329) on the same terminal: one stream per page load, alternating mirror off, on, on, off, ... so
+// neighbouring streams share the host's load. Cost is what the mirror adds to a stream the terminal already handles: throughput,
+// ack p99, main-thread script time (CDP) and long tasks, plus what the mirror itself did (viewport reads, DOM mutations, announcements).
+const mirrorRounds = Number(process.env.LAZYSH_BENCH_MIRROR_ROUNDS) || (full ? 12 : 1);
+test('terminal screen reader mirror, paired streams', async ({ page, browser, browserName }, info) => {
+  test.skip(browserName !== 'chromium', 'CDP process metrics need Chromium.');
+  test.skip(full && !process.env.LAZYSH_BENCH_MIRROR, 'The full mirror comparison is opt-in (LAZYSH_BENCH_MIRROR=1).');
+  const atStart = os.loadavg(), kinds = ([['plain', scale.plain], ['ansi', scale.ansi], ['redraw', scale.frames]] as const).filter(([kind]) => !pairedKinds || pairedKinds.includes(kind));
+  const streams: Record<string, Record<string, Record<string, number>[]>> = {};
+  for (const [kind, size] of kinds) for (let i = 0; i < mirrorRounds * 2; i++) {
+    const mirror = (i + (i >> 1)) % 2 === 0 ? 'off' : 'on';
+    await page.goto(`/bench/terminal-bench.html?renderer=${candidate}&write=adapter&mirror=${mirror}`);
+    await page.waitForFunction(() => !!window.terminalBench);
+    const cdp = await page.context().newCDPSession(page), browserCdp = await browser.newBrowserCDPSession();
+    await cdp.send('Performance.enable');
+    await page.evaluate(async ([k, s]) => { window.terminalBench.open(); await window.terminalBench.calibrate(); await window.terminalBench.prepare(k, s); }, [kind, size] as const);
+    const before = await snapshot(cdp, browserCdp), run = await page.evaluate(() => window.terminalBench.stream()), after = await snapshot(cdp, browserCdp);
+    await page.waitForTimeout(400); // the mirror's last settle and announcement come after the stream ends
+    const stats = await page.evaluate(() => window.terminalBench.mirrorStats()), spent = cost(before, after);
+    expect(run.correct, `${kind} with the mirror ${mirror} must end on the expected screen`).toBe(true);
+    expect(stats.mounted, 'the page must really have the mirror when asked').toBe(mirror === 'on');
+    ((streams[kind] ??= {})[mirror] ??= []).push({
+      MiBs: run.throughputMiBs, ackP99Ms: run.ackMs.p99, wallMs: run.wallMs, scriptMs: spent.mainThreadMs.script, taskMs: spent.mainThreadMs.task, longTasks: run.longTasks.n, longTaskMs: run.longTasks.totalMs, droppedFrames: run.pacing.dropped,
+      mirrorReads: stats.reads, mirrorReadMs: stats.readMs, mirrorMutations: stats.mutations, announcements: stats.announced, domNodes: spent.domNodes,
+    });
+    await cdp.detach(); await browserCdp.detach();
+  }
+  const medians = Object.fromEntries(Object.entries(streams).map(([kind, byMirror]) => [kind, Object.fromEntries(Object.entries(byMirror).map(([mirror, runs]) => [mirror, medianOf(runs as never)]))]));
+  expect(JSON.stringify(streams), 'metrics must be finite').not.toMatch(/NaN|Infinity/);
+  const document = {
+    schema: 1, kind: 'screen-reader-mirror-paired', candidate: `xterm-${candidate}`, mode: full ? 'full' : 'smoke', order: 'off, on, on, off, repeated; one stream per page load, every byte through XtermTerminalAdapter.write', rounds: mirrorRounds,
+    host: { loadAverage: { atStart, atEnd: os.loadavg() }, cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, os: `${os.type()} ${os.release()}`, chromium: browser.version() },
+    source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
+    limits: 'Headless Chromium on a desktop host with the DOM renderer, not an Android WebView; no screen reader was running, so the DOM region was updated but never read by an accessibility service.',
+    medians, streams,
+  };
+  const out = process.env.LAZYSH_BENCH_MIRROR_OUT ?? path.resolve(root, `apps/client/bench-results/${full ? 'terminal-screen-reader-mirror' : 'terminal-screen-reader-mirror-smoke'}-${info.project.name}.json`);
+  mkdirSync(path.dirname(out), { recursive: true });
+  writeFileSync(out, JSON.stringify(document, null, 2) + '\n');
+  await info.attach('terminal-screen-reader-mirror.json', { path: out });
+});
