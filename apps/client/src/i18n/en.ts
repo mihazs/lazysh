@@ -2263,6 +2263,7 @@ export const english = {
   agentViewFinding: "Looking for the agent in this terminal…",
   agentViewNoConversation: "No agent conversation for this terminal.",
   agentViewPartial: "The last {{agent}} report names this pane, but its conversation is unavailable. Turn on reported history in the companion to follow it here.",
+  agentViewPartialState: "This view shows only the last reported state of {{agent}}. Its conversation stays in the terminal.",
   agentViewShowTerminal: "Show terminal",
   agentComposerTitle: "Message composer",
   agentComposerLabel: "Message to the agent",

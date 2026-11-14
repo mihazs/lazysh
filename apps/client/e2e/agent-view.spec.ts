@@ -1160,11 +1160,12 @@ test('OpenCode live: the stream is opened for the pane\'s database session and a
 });
 
 test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
-  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Kimi CLI';});
+  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Amp';});
   await open(page);
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   const agent=agentView(page);
-  await expect(agent.locator('header')).toContainText('Kimi CLI');
+  await expect(agent.locator('header')).toContainText('Amp');
+  await expect(agent.getByText('This view shows only the last reported state of Amp. Its conversation stays in the terminal.',{exact:true})).toBeVisible();
   await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
   await expect(agent.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveCount(0);
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);

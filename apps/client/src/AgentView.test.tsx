@@ -220,6 +220,19 @@ it('labels a detected agent without a reported conversation as partial and never
   expect(calls('agent_transcript')).toEqual([]);
 });
 
+// An agent the view has no reader for: turning on reported history cannot help, so the label says it shows state only.
+it.each(['Gemini CLI','Pi','GitHub Copilot'])('labels %s, which has no conversation reader here, as state only with Show terminal and no composer',async agent=>{
+  host('codex',[row(agent,'%3','needs_attention')],'missing',[[]]);
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(`This view shows only the last reported state of ${agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+  expect(screen.queryByText(/Turn on reported history/)).toBeNull();
+  expect(screen.getByTitle('Last reported: Waiting for you')).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+  expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  expect(calls('agent_transcript')).toEqual([]);expect(calls('agent_reported_history')).toEqual([]);
+});
+
 it('keeps a detected tmux agent visible when its history lookup fails',async()=>{
   host('codex',[row('Codex','%3')],'missing',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
