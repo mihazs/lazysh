@@ -792,6 +792,8 @@ jobs:
       # Non-blocking until its first qualifying hosted pass is recorded on #492; then remove continue-on-error.
       - name: Exercise the installed Windows application GUI
         if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        # A composite step cannot carry its own timeout: the runner rejects the manifest. This bounds the driver install and the case.
+        timeout-minutes: 30
         continue-on-error: true
         uses: ./.github/actions/windows-installed-gui
 

@@ -4,6 +4,8 @@ import { lstat, mkdir, readdir, rm, rmdir, unlink, writeFile } from 'node:fs/pro
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { digestFile } from '../.changeset/release-artifacts';
+import { project } from './support/gitFixture';
+import { document } from './support/workflowGraph';
 import { exactlyOne, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, launch, mainWindow, parseHostState,
   parseProcessTable, pinnedTools, powershell, processTable, requireOwnedWindowsRunner, sameImage, killOwned, until,
@@ -77,6 +79,19 @@ test('the WebDriver client sends the Tauri application capability and reports dr
     await driver.quit();
     expect(calls.at(-1)).toMatchObject({ method: 'DELETE', url: '/session/abc' });
   } finally { server.close(); }
+});
+
+// The runner validates a composite manifest when it loads the action and rejects the step before anything runs, and a
+// `continue-on-error` caller then reports that step as a success. Only these keys are accepted on a composite step.
+test('every composite action step uses only keys the runner accepts', async () => {
+  const accepted = new Set(['id', 'if', 'name', 'run', 'shell', 'uses', 'with', 'env', 'continue-on-error', 'working-directory']);
+  const manifests = [...new Bun.Glob('.github/actions/*/action.yml').scanSync({ cwd: project, dot: true })].sort();
+  expect(manifests).toContain('.github/actions/windows-installed-gui/action.yml');
+  for (const manifest of manifests) {
+    const steps: any[] = (await document(manifest)).runs.steps ?? [];
+    expect(steps.map(step => ({ manifest, step: step.name, unknown: Object.keys(step).filter(key => !accepted.has(key)) })))
+      .toEqual(steps.map(step => ({ manifest, step: step.name, unknown: [] })));
+  }
 });
 
 // ---- Actual Windows acceptance: exactly one installed image, driven through the real WebView2 window. ----
