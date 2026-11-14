@@ -362,8 +362,17 @@ fn codex_records_of_megabytes_are_cut_not_refused_so_the_turns_after_them_still_
     assert!(text.contains("after the big records|still here"));
     assert!(text.contains("more bytes not shown"));
     assert!(!text.contains(&"x".repeat(1024)), "model context stays out");
-    // One page stays inside its 512 KiB budget however large the records were.
+    // One page stays inside its 512 KiB budget however large the records were, and no block is past the 256 KiB the app accepts.
     assert!(serde_json::to_vec(&page).unwrap().len() < 512 * 1024);
+    for block in page
+        .messages
+        .iter()
+        .flat_map(|m| m["blocks"].as_array().unwrap())
+    {
+        assert!(block["text"]
+            .as_str()
+            .is_none_or(|text| text.len() <= 262_144));
+    }
     for message in &page.messages {
         assert!(serde_json::to_vec(message).unwrap().len() < 512 * 1024);
     }
