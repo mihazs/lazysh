@@ -28,6 +28,12 @@ impl TmuxServer {
     pub(crate) fn prefix(&self) -> String {
         format!("tmux -u -L {}", quote(self.name()))
     }
+    /// [`Self::prefix`] as exact argv words, for plans that quote each word itself.
+    pub(crate) fn argv(&self) -> Vec<String> {
+        ["tmux", "-u", "-L", self.name()]
+            .map(str::to_owned)
+            .to_vec()
+    }
     /// The session an SSH id names and the server its commands address.
     pub(crate) async fn for_id(
         state: &AppState,
@@ -89,6 +95,10 @@ mod tests {
         assert_eq!(
             TmuxServer::parse(Some("a'b")).unwrap().prefix(),
             "tmux -u -L 'a'\\''b'"
+        );
+        assert_eq!(
+            TmuxServer::parse(Some("a'b")).unwrap().argv(),
+            ["tmux", "-u", "-L", "a'b"]
         );
     }
 }
