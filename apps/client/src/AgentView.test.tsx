@@ -1323,3 +1323,91 @@ describe('round trips before the first message',()=>{
     expect(names()).toContain('agent_transcript');
   });
 });
+
+describe('starting an agent from the empty state',()=>{
+  /** Adds the host commands the launcher dialogs read to whatever the test already mocked. */
+  const answering=(extra:Record<string,(args:unknown)=>unknown>)=>{
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command in extra?extra[command](args):base(command,args,options));
+  };
+  const typing=(element:HTMLElement,value:string)=>fireEvent.change(element,{target:{value}});
+
+  it('offers a new worktree of the focused workspace with the agent already chosen, reviews the commands, then focuses what it created',async()=>{
+    const state={focus:'w2E:p3',agents:[] as string[]};server(state);
+    const worktree='/work/one-worktrees/work';
+    answering({
+      herdr_repository:()=>({root:'/work/one',main:'/work/one',head:'main',detached:false,worktrees:['/work/one']}),
+      herdr_agent_kinds:()=>[{kind:'codex',label:'Codex',executable:'codex',prompt:true}],
+      herdr_workspace_plan:()=>({steps:[{stage:'worktree',argv:['git'],command:`git -C '/work/one' worktree add -b 'work' '${worktree}' 'main'`}]}),
+      herdr_workspace_create:()=>({workspaceId:'wNEW',worktree}),
+      herdr_action:()=>({}),
+    });
+    render(view({herdrLaunch:true}));await advance(0);
+    fireEvent.click(screen.getByRole('button',{name:'Start in a new worktree'}));await advance(0);
+    const dialog=screen.getByRole('dialog',{name:'New worktree from Work'});
+    expect(calls('herdr_repository')).toEqual([{sessionId:'ssh',directory:'/work/one'}]);
+    expect((within(dialog).getByRole('radio',{name:'Yes, start an agent'}) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('Agent'),{target:{value:'codex'}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
+    expect(calls('herdr_workspace_plan')).toEqual([{name:'owned',request:{target:{type:'worktree',repository:'/work/one',branch:'work',base:'main',path:worktree},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/)}}}]);
+    expect(calls('herdr_workspace_create')).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);
+    expect(calls('herdr_workspace_create')).toHaveLength(1);
+    expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusWorkspace',target:'wNEW'}}]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers no worktree when the session has no launcher or no workspace reported a directory',async()=>{
+    const state={focus:'w2E:p3',agents:[] as string[]};server(state);
+    const rendered=render(view());await advance(0);
+    expect(screen.getByRole('button',{name:'Start in a folder'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Start in a new worktree'})).toBeNull();
+    answering({herdr_tree:()=>({...herdrNavigationTree,agents:[],panes:herdrNavigationTree.panes.map(pane=>({...pane,cwd:null,focused:true}))})});
+    rendered.rerender(view({herdrLaunch:true}));await advance(3000);
+    expect(screen.getByRole('button',{name:'Start an agent'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Start in a new worktree'})).toBeNull();
+  });
+
+  describe('in a terminal without a launcher',()=>{
+    const staged=vi.fn(),shown=vi.fn();
+    beforeEach(()=>{staged.mockReset();shown.mockReset();window.addEventListener('lazysh-prompt-draft',staged);});
+    afterEach(()=>window.removeEventListener('lazysh-prompt-draft',staged));
+    const mountEmpty=async(extra:Record<string,(args:unknown)=>unknown>={})=>{
+      host('codex',[],'missing',[[]]);answering(extra);
+      render(<AgentView sessionId="ssh" shown tmux onShowTerminal={shown}/>);await advance(0);
+      fireEvent.click(screen.getByRole('button',{name:'Start in a folder'}));
+      return screen.getByRole('dialog',{name:'Start in a folder'});
+    };
+    const folder=(dialog:HTMLElement)=>within(dialog).getByLabelText('Herdr project directory');
+
+    it('shows the exact command for the chosen agent and folder, and only stages it in the terminal composer',async()=>{
+      const dialog=await mountEmpty();
+      fireEvent.click(within(dialog).getByRole('radio',{name:'Codex'}));
+      typing(folder(dialog),"/work/it's $(here)");
+      fireEvent.click(within(dialog).getByRole('button',{name:'Review command'}));
+      expect(within(dialog).getByText("cd '/work/it'\\''s $(here)' && codex")).toBeTruthy();
+      expect(staged).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole('button',{name:'Stage in the terminal'}));
+      expect(staged).toHaveBeenCalledTimes(1);
+      expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:"cd '/work/it'\\''s $(here)' && codex"});
+      expect(shown).toHaveBeenCalledTimes(1);expect(screen.queryByRole('dialog')).toBeNull();
+      expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+    });
+
+    it('refuses a folder that is not an absolute path before showing anything to stage',async()=>{
+      const dialog=await mountEmpty();
+      typing(folder(dialog),'../elsewhere');
+      fireEvent.click(within(dialog).getByRole('button',{name:'Review command'}));
+      expect(within(dialog).getByRole('alert').textContent).toMatch(/absolute path/);
+      expect(within(dialog).queryByRole('button',{name:'Stage in the terminal'})).toBeNull();expect(staged).not.toHaveBeenCalled();
+    });
+
+    it('browses the host for the folder',async()=>{
+      const dialog=await mountEmpty({list_directory:args=>(args as {path:string}).path==='/'?[{name:'work',isDir:true},{name:'.cache',isDir:true},{name:'notes.txt',isDir:false}]:[]});
+      fireEvent.click(within(dialog).getByRole('button',{name:'Browse host folders'}));await advance(0);
+      expect(calls('list_directory')).toEqual([{sessionId:'ssh',path:'/'}]);
+      const folders=within(within(dialog).getByRole('region',{name:'Browse host folders'})).getAllByRole('button').map(button=>button.textContent);
+      expect(folders).toContain('work');expect(folders).not.toContain('.cache');expect(folders).not.toContain('notes.txt');
+      fireEvent.click(within(dialog).getByRole('button',{name:'work'}));await advance(0);
+      expect(folder(dialog)).toHaveProperty('value','/work');
+    });
+  });
+});
