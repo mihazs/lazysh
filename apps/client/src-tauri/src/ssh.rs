@@ -4831,6 +4831,11 @@ mod tests {
         pub(crate) fn hold(&self) {
             self.server.hold_opens.store(true, Ordering::SeqCst);
         }
+        /// Every exec request now answers with this stdout and exit status.
+        pub(crate) fn script_exec(&self, stdout: &str, status: u32) {
+            *self.server.scripted_exec.lock().unwrap() =
+                Some((vec![stdout.as_bytes().to_vec()], status));
+        }
         pub(crate) fn quiet(&self) {
             self.server.tmux_metadata.store(true, Ordering::SeqCst);
         }
@@ -6639,6 +6644,8 @@ mod tests {
         for command in [
             "install_companion",
             "install_companion_from_device",
+            "rollback_companion",
+            "check_companion_update",
             "restore_file_transfer",
             "restore_host_tools",
             "host_home",
@@ -6680,7 +6687,9 @@ mod tests {
                 crate::companion_settings::get_companion_settings,
                 crate::companion_settings::update_companion_settings,
                 crate::companion::install_companion,
-                crate::companion::install_companion_from_device
+                crate::companion::install_companion_from_device,
+                crate::companion::rollback_companion,
+                crate::companion::check_companion_update
             ])
             .build(context)
             .unwrap();
@@ -6751,7 +6760,21 @@ mod tests {
         );
         let installer =
             serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"});
-        for command in ["install_companion", "install_companion_from_device"] {
+        let checked = serde_json::json!({"sessionId":"not-connected"});
+        let failure = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "check_companion_update", checked.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure["kind"], "disconnected",
+            "the real check handler must be reached before session preflight fails"
+        );
+        for command in [
+            "install_companion",
+            "install_companion_from_device",
+            "rollback_companion",
+        ] {
             let failure = tauri::test::get_ipc_response(
                 &main,
                 request(local_url, command, installer.clone()),
@@ -6801,7 +6824,9 @@ mod tests {
         }
         for (command, body) in [
             ("install_companion", installer.clone()),
-            ("install_companion_from_device", installer),
+            ("install_companion_from_device", installer.clone()),
+            ("rollback_companion", installer),
+            ("check_companion_update", checked.clone()),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
             ("list_hosts", serde_json::json!({})),

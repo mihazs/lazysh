@@ -126,11 +126,51 @@ async fn both_routes_refuse(
         assert_eq!(failure.kind(), kind, "{route:?}");
     }
 }
+/// A companion that follows the `lazysh-agent update` contract of ADR 0003 (flags, NDJSON events, exit codes),
+/// driven by the `outcome` file in the owned assets directory, so the app's CLI route runs over real SSH.
+/// It stands in until the shipped command is on `main`; the contract is the same one the real command's tests pin.
+const CLI: &str = r#"#!/bin/sh
+dir=$ASSETS/cli
+case "$1" in
+  --version) echo "lazysh-agent $(cat "$dir/version")"; exit 0;;
+  update) ;;
+  *) exit 2;;
+esac
+shift
+printf '%s\n' "$*" >> "$dir/argv.log"
+event() { printf '{"schemaVersion":1,"event":"%s",%s}\n' "$1" "$2"; }
+previous=null; [ ! -s "$dir/previous" ] || previous="{\"version\":\"$(cat "$dir/previous")\"}"
+result() { # exit outcome error current
+  printf '{"schemaVersion":1,"event":"result","action":"%s","outcome":"%s","exitCode":%s,"error":%s,"current":{"version":"%s","managed":true},"previous":%s}\n' "$action" "$2" "$1" "$3" "$(cat "$dir/version")" "$previous"
+  exit "$1"
+}
+case "$1" in
+  --status) action=status; result 0 status null;;
+  --rollback)
+    action=rollback
+    event stage '"stage":"replacing"'
+    mv "$dir/previous" "$dir/version"; previous=null
+    result 0 rolledBack null;;
+esac
+action=update
+event stage '"stage":"resolving"'
+[ "$4" != "$(cat "$dir/version")" ] || result 0 upToDate null
+event stage '"stage":"downloading","bytes":1048576,"total":2097152'
+event stage '"stage":"verifying"'
+code=$(cat "$dir/outcome")
+case $code in
+  0) event stage '"stage":"selfTesting"'; event stage '"stage":"replacing"'
+     cp "$dir/version" "$dir/previous"; echo "$4" > "$dir/version"; result 0 updated null;;
+  *) result "$code" failed '{"kind":"x","detail":"digestMismatch","message":"m","retryAfterSeconds":null}';;
+esac
+"#;
 pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str, directory: &Path) {
     let sessions = app.state::<AppState>();
     let session = sessions.session(id).await.unwrap();
     device_fallback(&session, directory).await;
     host_update(&session, directory).await;
+    update_command_route(&session, directory).await;
+    shipped_update_command(&session, directory).await;
 }
 /// A finished device-route install releases its SFTP channel in the background; the next install starts after it.
 async fn settled(session: &Session) {
@@ -638,4 +678,214 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
             }
         }
     }
+}
+
+/// **Check for updates** as the panel receives it, reduced to `(via, installed, state, previous)`.
+async fn checked(
+    owned: &crate::companion::Owned,
+    session: &Arc<Session>,
+) -> (String, Option<String>, String, Option<String>) {
+    let value =
+        serde_json::to_value(owned.check(session.clone(), &access_lease()).await.unwrap()).unwrap();
+    let text = |name: &str| value[name].as_str().map(str::to_owned);
+    (
+        text("via").unwrap(),
+        text("installed"),
+        text("state").unwrap(),
+        text("previous"),
+    )
+}
+/// A companion with `update` is updated, checked and rolled back through its own command; the script is not used.
+async fn update_command_route(session: &Arc<Session>, directory: &Path) {
+    use crate::companion::install::Route;
+    use sha2::Digest;
+    use std::os::unix::fs::PermissionsExt;
+    settled(session).await;
+    let lease = access_lease();
+    let version = env!("CARGO_PKG_VERSION");
+    let managed = directory.join("data/lazysh/companion");
+    let agent = managed.join("lazysh-agent");
+    let cli = directory.join("assets/cli");
+    fs::create_dir_all(&cli).unwrap();
+    let state = |name: &str, text: &str| fs::write(cli.join(name), text).unwrap();
+    let argv = || fs::read_to_string(cli.join("argv.log")).unwrap_or_default();
+    fs::create_dir_all(&managed).unwrap();
+    let _ = fs::remove_file(managed.join("lazysh-agent.previous"));
+    fs::write(&agent, CLI).unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o700)).unwrap();
+    state("version", "1.28.0");
+    state("previous", "");
+    state("outcome", "0");
+    let candidate = owned_agent_binary();
+    let owned = crate::companion::Owned::new(&candidate, version);
+    let calls = curl_calls(directory);
+    assert_eq!(
+        checked(&owned, session).await,
+        (
+            "update".into(),
+            Some("1.28.0".into()),
+            "available".into(),
+            None
+        )
+    );
+
+    // The pin goes to the command, which re-resolves the release itself; the phone and the script do nothing.
+    let updated = serde_json::to_value(
+        owned
+            .install(session.clone(), &lease, Route::Host)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(updated["status"], "installed", "{updated}");
+    assert_eq!(updated["version"], version);
+    let digest = format!("{:x}", sha2::Sha256::digest(fs::read(&candidate).unwrap()));
+    let size = fs::metadata(&candidate).unwrap().len();
+    assert_eq!(
+        argv().lines().last().unwrap(),
+        format!("--json --yes --version {version} --expect-sha256 {digest} --expect-bytes {size}")
+    );
+    assert_eq!(
+        (owned.downloads(), curl_calls(directory)),
+        (0, calls),
+        "no device download and no bootstrap"
+    );
+    assert_eq!(
+        checked(&owned, session).await,
+        (
+            "update".into(),
+            Some(version.into()),
+            "upToDate".into(),
+            Some("1.28.0".into())
+        )
+    );
+    // Up to date is reported by the host and the app still confirms the version itself.
+    let same = serde_json::to_value(
+        owned
+            .install(session.clone(), &lease, Route::Host)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(same["status"], "reused");
+    assert_eq!(
+        fs::read_to_string(cli.join("previous")).unwrap().trim(),
+        "1.28.0"
+    );
+
+    // Roll back to the kept previous companion; a second rollback has nothing to restore.
+    let restored = serde_json::to_value(
+        owned
+            .install(session.clone(), &lease, Route::Rollback)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (restored["status"].as_str(), restored["version"].as_str()),
+        (Some("rolledBack"), Some("1.28.0")),
+        "{restored}"
+    );
+    assert!(argv().lines().any(|line| line == "--rollback --yes --json"));
+    let again = owned
+        .install(session.clone(), &lease, Route::Rollback)
+        .await
+        .unwrap_err();
+    assert_eq!(again.kind(), "companion_no_previous");
+    assert_eq!(
+        argv()
+            .lines()
+            .filter(|line| line.starts_with("--rollback"))
+            .count(),
+        1,
+        "nothing is dispatched without a previous companion"
+    );
+
+    // A refusal the command reports is named, keeps its closed detail and changes nothing; the full table is unit tested.
+    state("version", "1.28.0");
+    for (code, kind) in [
+        (22, "companion_verification_failed"),
+        (24, "companion_self_test_failed"),
+        (1, "companion_installer_invalid"),
+    ] {
+        state("outcome", &code.to_string());
+        let failure = owned
+            .install(session.clone(), &lease, Route::Host)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.kind(), kind, "exit {code}");
+        assert_eq!(failure.detail(), Some("digestMismatch"), "exit {code}");
+        assert_eq!(
+            fs::read_to_string(cli.join("version")).unwrap().trim(),
+            "1.28.0",
+            "exit {code}"
+        );
+    }
+    state("outcome", "29");
+    let uncertain = serde_json::to_value(
+        owned
+            .install(session.clone(), &lease, Route::Host)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(uncertain["status"], "uncertain");
+    // A companion without the command is never asked to roll back.
+    fs::write(
+        &agent,
+        "#!/bin/sh\ncase \"$1\" in --version) echo 'lazysh-agent 1.28.0';; *) exit 2;; esac\n",
+    )
+    .unwrap();
+    assert_eq!(
+        owned
+            .install(session.clone(), &lease, Route::Rollback)
+            .await
+            .unwrap_err()
+            .kind(),
+        "companion_update_unsupported"
+    );
+    assert_eq!(checked(&owned, session).await.0, "bootstrap");
+}
+
+/// The shipped `lazysh-agent update`, when the current-source build has it: the app's probe, check and rollback
+/// refusal run against the real command, not the contract stub. (Its network paths are the command's own tests.)
+async fn shipped_update_command(session: &Arc<Session>, directory: &Path) {
+    use crate::companion::install::Route;
+    use std::os::unix::fs::PermissionsExt;
+    let candidate = owned_agent_binary();
+    let probe = std::process::Command::new(&candidate)
+        .args(["update", "--status", "--json"])
+        .env("LAZYSH_STATE_DIR", directory.join("probe-state"))
+        .output()
+        .unwrap();
+    if !probe.status.success() {
+        eprintln!("the current-source companion has no `update` command yet: the shipped-command checks are skipped");
+        return;
+    }
+    settled(session).await;
+    let lease = access_lease();
+    let agent = directory.join("data/lazysh/companion/lazysh-agent");
+    let _ = fs::remove_file(agent.with_extension("previous"));
+    fs::copy(&candidate, &agent).unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o700)).unwrap();
+    let owned = crate::companion::Owned::new(&candidate, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        checked(&owned, session).await,
+        (
+            "update".into(),
+            Some(env!("CARGO_PKG_VERSION").into()),
+            "upToDate".into(),
+            None
+        )
+    );
+    let refused = owned
+        .install(session.clone(), &lease, Route::Rollback)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.kind(), "companion_no_previous");
+    assert_eq!(
+        fs::read(&agent).unwrap(),
+        fs::read(&candidate).unwrap(),
+        "nothing was replaced"
+    );
 }

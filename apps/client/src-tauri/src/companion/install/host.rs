@@ -17,11 +17,35 @@ struct Line {
     total: Option<u64>,
     outcome: Option<String>,
     exit_code: Option<u32>,
+    action: Option<String>,
     error: Option<Reported>,
+    current: Option<Versioned>,
+    previous: Option<Versioned>,
 }
 #[derive(Deserialize)]
 struct Reported {
     detail: Option<String>,
+}
+#[derive(Deserialize)]
+struct Versioned {
+    version: Option<String>,
+    managed: Option<bool>,
+}
+impl Line {
+    fn current(&self) -> Option<&str> {
+        self.current
+            .as_ref()?
+            .version
+            .as_deref()
+            .filter(|v| release::version(v).is_some())
+    }
+    fn previous(&self) -> Option<&str> {
+        self.previous
+            .as_ref()?
+            .version
+            .as_deref()
+            .filter(|v| release::version(v).is_some())
+    }
 }
 fn parse(line: &str) -> Option<Line> {
     serde_json::from_str::<Line>(line.trim())
@@ -117,6 +141,10 @@ fn failure(code: u32) -> SshError {
             "companion_unsafe_location",
             "The managed companion location on this host is not safe to use",
         ),
+        28 => (
+            "companion_no_previous",
+            "The host has no previous companion to restore",
+        ),
         30 => (
             "companion_host_tool_missing",
             "The host has no curl or GNU wget, or no SHA-256 tool",
@@ -150,7 +178,68 @@ pub(super) fn bootstrap_command(
         ssh::quote(&directory)
     ))
 }
+/// `lazysh-agent update --json --yes --version V --expect-sha256 H --expect-bytes N` through the managed-executable
+/// resolver: the host re-resolves the release itself and refuses (exit 22) anything that differs from the pin.
+fn update_command(unix: &resolve::Unix, selection: &release::Selection) -> Result<String> {
+    if release::version(&selection.version).is_none()
+        || !lazysh_common::valid_sha256(&selection.digest)
+        || selection.bytes == 0
+        || selection.bytes > release::MAX_BINARY
+    {
+        return Err(invalid());
+    }
+    unix.command(&format!(
+        "lazysh-agent update --json --yes --version {} --expect-sha256 {} --expect-bytes {}",
+        selection.version, selection.digest, selection.bytes
+    ))
+}
+/// The result of **Check for updates**: only versions and a closed state, nothing from the host's own text.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checked {
+    schema_version: u8,
+    via: &'static str,
+    installed: Option<String>,
+    previous: Option<String>,
+    latest: String,
+    state: &'static str,
+}
+/// What the host's `update --status --json` reported; absent when the companion has no `update` command.
+pub(super) struct Capability {
+    /// The managed companion's version, when the host reports one.
+    pub managed: Option<String>,
+    pub previous: Option<String>,
+}
 impl Operation {
+    /// Offline and instant: exit 0 with a status result means the companion can update and roll back itself;
+    /// anything else (2 for an unknown subcommand, 126 or 127 for none at all) selects the bootstrap.
+    pub(super) async fn probe(&self, unix: &resolve::Unix) -> Result<Option<Capability>> {
+        let output = ssh::exec_status(
+            &self.session,
+            unix.command("lazysh-agent update --status --json")?,
+            &self.lease,
+            Duration::from_secs(15),
+            16_384,
+            Some(self.flight.clone()),
+            &mut |_| {},
+        )
+        .await?;
+        Ok(last_result(&output.stdout)
+            .filter(|line| {
+                output.status == Some(0)
+                    && line.exit_code == Some(0)
+                    && line.action.as_deref() == Some("status")
+            })
+            .map(|line| Capability {
+                managed: line
+                    .current
+                    .as_ref()
+                    .filter(|current| current.managed == Some(true))
+                    .and(line.current())
+                    .map(str::to_owned),
+                previous: line.previous().map(str::to_owned),
+            }))
+    }
     fn host_stage(&self, phase: &mut Option<Stage>, stage: Stage, counted: Option<(u64, u64)>) {
         *phase = Some(stage);
         if self.lease.check().is_ok() && !*self.session.cancel.borrow() {
@@ -169,19 +258,17 @@ impl Operation {
             Err(error) => Err(error),
         }
     }
-    pub(super) async fn perform_host(
+    /// Runs `script` on the host and streams its progress. `committing` is what the host may now have installed:
+    /// once dispatched the answer can be lost, so the exit status alone settles it. `Ok(None)` is an
+    /// uncertain commit (exit 29); a failure exit is a definite refusal and names no half-installed state.
+    async fn dispatch(
         &self,
         work: &mut Work,
-        publisher: &release::Publisher,
-    ) -> Result<Installed> {
-        let (unix, selection) = self.resolve(work, publisher).await?;
-        reject_newer(&self.installed_version(&unix).await?, &selection.version)?;
-        self.work_stage(&mut work.phase, Stage::Verifying);
-        publisher.recheck(&selection).await?;
-        let script = bootstrap_command(&unix, &selection)?;
-        let destination = unix.managed();
-        // Dispatch may reach the host even if its answer is lost; the exit status below settles it.
-        work.possible_commit = Some((selection.version.clone(), destination.clone()));
+        script: String,
+        total: Option<u64>,
+        committing: (String, String),
+    ) -> Result<Option<Line>> {
+        work.possible_commit = Some(committing);
         let mut lines = Lines::default();
         let phase = &mut work.phase;
         let output = ssh::exec_status(
@@ -202,7 +289,7 @@ impl Operation {
                     let counted = line
                         .bytes
                         .zip(line.total)
-                        .filter(|(bytes, total)| *total == selection.bytes && bytes <= total);
+                        .filter(|(bytes, declared)| Some(*declared) == total && bytes <= declared);
                     self.host_stage(phase, stage, counted);
                 });
             },
@@ -215,50 +302,143 @@ impl Operation {
             )
         })?;
         let reported = last_result(&output.stdout);
-        if code != 0 {
-            // Every non-zero exit but 29 is a definite answer: nothing was committed.
-            work.possible_commit = None;
-            if code == 29 {
-                return Ok(result(
-                    "uncertain",
-                    &selection.version,
-                    &destination,
-                    Some("committedDurabilityUnknown"),
-                ));
+        match code {
+            0 => {}
+            29 => return Ok(None),
+            code => {
+                work.possible_commit = None;
+                work.detail = reported
+                    .and_then(|line| line.error)
+                    .and_then(|reported| reported.detail)
+                    .and_then(|detail| detail_of(&detail));
+                return Err(failure(code));
             }
-            work.detail = reported
-                .and_then(|line| line.error)
-                .and_then(|reported| reported.detail)
-                .and_then(|detail| detail_of(&detail));
-            return Err(failure(code));
         }
-        // A success that does not say what it did may still have installed: that stays uncertain.
-        let reused = match reported {
-            Some(line) if line.exit_code == Some(0) => match line.outcome.as_deref() {
-                Some("updated") => false,
-                Some("upToDate") => true,
-                _ => return Err(invalid()),
-            },
+        // A success that does not say what it did may still have changed the host: that stays uncertain.
+        match reported {
+            Some(line) if line.exit_code == Some(0) => Ok(Some(line)),
+            _ => Err(invalid()),
+        }
+    }
+    /// The app does not trust the host's JSON alone: it asks for the version again through the resolver.
+    async fn confirm(&self, work: &mut Work, unix: &resolve::Unix, expected: &str) -> Result<()> {
+        work.checking_installed = true;
+        self.work_stage(&mut work.phase, Stage::CheckingInstalled);
+        let version = self.installed_version(unix).await?;
+        if version.trim() != format!("lazysh-agent {expected}") {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    pub(super) async fn perform_host(
+        &self,
+        work: &mut Work,
+        publisher: &release::Publisher,
+    ) -> Result<Installed> {
+        let (unix, selection) = self.resolve(work, publisher).await?;
+        reject_newer(&self.installed_version(&unix).await?, &selection.version)?;
+        self.work_stage(&mut work.phase, Stage::Verifying);
+        publisher.recheck(&selection).await?;
+        let destination = unix.managed();
+        // A companion with `update` re-resolves the release itself against the pin; older ones get the script.
+        let script = match self.probe(&unix).await? {
+            // Already the pinned version in the managed location: nothing to fetch, and the host is not asked to.
+            Some(capability)
+                if capability.managed.as_deref() == Some(selection.version.as_str()) =>
+            {
+                self.confirm(work, &unix, &selection.version).await?;
+                return Ok(result("reused", &selection.version, &destination, None));
+            }
+            Some(_) => update_command(&unix, &selection)?,
+            None => bootstrap_command(&unix, &selection)?,
+        };
+        let committing = (selection.version.clone(), destination.clone());
+        let Some(line) = self
+            .dispatch(work, script, Some(selection.bytes), committing)
+            .await?
+        else {
+            return Ok(result(
+                "uncertain",
+                &selection.version,
+                &destination,
+                Some("committedDurabilityUnknown"),
+            ));
+        };
+        let reused = match line.outcome.as_deref() {
+            Some("updated") => false,
+            Some("upToDate") => true,
             _ => return Err(invalid()),
         };
         if reused {
             work.possible_commit = None;
-        } else {
-            work.checking_installed = true;
         }
-        self.work_stage(&mut work.phase, Stage::CheckingInstalled);
-        let version = self
-            .command(unix.command("lazysh-agent --version")?)
-            .await?;
-        if version.trim() != format!("lazysh-agent {}", selection.version) {
-            return Err(invalid());
-        }
+        self.confirm(work, &unix, &selection.version).await?;
         Ok(result(
             if reused { "reused" } else { "installed" },
             &selection.version,
             &destination,
             None,
         ))
+    }
+    /// What is installed, whether it can update itself, and how it compares with the latest release.
+    pub(super) async fn check(&self, publisher: &release::Publisher) -> Result<Checked> {
+        let mut work = Work::default();
+        let (unix, latest) = self.resolve(&mut work, publisher).await?;
+        let installed = self.installed_version(&unix).await?;
+        let capability = self.probe(&unix).await?;
+        let current = installed
+            .trim()
+            .strip_prefix("lazysh-agent ")
+            .filter(|version| release::version(version).is_some())
+            .map(str::to_owned);
+        let state = match current.as_deref().and_then(release::version) {
+            None => "notInstalled",
+            Some(have) if Some(have) > release::version(&latest.version) => "newer",
+            Some(have) if Some(have) == release::version(&latest.version) => "upToDate",
+            Some(_) => "available",
+        };
+        Ok(Checked {
+            schema_version: 1,
+            via: if capability.is_some() {
+                "update"
+            } else {
+                "bootstrap"
+            },
+            installed: current,
+            previous: capability.and_then(|capability| capability.previous),
+            latest: latest.version,
+            state,
+        })
+    }
+    /// Restores the kept previous companion through the host's own `update --rollback`.
+    pub(super) async fn perform_rollback(&self, work: &mut Work) -> Result<Installed> {
+        let unix = self.detect(work).await?;
+        let Some(capability) = self.probe(&unix).await? else {
+            return Err(error(
+                "companion_update_unsupported",
+                "This companion cannot roll itself back; update it first",
+            ));
+        };
+        let Some(previous) = capability.previous else {
+            return Err(failure(28));
+        };
+        let script = unix.command("lazysh-agent update --rollback --yes --json")?;
+        let destination = unix.managed();
+        let committing = (previous.clone(), destination.clone());
+        let Some(line) = self.dispatch(work, script, None, committing).await? else {
+            return Ok(result(
+                "uncertain",
+                &previous,
+                &destination,
+                Some("committedDurabilityUnknown"),
+            ));
+        };
+        let restored = match (line.outcome.as_deref(), line.current()) {
+            (Some("rolledBack"), Some(version)) if version == previous => version.to_owned(),
+            _ => return Err(invalid()),
+        };
+        self.confirm(work, &unix, &restored).await?;
+        Ok(result("rolledBack", &restored, &destination, None))
     }
 }
 #[cfg(test)]
@@ -367,6 +547,47 @@ mod tests {
             b"{\"schemaVersion\":1,\"event\":\"stage\",\"stage\":\"verifying\"}\n"
         )
         .is_none());
+    }
+    #[tokio::test]
+    async fn only_a_status_result_with_exit_zero_selects_the_update_command() {
+        let access = ssh::test_support::unlocked_access();
+        let lease = ssh::test_support::ready_lease(&access);
+        let fixture = ssh::guard_admission_fixture(lease.clone()).await;
+        let operation = Operation::start(
+            Route::Host,
+            fixture.session.clone(),
+            &lease,
+            Channel::new(|_| Ok(())),
+            5,
+        )
+        .unwrap();
+        let host = unix("/home/owned/.local/share");
+        let status = |code: u32, action: &str, previous: &str| {
+            format!("{{\"schemaVersion\":1,\"event\":\"result\",\"action\":\"{action}\",\"outcome\":\"status\",\"exitCode\":{code},\"current\":{{\"version\":\"1.55.0\",\"managed\":true}},\"previous\":{previous},\"later\":true}}\n")
+        };
+        let kept = r#"{"version":"1.54.1"}"#;
+        for (stdout, exit, expected) in [
+            (status(0, "status", kept), 0, Some(Some("1.54.1"))),
+            (status(0, "status", "null"), 0, Some(None)),
+            // An older companion: usage error and nothing on stdout; or missing, or not executable.
+            (String::new(), 2, None),
+            (String::new(), 127, None),
+            (String::new(), 126, None),
+            // Exit zero with something that is not a status result: a shell banner, another action.
+            ("welcome\n".into(), 0, None),
+            (status(0, "check", kept), 0, None),
+            // A result that disagrees with its own exit status, or a status of a failing command.
+            (status(1, "status", kept), 0, None),
+            (status(0, "status", kept), 1, None),
+        ] {
+            fixture.script_exec(&stdout, exit);
+            let capability = operation.probe(&host).await.unwrap();
+            assert_eq!(
+                capability.map(|capability| capability.previous),
+                expected.map(|previous| previous.map(str::to_owned)),
+                "{stdout:?} exit {exit}"
+            );
+        }
     }
     /// Runs the embedded script exactly as the login shell would receive it, with `curl` replaced by a copy
     /// from the owned directory, so the quoting of the script and the output contract are the real ones.

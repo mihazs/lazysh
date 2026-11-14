@@ -874,7 +874,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::rollback_companion, crate::companion::check_companion_update, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -916,6 +916,13 @@ mod tests {
             let mut fallback = request(nonce);
             fallback.cmd = "install_companion_from_device".into();
             fallback.body = installer.body.clone();
+            let mut rollback = request(nonce);
+            rollback.cmd = "rollback_companion".into();
+            rollback.body = installer.body.clone();
+            let mut check = request(nonce);
+            check.cmd = "check_companion_update".into();
+            check.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
             let mut hooks = request(nonce);
             hooks.cmd = "companion_hooks".into();
             hooks.body = tauri::ipc::InvokeBody::Json(
@@ -925,7 +932,9 @@ mod tests {
             discovery.cmd = "companion_hook_discovery".into();
             discovery.body =
                 tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
-            [read, update, installer, fallback, hooks, discovery]
+            [
+                read, update, installer, fallback, rollback, check, hooks, discovery,
+            ]
         };
         let rejected = |nonce: Option<&str>| {
             for request in protected_requests(nonce) {
@@ -938,7 +947,8 @@ mod tests {
         };
         let admitted = |nonce: &str| {
             for request in protected_requests(Some(nonce)) {
-                let installer = request.cmd.starts_with("install_companion");
+                let installer = request.cmd.starts_with("install_companion")
+                    || request.cmd == "rollback_companion";
                 let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
                 if installer {
                     assert!(error.get("phase").is_some_and(serde_json::Value::is_null));
