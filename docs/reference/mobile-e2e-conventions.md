@@ -150,7 +150,7 @@ the device layer only if no lower layer can.
 | Rule | Value |
 | --- | --- |
 | Marker | `@flaky` in the `describe` title plus a linked issue in the title comment |
-| Run | excluded from the gating run (`--mochaOpts.grep @flaky --mochaOpts.invert`); run by the non-gating quarantine run (`--mochaOpts.grep @flaky`) |
+| Run | excluded from the gating run (`LAZYSH_E2E_FLAKY=exclude`, Mocha `grep: '@flaky'` inverted); run by the non-gating quarantine job (`LAZYSH_E2E_FLAKY=only`) |
 | Cap | five tests at once |
 | Age | 14 days, then fix, rewrite at a lower layer or delete with a note in the regression index |
 | Detection | a spec that passes only on its CI retry is listed in the job summary; open or update the issue the same day |
@@ -159,12 +159,13 @@ the device layer only if no lower layer can.
 
 | Item | Value |
 | --- | --- |
-| Trigger | `.github/scripts/native-changes.sh` adds an `android_appium` output for client, Android, `mobile-e2e` and shared fixture paths |
-| Runner | the `mihazs/lazysh-android-emulator-runner` API 36 x86_64 setup used by `native-android-runtime` |
-| Tiers | pull request: `smoke` and `regression`; `main` and nightly: plus `journeys` and the quarantine run |
-| Sharding | `wdio run --shard x/y`, a matrix of jobs (one emulator each), added when wall time passes 25 minutes |
+| Trigger | `.github/scripts/native-changes.sh` sets `android_appium` for client, Android, agent, Herdr, `mobile-e2e` and shared fixture paths, and `android_appium_quarantine` on `main` and the nightly while a spec carries `@flaky` |
+| Runner | the `mihazs/lazysh-android-emulator-runner` API 36 x86_64 setup used by `native-android-runtime`, same caches; job `native-android-appium`, 38 minute timeout |
+| Tiers | pull request: `smoke` and `regression`; `main` and the nightly: plus `journeys`, and the quarantine job (`LAZYSH_E2E_TIERS`, `LAZYSH_E2E_FLAKY`) |
+| Retries | `specFileRetries: 1` when `CI` is set, Mocha `retries: 0`; a spec file that passes only on its retry is listed in the job summary |
+| Sharding | `wdio run --shard x/y` (`LAZYSH_E2E_SHARD`), a matrix of jobs (one emulator each), wired for `1/1` and widened when wall time passes 25 minutes |
 | Artifacts | `reports/junit/` and `reports/artifacts/` upload on every run |
-| Gating | report-only first; required after 20 consecutive green runs on `main` (a maintainer sets the ruleset) |
+| Gating | report-only first; required after 20 consecutive concluded green runs on `main` (a maintainer sets the ruleset); procedure in [Android instrumentation](../android-testing.md#promotion-to-a-required-check) |
 
 ## Sources
 

@@ -76,7 +76,9 @@ classify() {
   esac
 }
 
-if [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
+if [ "${EVENT-}" = schedule ]; then
+  add nightly # only the device suite: main's push run is the parity evidence for everything else.
+elif [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
   add all
 elif ! start=$(git merge-base "$BASE" "$HEAD" 2>/dev/null) ||
   ! files=$(git diff --name-only --no-renames "$start" "$HEAD" 2>/dev/null) || [ -z "$files" ]; then
@@ -92,9 +94,14 @@ linux=$(flag any client agent herdr)
 linux_runtimes=$(flag any client herdr relay)
 android_runtime=$(flag any client android agent herdr)
 android_herdr=$(flag any herdr android agent)
+# The Appium suite drives the packaged app against owned SSH and stock Herdr hosts with the real companion.
+android_appium=$(flag any client android agent herdr nightly)
+# Quarantined (@flaky) specs run in their own non-gating job, never on a pull request, and only when one exists.
+quarantine=false
+if [ "${EVENT-}" != pull_request ] && [ "$android_appium" = true ] && grep -rqs --include='*.e2e.ts' '@flaky' apps/client/mobile-e2e/specs; then quarantine=true; fi
 # herdr-native produces the same-run binaries these consumers verify, so it runs for any of them.
 herdr=$(flag any herdr terminal_runtime)
-case "$linux$linux_runtimes$android_runtime$android_herdr" in *true*) herdr=true ;; esac
+case "$linux$linux_runtimes$android_runtime$android_herdr$android_appium" in *true*) herdr=true ;; esac
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
 native=false
@@ -108,6 +115,8 @@ for output in \
   "android_runtime=$android_runtime" \
   "android_mosh=$(flag has mosh)" \
   "android_herdr=$android_herdr" \
+  "android_appium=$android_appium" \
+  "android_appium_quarantine=$quarantine" \
   "android_auxiliary=$(flag any android agent push)" \
   "android_ntfy=$(flag any android push)" \
   "ios=$(flag has ios)"; do

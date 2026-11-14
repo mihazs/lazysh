@@ -70,6 +70,13 @@ tasks:
     command: bun run mobile-e2e
     deps: [~:setup-mobile-e2e, ~:check-mobile-e2e, ~:lint-mobile-e2e, ~:test-mobile-e2e-unit]
     options: {cache: false, runInCI: false}
+  # The emulator job's run (checks.yml native-android-appium): it builds the APK itself, before the emulator boots, and the
+  # client job already ran the static checks, so only the driver setup is a dependency.
+  test-mobile-e2e-ci:
+    type: test
+    command: bun run mobile-e2e
+    deps: [~:setup-mobile-e2e]
+    options: {cache: false, runInCI: false}
   build-native:
     type: build
     command: tauri build --no-bundle

@@ -77,14 +77,19 @@ skip the gate and run every job with the full matrix, which is the parity eviden
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
 | Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |
-| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android tmux |
-| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
-| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google) |
+| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android tmux, Appium suite |
+| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
+| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
-| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime and Herdr navigation consumers |
+| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers |
 | Terminal runtime: `packages/terminal-runtime/**` | Herdr only: its tests run in that job against the same libghostty-vt build |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
+
+The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its
+`journeys` tier) and in a nightly `checks` run that starts only that job, and it is not a required check until it has passed 20
+consecutive concluded runs on `main` ([promotion rule](docs/android-testing.md#promotion-to-a-required-check)). A `@flaky` Appium spec runs in the
+separate, never-gating `native-android-appium-quarantine` job.
 
 Matrices fail fast on pull requests and keep every verdict on `main`. The script and
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a

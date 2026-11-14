@@ -11,20 +11,21 @@ afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
 const jobOutputs = ['companion', 'herdr', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
-  'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios'];
-const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])),
+  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios'];
+// The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
+const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
-const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])),
+const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false',
   ntfy_variants: '["google"]', native: 'false' };
 
 /** Commit `paths` (and `moves` of seeded files) over a base commit and classify the range as checks.yml does. */
-async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][] } = {}) {
+async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string> } = {}) {
   const { root, env } = await roots.create();
   Object.assign(env, { GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' });
   const repo = join(root, 'repo');
   const write = async (path: string) => {
     await mkdir(dirname(join(repo, path)), { recursive: true });
-    await writeFile(join(repo, path), `change ${path}`);
+    await writeFile(join(repo, path), contents[path] ?? `change ${path}`);
   };
   await mkdir(repo);
   const git = (...args: string[]) => run(repo, ['git', ...args], env);
@@ -53,7 +54,7 @@ function parse(stdout: string): Outputs {
 }
 
 /** Evaluate checks.yml's job conditions and matrices against classifier outputs; returns job → runner count. */
-async function runningJobs(outputs: Outputs) {
+async function runningJobs(outputs: Outputs, event = 'push') {
   const binaries = (await workflow('companion-artifacts.yml')).jobs.binary.strategy.matrix.include.length;
   const jobs: Record<string, number> = {};
   for (const [id, job] of Object.entries<any>(checks.jobs)) {
@@ -62,7 +63,11 @@ async function runningJobs(outputs: Outputs) {
       expect(output, id).toBeDefined();
       expect(outputs[output!], id).toMatch(/^(true|false)$/);
       if (outputs[output!] !== 'true') continue;
-    } else expect(job.if, id).toBeUndefined();
+    } else {
+      // `changes` classifies every event; client and agent always run, except the nightly, which is the device suite alone.
+      expect(job.if, id).toBe(id === 'changes' ? undefined : neverNightly);
+      if (event === 'schedule' && id !== 'changes') continue;
+    }
     let count = job.uses === './.github/workflows/companion-artifacts.yml' ? binaries : 1;
     for (const [key, values] of Object.entries<any>(job.strategy?.matrix ?? {})) {
       expect(key, id).not.toMatch(/^(include|exclude)$/);
@@ -75,17 +80,18 @@ async function runningJobs(outputs: Outputs) {
   return jobs;
 }
 
+const neverNightly = "github.event_name != 'schedule'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
 const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
-  'native-android-biometric': 1 };
+  'native-android-biometric': 1, 'native-android-appium': 1 };
 const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-desktop': 2,
-  'native-android': 1, 'native-android-runtime': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1 };
+  'native-android': 1, 'native-android-runtime': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const agentRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
-  'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1 };
+  'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-appium': 1 };
 const androidRun = { ...alwaysRun, 'herdr-native': 1, 'native-android': 1, 'native-android-runtime': 1,
-  'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1 };
+  'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const iosRun = { ...alwaysRun, 'native-ios-simulator': 1 };
 
 test.each([
@@ -144,10 +150,12 @@ test.each([
   ['Android project', ['apps/client/src-tauri/gen/android/app/build.gradle.kts'], androidRun],
   ['an Android plugin source set', ['packages/credential-vault/android/src/main/kotlin/Vault.kt'], androidRun],
   ['an Android emulator test', ['tests/android-qr.test.ts'], androidRun],
+  ['an Appium spec', ['apps/client/mobile-e2e/specs/smoke/launch.e2e.ts'], clientRun],
+  ['the owned SSH fixture the Appium suite reuses', ['tests/support/sshFixture.ts'], { ...clientRun, ...androidRun }],
   ['iOS project', ['apps/client/src-tauri/apple/project.yml.hbs'], iosRun],
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
   ['Herdr', ['packages/herdr-guard/client.rs'], { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1,
-    'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1 }],
+    'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-appium': 1 }],
   ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1 }],
   ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
@@ -164,6 +172,26 @@ test.each([
   expect(outputs.docs_only).toBe('false');
   expect(outputs.native).toBe(Object.keys(expected).length > 3 ? 'true' : 'false');
   expect(await runningJobs(outputs)).toEqual(expected);
+});
+
+test('the nightly runs the Appium suite and the Herdr it needs, and nothing else', async () => {
+  const outputs = await classify([], { event: 'schedule' });
+  expect(outputs).toEqual({ ...nothing, herdr: 'true', android_appium: 'true', native: 'true', docs_only: 'false' });
+  expect(await runningJobs(outputs, 'schedule')).toEqual({ changes: 1, 'herdr-native': 1, 'native-android-appium': 1 });
+});
+
+test('quarantined Appium specs get their own job on main and the nightly, never on a pull request or without a tagged spec', async () => {
+  const spec = 'apps/client/mobile-e2e/specs/regression/scroll/1402-swipe.e2e.ts';
+  const quarantined = { [spec]: "describe('Swipe @flaky', () => {});" };
+  for (const event of ['push', 'schedule']) {
+    const outputs = await classify([spec], { event, contents: quarantined });
+    expect(outputs.android_appium_quarantine, event).toBe('true');
+    expect(await runningJobs(outputs, event)).toHaveProperty('native-android-appium-quarantine', 1);
+  }
+  expect((await classify([spec], { event: 'pull_request', contents: quarantined })).android_appium_quarantine).toBe('false');
+  expect((await classify([spec], { event: 'push' })).android_appium_quarantine).toBe('false');
+  // Only a spec file counts: the tag in a document is just a word.
+  expect((await classify(['docs/regression-tests.md'], { event: 'push', contents: { 'docs/regression-tests.md': '@flaky' } })).android_appium_quarantine).toBe('false');
 });
 
 test('renaming a source file into documentation still selects the source jobs', async () => {
@@ -202,8 +230,11 @@ test('superseded runs cancel only where no publication or caller can be interrup
   const owner = { group: '${{ github.workflow }}-${{ github.ref }}', 'cancel-in-progress': true };
   for (const name of ['conventional-commits.yml', 'fdroid.yml']) expect((await workflow(name)).concurrency).toEqual(owner);
   // checks and version cancel only superseded pull request runs; a main run always completes, so native
-  // verification finishes and the version PR is regenerated even while main keeps moving.
-  for (const config of [checks, await workflow('version.yml')]) expect(config.concurrency).toEqual({ ...owner, 'cancel-in-progress': "${{ github.event_name == 'pull_request' }}" });
+  // verification finishes and the version PR is regenerated even while main keeps moving. The nightly device run has its
+  // own group, so it can neither displace a pending main run nor be displaced by one.
+  const supersededPullRequestsOnly = { 'cancel-in-progress': "${{ github.event_name == 'pull_request' }}" };
+  expect((await workflow('version.yml')).concurrency).toEqual({ ...owner, ...supersededPullRequestsOnly });
+  expect(checks.concurrency).toEqual({ group: "${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}", ...supersededPullRequestsOnly });
   // Reusable workflows inherit the caller's group; their own group could cancel or deadlock the caller.
   for (const name of ['companion-artifacts.yml', 'release-artifacts.yml']) expect((await workflow(name)).concurrency).toBeUndefined();
   // A new main push never aborts an in-flight verified tag publication.
