@@ -264,16 +264,31 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 | Situation | Agent view shows |
 | --- | --- |
-| No agent detected in the pane (tmux) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer; the last-reported list when other panes have agents. |
+| No agent detected in the pane (tmux, Zellij or a plain shell) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer, and **Start in a folder** (see [Starting an agent from the empty state](#starting-an-agent-from-the-empty-state)); the last-reported list when other panes have agents. |
 | Herdr: the focused pane runs an agent with one reported conversation | That conversation, opened by itself and re-linked when focus or the agent changes. |
 | Herdr: the focused pane runs no agent, others do | The live agents of the server, with the reason; a pick is marked **Not this pane** and dropped when focus moves. |
-| Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher) and **Show terminal**. |
+| Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher), **Start in a new worktree** and **Show terminal**. Without the launcher (a host companion that predates it), **Start in a folder** replaces the last two launcher buttons. |
 | Agent detected, no adapter (records-only or hook-only) | Records or hook state, labelled as partial, with **Show terminal**. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
 | Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
 | Zellij 0.45.1 or newer, the agent's pane named by its own hook report | One report of the attached session binds by itself; with several, the list asks which, and the pick takes input to its own pane. See [Zellij input](#zellij-input). |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
+
+### Starting an agent from the empty state
+
+- **Start in a new worktree** (Herdr, when no agent runs and a workspace reported a pane directory):
+  opens the Herdr **New worktree from …** dialog for the focused workspace (the first workspace that
+  reported a directory when the focused one has none) with **Start an agent in it?** already set to
+  yes. It shows the exact commands for review before anything runs; once created, the Agent view
+  focuses the new workspace and links to its agent as soon as Herdr reports the session. See
+  [Herdr spaces](multiplexers.md#create-workspaces-worktrees-and-agents) for the dialog's branch, base and path rules.
+- **Start in a folder** (tmux, Zellij, plain shells, and Herdr without the launcher): choose Claude
+  Code or Codex and a host folder (typed, a known folder, or browsed over SFTP). The review step shows
+  the exact command, `cd '<folder>' && claude` or `… && codex` with the folder shell-quoted, and
+  **Stage in the terminal** puts it in the terminal composer and shows the terminal. Nothing runs
+  until you send it there; no multiplexer window or pane is created, so this starts the agent in the
+  pane you are in.
 
 ## Per-agent capabilities
 

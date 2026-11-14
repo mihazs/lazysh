@@ -3,7 +3,9 @@ import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
-import {HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
+import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
+import AgentStartFolder from './AgentStartFolder';
+import {knownDirectories} from './herdrCreate';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
@@ -231,6 +233,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     setPicked(herdrSelection(live,server,{focusKey:lastFocus.current,enter:{server,target:{kind:'pane',workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id}}}));
   };
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;
+  const focusCreated=(workspace:string)=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined);
+  const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={knownDirectories(navigation.data?.snapshot,sessions.map(session=>session.project))} disabled={!shown} onStaged={onShowTerminal}/>;
   // One compact row: what the chat belongs to and its state. Everything else waits behind the options button.
   const enter=selected?.enter && onEnterHerdr;
   const unlinked=!!herdrSession && !!selected && !selected.linked && !selected.history;
@@ -281,7 +285,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
-        {binding.kind === 'none' && <StartButtons sessionId={sessionId}/>}
+        {binding.kind === 'none' && <><StartButtons sessionId={sessionId}/>{startFolder}</>}
       </div>
     </div>}
     {!selected && !herdrSession && (!reader || choosing) && access.current() && sessions.length>0 && <section className="agent-view-picker" aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>
@@ -294,8 +298,10 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       <div className="button-row">
         <StartButtons sessionId={sessionId}/>
         {viewFolder && !history && <button type="button" onClick={()=>setHistory(viewFolder)}>{t('agentHistoryOpen')}</button>}
-        {herdrLaunch ? <HerdrWorkspaceCreate sessionId={sessionId} server={navigation.data.server} lease={navigation.lease} tree={navigation.data.snapshot} disabled={!shown} label={t('agentViewStartAgent')} agentFirst
-          onCreated={workspace=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined)}/> : null}
+        {herdrLaunch ? <>
+          <HerdrWorkspaceCreate sessionId={sessionId} server={navigation.data.server} lease={navigation.lease} tree={navigation.data.snapshot} disabled={!shown} label={t('agentViewStartAgent')} agentFirst onCreated={focusCreated}/>
+          {navigation.data.snapshot && <HerdrWorktreeCreate sessionId={sessionId} server={navigation.data.server} lease={navigation.lease} tree={navigation.data.snapshot} disabled={!shown} label={t('agentViewStartWorktree')} onCreated={focusCreated}/>}
+        </> : startFolder}
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
       </div>
     </section>}
