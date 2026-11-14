@@ -267,6 +267,8 @@ fn main() {
         "update_host_browser_settings",
         "get_notification_policy",
         "update_notification_policy",
+        "get_host_features",
+        "update_host_features",
         "agent_transcript",
         "agent_usage",
         "account_usage",

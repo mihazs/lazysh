@@ -77,6 +77,7 @@ it.each([
   const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
   try {
     vi.mocked(invoke).mockImplementation(async command=>{
+      if(command==='get_host_features')return null;
       if(command===scenario.command){if('raw' in scenario)throw {name:'LocalUiError',key:'previewInvalidList',message:scenario.raw};return scenario.reply;}
       return [previewFixture];
     });
