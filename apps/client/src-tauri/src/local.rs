@@ -358,6 +358,10 @@ mod desktop {
         retiring: Mutex<HashMap<String, Arc<Session>>>,
         slots: Arc<Semaphore>,
         stopped: AtomicBool,
+        /// Variables every host-tool command of a test session receives, so a test can
+        /// keep real multiplexers away from the user's own state.
+        #[cfg(test)]
+        test_env: Mutex<Vec<(String, String)>>,
     }
     impl Inner {
         fn with_sessions<T>(
@@ -423,6 +427,8 @@ mod desktop {
                 retiring: Mutex::new(HashMap::new()),
                 slots: Arc::new(Semaphore::new(SESSION_LIMIT as usize)),
                 stopped: AtomicBool::new(false),
+                #[cfg(test)]
+                test_env: Mutex::new(Vec::new()),
             }))
         }
     }
@@ -460,6 +466,14 @@ mod desktop {
         #[cfg(test)]
         pub(super) fn available_slots(&self) -> usize {
             self.0.slots.available_permits()
+        }
+        #[cfg(test)]
+        pub(crate) fn set_test_env(&self, env: Vec<(String, String)>) {
+            *self.0.test_env.lock().unwrap() = env;
+        }
+        #[cfg(test)]
+        pub(crate) fn test_env(&self) -> Vec<(String, String)> {
+            self.0.test_env.lock().unwrap().clone()
         }
         pub(super) fn clone_inner(&self) -> Arc<Inner> {
             self.0.clone()

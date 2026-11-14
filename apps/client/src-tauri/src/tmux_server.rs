@@ -1,5 +1,8 @@
 //! Public tmux named-socket selection, never an arbitrary socket path.
-use crate::ssh::{quote, Result, Session, SshError};
+use crate::{
+    host::{Cmd, Host},
+    ssh::{quote, Result, Session, SshError},
+};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TmuxServer {
     #[default]
@@ -15,12 +18,28 @@ impl TmuxServer {
             _ => Err(SshError::new("invalid_tmux_server", "tmux server names must be 1–64 UTF-8 bytes without slash/control characters, and not . or ..")),
         }
     }
-    pub(crate) fn prefix(&self) -> String {
-        let name = match self {
+    fn name(&self) -> &str {
+        match self {
             Self::Default => "default",
             Self::Named(name) => name,
-        };
-        format!("tmux -u -L {}", quote(name))
+        }
+    }
+    pub(crate) fn prefix(&self) -> String {
+        format!("tmux -u -L {}", quote(self.name()))
+    }
+    /// `tmux -u -L <server> <args>` as argv, for a local host to run and a remote one to quote.
+    pub(crate) fn cmd(&self, args: &[&str]) -> Cmd {
+        let mut argv = vec!["tmux", "-u", "-L", self.name()];
+        argv.extend_from_slice(args);
+        Cmd::new(&[], &argv)
+    }
+    /// The server this host's terminal is attached to, else the requested one.
+    pub(crate) fn for_host(host: &Host, requested: Option<&str>) -> Result<Self> {
+        match host {
+            Host::Remote(session) => Self::for_session(session, requested),
+            #[cfg(desktop)]
+            Host::Local(_) => Self::parse(requested),
+        }
     }
     pub(crate) fn for_session(session: &Session, requested: Option<&str>) -> Result<Self> {
         let attached = session

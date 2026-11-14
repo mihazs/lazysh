@@ -1,4 +1,6 @@
 use crate::app_lock::AccessLease;
+use crate::host::{Cmd, Host};
+use crate::local::LocalState;
 use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -14,12 +16,16 @@ pub enum MultiplexerKind {
 pub struct PersistentSession {
     name: String,
 }
-pub(crate) fn tmux_arg(value: &str) -> String {
-    // tmux parses a trailing semicolon again after the remote shell has parsed argv.
+/// One tmux argument word. tmux parses a trailing semicolon again after the shell, or the
+/// process launcher, has split argv.
+fn tmux_word(value: &str) -> String {
     match value.strip_suffix(';') {
-        Some(prefix) => quote(&format!("{prefix}\\;")),
-        None => quote(value),
+        Some(prefix) => format!("{prefix}\\;"),
+        None => value.to_owned(),
     }
+}
+pub(crate) fn tmux_arg(value: &str) -> String {
+    quote(&tmux_word(value))
 }
 
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {
@@ -118,13 +124,14 @@ impl Entry {
                 tmux_arg(&format!("={}", self.name))
             );
             if self.create_if_missing {
-                let create = action_command_for(
+                let create = action_cmd(
                     &TmuxAction::CreateSession {
                         name: self.name.clone(),
                         directory: ".".into(),
                     },
                     &server,
-                )?;
+                )?
+                .render();
                 command.push_str(&format!(
                     " && ({exists} || {{ {create} >/dev/null 2>&1; {exists}; }})"
                 ));
@@ -259,16 +266,22 @@ fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<Persis
 #[tauri::command]
 pub async fn multiplexer_sessions(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     kind: MultiplexerKind,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<Vec<PersistentSession>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let command = match kind {
-                MultiplexerKind::Herdr => "herdr session list --json",
-                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let cmd = match kind {
+                MultiplexerKind::Herdr => {
+                    Cmd::new(&[], &["herdr", "session", "list", "--json"]).herdr()
+                }
+                MultiplexerKind::Zellij => Cmd::new(
+                    &[],
+                    &["zellij", "list-sessions", "--short", "--no-formatting"],
+                ),
                 MultiplexerKind::Tmux => {
                     return Err(SshError::new(
                         "invalid_target",
@@ -276,24 +289,7 @@ pub async fn multiplexer_sessions(
                     ))
                 }
             };
-            let positive_unix = if matches!(kind, MultiplexerKind::Herdr) {
-                crate::herdr_path::admit(&session, &access).await?
-            } else {
-                false
-            };
-            persistent_sessions(
-                kind,
-                &crate::ssh::exec_for_access(
-                    &session,
-                    if matches!(kind, MultiplexerKind::Herdr) && positive_unix {
-                        crate::herdr_path::with_path(command)
-                    } else {
-                        command.into()
-                    },
-                    &access,
-                )
-                .await?,
-            )
+            persistent_sessions(kind, &host.run(&access, &cmd).await?)
         })
         .await
 }
@@ -598,24 +594,32 @@ pub enum TmuxAction {
 }
 #[cfg(test)]
 fn action_command(action: &TmuxAction) -> Result<String> {
-    action_command_for(action, &crate::tmux_server::TmuxServer::Default)
+    Ok(action_cmd(action, &crate::tmux_server::TmuxServer::Default)?.render())
 }
-pub(crate) fn action_command_for(
+pub(crate) fn action_cmd(
     action: &TmuxAction,
     server: &crate::tmux_server::TmuxServer,
-) -> Result<String> {
-    let quote = |value: &str| tmux_arg(&value.replace('#', "##"));
+) -> Result<Cmd> {
+    // tmux expands `#` in names and directories as a format, so a literal one is doubled.
+    let word = |value: &str| tmux_word(&value.replace('#', "##"));
     let directory = |value: &str| -> Result<String> {
         text(value, 4096)?;
-        Ok(quote(value))
+        Ok(word(value))
     };
-    let command = match action {
+    let args: Vec<String> = match action {
         TmuxAction::CreateSession {
             name: value,
             directory: path,
         } => {
             name(value)?;
-            format!("new-session -d -s {} -c {}", quote(value), directory(path)?)
+            vec![
+                "new-session".into(),
+                "-d".into(),
+                "-s".into(),
+                word(value),
+                "-c".into(),
+                directory(path)?,
+            ]
         }
         TmuxAction::RenameSession {
             target,
@@ -623,7 +627,12 @@ pub(crate) fn action_command_for(
         } => {
             id(target, '$')?;
             name(value)?;
-            format!("rename-session -t {} {}", quote(target), quote(value))
+            vec![
+                "rename-session".into(),
+                "-t".into(),
+                word(target),
+                word(value),
+            ]
         }
         TmuxAction::CreateWindow {
             target,
@@ -632,12 +641,16 @@ pub(crate) fn action_command_for(
         } => {
             id(target, '$')?;
             text(value, 200)?;
-            format!(
-                "new-window -d -t {} -n {} -c {}",
-                quote(target),
-                quote(value),
-                directory(path)?
-            )
+            vec![
+                "new-window".into(),
+                "-d".into(),
+                "-t".into(),
+                word(target),
+                "-n".into(),
+                word(value),
+                "-c".into(),
+                directory(path)?,
+            ]
         }
         TmuxAction::RenameWindow {
             target,
@@ -645,15 +658,20 @@ pub(crate) fn action_command_for(
         } => {
             id(target, '@')?;
             text(value, 200)?;
-            format!("rename-window -t {} {}", quote(target), quote(value))
+            vec![
+                "rename-window".into(),
+                "-t".into(),
+                word(target),
+                word(value),
+            ]
         }
         TmuxAction::SelectWindow { target } => {
             id(target, '@')?;
-            format!("select-window -t {}", quote(target))
+            vec!["select-window".into(), "-t".into(), word(target)]
         }
         TmuxAction::SelectPane { target } => {
             id(target, '%')?;
-            format!("select-pane -t {}", quote(target))
+            vec!["select-pane".into(), "-t".into(), word(target)]
         }
         TmuxAction::SplitPane {
             target,
@@ -661,60 +679,122 @@ pub(crate) fn action_command_for(
             directory: path,
         } => {
             id(target, '%')?;
-            format!(
-                "split-window -d {} -t {} -c {}",
-                if *horizontal { "-h" } else { "-v" },
-                quote(target),
-                directory(path)?
-            )
+            vec![
+                "split-window".into(),
+                "-d".into(),
+                if *horizontal { "-h" } else { "-v" }.into(),
+                "-t".into(),
+                word(target),
+                "-c".into(),
+                directory(path)?,
+            ]
         }
         TmuxAction::ZoomPane { target } => {
             id(target, '%')?;
-            format!("resize-pane -Z -t {}", quote(target))
+            vec!["resize-pane".into(), "-Z".into(), "-t".into(), word(target)]
         }
     };
-    Ok(format!("{} {command}", server.prefix()))
+    Ok(server.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()))
+}
+
+/// What a local host runs where the remote one runs `discovery_command`: the same output
+/// lines, from PATH lookups and argv instead of a shell script.
+#[cfg(desktop)]
+async fn local_discovery(
+    host: &Host,
+    access: &AccessLease,
+    server: &crate::tmux_server::TmuxServer,
+) -> Result<String> {
+    // A failed command means "no": the tool is absent, or tmux has no server. Anything else
+    // (a closed session, a revoked lease, a timeout) ends the discovery.
+    async fn ran(host: &Host, access: &AccessLease, cmd: &Cmd) -> Result<Option<String>> {
+        match host.run(access, cmd).await {
+            Ok(output) => Ok(Some(output)),
+            Err(error) if error.kind() == "remote_command_failed" => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    let mut output = String::new();
+    let mut tmux = false;
+    for (tool, flag) in [
+        ("tmux", "-V"),
+        ("herdr", "--version"),
+        ("zellij", "--version"),
+    ] {
+        // No native Windows tmux exists; it is reached through a WSL target.
+        if (cfg!(windows) && tool == "tmux") || !crate::host::local_program(tool).await {
+            output.push_str(&format!("{tool}\t0\n"));
+            continue;
+        }
+        tmux |= tool == "tmux";
+        let probe = Cmd::new(&[], &[tool, flag]);
+        let probe = if tool == "herdr" {
+            probe.herdr()
+        } else {
+            probe
+        };
+        let version = ran(host, access, &probe).await?.unwrap_or_default();
+        output.push_str(&format!(
+            "{tool}\t1\t{}\n",
+            version.lines().next().unwrap_or_default()
+        ));
+    }
+    if tmux
+        && ran(host, access, &server.cmd(&["has-session"]))
+            .await?
+            .is_some()
+    {
+        let panes = server.cmd(&["list-panes", "-a", "-F", PANE_FORMAT]);
+        output.push_str(&host.run(access, &panes).await?);
+    }
+    Ok(output)
+}
+
+/// The host a tmux command runs on and the tmux server it addresses.
+pub(crate) async fn tmux_target(
+    state: &AppState,
+    local: &LocalState,
+    session_id: &str,
+    requested: Option<&str>,
+    access: &AccessLease,
+) -> Result<(Host, crate::tmux_server::TmuxServer)> {
+    let host = Host::resolve(state, local, session_id, access).await?;
+    let server = crate::tmux_server::TmuxServer::for_host(&host, requested)?;
+    Ok((host, server))
 }
 
 #[tauri::command]
 pub async fn multiplexer_tree(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     tmux_server: Option<String>,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let server =
-                crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
-            let output = crate::ssh::exec_for_access(
-                &session,
-                discovery_command(&server, crate::herdr_path::admit(&session, &access).await?),
-                &access,
-            )
-            .await
-            .map_err(host_shell)?;
+            let (host, server) =
+                tmux_target(&state, &local, &session_id, tmux_server.as_deref(), &access).await?;
+            let output = match &host {
+                Host::Remote(session) => crate::ssh::exec_for_access(
+                    session,
+                    discovery_command(&server, crate::herdr_path::admit(session, &access).await?),
+                    &access,
+                )
+                .await
+                .map_err(host_shell)?,
+                #[cfg(desktop)]
+                Host::Local(_) => local_discovery(&host, &access, &server).await?,
+            };
             parse_tree(&output)
         })
         .await
-}
-// All multiplexer actions share the same immutable access lease through dispatch.
-pub(crate) async fn execute_action(
-    state: &AppState,
-    access: &AccessLease,
-    session_id: &str,
-    command: Result<String>,
-) -> Result<()> {
-    let command = command?;
-    let session = state.session(session_id).await?;
-    crate::ssh::exec_for_access(&session, command, access).await?;
-    Ok(())
 }
 
 #[tauri::command]
 pub async fn tmux_action(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     action: TmuxAction,
     tmux_server: Option<String>,
@@ -722,11 +802,9 @@ pub async fn tmux_action(
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let server =
-                crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
-            let command = action_command_for(&action, &server)?;
-            crate::ssh::exec_for_access(&session, command, &access).await?;
+            let (host, server) =
+                tmux_target(&state, &local, &session_id, tmux_server.as_deref(), &access).await?;
+            host.run(&access, &action_cmd(&action, &server)?).await?;
             Ok(())
         })
         .await
@@ -971,8 +1049,154 @@ mod tests {
         .unwrap();
         assert_eq!(
             command,
-            "tmux -u -L 'default' new-session -d -s 'a'\\''$(touch nope)' -c '/work/##(touch nope)'"
+            "tmux -u -L default new-session -d -s 'a'\\''$(touch nope)' -c '/work/##(touch nope)'"
         );
+    }
+    /// Kills the isolated tmux server a test started, even when the test panics.
+    #[cfg(unix)]
+    struct TmuxServer<'a>(&'a crate::host::tests::local::Isolated, String);
+    #[cfg(unix)]
+    impl Drop for TmuxServer<'_> {
+        fn drop(&mut self) {
+            let _ = self
+                .0
+                .command("tmux")
+                .args(["-L", &self.1, "kill-server"])
+                .output();
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
+    async fn real_local_session_discovers_tmux_and_applies_actions_with_literal_names() {
+        use crate::host::tests::local::{lease, ok, Isolated};
+        use tauri::Manager;
+        let home = Isolated::new();
+        let (app, id) = home.session().await;
+        let server = format!("ls-{}", uuid::Uuid::new_v4().simple());
+        let _server = TmuxServer(&home, server.clone());
+        let tree = || {
+            ok(multiplexer_tree(
+                app.state(),
+                app.state(),
+                id.clone(),
+                Some(server.clone()),
+                lease(),
+            ))
+        };
+        let act = |action| {
+            ok(tmux_action(
+                app.state(),
+                app.state(),
+                id.clone(),
+                action,
+                Some(server.clone()),
+                lease(),
+            ))
+        };
+        // No server runs yet: tmux is found by its PATH lookup and no session is listed.
+        let before = tree().await;
+        assert!(before.tmux_available && before.sessions.is_empty());
+        assert!(before
+            .tools
+            .iter()
+            .any(|tool| matches!(tool.kind, MultiplexerKind::Tmux)));
+        // Herdr runs through the same lookup; with no server running it lists no session.
+        if before.herdr_available {
+            let herdr = ok(multiplexer_sessions(
+                app.state(),
+                app.state(),
+                id.clone(),
+                MultiplexerKind::Herdr,
+                lease(),
+            ))
+            .await;
+            assert!(herdr.is_empty());
+        }
+        let work = home.path().join("work dir 'q'");
+        std::fs::create_dir(&work).unwrap();
+        let directory = work.to_str().unwrap().to_owned();
+        let name = "literal 'quote' \"double\" $(touch nope)#(printf bad);".to_owned();
+        act(TmuxAction::CreateSession {
+            name: name.clone(),
+            directory: directory.clone(),
+        })
+        .await;
+        let after = tree().await;
+        assert_eq!(after.sessions.len(), 1);
+        assert_eq!(after.sessions[0].name, name);
+        assert_eq!(after.sessions[0].windows[0].panes[0].path, directory);
+        assert!(!home.path().join("nope").exists());
+        let (session, pane) = (
+            after.sessions[0].id.clone(),
+            after.sessions[0].windows[0].panes[0].id.clone(),
+        );
+        act(TmuxAction::SplitPane {
+            target: pane.clone(),
+            horizontal: true,
+            directory: directory.clone(),
+        })
+        .await;
+        act(TmuxAction::ZoomPane {
+            target: pane.clone(),
+        })
+        .await;
+        act(TmuxAction::SelectPane { target: pane }).await;
+        act(TmuxAction::CreateWindow {
+            target: session.clone(),
+            name: "second".into(),
+            directory,
+        })
+        .await;
+        act(TmuxAction::RenameSession {
+            target: session,
+            name: "renamed;".into(),
+        })
+        .await;
+        let tree_now = tree().await;
+        let session = &tree_now.sessions[0];
+        assert_eq!(
+            (session.name.as_str(), session.windows.len()),
+            ("renamed;", 2)
+        );
+        assert_eq!(session.windows[0].panes.len(), 2);
+        let window = session.windows[1].id.clone();
+        act(TmuxAction::RenameWindow {
+            target: window.clone(),
+            name: "new #{session_name} title;".into(),
+        })
+        .await;
+        act(TmuxAction::SelectWindow { target: window }).await;
+        let tree_now = tree().await;
+        assert_eq!(
+            tree_now.sessions[0].windows[1].name,
+            "new #{session_name} title;"
+        );
+        assert!(tree_now.sessions[0].windows[1].active);
+        let listed = ok(crate::ssh::list_multiplexer_sessions(
+            lease(),
+            app.state(),
+            app.state(),
+            id.clone(),
+            Some(server.clone()),
+        ))
+        .await;
+        assert_eq!(listed.len(), 1);
+        let listed = serde_json::to_value(&listed[0]).unwrap();
+        assert_eq!(
+            (&listed["name"], &listed["windows"], &listed["attached"]),
+            (&"renamed;".into(), &2.into(), &false.into())
+        );
+        // Another named server is another namespace: it knows none of these sessions.
+        let other = ok(multiplexer_tree(
+            app.state(),
+            app.state(),
+            id.clone(),
+            Some("ls-other".into()),
+            lease(),
+        ))
+        .await;
+        assert!(other.sessions.is_empty());
     }
     #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
