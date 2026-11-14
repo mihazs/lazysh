@@ -1787,6 +1787,330 @@
      }
     }
    ]
+  },
+  {
+   "id": "gap-cells",
+   "about": "Cells nothing was written to between text (a tab, a cursor move) are blanks while text follows them on the row, and are cut only at the end of the row's content",
+   "cols": 24,
+   "rows": 4,
+   "scrollback": 50,
+   "write": "ab\tcd\u001b[4Cef\r\nxyz\tw\r\n\tindent",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      4,
+      0
+     ],
+     "text": "ab   "
+    },
+    {
+     "start": [
+      3,
+      0
+     ],
+     "end": [
+      3,
+      0
+     ],
+     "text": " "
+    },
+    {
+     "start": [
+      1,
+      0
+     ],
+     "end": [
+      9,
+      0
+     ],
+     "text": "b      cd"
+    },
+    {
+     "start": [
+      10,
+      0
+     ],
+     "end": [
+      12,
+      0
+     ],
+     "text": "   "
+    },
+    {
+     "start": [
+      11,
+      0
+     ],
+     "end": [
+      17,
+      0
+     ],
+     "text": "   ef"
+    },
+    {
+     "start": [
+      2,
+      0
+     ],
+     "end": [
+      2,
+      1
+     ],
+     "text": "      cd    ef\nxyz"
+    },
+    {
+     "start": [
+      5,
+      1
+     ],
+     "end": [
+      6,
+      1
+     ],
+     "text": "  "
+    },
+    {
+     "start": [
+      0,
+      1
+     ],
+     "end": [
+      7,
+      1
+     ],
+     "text": "xyz     "
+    },
+    {
+     "start": [
+      0,
+      2
+     ],
+     "end": [
+      3,
+      2
+     ],
+     "text": "    "
+    },
+    {
+     "start": [
+      20,
+      0
+     ],
+     "end": [
+      23,
+      0
+     ],
+     "text": ""
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      3,
+      0
+     ],
+     "range": [
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      5,
+      0
+     ],
+     "range": [
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      1,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       2,
+       1
+      ]
+     ]
+    }
+   ],
+   "all": "ab      cd    ef\nxyz     w\n        indent\n",
+   "screen": "ab      cd    ef\nxyz     w\n        indent\n",
+   "searches": []
+  },
+  {
+   "id": "wide-tail-start",
+   "about": "A span that opens on the second cell of a wide character reads that cell as a blank, as xterm does, even when it ends the row's content",
+   "cols": 8,
+   "rows": 4,
+   "scrollback": 50,
+   "write": "x=1 メモ\r\nabc 世界\r\nend",
+   "selections": [
+    {
+     "start": [
+      7,
+      0
+     ],
+     "end": [
+      7,
+      0
+     ],
+     "text": " "
+    },
+    {
+     "start": [
+      5,
+      0
+     ],
+     "end": [
+      5,
+      0
+     ],
+     "text": " "
+    },
+    {
+     "start": [
+      5,
+      0
+     ],
+     "end": [
+      7,
+      0
+     ],
+     "text": " モ"
+    },
+    {
+     "start": [
+      7,
+      0
+     ],
+     "end": [
+      2,
+      1
+     ],
+     "text": " \nabc"
+    },
+    {
+     "start": [
+      5,
+      1
+     ],
+     "end": [
+      7,
+      1
+     ],
+     "text": " 界"
+    },
+    {
+     "start": [
+      7,
+      1
+     ],
+     "end": [
+      7,
+      1
+     ],
+     "text": " "
+    },
+    {
+     "start": [
+      6,
+      0
+     ],
+     "end": [
+      1,
+      1
+     ],
+     "text": "モ\nab"
+    },
+    {
+     "start": [
+      7,
+      0
+     ],
+     "end": [
+      2,
+      2
+     ],
+     "text": " \nabc 世界\nend"
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      5,
+      0
+     ],
+     "range": [
+      [
+       4,
+       0
+      ],
+      [
+       7,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      7,
+      0
+     ],
+     "range": [
+      [
+       4,
+       0
+      ],
+      [
+       7,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      7,
+      1
+     ],
+     "range": [
+      [
+       4,
+       1
+      ],
+      [
+       7,
+       1
+      ]
+     ]
+    }
+   ],
+   "all": "x=1 メモ\nabc 世界\nend\n",
+   "screen": "x=1 メモ\nabc 世界\nend\n",
+   "searches": []
   }
  ]
 }

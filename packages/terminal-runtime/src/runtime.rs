@@ -540,9 +540,13 @@ impl TerminalRuntime {
         let Ok(row) = u32::try_from(row) else {
             return Ok(text);
         };
-        let (mut column, mut content) = (0u16, 0);
+        let (mut column, mut content, mut written) = (0u16, 0, 0u16);
         self.terminal
             .for_each_screen_row_cell(row, |wide, graphemes| {
+                // The row's own length, as xterm trims it: one past its last cell with content.
+                if !graphemes.is_empty() || wide == CellWide::SpacerTail {
+                    written = column + 1;
+                }
                 if span.contains(&column) {
                     let spacer = wide == CellWide::SpacerTail && column != span.start
                         || wide == CellWide::SpacerHead;
@@ -550,7 +554,11 @@ impl TerminalRuntime {
                         text.push(' ');
                     }
                     text.extend(graphemes.iter().filter_map(|&code| char::from_u32(code)));
-                    if !graphemes.is_empty() {
+                    // xterm counts a wide character's second cell in the row's length, so a span that
+                    // opens on it keeps its blank even when nothing follows.
+                    if !graphemes.is_empty()
+                        || (wide == CellWide::SpacerTail && column == span.start)
+                    {
                         content = text.len();
                     }
                 }
@@ -558,7 +566,10 @@ impl TerminalRuntime {
             })?;
         match trim {
             Trim::Spaces => text.truncate(text.trim_end_matches(js_space).len()),
-            Trim::EmptyCells => text.truncate(content),
+            // xterm cuts a span at the end of the row's content, not at the span's own last
+            // content: the empty cells of a gap (a tab, a cursor move) stay while text follows them.
+            Trim::EmptyCells if written < span.end => text.truncate(content),
+            Trim::EmptyCells => {}
         }
         Ok(text)
     }
