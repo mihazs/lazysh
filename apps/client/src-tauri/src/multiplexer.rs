@@ -165,7 +165,7 @@ impl Entry {
         if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
             let command = match self.kind {
                 MultiplexerKind::Herdr => "herdr session list --json",
-                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
+                MultiplexerKind::Zellij => ZELLIJ_SESSIONS,
                 MultiplexerKind::Tmux => unreachable!(),
             };
             let output = crate::ssh::exec_for_access(
@@ -213,6 +213,11 @@ pub(crate) async fn prepare_default_entry(
     .prepare(session, lease)
     .await
 }
+
+/// Names of the live and the exited (resurrectable) Zellij sessions. With no session left Zellij prints
+/// "No active zellij sessions found." and exits 1, which is an empty list; any other failure stays one.
+const ZELLIJ_SESSIONS: &str =
+    "sh -c 'zellij list-sessions --short --no-formatting || [ $? -eq 1 ]'";
 
 fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<PersistentSession>> {
     let names: Vec<String> = match kind {
@@ -268,7 +273,7 @@ pub async fn multiplexer_sessions(
             let session = state.session(&session_id).await?;
             let command = match kind {
                 MultiplexerKind::Herdr => "herdr session list --json",
-                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
+                MultiplexerKind::Zellij => ZELLIJ_SESSIONS,
                 MultiplexerKind::Tmux => {
                     return Err(SshError::new(
                         "invalid_target",
@@ -735,6 +740,8 @@ pub async fn tmux_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     #[test]
     fn typed_entry_keeps_namespace_and_creation_policy_without_a_command_interface() {
         let entry: Entry = serde_json::from_value(
@@ -1056,6 +1063,232 @@ mod tests {
         assert_eq!(
             tree.sessions[0].windows[1].name,
             "new #{session_name} title;"
+        );
+    }
+    /// Runs the product's Zellij listing the way the SSH exec does: one command string through a POSIX shell.
+    #[cfg(unix)]
+    fn list_zellij_sessions(
+        path: &std::path::Path,
+        environment: &[(&str, &std::path::Path)],
+    ) -> std::process::Output {
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(ZELLIJ_SESSIONS).env("PATH", path);
+        for (key, value) in environment {
+            command.env(key, value);
+        }
+        command.output().unwrap()
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lists_zellij_sessions_and_reads_a_host_without_any_as_an_empty_list_not_a_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake = temp.path().join("zellij");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncase \"$(cat \"$FAKE_MODE\")\" in\n live) printf 'one\\ntwo\\n';;\n none) echo 'No active zellij sessions found.' >&2; exit 1;;\n *) echo boom >&2; exit 2;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mode = temp.path().join("mode");
+        let path = format!("{}:/usr/bin:/bin", temp.path().display());
+        let run = |mode_text: &str| {
+            std::fs::write(&mode, mode_text).unwrap();
+            list_zellij_sessions(
+                std::path::Path::new(&path),
+                &[("FAKE_MODE", mode.as_path())],
+            )
+        };
+        let live = run("live");
+        assert!(live.status.success());
+        let names: Vec<_> = persistent_sessions(
+            MultiplexerKind::Zellij,
+            &String::from_utf8(live.stdout).unwrap(),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|session| session.name)
+        .collect();
+        assert_eq!(names, ["one", "two"]);
+        let none = run("none");
+        assert!(none.status.success(), "no session is an empty list");
+        assert!(persistent_sessions(
+            MultiplexerKind::Zellij,
+            &String::from_utf8(none.stdout).unwrap()
+        )
+        .unwrap()
+        .is_empty());
+        assert!(
+            !run("broken").status.success(),
+            "any other failure stays a failure"
+        );
+        // A PATH holding only a shell: the host has no zellij, wherever the test machine keeps its own.
+        let bare = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/bin/sh", bare.path().join("sh")).unwrap();
+        let missing = list_zellij_sessions(bare.path(), &[]);
+        assert!(
+            !missing.status.success(),
+            "a host without zellij stays a failure"
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires zellij on PATH; runs isolated background sessions"]
+    fn real_zellij_discovery_lists_live_and_exited_sessions_and_an_empty_list_for_none() {
+        use std::process::Command;
+        // The IPC socket path may not exceed 107 bytes, so the private tree is short.
+        let temp = tempfile::Builder::new()
+            .prefix("zd")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root = temp.path();
+        for child in ["rt", "cache", "cfg", "sock", "home"] {
+            std::fs::create_dir(root.join(child)).unwrap();
+            std::fs::set_permissions(root.join(child), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        std::fs::write(
+            root.join("cfg/config.kdl"),
+            "show_release_notes false\nshow_startup_tips false\nsession_serialization true\nserialization_interval 1\ndefault_shell \"/bin/sh\"\n",
+        )
+        .unwrap();
+        let zellij = |arguments: &[&str]| {
+            let mut command = Command::new("zellij");
+            command
+                .args(arguments)
+                .env("XDG_RUNTIME_DIR", root.join("rt"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("XDG_CONFIG_HOME", root.join("cfg"))
+                .env("ZELLIJ_SOCKET_DIR", root.join("sock"))
+                .env("HOME", root.join("home"))
+                .env("TERM", "xterm-256color")
+                .env_remove("ZELLIJ")
+                .env_remove("ZELLIJ_SESSION_NAME");
+            command.output().unwrap()
+        };
+        // Servers carry their own socket path on the command line; only ours name this private tree.
+        let servers = || -> Vec<i32> {
+            let mark = root.join("sock").display().to_string();
+            std::fs::read_dir("/proc")
+                .unwrap()
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
+                    let line = std::fs::read(entry.path().join("cmdline")).ok()?;
+                    String::from_utf8_lossy(&line)
+                        .contains(&mark)
+                        .then_some(pid)
+                })
+                .collect()
+        };
+        struct Servers<'a>(&'a dyn Fn() -> Vec<i32>);
+        impl Drop for Servers<'_> {
+            fn drop(&mut self) {
+                for pid in (self.0)() {
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+            }
+        }
+        let _cleanup = Servers(&servers);
+        let list = || {
+            let output = list_zellij_sessions(
+                std::path::Path::new(&std::env::var("PATH").unwrap()),
+                &[
+                    ("XDG_RUNTIME_DIR", &root.join("rt")),
+                    ("XDG_CACHE_HOME", &root.join("cache")),
+                    ("XDG_CONFIG_HOME", &root.join("cfg")),
+                    ("ZELLIJ_SOCKET_DIR", &root.join("sock")),
+                    ("HOME", &root.join("home")),
+                ],
+            );
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let mut names: Vec<_> = persistent_sessions(
+                MultiplexerKind::Zellij,
+                &String::from_utf8(output.stdout).unwrap(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|session| session.name)
+            .collect();
+            names.sort();
+            names
+        };
+        let wait = |description: &str, ready: &dyn Fn() -> bool| {
+            for _ in 0..500 {
+                if ready() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("Zellij did not reach {description}");
+        };
+        assert!(
+            list().is_empty(),
+            "a host with Zellij and no session lists nothing"
+        );
+        let config = root.join("cfg/config.kdl");
+        for name in ["live-one", "exited-one"] {
+            let output = zellij(&[
+                "--config",
+                config.to_str().unwrap(),
+                "attach",
+                "--create-background",
+                name,
+            ]);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let metadata = root
+                .join("cache/zellij/contract_version_1/session_info")
+                .join(name);
+            wait("its session metadata", &|| {
+                metadata.join("session-metadata.kdl").exists()
+            });
+        }
+        // A command pane is what Zellij serializes, so ending the server of a session with one leaves it to resurrect.
+        assert!(zellij(&[
+            "--session",
+            "exited-one",
+            "action",
+            "new-pane",
+            "--",
+            "sleep",
+            "600"
+        ])
+        .status
+        .success());
+        wait("both sessions listed", &|| {
+            list() == ["exited-one", "live-one"]
+        });
+        // Zellij serializes the command pane's layout; ending its server then leaves `exited-one` to resurrect.
+        let layout =
+            root.join("cache/zellij/contract_version_1/session_info/exited-one/session-layout.kdl");
+        wait("a serialized layout", &|| layout.exists());
+        let exited: Vec<i32> = servers()
+            .into_iter()
+            .filter(|pid| {
+                std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|line| String::from_utf8_lossy(&line).contains("exited-one"))
+            })
+            .collect();
+        assert!(!exited.is_empty());
+        for pid in exited {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        wait("exited-one marked exited", &|| {
+            String::from_utf8_lossy(&zellij(&["list-sessions", "--no-formatting"]).stdout)
+                .lines()
+                .any(|line| line.starts_with("exited-one") && line.contains("EXITED"))
+        });
+        assert_eq!(
+            list(),
+            ["exited-one", "live-one"],
+            "an exited session is still listed, and is what an attach would resurrect"
         );
     }
 }

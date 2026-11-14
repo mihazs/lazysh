@@ -244,7 +244,7 @@ Attached tmux and Herdr terminals also offer prefix shortcuts and numbered windo
 
 ## Zellij
 
-List running sessions or enter a name to create/attach one. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
+List running sessions or enter a name to create/attach one. The list names live sessions and exited ones (Zellij keeps a resurrectable layout, and attaching resurrects it); a host with Zellij and no session shows "No running zellij sessions." instead of an error, although Zellij itself exits with status 1 there. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
 
 The Zellij panel includes a tab 1–20 quick-access row alongside the existing manual
 tab-number form. These are explicit shortcuts, not a discovered tab list or a
