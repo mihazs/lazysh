@@ -1,6 +1,6 @@
 //! Read the selected OpenCode projection, never the model-context replay log.
 use super::session_info::Session;
-use super::window::{select, Window};
+use super::window::{fit, select, Window};
 use super::{
     block, database, interaction, open_transcript, Error, Result, SourceSnapshot, TranscriptAgent,
     TranscriptPage, MAX_PAGE,
@@ -48,9 +48,9 @@ pub(super) fn schema(db: &Connection, session: &str) -> Result<Schema> {
 }
 
 fn decoded(raw: &str, bytes: &mut usize) -> Result<Value> {
-    *bytes = bytes.checked_add(raw.len()).ok_or(Error::InvalidEvent)?;
+    *bytes = bytes.checked_add(raw.len()).ok_or(Error::TooLarge)?;
     if *bytes > MAX_INPUT {
-        return Err(Error::InvalidEvent);
+        return Err(Error::TooLarge);
     }
     let value: Value = serde_json::from_str(raw).map_err(|_| Error::InvalidEvent)?;
     if !value.is_object() {
@@ -85,7 +85,7 @@ pub fn conversation_window(
     }
     let original = open_transcript(path)?;
     let identity = SourceSnapshot::capture(&original)?;
-    let db = database::open_database(path)?;
+    let db = database::open_database_with_length(path, MAX_INPUT as i32)?;
     identity.same_file(&open_transcript(path)?)?;
     let kind = schema(&db, session)?;
     let name = if kind == Schema::V2 {
@@ -130,7 +130,7 @@ pub fn conversation_window(
     let mut bytes = 0;
     while let Some(row) = cursor.next()? {
         if rows.len() == MAX_ROWS {
-            return Err(Error::InvalidEvent);
+            return Err(Error::TooLarge);
         }
         let id: String = row.get(0)?;
         if id.is_empty() || id.len() > 256 {
@@ -164,7 +164,7 @@ pub fn conversation_window(
         while let Some(row) = cursor.next()? {
             count += 1;
             if count > MAX_PARTS {
-                return Err(Error::InvalidEvent);
+                return Err(Error::TooLarge);
             }
             let id: String = row.get(0)?;
             if !ids.contains(id.as_str()) {
@@ -212,6 +212,8 @@ pub fn conversation_window(
             row.time,
         )?);
     }
+    // A tool output can be megabytes: its text is cut to fit a page, not refused.
+    all.iter_mut().for_each(fit);
     let assistants: Vec<&Value> = rows
         .iter()
         .rev()
