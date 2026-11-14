@@ -21,13 +21,21 @@ pub(crate) enum Host {
 pub(crate) struct Cmd {
     env: &'static [(&'static str, &'static str)],
     argv: Vec<String>,
+    /// Runs Herdr: it may live in the user install directory off the PATH.
+    herdr: bool,
 }
 impl Cmd {
     pub(crate) fn new(env: &'static [(&'static str, &'static str)], argv: &[&str]) -> Self {
         Self {
             env,
             argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+            herdr: false,
         }
+    }
+    /// Marks a Herdr command: its owner-checked user install is searched after the PATH.
+    pub(crate) fn herdr(mut self) -> Self {
+        self.herdr = true;
+        self
     }
     pub(crate) fn arg(mut self, arg: &str) -> Self {
         self.argv.push(arg.to_owned());
@@ -157,7 +165,15 @@ impl Host {
     ) -> Result<String> {
         match self {
             Self::Remote(session) => {
-                ssh::exec_bounded(session, cmd.render(), lease, deadline, limit, None).await
+                let line = if cmd.herdr {
+                    crate::herdr_path::select(
+                        &cmd.render(),
+                        crate::herdr_path::admit(session, lease).await?,
+                    )
+                } else {
+                    cmd.render()
+                };
+                ssh::exec_bounded(session, line, lease, deadline, limit, None).await
             }
             #[cfg(desktop)]
             Self::Local(host) => ssh::command_text(host.exec(lease, cmd, deadline, limit).await?),
@@ -430,6 +446,11 @@ impl LocalHost {
                     error
                 }
             })?;
+        let path = if cmd.herdr {
+            with_herdr_install(path.cloned(), crate::local::home_dir())
+        } else {
+            path.cloned()
+        };
         if let Some(path) = path {
             command.env("PATH", path);
         }
@@ -565,19 +586,51 @@ pub(crate) async fn local_command(program: &str) -> tokio::process::Command {
     }
     command
 }
-/// Whether `program` resolves on the PATH local commands receive.
 #[cfg(desktop)]
-pub(crate) async fn local_program(program: &str) -> bool {
-    let path = match login_path().await {
-        Some(path) => path.clone(),
-        None => std::env::var_os("PATH").unwrap_or_default(),
-    };
+fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
     let name = if cfg!(windows) {
         format!("{program}.exe")
     } else {
         program.to_owned()
     };
-    std::env::split_paths(&path).any(|directory| directory.join(&name).is_file())
+    std::env::split_paths(path).any(|directory| directory.join(&name).is_file())
+}
+/// The PATH Herdr runs with: a Herdr on the PATH always wins; otherwise its owner-checked
+/// user install directory is appended, as the remote `with_path` wrapper does.
+#[cfg(desktop)]
+fn with_herdr_install(
+    path: Option<std::ffi::OsString>,
+    home: Option<std::path::PathBuf>,
+) -> Option<std::ffi::OsString> {
+    let current = path
+        .clone()
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    if on_path(&current, "herdr") {
+        return path;
+    }
+    let Some(install) = home.and_then(|home| crate::herdr_path::local_install_dir(&home)) else {
+        return path;
+    };
+    let mut directories = std::env::split_paths(&current).collect::<Vec<_>>();
+    directories.push(install);
+    std::env::join_paths(directories).ok().or(path)
+}
+/// Whether `program` resolves on the PATH local commands receive.
+#[cfg(desktop)]
+pub(crate) async fn local_program(program: &str) -> bool {
+    let path = login_path().await.cloned();
+    let path = if program == "herdr" {
+        with_herdr_install(path, crate::local::home_dir())
+    } else {
+        path
+    };
+    on_path(
+        &path
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default(),
+        program,
+    )
 }
 
 #[cfg(desktop)]
@@ -700,4 +753,4 @@ mod local_fs {
 
 #[cfg(all(test, desktop))]
 #[path = "host_tests.rs"]
-mod tests;
+pub(crate) mod tests;

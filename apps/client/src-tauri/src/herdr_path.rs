@@ -114,6 +114,62 @@ pub(crate) fn with_path(command: &str) -> String {
     format!("sh -c {}", quote(&format!("{ADMIT}\n{command}")))
 }
 
+/// The user install directory when it holds an executable Herdr and every component up to
+/// `/` is owner-controlled: the same admission as `ADMIT`, checked with `std::fs` on this device.
+#[cfg(all(desktop, unix))]
+pub(crate) fn local_install_dir(home: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::{
+        ffi::CString,
+        os::unix::{ffi::OsStrExt, fs::MetadataExt},
+        path::Path,
+    };
+    let text = home.to_str()?;
+    if !cfg!(any(target_os = "linux", target_os = "macos"))
+        || !text.starts_with('/')
+        || text == "/"
+        || text.contains(':')
+        || text.chars().any(char::is_control)
+        || text.split('/').any(|part| matches!(part, "." | ".."))
+    {
+        return None;
+    }
+    let uid = unsafe { libc::geteuid() };
+    let directory = home.join(".local/bin");
+    let candidate = directory.join("herdr");
+    let mut path = candidate.as_path();
+    loop {
+        let own = std::fs::symlink_metadata(path).ok()?;
+        let executable = unsafe {
+            libc::access(
+                CString::new(path.as_os_str().as_bytes()).ok()?.as_ptr(),
+                libc::X_OK,
+            )
+        } == 0;
+        let shared = own.mode() & 0o022 != 0;
+        let admitted = if path == candidate {
+            own.is_file() && executable && own.uid() == uid && own.nlink() == 1 && !shared
+        } else {
+            own.is_dir()
+                && executable
+                && (own.uid() == uid || own.uid() == 0)
+                // A shared directory is trusted only as a root-owned sticky one, like /tmp.
+                && (!shared || (own.uid() == 0 && own.mode() & 0o1000 != 0))
+        };
+        // `is_file`/`is_dir` on symlink_metadata are false for a link: links are refused.
+        if !admitted {
+            return None;
+        }
+        match path.parent() {
+            Some(parent) if parent != Path::new("/") => path = parent,
+            _ => return Some(directory),
+        }
+    }
+}
+#[cfg(all(desktop, not(unix)))]
+pub(crate) fn local_install_dir(_home: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::{optional_probe, select, with_path};
@@ -152,6 +208,21 @@ mod tests {
         assert_eq!(select(raw, false), raw);
         assert_ne!(select(raw, true), raw);
     }
+    /// The Rust admission used on this device must agree with the remote `ADMIT` script.
+    fn parity(home: &str, expected: bool) {
+        assert_eq!(
+            super::local_install_dir(std::path::Path::new(home)).is_some(),
+            expected,
+            "{home}"
+        );
+        assert_eq!(
+            run(home, "/usr/bin:/bin", "herdr --version")
+                .status
+                .success(),
+            expected,
+            "{home}"
+        );
+    }
     #[test]
     fn trusted_default_is_found_after_path_and_hostile_paths_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
@@ -167,6 +238,7 @@ mod tests {
             "#!/bin/sh\nif [ \"${1-}\" = fd ]; then printf receipt >&3; else printf fallback; fi",
         );
         let home = home.to_str().unwrap();
+        parity(home, true);
         let result = run(home, "/usr/bin:/bin", "herdr --version");
         assert!(result.status.success());
         assert_eq!(result.stdout, b"fallback");
@@ -192,19 +264,13 @@ mod tests {
             "/tmp/bad\nline",
             "/tmp/../home",
         ] {
-            assert!(!run(invalid, "/usr/bin:/bin", "herdr --version")
-                .status
-                .success());
+            parity(invalid, false);
         }
         fs::set_permissions(&local, fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(!run(home, "/usr/bin:/bin", "herdr --version")
-            .status
-            .success());
+        parity(home, false);
         fs::set_permissions(&local, fs::Permissions::from_mode(0o755)).unwrap();
         fs::remove_file(&fallback).unwrap();
         std::os::unix::fs::symlink(preferred.join("herdr"), &fallback).unwrap();
-        assert!(!run(home, "/usr/bin:/bin", "herdr --version")
-            .status
-            .success());
+        parity(home, false);
     }
 }
