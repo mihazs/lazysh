@@ -327,3 +327,120 @@ pub fn load_average() -> String {
         .trim()
         .to_string()
 }
+
+/// Scrollback workloads: `rows` lines of `cols - 1` cells numbered from `base`, in the shapes that
+/// decide how many rows one byte budget holds (see `examples/scrollback_budget.rs`).
+pub type Workload = fn(base: usize, rows: usize, cols: usize) -> Vec<u8>;
+
+/// Digits only, no styling.
+pub fn plain_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    (base..base + rows)
+        .flat_map(|n| format!("{n:0>w$}\r\n", w = cols - 1).into_bytes())
+        .collect()
+}
+
+/// `style` renders the SGR sequence that starts the `k`-th run of a row (3 to 11 cells long).
+fn run_rows(base: usize, rows: usize, cols: usize, style: impl Fn(usize) -> String) -> Vec<u8> {
+    let mut out = Vec::new();
+    for n in base..base + rows {
+        let (mut used, mut k) = (0, n);
+        while used < cols - 1 {
+            let run = (3 + (k * 7) % 9).min(cols - 1 - used);
+            out.extend(format!("{}{}", style(k), "x".repeat(run)).into_bytes());
+            used += run;
+            k += 1;
+        }
+        out.extend(b"\x1b[0m\r\n");
+    }
+    out
+}
+
+/// A 16-colour foreground and bold, as `ls --color` or a coloured log prints.
+pub fn colour_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    run_rows(base, rows, cols, |k| {
+        format!("\x1b[{};{}m", 30 + k % 8, if k % 5 == 0 { 1 } else { 22 })
+    })
+}
+
+/// Truecolor foregrounds from a 24-value-per-channel palette, as a syntax highlighter prints.
+pub fn syntax_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    run_rows(base, rows, cols, |k| {
+        let channel = |m: usize| (k * m) % 24 * 10;
+        format!("\x1b[38;2;{};{};{}m", channel(37), channel(53), channel(71))
+    })
+}
+
+/// A different truecolor foreground and background on every cell: defeats style sharing.
+pub fn cell_style_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for n in base..base + rows {
+        for c in 0..cols - 1 {
+            let (r, g, b) = (
+                (n * 7 + c * 13) % 256,
+                (n * 11 + c * 5) % 256,
+                (n + c * 3) % 256,
+            );
+            out.extend(format!("\x1b[38;2;{r};{g};{b};48;2;{b};{r};{g}m#").into_bytes());
+        }
+        out.extend(b"\x1b[0m\r\n");
+    }
+    out
+}
+
+/// ZWJ family emoji, wide CJK and stacked combining marks.
+pub fn grapheme_rows(_base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for _ in 0..rows {
+        let mut used = 0;
+        while used + 2 < cols {
+            out.extend("\u{1F468}\u{200d}\u{1F469}\u{200d}\u{1F467}".as_bytes());
+            used += 2;
+            if used + 2 < cols {
+                out.extend("\u{65E5}".as_bytes());
+                used += 2;
+            }
+            if used + 1 < cols {
+                out.extend("e\u{301}\u{302}".as_bytes());
+                used += 1;
+            }
+        }
+        out.extend(b"\r\n");
+    }
+    out
+}
+
+/// A distinct OSC 8 hyperlink on every row.
+pub fn link_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    (base..base + rows)
+        .flat_map(|n| {
+            format!(
+                "\x1b]8;;http://example.com/{n}\x1b\\{:#<w$}\x1b]8;;\x1b\\\r\n",
+                "",
+                w = cols - 1
+            )
+            .into_bytes()
+        })
+        .collect()
+}
+
+/// A runtime of `cols` by 24 with `scrollback_bytes` of history, fed `rows` rows of `workload`.
+pub fn fed_scrollback(
+    cols: u16,
+    scrollback_bytes: usize,
+    rows: usize,
+    workload: Workload,
+) -> TerminalRuntime {
+    let mut rt = TerminalRuntime::new(Config {
+        size: Size::new(cols, 24),
+        scrollback_bytes,
+        ..Config::default()
+    })
+    .expect("runtime");
+    for base in (0..rows).step_by(256) {
+        feed(
+            &mut rt,
+            &workload(base, 256.min(rows - base), usize::from(cols)),
+        );
+    }
+    rt
+}
