@@ -24,6 +24,8 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
   const clipboardPlatform = useClipboardPlatform();
   const guard = useProtectedCallback();
   const owner=useMountedAccess();
+  // A local session saves on this device and uses its clipboard: there is no host clipboard to copy to.
+  const local=sessionId.startsWith('local:');
   const originalSession=useRef(sessionId).current;
   const latestSession=useRef(sessionId);latestSession.current=sessionId;
   const completed=useRef<{path:string}|null>(null);
@@ -180,7 +182,7 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
     },(path,uploadId)=>{
       completed.current=Object.freeze({path});
       if(sent)uploadedFile.current={...sent,name:sent.name||path.slice(path.lastIndexOf('/')+1)||path};
-      setAttachable(true);hostClipboard.completed(uploadId);
+      setAttachable(true);if(!local)hostClipboard.completed(uploadId);
       setRecoveryNeeded(false);setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
     });
   }
@@ -190,11 +192,11 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
     catch { setError(new LocalUiError('attachmentClipboardDenied')); }
   }
   return <section className="tool-panel attachment-panel" aria-label={t('attachmentTitle')}>
-    <h3>{t('attachmentHeading')}</h3><p>{t('attachmentScope')}</p>
+    <h3>{t('attachmentHeading')}</h3><p>{t(local?'attachmentScopeLocal':'attachmentScope')}</p>
     {uploaded && <div className="form-stack attachment-completed"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label>
       {onPastePath&&!onAttach&&attachable&&<><button type="button" className="primary-button" disabled={busy} onClick={()=>void pastePath(renderedPasteTarget)}>{t(pasteBusy?'attachmentPasting':'attachmentPastePath')}</button><small>{t('attachmentPasteHint')}</small></>}
       {onAttach && attachable && <button type="button" className="primary-button" disabled={busy} onClick={guard(()=>{const file=uploadedFile.current;if(uploadJob.active()||hostClipboard.active()||!file)return;setError('');try{onAttach(uploaded,file);}catch(e){setError(e instanceof Error?captureUiError(e):String(e));}})}>{t(attachTarget==='composer'?'attachmentAddToComposer':'attachmentAddToChat')}</button>}
-      <details><summary>{t('attachmentOtherActions')}</summary><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button><div className="button-row"><button type="button" disabled={!hostClipboard.ready||busy} onClick={()=>{setError('');setNotice('');void hostClipboard.copy();}}>{hostClipboard.busy?t('attachmentHostCopying'):t('attachmentHostCopy')}</button>{hostClipboard.busy&&<button type="button" onClick={()=>hostClipboard.clear()}>{t('attachmentHostCancel')}</button>}</div><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></details></div>}
+      <details><summary>{t('attachmentOtherActions')}</summary><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button>{!local&&<div className="button-row"><button type="button" disabled={!hostClipboard.ready||busy} onClick={()=>{setError('');setNotice('');void hostClipboard.copy();}}>{hostClipboard.busy?t('attachmentHostCopying'):t('attachmentHostCopy')}</button>{hostClipboard.busy&&<button type="button" onClick={()=>hostClipboard.clear()}>{t('attachmentHostCancel')}</button>}</div>}<label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></details></div>}
     <details className="attachment-sources" open={!selected}><summary>{t('attachmentChoose')}</summary><div className="button-row">
       <label><FilePlus2 size={20} aria-hidden="true"/>{t('attachmentChoose')}<input aria-label={t('attachmentChooseLabel')} type="file" disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choose(file); }} /></label>
       <label><Camera size={20} aria-hidden="true"/>{t('attachmentPhoto')}<input aria-label={t('attachmentPhotoLabel')} type="file" accept="image/*" capture="environment" disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choose(file); }} /></label>

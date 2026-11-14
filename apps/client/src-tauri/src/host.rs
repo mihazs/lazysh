@@ -4,11 +4,11 @@
 use crate::{
     app_lock::AccessLease,
     local::LocalState,
-    ssh::{self, AppState, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
+    ssh::{self, AppState, Destination, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
 };
 use serde::Serialize;
 use std::{pin::Pin, sync::Arc, time::Duration};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 pub(crate) enum Host {
     Remote(Arc<ssh::Session>),
@@ -95,6 +95,11 @@ impl Source {
         }
     }
 }
+
+/// A connection to a TCP port on the host's loopback.
+pub(crate) trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
+pub(crate) type Stream = Box<dyn Duplex>;
 
 impl Host {
     /// Resolves a session id; `local:` ids need an adopted, live local terminal.
@@ -297,6 +302,64 @@ impl Host {
             Self::Local(host) => {
                 host.blocking(lease, move || local_fs::read(&path, limit))
                     .await
+            }
+        }
+    }
+    /// Turns true when the session ends.
+    pub(crate) fn closed(&self) -> tokio::sync::watch::Receiver<bool> {
+        match self {
+            Self::Remote(session) => session.cancel.subscribe(),
+            #[cfg(desktop)]
+            Self::Local(host) => host.cancel.clone(),
+        }
+    }
+    /// Creates a new file and never replaces one: at an explicit path, or as a private,
+    /// uniquely named file in the host's temporary directory.
+    pub(crate) async fn create_new(
+        &self,
+        lease: &AccessLease,
+        destination: Destination,
+        data: Vec<u8>,
+        work: &crate::attachment_upload::Work,
+    ) -> Result<crate::attachment_upload::Uploaded> {
+        match self {
+            Self::Remote(session) => {
+                ssh::transfer_file(session, lease, destination, data, work).await
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => host
+                .blocking(lease, move || local_fs::create_new(destination, &data))
+                .await
+                .map(|path| crate::attachment_upload::Uploaded { path }),
+        }
+    }
+    /// A TCP connection to `address:port` on the host's loopback: a direct-tcpip channel
+    /// over SSH, a plain connection from this device for a local session.
+    pub(crate) async fn connect_tcp(
+        &self,
+        lease: &AccessLease,
+        address: &str,
+        port: u16,
+        deadline: tokio::time::Instant,
+    ) -> Result<Stream> {
+        match self {
+            Self::Remote(session) => {
+                crate::previews::remote_stream(&session.handle, lease, address, port, deadline)
+                    .await
+                    .map(|stream| Box::new(stream) as Stream)
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                ssh::until_closed(lease, host.cancel.clone(), async {
+                    let connecting = tokio::net::TcpStream::connect((address, port));
+                    let stream = tokio::time::timeout_at(deadline, connecting)
+                        .await
+                        .map_err(|_| {
+                            SshError::new("timeout", "Connecting to the port timed out")
+                        })??;
+                    Ok(Box::new(stream) as Stream)
+                })
+                .await
             }
         }
     }
@@ -609,6 +672,117 @@ mod local_fs {
             return Err(not_regular());
         }
         Ok((file, metadata.len()))
+    }
+    /// A new file that never replaces one. Temporary files are owner-only in the shared
+    /// temporary directory; the path comes back with `/` separators, as uploads report it.
+    pub(super) fn create_new(destination: Destination, data: &[u8]) -> Result<String> {
+        use std::io::Write;
+        if data.len() > ssh::UPLOAD_LIMIT {
+            return Err(SshError::new(
+                "file_too_large",
+                "Upload is limited to 10 MiB",
+            ));
+        }
+        let (path, private) = match destination {
+            Destination::Path(path) => {
+                ssh::bounded(&path)?;
+                (resolve(&path)?, false)
+            }
+            Destination::Temporary(name) => (
+                temporary_directory().join(ssh::temporary_name(&name)?),
+                true,
+            ),
+        };
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        let mut file = options.open(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                SshError::new(
+                    "file_exists",
+                    "A file already exists there; uploads never replace files",
+                )
+            } else {
+                error.into()
+            }
+        })?;
+        let path = path
+            .into_os_string()
+            .into_string()
+            .map_err(|_| SshError::new("invalid_path", "The file path is not valid UTF-8"))?;
+        // Confirm privacy before any byte reaches a directory other accounts can list.
+        if private {
+            if let Err(error) = keep_private(&file) {
+                drop(file);
+                // Nothing was written yet: remove the empty file this upload created exclusively.
+                return Err(match fs::remove_file(&path) {
+                    Ok(()) => error,
+                    Err(_) => SshError::new(
+                        "upload_not_private",
+                        format!(
+                            "{}. An empty new file may remain at {path}.",
+                            error.message()
+                        ),
+                    ),
+                });
+            }
+        }
+        file.write_all(data).map_err(|error| {
+            SshError::new(
+                "upload_failed",
+                format!("{error}. A partial new file may remain at {path}."),
+            )
+        })?;
+        Ok(if cfg!(windows) {
+            path.replace('\\', "/")
+        } else {
+            path
+        })
+    }
+    fn temporary_directory() -> PathBuf {
+        // `/tmp` as on every remote host; Windows uses the per-user %TEMP%.
+        #[cfg(unix)]
+        if std::path::Path::new("/tmp").is_dir() {
+            return PathBuf::from("/tmp");
+        }
+        std::env::temp_dir()
+    }
+    /// Restricts a new file to its owner and verifies it. Windows relies on the per-user %TEMP% ACL.
+    #[cfg(unix)]
+    pub(super) fn keep_private(file: &fs::File) -> Result<()> {
+        keep_private_with(file, |file| {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+        })
+    }
+    /// `restrict` is how the file is made owner-only; a filesystem that ignores it fails the check.
+    #[cfg(unix)]
+    pub(super) fn keep_private_with(
+        file: &fs::File,
+        restrict: impl FnOnce(&fs::File),
+    ) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let exposed = || {
+            file.metadata()
+                .map_or(true, |metadata| metadata.permissions().mode() & 0o077 != 0)
+        };
+        if exposed() {
+            restrict(file);
+        }
+        if exposed() {
+            return Err(SshError::new(
+                "upload_not_private",
+                "This device could not make the temporary attachment private",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    pub(super) fn keep_private(_: &fs::File) -> Result<()> {
+        Ok(())
     }
     pub(super) fn read(path: &str, limit: u64) -> Result<Vec<u8>> {
         // Previews have always reported a link as "not a regular file".

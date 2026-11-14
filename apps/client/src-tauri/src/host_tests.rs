@@ -693,4 +693,260 @@ mod local {
             .unwrap();
         assert!(version.starts_with("git version"), "{version}");
     }
+
+    /// Removes what a test created outside its temporary directory, even when it fails.
+    struct Remove(Vec<String>);
+    impl Drop for Remove {
+        fn drop(&mut self) {
+            for file in &self.0 {
+                let _ = fs::remove_file(file);
+            }
+        }
+    }
+    async fn upload(
+        app: &App<MockRuntime>,
+        id: &str,
+        name: &str,
+        data: &[u8],
+        temporary: bool,
+    ) -> Answer<crate::attachment_upload::Uploaded> {
+        let reserved = ok(crate::attachment_upload::upload_reserve(
+            lease(),
+            app.state(),
+            app.state(),
+            id.into(),
+            data.len(),
+        ))
+        .await;
+        crate::attachment_upload::upload_file(
+            lease(),
+            app.state(),
+            app.state(),
+            id.into(),
+            reserved.upload_id,
+            name.into(),
+            data.to_vec(),
+            Some(temporary),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn local_uploads_create_private_distinct_files_and_never_replace_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let (app, id) = app(temp.path()).await;
+        let first = ok(upload(&app, &id, "shot.png", b"one", true)).await.path;
+        let second = ok(upload(&app, &id, "shot.png", b"two", true)).await.path;
+        let _remove = Remove(vec![first.clone(), second.clone()]);
+        assert_ne!(first, second);
+        let shared = if cfg!(unix) {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        for (created, content) in [(&first, b"one"), (&second, b"two")] {
+            let created = Path::new(created);
+            assert_eq!(created.parent().unwrap(), shared);
+            let name = created.file_name().unwrap().to_str().unwrap();
+            assert!(
+                name.starts_with("lazysh-") && name.ends_with("-shot.png"),
+                "{name}"
+            );
+            assert_eq!(fs::read(created).unwrap(), content);
+            #[cfg(unix)]
+            assert_eq!(
+                std::os::unix::fs::PermissionsExt::mode(
+                    &fs::metadata(created).unwrap().permissions()
+                ) & 0o777,
+                0o600
+            );
+        }
+        // An explicit path is created once and never replaced.
+        let explicit = temp.path().join("explicit.txt");
+        let uploaded = ok(upload(&app, &id, &path(&explicit), b"keep", false))
+            .await
+            .path;
+        assert_eq!(Path::new(&uploaded), explicit);
+        assert_eq!(
+            kind(upload(&app, &id, &path(&explicit), b"replace", false)).await,
+            "file_exists"
+        );
+        assert_eq!(fs::read(&explicit).unwrap(), b"keep");
+        // A dangling link is a name in use: it is neither followed nor replaced.
+        #[cfg(unix)]
+        {
+            let missing = temp.path().join("missing.txt");
+            let link = temp.path().join("link.txt");
+            std::os::unix::fs::symlink(&missing, &link).unwrap();
+            assert_eq!(
+                kind(upload(&app, &id, &path(&link), b"x", false)).await,
+                "file_exists"
+            );
+            assert!(!missing.exists());
+        }
+        // Names are one file name, and a closed session takes no more uploads.
+        assert_eq!(
+            kind(upload(&app, &id, "folder/shot.png", b"x", true)).await,
+            "invalid_path"
+        );
+        local_disconnect(app.state(), id.clone()).unwrap();
+        assert_eq!(
+            kind(crate::attachment_upload::upload_reserve(
+                lease(),
+                app.state(),
+                app.state(),
+                id,
+                1
+            ))
+            .await,
+            "disconnected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_filesystem_that_ignores_chmod_never_receives_a_private_attachment() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let temp = tempfile::tempdir().unwrap();
+        let create = |name: &str| {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o666)
+                .open(temp.path().join(name))
+                .unwrap();
+            file.set_permissions(fs::Permissions::from_mode(0o644))
+                .unwrap();
+            file
+        };
+        let exposed = create("exposed");
+        let refused = crate::host::local_fs::keep_private_with(&exposed, |_| {});
+        assert_eq!(refused.unwrap_err().kind(), "upload_not_private");
+        let repaired = create("repaired");
+        crate::host::local_fs::keep_private(&repaired).unwrap();
+        assert_eq!(
+            repaired.metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    /// An HTTP server on this device's loopback that answers every request with `local`.
+    async fn http_listener(address: &str) -> Option<u16> {
+        let server = tokio::net::TcpListener::bind((address, 0)).await.ok()?;
+        let port = server.local_addr().ok()?.port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut socket, _)) = server.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nlocal",
+                        )
+                        .await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        Some(port)
+    }
+    async fn get(port: u16) -> std::io::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        socket
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await?;
+        let mut answer = String::new();
+        socket.read_to_string(&mut answer).await?;
+        Ok(answer)
+    }
+    async fn refuses(port: u16) -> bool {
+        for _ in 0..50 {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err()
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn local_previews_proxy_http_report_discovery_and_stop_with_the_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let (app, id) = app(temp.path()).await;
+        app.manage(crate::previews::PreviewState::default());
+        let port = http_listener("127.0.0.1").await.unwrap();
+        // Hosts without IPv6 loopback skip the second family.
+        let v6 = http_listener("::1").await;
+        let wanted: Vec<u16> = [Some(port), v6].into_iter().flatten().collect();
+        let listeners = ok(crate::previews::discover_preview_ports(
+            lease(),
+            app.state(),
+            app.state(),
+            id.clone(),
+            Some(wanted.clone()),
+            Some(true),
+        ))
+        .await;
+        let found = serde_json::to_value(listeners).unwrap();
+        let found = found.as_array().unwrap();
+        assert_eq!(found.len(), wanted.len(), "{found:?}");
+        for row in found {
+            assert_eq!(row["http"], true, "{row}");
+        }
+        assert!(found
+            .iter()
+            .any(|row| row["port"] == port && row["address"] == "127.0.0.1"));
+        if let Some(v6) = v6 {
+            assert!(found
+                .iter()
+                .any(|row| row["port"] == v6 && row["address"] == "[::1]"));
+        }
+        // A preview is a fresh loopback port in front of the dev server, which keeps its own.
+        let start = || {
+            crate::previews::start_preview(
+                lease(),
+                app.state(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                port,
+                None,
+                None,
+            )
+        };
+        let first = serde_json::to_value(ok(start()).await).unwrap();
+        let second = serde_json::to_value(ok(start()).await).unwrap();
+        let proxied = |preview: &serde_json::Value| preview["localPort"].as_u64().unwrap() as u16;
+        assert_ne!(proxied(&first), port);
+        assert_ne!(proxied(&first), proxied(&second));
+        assert!(get(proxied(&first)).await.unwrap().ends_with("local"));
+        assert!(get(port).await.unwrap().ends_with("local"));
+        let listed = ok(crate::previews::list_previews(
+            lease(),
+            app.state(),
+            app.state(),
+            app.state(),
+            id.clone(),
+        ))
+        .await;
+        assert_eq!(listed.len(), 2);
+        crate::previews::stop_preview(
+            app.state(),
+            id.clone(),
+            first["id"].as_str().unwrap().into(),
+        )
+        .await
+        .unwrap();
+        assert!(refuses(proxied(&first)).await);
+        assert!(get(proxied(&second)).await.unwrap().ends_with("local"));
+        // Closing the session stops the proxy that is left.
+        local_disconnect(app.state(), id).unwrap();
+        assert!(refuses(proxied(&second)).await);
+        assert!(get(port).await.unwrap().ends_with("local"));
+    }
 }

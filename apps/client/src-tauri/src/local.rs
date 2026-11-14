@@ -27,6 +27,8 @@ pub struct Target {
 pub struct Tools {
     files: bool,
     repository: bool,
+    attachments: bool,
+    previews: bool,
 }
 #[tauri::command]
 pub async fn local_capability() -> Capability {
@@ -45,6 +47,9 @@ pub async fn local_capability() -> Capability {
                 tools: Tools {
                     files: true,
                     repository: crate::host::local_program("git").await,
+                    // Uploads write files and previews connect to loopback ports from this device.
+                    attachments: true,
+                    previews: true,
                 },
             }],
         }

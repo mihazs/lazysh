@@ -170,12 +170,12 @@ export const api = {
   hostClipboardCopy: (sessionId: string, uploadId: string) =>
     remoteInvoke<void>("host_clipboard_copy", {sessionId,uploadId}),
   reserveUpload: (sessionId: string, size: number) =>
-    remoteInvoke<{uploadId:string}>("upload_reserve", { sessionId, size }),
+    invoke<{uploadId:string}>("upload_reserve", { sessionId, size }),
   cancelUpload: (sessionId: string, uploadId: string) =>
-    remoteInvoke<{outcome:'cancellation_requested'|'unknown_or_settled'}>("upload_cancel", { sessionId, uploadId }),
+    invoke<{outcome:'cancellation_requested'|'unknown_or_settled'}>("upload_cancel", { sessionId, uploadId }),
   /** `temporary` sends only a file name; the host saves a private, uniquely named file under /tmp. */
   uploadFile: (sessionId: string, path: string, data: number[], uploadId: string, temporary = false) =>
-    remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
+    invoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
   diff: (sessionId: string, path: string, staged = false) =>
     invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>

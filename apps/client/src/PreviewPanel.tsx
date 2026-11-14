@@ -157,7 +157,7 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   }
   return <section className="tool-panel preview-panel" aria-label={t('previewRegion')}>
     <div className="tool-bar"><h3><Globe size={17} /> {t('previewTitle')}</h3><button className="subtle-button" disabled={busy} onClick={() => void discover()}>{t('previewDiscover')}</button></div>
-    <p className="agent-note">{t('previewConnectionHint')}</p>
+    <p className="agent-note">{t(sessionId.startsWith('local:') ? 'previewConnectionHintLocal' : 'previewConnectionHint')}</p>
     <label className="preview-filter">{t('previewDiscoverPorts')} <input disabled={automatic} value={allowlist} onChange={event => { discoveryRevision.current++; setAllowlist(event.target.value); }} maxLength={2048} placeholder={t('previewPortsHint')} /></label>
     <label className="preview-filter"><input type="checkbox" disabled={automatic} checked={probeHttp} onChange={event => { discoveryRevision.current++; setProbeHttp(event.target.checked); }} /> {t('previewProbe')}</label>
     <label className="preview-filter"><input type="checkbox" checked={automatic} onChange={toggleAutomatic} /> {t('previewAutomatic')}</label>

@@ -27,10 +27,12 @@ use tokio::{
     time::timeout,
 };
 pub(crate) use upload_path::Destination;
+#[cfg(desktop)]
+pub(crate) use upload_path::{bounded, temporary_name};
 use zeroize::Zeroizing;
 
 pub(crate) const FILE_LIMIT: u64 = 1024 * 1024;
-const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
+pub(crate) const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
@@ -2732,6 +2734,7 @@ pub(crate) async fn sftp_read_text(
 async fn upload_file(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
     data: Vec<u8>,
@@ -2739,6 +2742,7 @@ async fn upload_file(
     let reserved = crate::attachment_upload::upload_reserve(
         lease.clone(),
         state.clone(),
+        local.clone(),
         session_id.clone(),
         data.len(),
     )
@@ -2748,6 +2752,7 @@ async fn upload_file(
     crate::attachment_upload::upload_file(
         lease,
         state,
+        local,
         session_id,
         reserved.upload_id,
         path,
@@ -7241,6 +7246,7 @@ mod tests {
             upload_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 mosh_id.clone(),
                 file.clone(),
                 b"SSH control remains alive".to_vec(),
@@ -7266,6 +7272,7 @@ mod tests {
             let screenshot = vec![0xa5; 462_702];
             let uploaded = upload_file(
                 access_lease(),
+                app.state(),
                 app.state(),
                 mosh_id.clone(),
                 "./Screenshot.jpg".into(),
@@ -7307,6 +7314,7 @@ mod tests {
             let error = upload_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 mosh_id.clone(),
                 "./Screenshot-after-close.jpg".into(),
                 screenshot.clone(),
@@ -7331,6 +7339,7 @@ mod tests {
             ));
             let recovered_file = upload_file(
                 access_lease(),
+                app.state(),
                 app.state(),
                 recovered.session_id.clone(),
                 "./Screenshot-after-close.jpg".into(),
@@ -7510,6 +7519,7 @@ mod tests {
             let uploaded = upload_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 mosh_id.clone(),
                 "./Screenshot-restored.jpg".into(),
                 payload.clone(),
@@ -7574,6 +7584,7 @@ mod tests {
             assert_eq!(state.sessions.lock().await.len(), sessions_before);
             assert!(upload_file(
                 access_lease(),
+                app.state(),
                 app.state(),
                 mosh_id.clone(),
                 "./Screenshot.jpg".into(),
@@ -7667,6 +7678,7 @@ mod tests {
             let relative_upload = upload_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 id.clone(),
                 format!("./{relative_name}"),
                 b"relative fixture".to_vec(),
@@ -7720,6 +7732,7 @@ mod tests {
                 let reserved = crate::attachment_upload::upload_reserve(
                     access_lease(),
                     app.state(),
+                    app.state(),
                     id.clone(),
                     data.len(),
                 )
@@ -7729,6 +7742,7 @@ mod tests {
                 .unwrap();
                 let uploaded = crate::attachment_upload::upload_file(
                     access_lease(),
+                    app.state(),
                     app.state(),
                     id.clone(),
                     reserved.upload_id.clone(),
@@ -7812,6 +7826,7 @@ mod tests {
         upload_file(
             access_lease(),
             app.state(),
+            app.state(),
             id.clone(),
             upload.clone(),
             "hello 世界".as_bytes().to_vec(),
@@ -7836,6 +7851,7 @@ mod tests {
         );
         assert!(upload_file(
             access_lease(),
+            app.state(),
             app.state(),
             id.clone(),
             upload.clone(),
@@ -7920,6 +7936,7 @@ mod tests {
             upload_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 id.clone(),
                 rejected.to_string_lossy().into_owned(),
                 vec![0; UPLOAD_LIMIT + 1]
@@ -7998,6 +8015,7 @@ mod tests {
         });
         let preview = crate::previews::start_preview(
             access_lease(),
+            app.state(),
             app.state(),
             app.state(),
             id.clone(),
