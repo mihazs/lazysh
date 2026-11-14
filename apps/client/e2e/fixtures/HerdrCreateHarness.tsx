@@ -34,7 +34,7 @@ export function mountHerdrCreate(options:{outcome?:Record<string,unknown>;tree?:
     if(command==='herdr_tree')return options.tree??tree;
     if(command==='list_directory')return args.path==='/'?[{name:'srv',isDir:true,size:0},{name:'.hidden',isDir:true,size:0},{name:'notes.txt',isDir:false,size:3}]:args.path==='/srv'?[{name:'api',isDir:true,size:0}]:[];
     if(command==='herdr_repository')return {root:'/srv/app',main:'/srv/app',head:'main',detached:false,worktrees:['/srv/app','/srv/app-worktrees/old']};
-    if(command==='herdr_agent_kinds')return [{kind:'codex',label:'Codex',executable:'codex',prompt:true},{kind:'opencode',label:'OpenCode',executable:'opencode',prompt:false}];
+    if(command==='herdr_agent_kinds')return [{kind:'codex',label:'Codex',executable:'codex',prompt:true,installed:true},{kind:'claude',label:'Claude Code',executable:'claude',prompt:true,installed:false},{kind:'opencode',label:'OpenCode',executable:'opencode',prompt:false,installed:true}];
     if(command==='herdr_workspace_plan')return plan(args.name as string,args.request as Request);
     if(command==='herdr_workspace_create')return options.outcome??{workspaceId:'w9',paneId:'w9:p1'};
     throw new Error(`Unexpected Herdr creation fixture command: ${command}`);

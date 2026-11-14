@@ -1324,12 +1324,12 @@ describe('round trips before the first message',()=>{
   });
 });
 
+/** Adds the host commands the launcher dialogs read to whatever the test already mocked. */
+const answering=(extra:Record<string,(args:unknown)=>unknown>)=>{
+  const base=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async(command,args,options)=>command in extra?extra[command](args):base(command,args,options));
+};
 describe('starting an agent from the empty state',()=>{
-  /** Adds the host commands the launcher dialogs read to whatever the test already mocked. */
-  const answering=(extra:Record<string,(args:unknown)=>unknown>)=>{
-    const base=vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command in extra?extra[command](args):base(command,args,options));
-  };
   const typing=(element:HTMLElement,value:string)=>fireEvent.change(element,{target:{value}});
 
   it('offers a new worktree of the focused workspace with the agent already chosen, reviews the commands, then focuses what it created',async()=>{
@@ -1337,7 +1337,7 @@ describe('starting an agent from the empty state',()=>{
     const worktree='/work/one-worktrees/work';
     answering({
       herdr_repository:()=>({root:'/work/one',main:'/work/one',head:'main',detached:false,worktrees:['/work/one']}),
-      herdr_agent_kinds:()=>[{kind:'codex',label:'Codex',executable:'codex',prompt:true}],
+      herdr_agent_kinds:()=>[{kind:'codex',label:'Codex',executable:'codex',prompt:true,installed:true}],
       herdr_workspace_plan:()=>({steps:[{stage:'worktree',argv:['git'],command:`git -C '/work/one' worktree add -b 'work' '${worktree}' 'main'`}]}),
       herdr_workspace_create:()=>({workspaceId:'wNEW',worktree}),
       herdr_action:()=>({}),
@@ -1409,5 +1409,62 @@ describe('starting an agent from the empty state',()=>{
       fireEvent.click(within(dialog).getByRole('button',{name:'work'}));await advance(0);
       expect(folder(dialog)).toHaveProperty('value','/work');
     });
+  });
+});
+
+describe('the New agent entry',()=>{
+  const launching={
+    herdr_agent_kinds:()=>[{kind:'codex',label:'Codex',executable:'codex',prompt:true,installed:true}],
+    multiplexer_launch_plan:()=>({steps:[{stage:'window',argv:['tmux'],command:"'tmux' 'new-window'"}]}),
+    multiplexer_launch:()=>({paneId:'%9'}),
+  };
+  const entries=()=>screen.queryAllByRole('button',{name:'New agent'});
+  const quiet=(extra:Parameters<typeof view>[0]={})=>view({herdrSession:undefined,...extra});
+
+  it('is offered in the tmux session the terminal is attached to, in place of the staged folder command',async()=>{
+    host('codex',[],'missing',[[]]);answering(launching);
+    render(<AgentView sessionId="ssh" shown tmux tmuxSession="work" onShowTerminal={()=>{}}/>);await advance(0);
+    // The header's icon and the empty state's button.
+    expect(entries()).toHaveLength(2);expect(screen.queryByRole('button',{name:'Start in a folder'})).toBeNull();
+    fireEvent.click(entries()[0]);await advance(0);
+    const dialog=screen.getByRole('dialog',{name:'New agent'});
+    fireEvent.change(within(dialog).getByRole('combobox',{name:'Agent'}),{target:{value:'codex'}});
+    fireEvent.change(within(dialog).getByRole('textbox',{name:'Host folder'}),{target:{value:'/work/app'}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
+    expect(calls('multiplexer_launch')).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);
+    expect(calls('multiplexer_launch')).toEqual([{sessionId:'ssh',multiplexer:{kind:'tmux',name:'work'},request:{target:{type:'directory',label:'app',directory:'/work/app'},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/)}}}]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Starting the agent never types into a pane: tmux itself makes the new window current.
+    expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+  });
+
+  it('is offered in a Zellij session and not in a terminal without a multiplexer',async()=>{
+    host('codex',[],'missing',[[]]);answering(launching);
+    const rendered=render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="main" onShowTerminal={()=>{}}/>);await advance(0);
+    expect(entries()).toHaveLength(2);
+    fireEvent.click(entries()[1]);await advance(0);
+    expect(screen.getByRole('dialog',{name:'New agent'})).toBeTruthy();
+    cleanup();
+    rendered.unmount();
+    render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);await advance(0);
+    expect(entries()).toHaveLength(0);expect(screen.getByRole('button',{name:'Start in a folder'})).toBeTruthy();
+  });
+
+  it('is offered under Herdr only when its launcher is available, and focuses the new workspace',async()=>{
+    server({focus:'w2E:p1'});
+    const rendered=render(quiet());await advance(0);
+    expect(entries()).toHaveLength(0);
+    rendered.unmount();
+    answering({...launching,herdr_workspace_plan:()=>({steps:[{stage:'workspace',argv:['herdr'],command:"'herdr' 'workspace' 'create'"}]}),herdr_workspace_create:()=>({workspaceId:'wNEW',paneId:'wNEW:p1'}),herdr_action:()=>({})});
+    render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" herdrLaunch onEnterHerdr={vi.fn()} onShowTerminal={()=>{}}/>);await advance(0);
+    fireEvent.click(entries()[0]);await advance(0);
+    const dialog=screen.getByRole('dialog',{name:'New agent'});
+    fireEvent.change(within(dialog).getByRole('combobox',{name:'Agent'}),{target:{value:'codex'}});
+    fireEvent.change(within(dialog).getByRole('textbox',{name:'Host folder'}),{target:{value:'/work/one'}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
+    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);
+    expect(calls('herdr_workspace_create')).toHaveLength(1);expect(calls('multiplexer_launch')).toEqual([]);
+    expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusWorkspace',target:'wNEW'}}]);
   });
 });

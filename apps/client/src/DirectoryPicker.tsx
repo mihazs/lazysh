@@ -11,7 +11,7 @@ const child=(parent:string,name:string)=>`${parent==='/'?'':parent}/${name}`;
 const up=(value:string)=>value.slice(0,Math.max(1,value.lastIndexOf('/')));
 
 /** A host folder field: typed, chosen from known folders, or browsed through the host's directory listing. */
-export default function DirectoryPicker({sessionId,invoke,owns,value,onChange,recent}:{sessionId:string;invoke:ReturnType<typeof bindProtectedInvoke>;owns:()=>boolean;value:string;onChange:(directory:string)=>void;recent:readonly string[]}) {
+export default function DirectoryPicker({sessionId,invoke,owns,value,onChange,recent,label}:{sessionId:string;invoke:ReturnType<typeof bindProtectedInvoke>;owns:()=>boolean;value:string;onChange:(directory:string)=>void;recent:readonly string[];/** The field's name; the Herdr project directory by default. */label?:string}) {
   useUi();
   const [browse,setBrowse]=useState<{path:string;entries:Load<string[]>}>();
   function openDirectory(target:string) {
@@ -21,7 +21,7 @@ export default function DirectoryPicker({sessionId,invoke,owns,value,onChange,re
     },error=>{if(owns())setBrowse(current=>current?.path===target?{path:target,entries:{state:'failed',cause:captureUiError(error)}}:current);});
   }
   return <>
-    <label>{t('herdrDirectory')}<input value={value} maxLength={4096} placeholder="/home/user/project" onChange={event=>onChange(event.target.value)}/></label>
+    <label>{label??t('herdrDirectory')}<input value={value} maxLength={4096} placeholder="/home/user/project" onChange={event=>onChange(event.target.value)}/></label>
     <div className="herdr-create-row">
       <button type="button" className="subtle-button" onClick={()=>openDirectory(validAbsolutePath(value)?value:'/')}><FolderOpen size={15} aria-hidden="true"/>{t('herdrCreateBrowse')}</button>
       {recent.length>0 && <label>{t('herdrCreateRecent')}<select value={recent.includes(value)?value:''} onChange={event=>onChange(event.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{recent.map(item=><option key={item} value={item}>{item}</option>)}</select></label>}
