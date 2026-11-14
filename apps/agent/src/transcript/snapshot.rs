@@ -13,7 +13,7 @@ pub(super) fn read_bytes_bounded(
     maximum: u64,
 ) -> Result<Vec<u8>> {
     if length > maximum {
-        return Err(Error::InvalidArgument);
+        return Err(Error::TooLarge);
     }
     let mut bytes = Vec::new();
     file.take(length).read_to_end(&mut bytes)?;

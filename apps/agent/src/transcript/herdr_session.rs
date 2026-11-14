@@ -356,7 +356,13 @@ mod tests {
         let ignored = json!({"type":"response_item","payload":{"type":"message","content":"x".repeat(300_000)}});
         let event = json!({"type":"event_msg","payload":{"type":"user_message","message":"hello"}});
         fs::write(&rollout, format!("{meta}\n{ignored}\n{event}\n")).unwrap();
-        assert!(super::super::conversation(&rollout, TranscriptAgent::Codex, 50).is_err());
+        // Codex writes whole commands and compactions as one line, so its reader takes a record of any length (the Claude reader above still bounds it).
+        assert_eq!(
+            super::super::conversation(&rollout, TranscriptAgent::Codex, 50)
+                .unwrap()
+                .messages[0]["blocks"][0]["text"],
+            "hello"
+        );
         assert_eq!(
             read_in(&codex, TranscriptAgent::Codex, ID, 50, &Window::Tail)
                 .unwrap()
