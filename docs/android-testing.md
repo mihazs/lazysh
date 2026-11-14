@@ -181,6 +181,12 @@ Cleanup clears only the fixture-labeled clipboard and removes only the allocated
 
 Local SDK/JDK compilation and host tests are separate from actual API36 execution. At implementation time this development host has no connected emulator or KVM device; no local app SSH runtime pass is claimed. Hosted app/WebView results must establish the UI path; they do not imply physical roaming, successful biometric prompts or every mobile SSH workflow.
 
+### Closed SSH control during Mosh uploads (#1523)
+
+`ownedMoshUploadsLargeClipboardImageThroughRealUi` continues after its fresh-upload and no-overwrite stages. The device reaches the owned OpenSSH daemon through `OwnedSshRelay` (the fixture's `port` is the relay port). The case types a shell command in its live Mosh terminal that publishes a receipt (`upload-control`) and waits; `tests/support/androidUploadRecovery.ts` then closes only the app's SSH stream through the server-attributed `closeOwnedServer`, requires the same Mosh shell, UDP daemon and socket afterwards, and releases the shell. The explicit Upload then shows the closed-control error and **Reconnect uploads** with the destination and draft intact. Manual private-key authentication restores the upload connection: the host requires the destination to stay absent until the first reconnection and for 1.5 s after it (the device waits longer), the device shows one tab and the same terminal element, and a separate explicit Upload creates the file (size and SHA-256 are compared on the host with the instrumentation's receipt). A repeated Upload is refused by the existing file, whose inode, size and modification time must not change from the completed upload. The original terminal prints a fresh nonce proof, and the relay listener, owned processes and directory retire with the fixture. The witness is exercised by a real-daemon host test (`owned namespaced SSH upload recovery witness ...`) including its refusal cases.
+
+The physical Galaxy S23+, the system file chooser and the camera are not part of this case (#1521), and the original cause of the Galaxy's SSH loss stays unknown.
+
 ## Debug Activity creation phases
 
 Debug builds emit three fixed `LazyshActivityCreate` messages: `onCreate:enter`,

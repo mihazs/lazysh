@@ -3512,7 +3512,7 @@ class NativeWorkspaceTest {
         fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
             "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
             .perform(webScrollIntoView()).perform(webClick())
-        fun stage(name: String) {
+        fun stage(name: String, upload: Boolean = true) {
             sessionView(scenario, "Attach")
             awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
             instrumentation.runOnMainSync {clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))}
@@ -3524,15 +3524,16 @@ class NativeWorkspaceTest {
                 "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && !document.querySelector('$panel [role=alert]')"))
             assertEquals("One enabled manual upload action", "true", evaluate(scenario,
                 "Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Upload attachment'&&!x.disabled).length===1"))
-            click("Upload attachment")
+            if (upload) click("Upload attachment")
         }
-        stage(owned.getString("newName"))
-        awaitDocument(scenario, "manual large image upload completed", """
+        fun uploadedTo(name: String) = """
             (()=>{const fields=document.querySelectorAll('$panel input[readonly]');return fields.length===1 &&
-              fields[0].value.endsWith(${JSONObject.quote("/"+owned.getString("newName")+"'")}) &&
+              fields[0].value.endsWith(${JSONObject.quote("/$name'")}) &&
               !document.querySelector('$panel [role=alert]') &&
               document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
-        """)
+        """
+        stage(owned.getString("newName"))
+        awaitDocument(scenario, "manual large image upload completed", uploadedTo(owned.getString("newName")))
         sessionView(scenario, "Terminal")
         awaitDocument(scenario, "successful upload panel retired", "!document.querySelector('$panel')")
         stage(owned.getString("collisionName"))
@@ -3543,7 +3544,76 @@ class NativeWorkspaceTest {
         """)
         sessionView(scenario, "Terminal")
         selectOwnedConnection(scenario, fixture.getString("name"), true)
-        println("lazysh manual attachment: large valid protected PNG uploaded; pre-existing destination rejected with SFTP Failure; original Mosh display selected")
+        verifyClosedControlUploadRecovery(scenario, fixture, label, ::stage, ::uploadedTo, ::click)
+        println("lazysh manual attachment: large valid protected PNG uploaded; pre-existing destination rejected with SFTP Failure; closed SSH control recovered by manual reauthentication; original Mosh display selected")
+    }
+
+    // #1523: the host closes only this app's relayed SSH stream while the Mosh daemon lives on. The explicit
+    // Upload then shows the closed-control recovery action and leaves the draft; manual authentication restores
+    // the upload connection without an automatic upload or a second terminal; a separate Upload writes the file.
+    private fun verifyClosedControlUploadRecovery(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String,
+        stage: (String, Boolean) -> Unit, uploadedTo: (String) -> String, click: (String) -> Unit) {
+        val nonce = fixture.getString("nonce")
+        val owned = fixture.getJSONObject("attachments")
+        val directory = owned.getString("directory")
+        val name = owned.getString("recoveryName")
+        require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+").matches(directory) && name == "owned-recovery-$nonce.png") { "Owned recovery fixture invalid" }
+        val panel = ".attachment-panel"
+        val destination = "$panel label:has(input:not([type]):not([readonly])) input"
+        val dialog = "[role=dialog][aria-label='Reconnect uploads to ${fixture.getString("name")}']"
+        val key = JSONObject.quote("__lazyshOwnedRecovery_$nonce")
+        val token = JSONObject.quote(UUID.randomUUID().toString())
+        fun typed(command: String, proof: String) {
+            sendOwnedCommand(scenario, command, label)
+            awaitDocument(scenario, "owned Mosh terminal printed its recovery proof", terminalScreenContains(proof))
+        }
+        fun same() = "owned.token===$token && owned.screen.isConnected && owned.screen===document.querySelector('.terminal-canvas .xterm-screen') && document.querySelectorAll('[role=tab]').length===owned.tabs"
+        assertEquals("Retain only the original Mosh terminal and tab", "true", evaluate(scenario, """
+            (()=>{const screen=document.querySelector('.terminal-canvas .xterm-screen');
+              if(!screen || Object.prototype.hasOwnProperty.call(window,$key))return false;
+              window[$key]={token:$token,screen,tabs:document.querySelectorAll('[role=tab]').length};return true;})()
+        """))
+        // The host answers this receipt by closing exactly the app's SSH stream, then releases the shell.
+        typed(hostReceipt(directory, "upload-control") + "printf 'CONTROL_%s_CLOSED\\n' '$nonce'", "CONTROL_${nonce}_CLOSED")
+        stage(name, false)
+        val draft = "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && " +
+            "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]')"
+        click("Upload attachment")
+        awaitDocument(scenario, "closed SSH control refuses the explicit upload and offers recovery", """
+            (()=>{const alerts=document.querySelectorAll('$panel [role=alert]');return alerts.length===1 &&
+              alerts[0].textContent.includes('The SSH file-transfer connection is closed') &&
+              Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Reconnect uploads'&&!x.disabled).length===1;})() && $draft
+        """)
+        click("Reconnect uploads")
+        awaitDocument(scenario, "manual upload reauthentication dialog", present(dialog))
+        assertEquals("Recovery offers no transport choice", "true", evaluate(scenario, "!document.querySelector(${JSONObject.quote("$dialog select")})"))
+        clickOwnedButton("Private key")
+        pasteOwnedText(scenario, "$dialog textarea", fixture.getString("privateKey"), label)
+        assertEquals("Recovery cannot remember credentials", "true", evaluate(scenario, "!document.querySelector(${JSONObject.quote("$dialog input[type=checkbox]")})"))
+        closeSoftKeyboard()
+        onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//button[normalize-space(.)='Reconnect uploads']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "manual authentication restored uploads and kept the draft", """
+            (()=>{const owned=window[$key];return !document.querySelector(${JSONObject.quote(dialog)}) && !document.querySelector('$panel [role=alert]') &&
+              Array.from(document.querySelectorAll('$panel [role=status]')).some(x=>x.textContent==='Uploads reconnected. Select Upload attachment to retry.') &&
+              !!owned && owned.token===$token && document.querySelectorAll('[role=tab]').length===owned.tabs;})() && $draft
+        """)
+        // The host requires the destination to stay absent for this long after the reconnect; wait it out, then upload explicitly.
+        Thread.sleep(2_500)
+        assertEquals("Reconnecting never uploads by itself", "true", evaluate(scenario, "$draft && !document.querySelector('$panel [role=alert]')"))
+        click("Upload attachment")
+        awaitDocument(scenario, "separate explicit upload after recovery completed", uploadedTo(name))
+        // A completed upload collapses the selected file; reopen it as a user would and repeat the same upload.
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel details.attachment-selected > summary"))
+            .perform(webScrollIntoView()).perform(webClick())
+        click("Upload attachment")
+        awaitDocument(scenario, "repeated upload refused by the existing remote file", """
+            (()=>{const alerts=document.querySelectorAll('$panel [role=alert]');return alerts.length===1 && alerts[0].textContent.startsWith('Failure: ') &&
+              !Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent.trim()==='Reconnect uploads');})()
+        """)
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "original Mosh terminal and tab retained", "(()=>{const owned=window[$key];return !!owned && ${same()};})()")
+        typed("printf 'CONTROL_%s_RECOVERED\\n' '$nonce'", "CONTROL_${nonce}_RECOVERED")
     }
 
     private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
@@ -3652,6 +3722,11 @@ class NativeWorkspaceTest {
         }
     }
 
+    // Publishes this shell's PID and start time as `<directory>/<name>`, then waits for the host's `<name>-ack`.
+    private fun hostReceipt(directory: String, name: String) =
+        "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/$name.tmp; " +
+            "mv $directory/$name.tmp $directory/$name; while ! test -f $directory/$name-ack; do sleep .1; done; "
+
     private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String, label: String) {
         val owned = fixture.getJSONObject("moshBackground")
         val directory = owned.getString("directory")
@@ -3688,9 +3763,7 @@ class NativeWorkspaceTest {
         }
         fun send(command: String) = sendOwnedCommand(scenario, command, label)
         fun proof(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun record(part: String) = "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/background-$part.tmp; " +
-            "mv $directory/background-$part.tmp $directory/background-$part; " +
-            "while ! test -f $directory/background-$part-ack; do sleep .1; done; "
+        fun record(part: String) = hostReceipt(directory, "background-$part")
         fun execution(active: Boolean) {
             val sample = connectionExecutionObservation()
             val valid = if (active) sample.getInt("serviceCount") == 1 && sample.getBoolean("foreground") &&
