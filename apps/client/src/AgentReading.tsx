@@ -1,6 +1,5 @@
 import {useEffect, useMemo, useRef, useState, type RefObject} from 'react';
 import {Check, ChevronDown, ChevronUp, Copy, X} from 'lucide-react';
-import type {Components} from 'react-markdown';
 import {t} from './i18n/core';
 import './AgentReading.css';
 
@@ -13,14 +12,8 @@ type Searchable = {id: string; blocks: {text?: string}[]};
 export const messageMarkdown = (message: {blocks: {type: string; text?: string}[]}) =>
   message.blocks.filter(block => block.type === 'text' && block.text).map(block => block.text).join('\n\n');
 
-/** The plain text of a rendered Markdown node (a code block), for the Copy button next to it. */
-export const nodeText = (node: unknown): string => {
-  const {type, value, children} = node as {type: string; value?: string; children?: unknown[]};
-  return type === 'text' ? value ?? '' : (children ?? []).map(nodeText).join('');
-};
-
-/** Copies `text` and says so; the label is also the accessible name, so it always states what happens. */
-export function CopyButton({text, label, className}: {text: string; label: string; className?: string}) {
+/** Copies `text` and says so; the label is also the accessible name, so it always states what happens. `labelled` also draws it. */
+export function CopyButton({text, label, className, labelled = false}: {text: string; label: string; className?: string; labelled?: boolean}) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -29,11 +22,9 @@ export function CopyButton({text, label, className}: {text: string; label: strin
   return <button type="button" className={`icon-button agent-copy ${className ?? ''}`} aria-label={title} title={title} data-state={state}
     onClick={() => void (navigator.clipboard?.writeText(text).then(() => done('copied'), () => done('failed')) ?? done('failed'))}>
     {state === 'copied' ? <Check size={14} aria-hidden="true"/> : <Copy size={14} aria-hidden="true"/>}
+    {labelled && <span aria-hidden="true">{title}</span>}
   </button>;
 }
-
-/** A code block with a button that copies its text. */
-export const codeBlockWithCopy: Components['pre'] = ({node, children}) => <div className="chat-code"><pre>{children}</pre><CopyButton text={nodeText(node).replace(/\n$/, '')} label={t('agentCopyCode')}/></div>;
 
 const highlights = (): Map<string, unknown> | undefined => typeof CSS === 'undefined' ? undefined : (CSS as unknown as {highlights?: Map<string, unknown>}).highlights;
 

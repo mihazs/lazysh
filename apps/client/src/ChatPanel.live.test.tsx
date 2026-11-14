@@ -233,3 +233,53 @@ describe('tool calls in the timeline',()=>{
     expect(status('sleep 1')).toBe('unknown');
   });
 });
+
+describe('plan calls in the timeline',()=>{
+  it('draws no row for the result of a plan call, which the plan chip already shows',async()=>{
+    const plan={id:'m-plan',role:'assistant',blocks:[{type:'tool_use',id:'todo-1',name:'TodoWrite',text:'{}',card:{kind:'plan',entries:[{text:'Run the suite',status:'in_progress'}]}}]};
+    const result={id:'m-res',role:'tool',blocks:[{type:'tool_result',id:'todo-1',text:'Todos have been modified successfully'}]};
+    poll=polled(...first,plan,result);
+    render_();await advance(0);
+    expect(screen.queryByText('Todos have been modified successfully')).toBeNull();
+    expect(screen.getByRole('button',{name:/0 of 1/})).toBeTruthy();
+  });
+});
+
+describe('message time',()=>{
+  const stamped=(id:string,role:string,value:string,timestamp?:string)=>({...text(id,role,value),...(timestamp?{timestamp}:{})});
+  it('keeps the time of a message under it for a screen reader and shows it after a tap, without rendering the list again',async()=>{
+    poll=polled(stamped('p1','user','Question','2026-11-13T10:30:00Z'),stamped('a1','assistant','Answer'));
+    render_();await advance(0);
+    const message=screen.getByText('Question').closest('article')!;
+    const time=message.querySelector('time')!;
+    expect(time.getAttribute('datetime')).toBe('2026-11-13T10:30:00Z');
+    expect(time.textContent).toMatch(/^Sent .*2026/);
+    expect(message.hasAttribute('data-stamped')).toBe(false);
+    const renders=markdownRenders.get('Question');
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(true);
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(false);
+    expect(markdownRenders.get('Question')).toBe(renders);
+    // A message the agent wrote without a time has nothing to show.
+    expect(screen.getByText('Answer').closest('article')!.querySelector('time')).toBeNull();
+  });
+  it('shows Copy message after a tap even for a message the agent wrote without a time',async()=>{
+    poll=polled(stamped('a1','assistant','Answer'));
+    render_();await advance(0);
+    const message=screen.getByText('Answer').closest('article')!;
+    expect(message.querySelector('time')).toBeNull();
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(true);
+    expect(message.querySelector('button.agent-copy')).not.toBeNull();
+  });
+  it('does not toggle the time when the tap ends a text selection',async()=>{
+    poll=polled(stamped('a2','assistant','Done','2026-11-13T10:31:00Z'));
+    render_();await advance(0);
+    const message=screen.getByText('Done').closest('article')!;
+    const selection=vi.spyOn(window,'getSelection').mockReturnValue({isCollapsed:false} as Selection);
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(false);
+    selection.mockRestore();
+  });
+});

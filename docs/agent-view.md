@@ -249,8 +249,10 @@ allow-list, not the GitHub default) → depth and count caps:
   classified by `chatInjected.ts` before a message reaches this pipeline, so they keep
   their event rows and are not treated as the person's HTML.
 
-Markdown pipe tables are not rendered (no GFM plugin); Files and repository previews keep
-the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
+Markdown follows GitHub's flavour (`remark-gfm`), so pipe tables, strikethrough and task
+lists render; a fenced block is a code block with its language, **Copy code** and syntax
+colours (see [Agent view design](reference/agent-view-design.md)). Files and repository
+previews keep the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 ### Desktop
 

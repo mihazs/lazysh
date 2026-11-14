@@ -38,3 +38,8 @@ it('draws no chip without a plan',async()=>{
   expect(screen.getByText('Done')).toBeTruthy();
   expect(screen.queryByRole('button',{name:/ of /})).toBeNull();
 });
+
+it('sets how much of the plan is done as the chip fill, so 2 of 3 reads as two thirds',async()=>{
+  await open([prompt,update('a',[['Read the code','completed'],['Write tests','completed'],['Ship','in_progress']])]);
+  expect(screen.getByRole('button',{name:/2 of 3/}).style.getPropertyValue('--plan-done')).toBe('67%');
+});

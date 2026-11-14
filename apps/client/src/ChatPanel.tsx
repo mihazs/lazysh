@@ -1,16 +1,19 @@
 import AttachmentPanel from './AttachmentPanel';
-import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import {ArrowDown,ArrowLeft,Info,MessageSquare,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import './AgentTokens.css';
+import './AgentRows.css';
+import './AgentChrome.css';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
 import {zellijPane} from './agentPaneIdentity';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseSnapshot,type ReportedHistorySource} from './AgentPanel';
 import {conversationSource,type ConversationAgent} from './agentConversationSource';
-import {formatNumber, t, useUi} from './i18n/core';
+import {formatDate, formatNumber, t, useUi} from './i18n/core';
 import {formatCountdown,formatRelativeTime,useNow} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import {useDialogAnswerer, useTaskStopper} from './agentDialogAnswer';
 import {ChatActivity,ChatCard,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
@@ -298,7 +301,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // The newest unanswered question is the dialog that may still be open: it stays out of the folded activity, and only it can be answered here.
   // The Agent view draws a call and its result as one card; a result whose call is not loaded keeps its own block.
   const toolResults = useMemo(() => timeline ? new Map(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_result' && block.id).map(block => [block.id!, block])) : new Map<string, Block>(), [timeline, messages]);
-  const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && !block.card).map(block => block.id!)), [messages]);
+  // A plan call is drawn as the pinned plan chip, so its result ("Todos have been modified") is not a row of its own either.
+  const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && (!block.card || block.card.kind === 'plan')).map(block => block.id!)), [messages]);
   // A message whose blocks are all results of loaded calls draws nothing of its own; the call's card carries its anchor so search and copy still find it.
   const resultAnchors = useMemo(() => new Map(messages.filter(message => timeline && message.blocks.length > 0 && message.blocks.every(block => block.type === 'tool_result' && block.id && toolCalls.has(block.id))).flatMap(message => message.blocks.map(block => [block.id!, message.id] as const))), [timeline, messages, toolCalls]);
   const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
@@ -659,6 +663,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord",event:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);
+  // A tap shows or hides what a message offers: when it was sent and Copy message. It toggles an attribute on the element, so the timeline does not render again; a selection in progress is left alone.
+  const stamp = (event: MouseEvent<HTMLElement>) => { if (window.getSelection()?.isCollapsed !== false && !(event.target as Element).closest('a, button, summary, input, textarea, pre')) event.currentTarget.toggleAttribute('data-stamped'); };
   const renderMessage = (message: Message) => message.event ? (
     <article key={message.id} data-anchor={message.id} data-message-id={message.id} className="chat-message agent-event">
       {message.event.detail
@@ -666,8 +672,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         : <p>{eventLabel(message.event)}</p>}
     </article>
   ) : (timeline && message.blocks.every(block => isPlanBlock(block) || isThinking(block))) || (message.blocks.length > 0 && message.blocks.every(paired)) ? null : (
-    <article key={message.id} data-anchor={message.id} data-message-id={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
-      {timeline && messageMarkdown(message) && <CopyButton text={messageMarkdown(message)} label={t('agentCopyMessage')} />}
+    <article key={message.id} data-anchor={message.id} data-message-id={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined} onClick={timeline && (Number.isFinite(Date.parse(message.timestamp ?? '')) || !!messageMarkdown(message)) ? stamp : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
         {message.record.stepIndex !== undefined ? `${t("chatStep", {index:message.record.stepIndex})} · ` : ""}
@@ -699,6 +704,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           </details></Fragment>
         );
       })}
+      {timeline && messageMarkdown(message) && <CopyButton text={messageMarkdown(message)} label={t('agentCopyMessage')} />}
+      {timeline && Number.isFinite(Date.parse(message.timestamp ?? '')) && <time className="agent-stamp" dateTime={message.timestamp}>{t('chatMessageTime',{time:formatDate(Date.parse(message.timestamp!),{dateStyle:'medium',timeStyle:'short'})})}</time>}
       {message.usage && !timeline && (
         <small>
           {Object.entries(message.usage)
@@ -849,7 +856,6 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
         {t('chatRecordedStart')}
       </button>}
-      {bound && (!atLatest || history.newer) && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
       {followable && !bound && <div className="chat-follow-controls">
         <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
@@ -885,9 +891,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
+        {timeline && opened && !busy && !error && messages.length === 0 && <div className="agent-empty"><MessageSquare size={32} aria-hidden="true"/><strong>{t('agentEmptyTitle')}</strong><p>{t('agentEmptyHint')}</p></div>}
         {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}
         {timeline && <AgentQueued queued={queued} />}
       </div>
+      {/* Over the end of the timeline, not in its flow: it appears and goes without moving a line. */}
+      {bound && (!atLatest || history.newer) && <div className="agent-jump"><div className="agent-jump-box">
+        <button type="button" className="agent-jump-latest" aria-label={t("chatJumpLatest")} title={t("chatJumpLatest")} onClick={jumpToLatest}><ArrowDown size={20} aria-hidden="true"/></button>
+      </div></div>}
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}

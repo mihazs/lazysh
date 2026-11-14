@@ -25,7 +25,9 @@ import {noReading, type Reading} from './AgentReading';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
+import './AgentTokens.css';
 import './AgentView.css';
+import './AgentChrome.css';
 
 const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
@@ -242,10 +244,14 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   return <section className="agent-view" data-history={reading.full?undefined:'conversation'} hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
       {state && <StatusRing tone={state.tone} />}
-      <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
-      {state && <span title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && row && <> · <time dateTime={row.waitingSince ?? row.updatedAt}>{formatRelativeTime(row.waitingSince ?? row.updatedAt, now)}</time></>}</span>}
-      {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
-      {reader && <AgentHeaderPills session={info}/>}
+      <div className="agent-view-heading">
+        <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
+        <div className="agent-view-facts">
+          {state && <span className="agent-view-state" data-tone={state.tone} title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && row && <> · <time dateTime={row.waitingSince ?? row.updatedAt}>{formatRelativeTime(row.waitingSince ?? row.updatedAt, now)}</time></>}</span>}
+          {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
+          {reader && <AgentHeaderPills session={info}/>}
+        </div>
+      </div>
       {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
