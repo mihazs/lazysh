@@ -1,0 +1,67 @@
+.gt { display: flex; flex-direction: column; gap: 14px; padding: 2px 24px 22px; }
+.gt-stage { display: flex; justify-content: center; }
+.gt-copy h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--theme-text); }
+.gt-copy p, .gt-help p, .gt-replay { margin: 0 0 6px; font-size: 13px; line-height: 1.55; color: var(--theme-muted); }
+.gt-off { color: var(--theme-warning) !important; }
+.gt-progress { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--theme-muted); }
+.gt-dots { display: flex; gap: 6px; }
+.gt-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--theme-border); }
+.gt-dots i[data-active] { background: var(--theme-accent); }
+.gt-help { display: flex; flex-direction: column; gap: 14px; padding: 4px 16px 16px; }
+.gt-help h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+
+/* The phone, drawn at its final frame: panels open, the finger where the swipe ends, an arrow for its direction. */
+.gt-phone { height: min(300px, 36dvh); width: auto; aspect-ratio: 160 / 300; max-width: 100%; overflow: visible; }
+.gt-body { fill: var(--theme-bg); stroke: var(--theme-border); stroke-width: 3; }
+.gt-screen { fill: var(--theme-control); }
+.gt-line { fill: var(--theme-muted); opacity: 0.5; }
+.gt-sheet { fill: var(--theme-panel); stroke: var(--theme-border); stroke-width: 1; }
+.gt-item { fill: var(--theme-hover); }
+.gt-field { fill: var(--theme-bg); stroke: var(--theme-border); }
+.gt-caret { fill: var(--theme-accent); }
+.gt-pill { fill: var(--theme-text); opacity: 0.5; }
+.gt-zone { fill: var(--theme-accent); opacity: 0.28; }
+.gt-arrow { fill: none; stroke: var(--theme-accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.gt-ring { fill: var(--theme-accent); opacity: 0.25; stroke: var(--theme-accent); stroke-width: 1.5; }
+.gt-dot { fill: var(--theme-accent); }
+.gt-finger { transform: translate(var(--bx), var(--by)); }
+.gt-blocked { fill: none; stroke: var(--theme-danger); stroke-width: 4; stroke-linecap: round; }
+.gt-phone[data-scene="typing"] .gt-arrow { stroke: var(--theme-muted); }
+.gt-phone[data-scene="typing"] .gt-pill { fill: var(--theme-text); opacity: 0.5; }
+.gt-zone { fill: var(--theme-muted); }
+.gt-handle { fill: var(--theme-accent); }
+.gt-phone[data-off] { opacity: 0.55; }
+
+/* Every panel opens under the finger and closes under it again (side menu left, bottom menu down, Agent view right). */
+@media (prefers-reduced-motion: no-preference) {
+  .gt-phone .gt-arrow { opacity: 0; }
+  .gt-phone .gt-panel { animation: gt-reveal 5.2s ease-in-out infinite; }
+  .gt-phone .gt-finger { animation: gt-swipe-back 5.2s ease-in-out infinite; }
+  .gt-phone .gt-zone { animation: gt-glow 5.2s ease-in-out infinite; }
+  .gt-phone[data-scene="typing"] .gt-finger { animation-name: gt-swipe; }
+  .gt-phone[data-scene="typing"] .gt-caret { animation: gt-blink 1s steps(1) infinite; }
+  .gt-phone[data-scene="typing"] .gt-blocked { animation: gt-stop 5.2s ease-in-out infinite; }
+}
+@keyframes gt-reveal {
+  0%, 10% { transform: translate(var(--hx), var(--hy)); }
+  34%, 60% { transform: translate(0, 0); }
+  88%, 100% { transform: translate(var(--hx), var(--hy)); }
+}
+@keyframes gt-swipe {
+  0% { opacity: 0; transform: translate(var(--ax), var(--ay)); }
+  6% { opacity: 1; transform: translate(var(--ax), var(--ay)); }
+  36% { opacity: 1; transform: translate(var(--bx), var(--by)); }
+  44%, 100% { opacity: 0; transform: translate(var(--bx), var(--by)); }
+}
+@keyframes gt-swipe-back {
+  0% { opacity: 0; transform: translate(var(--ax), var(--ay)); }
+  6% { opacity: 1; transform: translate(var(--ax), var(--ay)); }
+  34% { opacity: 1; transform: translate(var(--bx), var(--by)); }
+  40%, 58% { opacity: 0; transform: translate(var(--bx), var(--by)); }
+  62% { opacity: 1; transform: translate(var(--bx), var(--by)); }
+  88% { opacity: 1; transform: translate(var(--ax), var(--ay)); }
+  94%, 100% { opacity: 0; transform: translate(var(--ax), var(--ay)); }
+}
+@keyframes gt-glow { 0%, 100% { opacity: 0.12; } 50% { opacity: 0.45; } }
+@keyframes gt-stop { 0%, 30% { opacity: 0; } 40%, 80% { opacity: 1; } 92%, 100% { opacity: 0; } }
+@keyframes gt-blink { 50% { opacity: 0; } }

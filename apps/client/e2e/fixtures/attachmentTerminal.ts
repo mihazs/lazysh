@@ -32,10 +32,15 @@ export async function connectAttachmentTerminal(page:Page,{nonce,uploadedPath,re
     };
   },{receipt:attachmentReceipt,uploadedPath});
   await page.goto('/');
+  await openAttachmentTerminal(page);
+  await page.evaluate(ready=>window.attachmentTerminal.emit(ready),ready);
+}
+
+/** From the connection list (the drawer on a phone) to the connected fixture terminal; also after a reload. */
+export async function openAttachmentTerminal(page:Page) {
   if(test.info().project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Connect to Attachment fixture',exact:true}).click();
   await page.getByLabel('Password',{exact:true}).fill('synthetic-owned-fixture');
   await page.getByRole('button',{name:'Connect',exact:true}).click();
   await expect(page.getByLabel('Terminal keys',{exact:true})).toBeVisible();
-  await page.evaluate(ready=>window.attachmentTerminal.emit(ready),ready);
 }
