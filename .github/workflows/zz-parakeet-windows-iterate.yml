@@ -1,0 +1,31 @@
+name: zz-parakeet-windows-iterate
+on:
+  push:
+    branches: [feat/parakeet-windows-x86-64]
+permissions:
+  contents: read
+concurrency:
+  group: zz-parakeet-windows-iterate
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: blacksmith-4vcpu-windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: bun install --frozen-lockfile
+      - name: Diagnostics
+        shell: pwsh
+        run: |
+          foreach ($p in @($env:TEMP, $env:RUNNER_TEMP, $env:GITHUB_WORKSPACE, "$env:USERPROFILE\AppData\Roaming", 'C:\', 'D:\')) { if (Test-Path $p) { "== $p"; icacls $p } }
+          (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem').LongPathsEnabled
+          cmake --version
+          Get-Volume | Format-Table
+          (Get-Location).Path
+      - name: Runtime native fixtures
+        run: cargo test --locked -p lazysh-parakeet-runtime --test native -- --nocapture
