@@ -335,12 +335,13 @@ pub fn voice_remove_model(
     state: State<'_, VoiceState>,
     id: String,
 ) -> Protected<()> {
-    access.run_sync(|| {
-        if state.busy.load(Ordering::Acquire) {
-            return Err("Wait for transcription to finish before removing models".into());
-        }
-        fs::remove_file(state.path(&id)?).map_err(|_| "Cannot remove model".to_owned())
-    })
+    access.run_sync(|| remove_model(&state, &id))
+}
+fn remove_model(state: &VoiceState, id: &str) -> Result<()> {
+    if state.busy.load(Ordering::Acquire) {
+        return Err("Wait for transcription to finish before removing models".into());
+    }
+    fs::remove_file(state.path(id)?).map_err(|_| "Cannot remove model".to_owned())
 }
 fn validate_audio(samples: &[f32], language: &str) -> Result<()> {
     // No logging backend is enabled: suppress native diagnostics that may include dictated text.
@@ -571,6 +572,38 @@ mod tests {
             .path()
             .extension()
             .is_none_or(|extension| extension != "part")));
+    }
+    fn import_model(state: &VoiceState, name: &str) {
+        let id = begin(state, name.into(), 1024).unwrap();
+        chunk(state, &id, 0, &super::test_support::ggml_bytes()).unwrap();
+        finish(state, &id, false).unwrap();
+    }
+    #[test]
+    fn model_removal_deletes_only_the_named_model_and_frees_its_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.bin");
+        let models = dir.path().join("models");
+        fs::write(&outside, b"not a model").unwrap();
+        let state = VoiceState::new(models.clone()).unwrap();
+        for name in ["tiny.bin", "base.bin", "other.bin"] {
+            import_model(&state, name);
+        }
+        assert!(begin(&state, "extra.bin".into(), 1024).is_err());
+        state.busy.store(true, Ordering::Release);
+        assert!(remove_model(&state, "tiny.bin").is_err());
+        assert!(models.join("tiny.bin").exists());
+        state.busy.store(false, Ordering::Release);
+        for rejected in ["../outside.bin", "missing.bin", "tiny.txt"] {
+            assert!(remove_model(&state, rejected).is_err());
+        }
+        assert!(outside.exists());
+        remove_model(&state, "tiny.bin").unwrap();
+        assert!(!models.join("tiny.bin").exists());
+        let left: Vec<_> = list(&state).unwrap().into_iter().map(|m| m.id).collect();
+        assert_eq!(left, ["base.bin", "other.bin"]);
+        assert!(remove_model(&state, "tiny.bin").is_err());
+        import_model(&state, "extra.bin");
+        assert_eq!(list(&state).unwrap().len(), 3);
     }
     #[test]
     fn invalid_audio_and_models_are_rejected_before_native_inference() {

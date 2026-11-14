@@ -57,7 +57,7 @@ The engine is [whisper-rs 0.16](https://codeberg.org/tazz4843/whisper-rs), backe
 
 Building the engine requires CMake and libclang alongside the platform C/C++ toolchain. Cargo config disables build-machine CPU tuning and optional x86 instruction sets so distributed binaries retain a portable baseline. The Android package task passes the selected NDK to CMake and uses the engine crate's supplied FFI bindings for its ARM64 target, avoiding host C-library headers during cross-compilation. Tauri detects and packages the NDK C++ shared runtime automatically. Hardware acceleration and CPU dispatch variants need separate measured release work.
 
-Cargo tests validate import limits, ordering, non-overwrite publication, cancellation cleanup and audio rejection. Vitest tests validate resampling, model boundaries, microphone denial and explicit draft staging. The ignored native speech test accepts explicit external fixtures:
+Cargo tests validate import limits, ordering, non-overwrite publication, cancellation cleanup, audio rejection and model removal: removal deletes only the named model file, refuses to run during a transcription or for a name outside the model directory, and frees a slot for the next import. Vitest tests validate resampling, model boundaries, microphone denial and explicit draft staging. The ignored native speech test accepts explicit external fixtures:
 
 ```sh
 LAZYSH_WHISPER_TEST_MODEL=/path/to/ggml-tiny.en.bin \
