@@ -25,6 +25,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Resolve an exact waiting Claude permission hook | [Approvals](approvals.md) |
 | Browse Git changes and stage review comments | [Repository review](repository-review.md) |
 | Preview a forwarded remote web service | [Previews](previews.md) |
+| Finish a browser sign-in whose redirect goes to `localhost` on the host (planned automatic tunnel, manual workaround today) | [Sign in on a host from your device](how-to/sign-in-on-a-host-from-your-device.md) |
 | Preview, upload or recover an image transfer | [Attachments](attachments.md) |
 | Encrypt and synchronize selected settings or credentials | [Sync](sync.md) |
 | Create an explicitly public, expiring share link | [Sharing](sharing.md) |
@@ -63,6 +64,8 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |
 | Theme QR evidence and pending native acceptance | [Theme QR acceptance](theme-qr-acceptance.md) |
+| Planned sign-in tunnel and device browser: settings, schemas, limits | [Sign-in tunnel contracts](reference/auth-tunnel.md) |
+| What `aws`, `gcloud`, `az`, `gh`, `claude`, `codex` and other login commands do: callback or device code, launchers, listeners | [Observed sign-in flows](reference/sso-login-flows.md) |
 | Host device Android SDK acceptance | [Device acceptance](reference/devices-acceptance.md) |
 | Attachment destination paths, cancellation and transfer limits | [Attachment transfer](reference/attachments.md) |
 | Sync categories, conflict behavior and cryptography | [Encrypted sync](reference/sync.md) |
@@ -88,6 +91,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | How are client, native transport and optional services separated? | [Architecture and implementation boundary](architecture.md) |
 | Why Appium and WebdriverIO drive the Android app, and where the suite sits in the test pyramid | [ADR 0002](architecture/adr-0002-appium-webdriverio-android-e2e.md) |
 | Why and how the companion updates on the host: trust model, `lazysh-agent update` contract, bootstrap, rollback and auto-update (planned) | [ADR 0003](architecture/adr-0003-host-side-companion-update.md) |
+| How a sign-in's `localhost` callback reaches the device, why the redirect is never rewritten, and how host browser requests open on the device (planned) | [ADR 0004](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) |
 | Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
 
 ## Evidence and delivery

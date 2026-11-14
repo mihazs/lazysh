@@ -14,6 +14,8 @@ The [local workspace specification](local-workspace.md) describes how desktop lo
 
 The [multiplexer compatibility specification](multiplexer-compatibility.md) describes the planned capability checklist for tmux, Zellij, Herdr and rmux.
 
+The [sign-in tunnel and device browser design](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) describes the planned automatic `localhost` callback tunnel and opening host browser requests on the device (epic [#1504](https://github.com/mihazs/lazysh/issues/1504)).
+
 The [host browser specification](host-browser.md) describes the planned opt-in view and control of a Chrome or Firefox on the host from the phone, with its [measured feasibility](reference/host-browser-feasibility.md).
 
 Anyone can follow the public issues or propose a focused contribution without
