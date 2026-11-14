@@ -1101,6 +1101,29 @@ mod tests {
         assert_eq!(tree.workspaces[0].label, "literal'$(touch nope)");
         assert_eq!(tree.tabs.len(), 2);
         assert_eq!(tree.panes.len(), 3);
+        // The companion's exact `pane.focus` moves focus to a live pane that does not have it,
+        // and the real server then reports that pane and its tab as the focused ones.
+        let (focus, focus_tab) = tree
+            .panes
+            .iter()
+            .find(|pane| !pane.focused)
+            .map(|pane| (pane.pane_id.clone(), pane.tab_id.clone()))
+            .unwrap();
+        run(action_command(
+            session,
+            &HerdrAction::FocusPane {
+                target: focus.clone(),
+            },
+        )
+        .unwrap());
+        let refocused = snapshot();
+        let focused: Vec<_> = refocused.panes.iter().filter(|pane| pane.focused).collect();
+        assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].pane_id, focus);
+        assert!(refocused
+            .tabs
+            .iter()
+            .any(|tab| tab.tab_id == focus_tab && tab.focused));
         let tab = tree.tabs[1].tab_id.clone();
         run(action_command(
             session,
