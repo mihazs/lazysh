@@ -4,7 +4,7 @@ import {createPortal} from 'react-dom';
 import {bindProtectedInvoke,type AccessLease} from './access';
 import DirectoryPicker,{type Load} from './DirectoryPicker';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
-import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,workspaceDirectory,worktreeSource} from './herdrCreate';
+import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,validSessionId,workspaceDirectory,worktreeSource} from './herdrCreate';
 import {t,useUi} from './i18n/core';
 import {pathBasename} from './relativeTime';
 import {captureUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
@@ -17,7 +17,7 @@ type Stage='folder'|'folderCheck'|'worktree'|'workspace'|'window'|'pane'|'agentC
 type Step={stage:Stage;argv:string[];command:string};
 type Outcome={folder?:string;worktree?:string;workspaceId?:string;paneId?:string;agent?:string;failure?:{stage:Stage;message:string}};
 type Target={type:'directory';label:string;directory:string;create?:boolean}|{type:'worktree';repository:string;branch:string;base:string;path:string};
-type Request={target:Target;agent?:{kind:string;name:string;prompt?:string}};
+type Request={target:Target;agent?:{kind:string;name:string;prompt?:string;resume?:string}};
 /** The session's tmux or Zellij, which the launcher starts the agent in; Herdr is addressed by `server`. */
 type Multiplexer={kind:'tmux'|'zellij';name:string};
 type Location='folder'|'new'|'worktree';
@@ -48,6 +48,8 @@ export function HerdrWorktreeCreate({label,tree,...props}:Shared&{tree:HerdrTree
     {open && <CreateFlow {...props} tree={tree} source={source} agentFirst close={()=>setOpen(false)}/>}
   </>;
 }
+/** The session's multiplexer as the flow addresses it: Herdr by `server`, tmux and Zellij by `multiplexer`. */
+const flowHost=(multiplexer:{kind:'herdr'|'tmux'|'zellij';name:string})=>({server:multiplexer.name,multiplexer:multiplexer.kind==='herdr'?undefined:{kind:multiplexer.kind,name:multiplexer.name}});
 /** The Agent view's New agent flow: the attached multiplexer, an existing or new folder or a new worktree, and an agent that must be chosen. Nothing runs before the reviewed commands are confirmed. */
 export function AgentLaunch({label,compact,multiplexer,...props}:Omit<Shared,'server'>&{label:string;/** An icon button for a toolbar. */compact?:boolean;multiplexer:{kind:'herdr'|'tmux'|'zellij';name:string}}) {
   useUi();
@@ -56,8 +58,19 @@ export function AgentLaunch({label,compact,multiplexer,...props}:Omit<Shared,'se
     {compact
       ? <button type="button" className="icon-button" title={label} aria-label={label} disabled={props.disabled} onClick={()=>setOpen(true)}><SquarePlus size={18} aria-hidden="true"/></button>
       : <button type="button" className="subtle-button herdr-create-trigger" disabled={props.disabled} onClick={()=>setOpen(true)}><SquarePlus size={16} aria-hidden="true"/>{label}</button>}
-    {open && <CreateFlow {...props} server={multiplexer.name} multiplexer={multiplexer.kind==='herdr'?undefined:{kind:multiplexer.kind,name:multiplexer.name}} launcher close={()=>setOpen(false)}/>}
+    {open && <CreateFlow {...props} {...flowHost(multiplexer)} launcher close={()=>setOpen(false)}/>}
   </>;
+}
+/** The launch that continues an earlier session with the agent's own resume command, in a new pane of its folder; nothing when the ID or the folder is not valid on the host. */
+export function resumeRequest(agent:'claude'|'codex',id:string,folder:string):Request|undefined {
+  if(!validSessionId(id) || !validAbsolutePath(folder))return undefined;
+  const label=pathBasename(folder);
+  return {target:{type:'directory',label:validLabel(label)?label:agent,directory:folder},agent:{kind:agent,name:agentName(agent),resume:id}};
+}
+/** Resumes an earlier session in a new pane: the dialog opens on the review of the exact commands, and nothing runs before they are confirmed. */
+export function AgentResume({multiplexer,request,close,...props}:Pick<Shared,'sessionId'|'lease'|'onCreated'>&{multiplexer:{kind:'herdr'|'tmux'|'zellij';name:string};request:Request;close:()=>void}) {
+  useUi();
+  return <CreateFlow {...props} {...flowHost(multiplexer)} disabled={false} resume={request} close={close}/>;
 }
 /** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. Escape is handled while capturing so the phone sidebar's own Escape (close the sidebar) never sees it. */
 export function HerdrSpaceActions({workspace,open,onOpenChange,...props}:Shared&{tree:HerdrTree;workspace:{workspace_id:string;label:string};open:boolean;onOpenChange:(open:boolean)=>void}) {
@@ -120,13 +133,14 @@ export function Modal({title,close,step,children}:{title:string;close:()=>void;s
   </div>,document.body);
 }
 
-function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,onCreated,close,agentFirst,multiplexer,launcher}:Shared&{source?:Source;close:()=>void;agentFirst?:boolean;multiplexer?:Multiplexer;launcher?:boolean}) {
+function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,onCreated,close,agentFirst,multiplexer,launcher,resume}:Shared&{source?:Source;close:()=>void;agentFirst?:boolean;multiplexer?:Multiplexer;launcher?:boolean;/** A launch that is already chosen: the flow starts at its review. */resume?:Request}) {
   useUi();
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const alive=useRef(true);
-  useEffect(()=>()=>{alive.current=false;},[]);
+  // Set again on mount: React's development StrictMode runs the cleanup once before the dialog is shown.
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const owns=()=>alive.current && lease.current();
-  const [phase,setPhase]=useState<'form'|'review'|'running'|'result'>('form');
+  const [phase,setPhase]=useState<'form'|'review'|'running'|'result'>(resume?'review':'form');
   const [problem,setProblem]=useState<UiErrorCause>('');
   const [invalid,setInvalid]=useState<Invalid>();
   const [label,setLabel]=useState('');
@@ -198,12 +212,16 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     setInvalid(check);
     if(check || typeof value==='string')return;
     const request:Request={target:value,...(startAgent && selected?{agent:{kind:selected.kind,name:nameFor(selected.kind),...(selected.prompt && prompt.trim()?{prompt}:{})}}:{})};
+    await showPlan(request);
+  }
+  async function showPlan(request:Request) {
     setProblem('');
     try {
       const plan=await invoke<{steps:Step[]}>(multiplexer?'multiplexer_launch_plan':'herdr_workspace_plan',multiplexer?{multiplexer,request}:{name:server,request});
       if(owns()){setReview({request,steps:plan.steps});setPhase('review');}
     } catch(error){if(owns())setProblem(captureUiError(error));}
   }
+  useEffect(()=>{if(resume)void showPlan(resume);},[]);
   const running=useRef(false);
   async function confirm() {
     if(!review || phase!=='review' || running.current)return;
@@ -217,7 +235,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     } catch(error){if(owns()){setProblem(captureUiError(error));setPhase('review');}}
     finally{running.current=false;}
   }
-  const title=launcher?t('agentLaunchTitle'):source?t('herdrCreateWorktree',{name:source.label}):t('herdrNewWorkspace');
+  const title=resume?t('agentHistoryResumeNew'):launcher?t('agentLaunchTitle'):source?t('herdrCreateWorktree',{name:source.label}):t('herdrNewWorkspace');
   const agentFields=<>
     {kinds?.state==='loading' && <p role="status">{t('herdrCreateDetecting')}</p>}
     {kinds?.state==='failed' && <p className="inline-error" role="alert">{uiErrorText(kinds.cause)}</p>}
@@ -267,13 +285,17 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
       {(invalid || problem) && <p className="inline-error" role="alert">{invalid?t(invalid):uiErrorText(problem)}</p>}
       <div className="dialog-actions"><button type="button" className="subtle-button" onClick={close}>{t('appCancel')}</button><button type="submit" className="primary-button" disabled={worktree && repository?.state!=='ready'}>{t('herdrCreateReview')}</button></div>
     </form>}
+    {phase==='review' && !review && <div className="form-stack herdr-create-review">
+      {problem?<div role="alert"><pre className="herdr-create-output">{uiErrorText(problem)}</pre></div>:<p role="status">{t('agentResumePlanning')}</p>}
+      <div className="dialog-actions"><button type="button" className="subtle-button" onClick={close}>{t('appCancel')}</button></div>
+    </div>}
     {(phase==='review' || phase==='running') && review && <div className="form-stack herdr-create-review">
       <p>{t('herdrCreateConfirmIntro')}</p>
       <ol>{review.steps.map((step,index)=><li key={index}><strong>{t(stageKeys[step.stage])}</strong><pre className="herdr-create-output"><code>{step.command}</code></pre></li>)}</ol>
       {review.request.agent?<p className="muted">{stepNote}</p>:<p><strong>{t('herdrCreateNoAgentNote')}</strong></p>}
       {phase==='running' && <p role="status">{t('herdrCreateRunning')}</p>}
       {problem && <div role="alert"><p>{t('herdrCreateFailedNothing')}</p><pre className="herdr-create-output">{uiErrorText(problem)}</pre></div>}
-      <div className="dialog-actions"><button type="button" className="subtle-button" disabled={phase==='running'} onClick={()=>{setPhase('form');setProblem('');}}>{t('navigationBack')}</button><button type="button" className="primary-button" disabled={phase==='running'} onClick={()=>void confirm()}>{t(review.request.agent?'herdrCreateConfirmAgent':'herdrCreateConfirm')}</button></div>
+      <div className="dialog-actions"><button type="button" className="subtle-button" disabled={phase==='running'} onClick={()=>{if(resume)close();else{setPhase('form');setProblem('');}}}>{t(resume?'appCancel':'navigationBack')}</button><button type="button" className="primary-button" disabled={phase==='running'} onClick={()=>void confirm()}>{t(resume?'agentResumeConfirm':review.request.agent?'herdrCreateConfirmAgent':'herdrCreateConfirm')}</button></div>
     </div>}
     {phase==='result' && outcome?.failure && <div className="form-stack herdr-create-review" role="alert">
       {outcome.folder && <p>{t('agentLaunchKeptFolder',{path:outcome.folder})}</p>}

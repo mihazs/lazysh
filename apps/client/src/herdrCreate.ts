@@ -25,6 +25,11 @@ export function validPrompt(value:string,multiline=false) {
   return value.trim()==='' || (freeText(multiline?value.replace(/[\n\t]/g,' '):value,2000) && !value.startsWith('-'));
 }
 
+/** An earlier session's ID as the agents' resume commands take it: it never starts with `-`, so it cannot read as an option. Mirrors the host's check. */
+export const validSessionId=(value:string)=>/^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/.test(value);
+/** The agent's own command to continue an earlier session; the same words the launcher runs in a new pane. */
+export const resumeCommand=(agent:'claude'|'codex',id:string)=>`${agent==='claude'?'claude --resume':'codex resume'} ${id}`;
+
 /** A branch suggestion from a workspace label that differs from the current HEAD. */
 export function branchFromLabel(label:string,head?:string) {
   const slug=label.toLocaleLowerCase().normalize('NFKD').replace(/[^a-z0-9/_-]+/g,'-').replace(/\/+/g,'/')

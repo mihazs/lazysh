@@ -3,7 +3,7 @@ import {cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/r
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import {captureAccess} from './access';
-import {AgentLaunch} from './HerdrWorkspaceCreateDialog';
+import {AgentLaunch,AgentResume,resumeRequest} from './HerdrWorkspaceCreateDialog';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
@@ -47,6 +47,13 @@ beforeEach(()=>{
   });
 });
 afterEach(cleanup);
+/** Confirms the Herdr commands under review: exactly the reviewed request creates the workspace, which is then reported. */
+async function confirmHerdr(dialog:HTMLElement,button:string,request:unknown) {
+  outcome={workspaceId:'w9',paneId:'w9:p1'};
+  fireEvent.click(within(dialog).getByRole('button',{name:button}));
+  await waitFor(()=>expect(created).toHaveBeenCalledWith('w9'));
+  expect(calls('herdr_workspace_create')).toEqual([{sessionId:'ssh',name:'default',request}]);
+}
 
 describe('the New agent launcher',()=>{
   it('lists every supported agent and offers only the installed ones',async()=>{
@@ -156,9 +163,26 @@ describe('the New agent launcher',()=>{
     expect(calls('herdr_workspace_plan')).toEqual([{name:'default',request}]);
     expect(calls('multiplexer_launch_plan')).toEqual([]);
     expect(within(dialog).getByText(/becomes the first pane of the new workspace/)).toBeTruthy();
-    outcome={workspaceId:'w9',paneId:'w9:p1'};
-    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
-    await waitFor(()=>expect(created).toHaveBeenCalledWith('w9'));
-    expect(calls('herdr_workspace_create')).toEqual([{sessionId:'ssh',name:'default',request}]);
+    await confirmHerdr(dialog,'Create and start agent',request);
+  });
+});
+
+describe('resuming an earlier session',()=>{
+  const session='019a1b2c-3d4e-4f60-8a9b-0c1d2e3f4a5b';
+  const agent={kind:'claude',name,resume:session};
+  it('asks for a launch only with a valid session ID and an absolute folder',()=>{
+    expect(resumeRequest('claude',session,'/srv/app')).toEqual({target:{type:'directory',label:'app',directory:'/srv/app'},agent});
+    // An ID that could read as an option, a short one and a relative folder never reach the host.
+    for(const [id,folder] of [['-abcdefgh','/srv/app'],['--resume','/srv/app'],['abc','/srv/app'],['a'.repeat(65),'/srv/app'],['abcd efgh','/srv/app'],[session,'srv/app'],[session,'/srv/../app']])expect(resumeRequest('codex',id,folder),`${id} ${folder}`).toBeUndefined();
+  });
+
+  it('shows the Herdr commands first and runs exactly that request once confirmed',async()=>{
+    const request=resumeRequest('claude',session,'/srv/app')!;
+    render(<AgentResume sessionId="ssh" lease={captureAccess()} multiplexer={{kind:'herdr',name:'default'}} request={request} close={vi.fn()} onCreated={created}/>);
+    const dialog=await screen.findByRole('dialog',{name:'Resume in a new pane'});
+    await within(dialog).findByText(/Only these exact commands/);
+    expect(calls('herdr_workspace_plan')).toEqual([{name:'default',request}]);
+    expect(calls('herdr_workspace_create')).toEqual([]);
+    await confirmHerdr(dialog,'Resume in a new pane',request);
   });
 });

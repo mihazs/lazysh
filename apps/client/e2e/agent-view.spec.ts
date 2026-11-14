@@ -2,6 +2,7 @@ import {expect,test,type Locator,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {workspaceControl} from './fixtures/workspaceControl';
 import {connectHost} from './fixtures/connectHost';
+import {fitsWidth} from './fixtures/dialogFit';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from '../src/test/opencodeRecorded';
@@ -639,8 +640,8 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
           agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:`0000000${index}-0000-4000-8000-000000000000`}}))};
     };
     const reports=Array.from({length:50},(_,index)=>({sessionId:`ended-${index}`,agent:'Claude Code',project:`/home/owner/old-${index}`,state:'done',updatedAt:new Date().toISOString(),summary:'Session ended',paneId:null,eventCount:3}));
-    type Fixture={conversations:unknown[];entered:unknown[];focus:string;inputs:unknown[];history:unknown[];inputError?:unknown};
-    (window as unknown as {herdrFixture:Fixture}).herdrFixture={conversations:[],entered:[],history:[],focus:start.focus??'',inputs:[]};
+    type Fixture={conversations:unknown[];entered:unknown[];focus:string;inputs:unknown[];history:unknown[];plans:unknown[];created:unknown[];inputError?:unknown};
+    (window as unknown as {herdrFixture:Fixture}).herdrFixture={conversations:[],entered:[],history:[],plans:[],created:[],focus:start.focus??'',inputs:[]};
     const record=(window as unknown as {herdrFixture:Fixture}).herdrFixture;
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
@@ -648,6 +649,14 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       if(command==='multiplexer_sessions')return [{name:'owned'}];
       if(command==='herdr_tree')return tree();
       if(command==='herdr_action'){record.entered.push(args.action);return;}
+      // The launcher's plan is a stand-in with the argv the Rust builder produces; the real words are asserted against a real Herdr by the cargo tests.
+      if(command==='herdr_workspace_plan'){
+        record.plans.push(args);
+        const {target,agent}=args.request as {target:{label:string;directory:string};agent:{kind:string;name:string;resume:string}};
+        return {steps:[{stage:'agentCheck',argv:[],command:`'command' '-v' '--' '${agent.kind}'`},{stage:'workspace',argv:[],command:`'herdr' 'workspace' 'create' '--label' '${target.label}' '--cwd' '${target.directory}'`},
+          {stage:'agent',argv:[],command:`'herdr' 'agent' 'start' '${agent.name}' '--kind' '${agent.kind}' '--' '--resume' '${agent.resume}'`}]};
+      }
+      if(command==='herdr_workspace_create'){record.created.push(args);return {workspaceId:'w9',paneId:'w9:p1'};}
       // Stock Herdr has no guard: the status says so and every guarded call is refused. Only its own agent commands deliver input.
       if(command==='herdr_chat'){if((args.action as {kind:string}).kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
       if(command==='herdr_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
@@ -675,7 +684,7 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
 }
-const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];inputs:unknown[]}}).herdrFixture);
+const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];inputs:unknown[];plans:{request:unknown}[];created:unknown[]}}).herdrFixture);
 const focusPane=(page:Page,pane:string)=>page.evaluate(pane=>{(window as unknown as {herdrFixture:{focus:string}}).herdrFixture.focus=pane;},pane);
 
 test('stock Herdr: the Agent view lists the live agents, and selecting one opens its native chat',async({page})=>{
@@ -967,8 +976,8 @@ test('Herdr: with no agent running the Agent view offers to start one through th
   expect((await herdrFixture(page)).entered).toEqual([]);
 });
 
-test('Herdr: the earlier sessions of the pane folder open read-only, and Resume stages the agent command in the terminal for review',async({page})=>{
-  await openHerdr(page,true,false,{focus:'w0:p2',agents:0,launch:true});
+test('Herdr without the launcher: the earlier sessions of the pane folder open read-only, and Resume stages the agent command in the terminal for review',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w0:p2',agents:0,launch:false});
   const agent=agentView(page);
   await page.evaluate(()=>{const drafts:unknown[]=[];(window as unknown as {drafts:unknown[]}).drafts=drafts;window.addEventListener('lazysh-prompt-draft',event=>drafts.push((event as CustomEvent).detail));});
   await agent.getByRole('button',{name:'Earlier sessions',exact:true}).click();
@@ -990,6 +999,32 @@ test('Herdr: the earlier sessions of the pane folder open read-only, and Resume 
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Resume in the terminal',exact:true}).click();
   expect(await page.evaluate(()=>(window as unknown as {drafts:unknown[]}).drafts)).toEqual([{sessionId:'display-owned',text:'claude --resume 11111111-1111-4111-8111-111111111111'}]);
+});
+
+test('Herdr with the launcher: Resume shows the commands, then starts the resume command in a new workspace and follows it',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w0:p2',agents:0,launch:true});
+  const agent=agentView(page);
+  await page.evaluate(()=>{const drafts:unknown[]=[];(window as unknown as {drafts:unknown[]}).drafts=drafts;window.addEventListener('lazysh-prompt-draft',event=>drafts.push((event as CustomEvent).detail));});
+  await agent.getByRole('button',{name:'Earlier sessions',exact:true}).click();
+  await agent.getByRole('region',{name:'Earlier sessions in this folder',exact:true}).getByRole('button',{name:/^Claude Code · Add dark mode · /}).click();
+  await expect(agent.getByText('Earlier answer',{exact:true})).toBeVisible();
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
+  await expect(agent.getByRole('button',{name:'Resume in the terminal',exact:true})).toHaveCount(0);
+  await agent.getByRole('button',{name:'Resume in a new pane',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Resume in a new pane',exact:true});
+  const session='11111111-1111-4111-8111-111111111111';
+  await expect(dialog.locator('ol code').last()).toContainText(`'--' '--resume' '${session}'`);
+  await fitsWidth(page);
+  // Reviewing runs nothing; confirming runs exactly the reviewed request.
+  const [plan]=(await herdrFixture(page)).plans;
+  expect(plan).toEqual({name:'owned',request:{target:{type:'directory',label:'project-0',directory:'/home/owner/dev/project-0'},agent:{kind:'claude',name:expect.stringMatching(/^claude-[0-9a-f]{8}$/),resume:session}}});
+  expect((await herdrFixture(page)).created).toEqual([]);
+  await dialog.getByRole('button',{name:'Resume in a new pane',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await herdrFixture(page)).created).toEqual([{sessionId:'display-owned',name:'owned',request:plan!.request}]);
+  // The new workspace is focused so the pane link follows its agent, and nothing was staged in the terminal.
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusWorkspace',target:'w9'}]);
+  expect(await page.evaluate(()=>(window as unknown as {drafts:unknown[]}).drafts)).toEqual([]);
 });
 
 test('OpenCode: the pane\'s session is read from its database, and the prompt goes through the guarded input with that session',async({page})=>{

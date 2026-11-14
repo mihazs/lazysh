@@ -326,9 +326,28 @@ After a launch the Agent view stays where it is and follows the new agent as soo
 interval; under Herdr the new workspace is focused and linked). The terminal keeps running and is
 one tap away; the launcher never types into an existing pane.
 
-Not covered yet: opening a plain terminal session in the folder when no multiplexer runs, resuming
-an earlier session through the launcher ([#1545](https://github.com/mihazs/lazysh/issues/1545)),
-rmux ([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions
+### Resume in a new pane
+
+The **Earlier sessions** list of a folder opens a session read-only. Its options menu then offers
+**Resume in a new pane** whenever the session's multiplexer has the launcher (tmux, Zellij, or a
+Herdr with the launcher) and the folder is a valid host path. It opens the same review dialog with the
+agent's own resume command already chosen and the folder of the earlier session as the working
+directory, so nothing is typed or chosen again:
+
+| Multiplexer | What runs after the review is confirmed |
+| --- | --- |
+| tmux | `tmux new-window -c <folder> -- claude --resume <id>` (or `-- codex resume <id>`), which becomes the session's current window |
+| Zellij | `zellij run --cwd <folder> -- claude --resume <id>` (or `-- codex resume <id>`) |
+| Herdr (host companion with the launcher) | a new workspace in the folder plus `herdr agent start … -- --resume <id>` (or `-- resume <id>`) |
+
+The host checks the agent and the folder first, so a missing agent or a folder that no longer exists
+stops the launch before a window, pane or workspace is created. After the launch the view leaves the
+read-only session and follows the new agent like any other (see above); the pane the user was in is
+never touched, so Resume is also offered over a pane that already runs an agent. Without a launcher
+(a plain shell, or a Herdr without it) **Resume in the terminal** keeps staging the command in the
+terminal composer for review, and is still not offered over a running agent.
+
+Not covered yet: opening a plain terminal session in the folder when no multiplexer runs, rmux ([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions
 ([#1133](https://github.com/mihazs/lazysh/issues/1133)) and an Android runtime case.
 
 ## Per-agent capabilities

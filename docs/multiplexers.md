@@ -282,13 +282,22 @@ tmux -u -L <server> new-window -P -F '#{pane_id}' -t =<session>: -n <label> -c <
 zellij --session=<session> run --cwd=<directory> --name=<label> -- <agent> [<prompt>]
 ```
 
-The agent is the executable's own argv, `<agent> [<prompt>]`, so nothing is parsed by a shell:
+The agent is the executable's own argv, `<agent> [<prompt>]` (or `<agent> <resume words>`, see below), so nothing is parsed by a shell:
 tmux and Zellij both `exec` it directly. A prompt may hold quotes, `$(…)`, backticks, tabs and
 line breaks and reaches the agent byte for byte. Only the codex and claude entries of the table take
 an initial prompt; the prompt cannot start with `-`, contain a backslash or other control
 characters, or exceed 2000 bytes. (Herdr's `agent start` still takes one line.) tmux parses an
 argument that ends in `;` as a command separator and expands formats in window names and
 directories, so those layers are escaped separately from the shell's (`\;`, `##`).
+
+An agent request may carry `resume` instead of `prompt`: the ID of an earlier session, which the
+Agent view's **Resume in a new pane** sends ([#1545](https://github.com/mihazs/lazysh/issues/1545)).
+Only Claude Code and Codex have a resume command, so the argv after the executable is the agent's
+own words: `claude --resume <id>` or `codex resume <id>`. Under Herdr the same words follow `--` in
+`herdr agent start`. The ID must be 8 to 64 letters, digits and `-` and cannot start with `-`, so it
+never reads as an option; a `resume` with a `prompt`, or for another agent, is refused before
+anything is created.
+
 The new pane's ID (tmux `%<n>`, Zellij `terminal_<n>`) is read back from the command's output and
 returned as `paneId`; a reply that is not exactly that ID is a failure, never trusted. tmux
 makes the new window the session's current one (no `-d`), so a client attached to the session
@@ -388,7 +397,7 @@ with a hostile branch name, and assert that the pane exists in the directory (or
 break and a trailing `;`), that `git worktree list` shows the worktree, that a folder that does not
 exist stops the launch (tmux would start in another directory), that the new tmux window is the
 session's current one, and that a missing agent or a missing session creates no pane, worktree or
-branch. The real Herdr case also creates a new folder before the workspace. Zellij runs against the pinned 0.45.1; the same case also passed on 0.46.0. An rmux case
+branch. Each real case also resumes a session: the stub records `resume <id>` (Codex's own words) as its argv in the new pane's folder, and Herdr's `agent start` hands the same words to the stub after `--`. The real Herdr case also creates a new folder before the workspace. Zellij runs against the pinned 0.45.1; the same case also passed on 0.46.0. An rmux case
 waits for rmux support (#1679, after #1140). The plan builders have platform-neutral unit tests that also
 run on macOS and Windows.
 

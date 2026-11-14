@@ -3,9 +3,9 @@ import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
-import {AgentLaunch,HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
+import {AgentLaunch,AgentResume,HerdrWorkspaceCreate,HerdrWorktreeCreate,resumeRequest} from './HerdrWorkspaceCreateDialog';
 import AgentStartFolder from './AgentStartFolder';
-import {knownDirectories} from './herdrCreate';
+import {knownDirectories,resumeCommand,validAbsolutePath,validSessionId} from './herdrCreate';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
@@ -32,7 +32,7 @@ import './AgentView.css';
 const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
  * `linked` marks the agent of the focused pane; any other pick is the user's own choice and says so. */
-type Selection = {row?:AgentSession;history?:boolean;resume?:string;conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
+type Selection = {row?:AgentSession;history?:boolean;resume?:{agent:'claude'|'codex';id:string};conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
 function herdrSelection(row:LinkedAgent,server:string,extra:Partial<Selection>):Selection {
   const agent=row.agent_session.agent as BoundConversation['agent'];
   return {cwd:row.cwd ?? undefined,title:[agentNames[agent],row.cwd && pathBasename(row.cwd)].filter(Boolean).join(' · '),status:row.agent_status,
@@ -66,6 +66,7 @@ export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSe
   const [choosing,setChoosing] = useState(false);
   const [unavailable,setUnavailable] = useState(false);
   const [menu,setMenu] = useState(false);
+  const [resuming,setResuming] = useState<ReturnType<typeof resumeRequest>>();
   const [images,setImages] = useState(storedImages);
   const [history,setHistory] = useState<string>();
   const menuId = useId();
@@ -238,6 +239,8 @@ export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSe
   const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={known} disabled={!shown} onStaged={onShowTerminal}/>;
   // The session's own multiplexer starts the agent; without one (or a Herdr that predates the launcher) only the staged command is left.
   const multiplexer=tmux && tmuxSession ? {kind:'tmux' as const,name:tmuxSession} : zellijSession ? {kind:'zellij' as const,name:zellijSession} : herdrSession && herdrLaunch ? {kind:'herdr' as const,name:navigation.data?.server ?? herdrSession} : undefined;
+  // An earlier session continues in a new pane of the session's multiplexer when its folder is a valid host path.
+  const resumable=!!multiplexer && !!selected?.history && !!selected.resume && !!selected.cwd && validAbsolutePath(selected.cwd);
   const newAgent=(compact:boolean)=>multiplexer && <AgentLaunch sessionId={sessionId} lease={access} multiplexer={multiplexer} tree={navigation.data?.snapshot} projects={known} disabled={!shown} label={t('agentViewNewAgent')} compact={compact} onCreated={id=>{if(multiplexer.kind==='herdr')focusCreated(id);}}/>;
   // One compact row: what the chat belongs to and its state. Everything else waits behind the options button.
   const enter=selected?.enter && onEnterHerdr;
@@ -264,16 +267,17 @@ export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSe
       {herdrSession && selected?.linked && <button type="button" onClick={()=>{setChoosing(true);setMenu(false);}}>{t('agentViewChooseAgent')}</button>}
       {herdrSession && !selected && linked && <button type="button" onClick={()=>{setChoosing(false);setMenu(false);}}>{t('agentViewThisPane')}</button>}
       {selected?.history && <button type="button" onClick={()=>{request.current++;setPicked(undefined);setHistory(selected.cwd);setMenu(false);}}>{t('agentHistoryBack')}</button>}
-      {/* Resume stages the agent's own command for review in the terminal composer, like Start; it is never offered over a running agent. */}
-      {selected?.history && selected.resume && !paneHasAgent && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:selected.resume}}));setMenu(false);onShowTerminal();}}>{t('agentHistoryResume')}</button>}
+      {/* Resume runs the agent's own command in a new pane of the multiplexer once the commands are reviewed. Without a launcher it stages the command in the terminal composer, like Start, and is never offered over a running agent. */}
+      {resumable && <button type="button" onClick={()=>{setResuming(resumeRequest(selected.resume!.agent,selected.resume!.id,selected.cwd!));setMenu(false);}}>{t('agentHistoryResumeNew')}</button>}
+      {selected?.history && selected.resume && !resumable && !paneHasAgent && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:resumeCommand(selected.resume!.agent,selected.resume!.id)}}));setMenu(false);onShowTerminal();}}>{t('agentHistoryResume')}</button>}
       {selected && !selected.linked && <button type="button" onClick={back}>{t(herdrSession && linked ? 'agentViewThisPane' : 'agentViewBackSessions')}</button>}
       {reader && viewFolder && !selected?.history && <button type="button" onClick={()=>{setHistory(viewFolder);setMenu(false);}}>{t('agentHistoryOpen')}</button>}
       {enter && <EnterSessionButton server={selected.enter!.server} target={selected.enter!.target} lease={access} enabled={shown} onEnterHerdr={onEnterHerdr} owner={()=>()=>active.current.shown && active.current.sessionId===sessionId && access.current()}/>}
       {reader && <button type="button" aria-pressed={!reading.full} onClick={()=>changeReading({...reading,full:!reading.full})}>{t('agentConversationOnly')}</button>}
       {/* The safety rule is unchanged: a shown conversation grants no terminal input beyond the confirmed-input flow. */}
       {selected?.linked && <p>{t('agentViewLinkedNote',{place:selected.place??''})}</p>}
-      {selected && !selected.linked && <p>{t(selected.history ? 'agentHistoryReadOnly' : 'agentViewSelectedNoStage')}</p>}
-      {selected?.history && selected.resume && paneHasAgent && <p>{t('agentHistoryResumeBusy')}</p>}
+      {selected && !selected.linked && <p>{t(selected.history ? resumable ? 'agentHistoryReadOnlyLaunch' : 'agentHistoryReadOnly' : 'agentViewSelectedNoStage')}</p>}
+      {selected?.history && selected.resume && !resumable && paneHasAgent && <p>{t('agentHistoryResumeBusy')}</p>}
       {selected && !selected.linked && selected.conversation.herdr && <p>{t('agentsHerdrSessionNotice')}</p>}
       {reader && !selected && !terminalInput && <p>{t('agentViewStageOnly')}</p>}
       {reader && info?.info && <button type="button" aria-expanded={infoOpen} onClick={()=>{setInfoOpen(true);setMenu(false);}}>{t('agentInfoOpen')}</button>}
@@ -282,8 +286,10 @@ export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSe
       {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
+    {resuming && multiplexer && <AgentResume sessionId={sessionId} lease={access} multiplexer={multiplexer} request={resuming} close={()=>setResuming(undefined)}
+      onCreated={id=>{if(multiplexer.kind==='herdr')focusCreated(id);request.current++;setPicked(undefined);setChoosing(false);}}/>}
     {history && <AgentHistory sessionId={sessionId} folder={history} invoke={invoke} onClose={()=>setHistory(undefined)}
-      onOpen={item=>{request.current++;setHistory(undefined);setPicked({history:true,cwd:history,focusKey:lastFocus.current,resume:/^[A-Za-z0-9-]{8,64}$/.test(item.sessionId)?`${item.agent==='claude'?'claude --resume':'codex resume'} ${item.sessionId}`:undefined,title:[agentNames[item.agent],item.title ?? item.sessionId.slice(0,8)].join(' · '),conversation:Object.freeze({agent:item.agent,path:item.path})});}}/>}
+      onOpen={item=>{request.current++;setHistory(undefined);setPicked({history:true,cwd:history,focusKey:lastFocus.current,resume:validSessionId(item.sessionId)?{agent:item.agent,id:item.sessionId}:undefined,title:[agentNames[item.agent],item.title ?? item.sessionId.slice(0,8)].join(' · '),conversation:Object.freeze({agent:item.agent,path:item.path})});}}/>}
     {infoOpen && reader && info?.info && <AgentInfoSheet info={info.info} onClose={()=>setInfoOpen(false)} onShowTerminal={onShowTerminal}/>}
     {(herdrSession ? !fresh && !manual && navigation.busy && !navigation.data?.loaded : binding.kind === 'finding') && !selected && <p role="status">{t('agentViewFinding')}</p>}
     {!reader && !herdrSession && binding.kind !== 'finding' && <div className="agent-view-fallback">

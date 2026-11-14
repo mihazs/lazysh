@@ -33,7 +33,7 @@ const options=()=>{const button=screen.getByRole('button',{name:'Agent view opti
 const calls=(name:string)=>vi.mocked(invoke).mock.calls.filter(([command])=>command===name).map(([,args])=>args);
 const advance=async(ms:number)=>{await act(async()=>{await vi.advanceTimersByTimeAsync(ms);});};
 /** The tmux pane the hook reports tie to a conversation, mounted and settled. */
-const mountTmux=async()=>{render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);};
+const mountTmux=async(tmuxSession?:string)=>{render(<AgentView sessionId="ssh" shown tmux tmuxSession={tmuxSession} terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);};
 beforeEach(()=>{localStorage.clear();vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 
@@ -932,7 +932,7 @@ describe('earlier sessions',()=>{
     ?[{agent,sessionId:'11111111-1111-4111-8111-111111111111',path:'/home/owner/.claude/projects/-work/11111111.jsonl',title:'Add dark mode',modifiedAt:new Date(Date.now()-3_600_000).toISOString(),bytes:900},
       {agent:'codex',sessionId:'wrong-agent',path:'/x.jsonl',modifiedAt:new Date().toISOString(),bytes:1},{agent,sessionId:'bad',path:'/y.jsonl',modifiedAt:'not a date',bytes:1}]
     :[{agent,sessionId:'019aaaaa-0000-7000-8000-000000000000',path:'/home/owner/.codex/sessions/2026/11/rollout-a.jsonl',modifiedAt:new Date(Date.now()-60_000).toISOString(),bytes:500}]});
-  const mount=async(history:(agent:string)=>unknown|Promise<unknown>=sessions)=>{
+  const mount=async(history:(agent:string)=>unknown|Promise<unknown>=sessions,tmuxSession?:string)=>{
     host('claude',[row('Claude Code','%3')],'available',[turn('Plan the work','Here is the plan.')]);
     const answers:Record<string,(args:{agent:string;path:string})=>unknown>={
       agent_approvals:()=>({schemaVersion:1,requests:[]}),
@@ -944,7 +944,7 @@ describe('earlier sessions',()=>{
       if(command==='agent_transcript'&&given.path.endsWith('rollout-a.jsonl'))return page('codex',turn('Earlier prompt','Earlier answer'));
       return answers[command]?answers[command](given):base(command,args);
     });
-    await mountTmux();
+    await mountTmux(tmuxSession);
   };
 
   it('lists both agents newest first for the folder, opens one read-only without a composer, and goes back to the list',async()=>{
@@ -973,6 +973,65 @@ describe('earlier sessions',()=>{
     expect(menu.queryByRole('button',{name:'Resume in the terminal'})).toBeNull();
     expect(menu.getByText(/An agent is running in this pane, so Resume is not offered here/)).toBeTruthy();
     expect(staged).not.toHaveBeenCalled();window.removeEventListener('lazysh-prompt-draft',staged);
+  });
+
+  describe('with a launcher',()=>{
+    const codexSession='019aaaaa-0000-7000-8000-000000000000';
+    const open=async()=>{
+      await mount(sessions,'work');
+      answering({
+        multiplexer_launch_plan:()=>({steps:[{stage:'agentCheck',argv:['command'],command:"'command' '-v' '--' 'codex'"},{stage:'window',argv:['tmux'],command:`'tmux' 'new-window' '--' 'codex' 'resume' '${codexSession}'`}]}),
+        multiplexer_launch:()=>({paneId:'%9'}),
+      });
+      fireEvent.click(within(options()).getByRole('button',{name:'Earlier sessions'}));await advance(0);
+      fireEvent.click(screen.getByText(/Codex · 019aaaaa/));await advance(0);
+    };
+    const request={target:{type:'directory',label:'work',directory:'/work'},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/),resume:codexSession}};
+
+    it('resumes in a new pane after the commands are reviewed, even over a running agent, and returns to the live agent',async()=>{
+      const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
+      await open();
+      const menu=within(options());
+      expect(menu.queryByRole('button',{name:'Resume in the terminal'})).toBeNull();
+      expect(menu.queryByText(/Resume is not offered here/)).toBeNull();
+      expect(menu.getByText(/Resume starts the agent's own resume command in a new pane/)).toBeTruthy();
+      fireEvent.click(menu.getByRole('button',{name:'Resume in a new pane'}));await advance(0);
+      const dialog=within(screen.getByRole('dialog',{name:'Resume in a new pane'}));
+      expect(dialog.getByText(new RegExp(`'codex' 'resume' '${codexSession}'`))).toBeTruthy();
+      expect(calls('multiplexer_launch_plan')).toEqual([{multiplexer:{kind:'tmux',name:'work'},request}]);
+      expect(calls('multiplexer_launch')).toEqual([]);
+      fireEvent.click(dialog.getByRole('button',{name:'Resume in a new pane'}));await advance(0);
+      expect(calls('multiplexer_launch')).toEqual([{sessionId:'ssh',multiplexer:{kind:'tmux',name:'work'},request}]);
+      // The view leaves the read-only session for the live agent; nothing is typed into any pane.
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(within(options()).queryByText(/read-only/)).toBeNull();
+      expect(staged).not.toHaveBeenCalled();window.removeEventListener('lazysh-prompt-draft',staged);
+      // Only reads and the composer's bind and release reach tmux: no key is sent to any pane.
+      expect(calls('tmux_chat').map(args=>(args as {action:{kind:string}}).action.kind).filter(kind=>!['snapshot','bind','release'].includes(kind))).toEqual([]);
+    });
+
+    it('runs nothing when the review is cancelled, and says why when no plan can be made',async()=>{
+      await open();
+      fireEvent.click(within(options()).getByRole('button',{name:'Resume in a new pane'}));await advance(0);
+      fireEvent.click(within(screen.getByRole('dialog',{name:'Resume in a new pane'})).getByRole('button',{name:'Cancel'}));await advance(0);
+      expect(screen.queryByRole('dialog')).toBeNull();expect(calls('multiplexer_launch')).toEqual([]);
+      answering({multiplexer_launch_plan:()=>{throw {kind:'invalid_target',message:'This agent cannot resume an earlier session'};}});
+      fireEvent.click(within(options()).getByRole('button',{name:'Resume in a new pane'}));await advance(0);
+      const dialog=within(screen.getByRole('dialog',{name:'Resume in a new pane'}));
+      expect(dialog.getByRole('alert').textContent).toMatch(/cannot resume an earlier session/);
+      expect(dialog.queryByRole('button',{name:'Resume in a new pane'})).toBeNull();
+      expect(calls('multiplexer_launch')).toEqual([]);
+    });
+
+    it('keeps the dialog open with what was kept when the new pane fails to start',async()=>{
+      await open();
+      answering({multiplexer_launch:()=>({failure:{stage:'window',message:'no server running'}})});
+      fireEvent.click(within(options()).getByRole('button',{name:'Resume in a new pane'}));await advance(0);
+      const dialog=within(screen.getByRole('dialog',{name:'Resume in a new pane'}));
+      fireEvent.click(dialog.getByRole('button',{name:'Resume in a new pane'}));await advance(0);
+      expect(dialog.getByRole('alert').textContent).toMatch(/no server running/);
+      expect(within(options()).getByText(/read-only/)).toBeTruthy();
+    });
   });
 
   it('says so when the companion cannot list sessions, and when the folder has none',async()=>{

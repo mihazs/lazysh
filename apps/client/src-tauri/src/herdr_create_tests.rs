@@ -652,6 +652,82 @@ fn a_launch_needs_an_agent_an_existing_session_and_a_valid_prompt() {
     assert!(herdr_workspace_plan("default".into(), multiline).is_err());
 }
 
+const SESSION: &str = "019a1b2c-3d4e-4f60-8a9b-0c1d2e3f4a5b";
+fn resumed(kind: &str, extra: serde_json::Value) -> CreateRequest {
+    let mut agent = serde_json::json!({"kind":kind,"name":format!("{kind}-1a2b"),"resume":SESSION});
+    agent
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    request(serde_json::json!({
+        "target":{"type":"directory","label":"app","directory":"/srv/app"},
+        "agent":agent,
+    }))
+}
+
+#[test]
+fn a_resume_launch_runs_the_agents_own_resume_command_in_the_new_pane() {
+    let none = serde_json::json!({});
+    for (kind, words) in [
+        ("claude", ["--resume", SESSION]),
+        ("codex", ["resume", SESSION]),
+    ] {
+        for multiplexer in [
+            serde_json::json!({"kind":"tmux","name":"w"}),
+            serde_json::json!({"kind":"zellij","name":"w"}),
+        ] {
+            let steps = plan_of(multiplexer.clone(), resumed(kind, none.clone())).unwrap();
+            let launch = &steps.last().unwrap().1;
+            let tail = launch.len() - 3;
+            assert_eq!(launch[tail..], [kind, words[0], words[1]], "{multiplexer}");
+            assert_eq!(
+                steps[0],
+                ("agentCheck", args(&["command", "-v", "--", kind]))
+            );
+        }
+        // Herdr's `agent start` hands everything after `--` to the agent.
+        let herdr = herdr_workspace_plan("default".into(), resumed(kind, none.clone())).unwrap();
+        let start = &herdr.steps.last().unwrap().argv;
+        assert_eq!(start[start.len() - 3..], ["--", words[0], words[1]]);
+    }
+}
+
+#[test]
+fn a_resume_launch_refuses_what_the_agent_cannot_continue_before_anything_is_created() {
+    let refused =
+        |request| plan_of(serde_json::json!({"kind":"tmux","name":"w"}), request).unwrap_err();
+    assert_eq!(
+        refused(resumed("claude", serde_json::json!({"prompt":"hi"}))).message(),
+        "A resumed session takes no initial prompt"
+    );
+    assert_eq!(
+        refused(resumed("opencode", serde_json::json!({}))).message(),
+        "This agent cannot resume an earlier session"
+    );
+    // An option-like, short, long or odd ID never reaches the agent's argv.
+    for id in [
+        "-abcdefgh",
+        "--resume",
+        "abc",
+        &"a".repeat(65),
+        "abcd efgh",
+        "abcdefg\n",
+        "abcd;efgh",
+    ] {
+        let request = resumed("codex", serde_json::json!({"resume":id}));
+        assert_eq!(
+            refused(request).message(),
+            "Enter the ID of an earlier session",
+            "{id:?}"
+        );
+    }
+    assert!(herdr_workspace_plan(
+        "default".into(),
+        resumed("claude", serde_json::json!({"resume":"-x-x-x-x-x"}))
+    )
+    .is_err());
+}
+
 /// A directory launch with `create` set or not, for the folder-step tests.
 fn folder_launch(create: bool) -> CreateRequest {
     request(serde_json::json!({
@@ -1050,6 +1126,22 @@ fn real_herdr_worktree_workspace_and_agent() {
         assert!(!root.join(name).exists() && !std::path::Path::new(&worktree).join(name).exists());
     }
 
+    // Resuming an earlier session hands the agent's own resume words to `agent start`.
+    let resumed = now(execute(
+        &mut remote,
+        &Host::Herdr("default"),
+        &request(serde_json::json!({
+            "target":{"type":"directory","label":"resumed","directory":repo_text},
+            "agent":{"kind":"codex","name":"codex-lazysh3","resume":SESSION},
+        })),
+    ))
+    .unwrap();
+    assert_eq!(resumed.failure, None, "{resumed:?}");
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        format!("{repo_text}\narg:resume\narg:{SESSION}\n")
+    );
+
     // A plain workspace without an agent, then a failing first step creates nothing.
     let plain = now(execute(
         &mut remote,
@@ -1301,6 +1393,27 @@ fn assert_agent_launches<R: Remote>(
     assert_eq!(root.recorded(&fresh), ["hello"]);
     assert!(panes(remote).contains(&(outcome.pane_id.unwrap(), fresh.clone())));
 
+    // An earlier session resumes through the agent's own argv, in a new pane of its folder.
+    let resumed = root.path().join("resume $(touch NO3) #{r};");
+    std::fs::create_dir(&resumed).unwrap();
+    let resumed = resumed.to_str().unwrap().to_owned();
+    let outcome = now(execute(
+        remote,
+        host,
+        &request(serde_json::json!({
+            "target":{"type":"directory","label":"resume","directory":resumed},
+            "agent":{"kind":"codex","name":"codex-lazysh5","resume":SESSION},
+        })),
+    ))
+    .unwrap();
+    assert_eq!(outcome.failure, None, "{outcome:?}");
+    assert_eq!(root.recorded(&resumed), ["resume", SESSION]);
+    let pane = outcome.pane_id.unwrap();
+    assert!(panes(remote).contains(&(pane.clone(), resumed.clone())));
+    if let Some(current) = current {
+        assert_eq!(current(remote), pane);
+    }
+
     let branch = "feat/$(touch${IFS}pwned)'q";
     let worktree = format!("{repo}-worktrees/feat-$(touch${{IFS}}pwned)'q");
     let outcome = now(execute(
@@ -1362,7 +1475,7 @@ fn assert_agent_launches<R: Remote>(
     .unwrap_err();
     assert_eq!(gone.kind(), "remote_command_failed");
     assert_eq!(panes(remote).len(), count);
-    for name in ["pwned", "NO", "NO2"] {
+    for name in ["pwned", "NO", "NO2", "NO3"] {
         assert!(
             !root.path().join(name).exists()
                 && !std::path::Path::new(&directory).join(name).exists()

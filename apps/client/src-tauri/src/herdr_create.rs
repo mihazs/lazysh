@@ -154,6 +154,10 @@ pub struct AgentRequest {
     name: String,
     #[serde(default)]
     prompt: Option<String>,
+    /// The ID of an earlier session to continue with the agent's own resume command
+    /// (Claude Code and Codex); it replaces the prompt.
+    #[serde(default)]
+    resume: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -227,7 +231,24 @@ struct Validated<'a> {
     /// Create the directory (`mkdir -p`) before anything starts in it.
     create: bool,
     worktree: Option<[&'a str; 4]>,
-    agent: Option<(&'static str, &'static str, &'a str, Option<&'a str>)>,
+    /// Kind, executable, name and the words after the executable: a prompt or a resume command.
+    agent: Option<(&'static str, &'static str, &'a str, Vec<&'a str>)>,
+}
+/// The agent's own words to continue an earlier session: Claude Code `--resume <id>`, Codex `resume <id>`.
+fn resume_words<'a>(kind: &str, id: &'a str) -> Result<Vec<&'a str>> {
+    let mut bytes = id.bytes();
+    // The first character is not `-`, so the ID can never be read as an option.
+    if !(8..=64).contains(&id.len())
+        || !bytes.next().is_some_and(|b| b.is_ascii_alphanumeric())
+        || !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err(invalid("Enter the ID of an earlier session"));
+    }
+    match kind {
+        "claude" => Ok(vec!["--resume", id]),
+        "codex" => Ok(vec!["resume", id]),
+        _ => Err(invalid("This agent cannot resume an earlier session")),
+    }
 }
 /// `multiline` lets a prompt hold line breaks and tabs: only an argv word of a
 /// tmux or Zellij launch carries them verbatim; Herdr's `agent start` takes one line.
@@ -271,7 +292,13 @@ fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
             let (kind, executable, prompts) = agent(&value.kind)?;
             agent_name(&value.name)?;
             let prompt = value.prompt.as_deref().filter(|p| !p.trim().is_empty());
-            if let Some(prompt) = prompt {
+            let mut words = vec![];
+            if let Some(id) = value.resume.as_deref() {
+                if prompt.is_some() {
+                    return Err(invalid("A resumed session takes no initial prompt"));
+                }
+                words = resume_words(kind, id)?;
+            } else if let Some(prompt) = prompt {
                 if !prompts {
                     return Err(invalid("This agent does not accept an initial prompt"));
                 }
@@ -290,8 +317,9 @@ fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
                 if prompt.starts_with('-') {
                     return Err(invalid("A prompt cannot start with -"));
                 }
+                words.push(prompt);
             }
-            Some((kind, executable, value.name.as_str(), prompt))
+            Some((kind, executable, value.name.as_str(), words))
         }
     };
     Ok(Validated {
@@ -307,19 +335,19 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
     if let Host::Herdr(name) = host {
         server(name)?;
     }
-    // A tmux or Zellij launch is the agent's own argv: `executable [prompt]`.
-    let launch = match (host, valid.agent) {
+    // A tmux or Zellij launch is the agent's own argv: `executable [prompt | resume words]`.
+    let launch = match (host, &valid.agent) {
         (Host::Herdr(_), _) => vec![],
         (_, None) => return Err(invalid("Choose an agent to start")),
-        (_, Some((_, executable, _, prompt))) => {
-            let mut argv = vec![executable];
-            argv.extend(prompt);
-            argv.into_iter().map(str::to_owned).collect()
-        }
+        (_, Some((_, executable, _, words))) => [executable]
+            .into_iter()
+            .chain(words)
+            .map(|word| (*word).to_owned())
+            .collect(),
     };
     let mut steps = vec![];
     // A missing agent fails before anything exists on the host.
-    if let Some((_, executable, _, _)) = valid.agent {
+    if let Some((_, executable, _, _)) = &valid.agent {
         steps.push(step(
             "agentCheck",
             args(&["command", "-v", "--", executable]),
@@ -393,7 +421,7 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             valid.directory,
         ]),
     ));
-    if let Some((kind, _, agent, prompt)) = valid.agent {
+    if let Some((kind, _, agent, words)) = &valid.agent {
         let timeout = AGENT_START_MS.to_string();
         let mut argv = args(&[
             "herdr",
@@ -409,8 +437,9 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             "--timeout",
             &timeout,
         ]);
-        if let Some(prompt) = prompt {
-            argv.extend(args(&["--", prompt]));
+        if !words.is_empty() {
+            argv.push("--".to_owned());
+            argv.extend(words.iter().map(|word| (*word).to_owned()));
         }
         steps.push(step("agent", argv));
     }
