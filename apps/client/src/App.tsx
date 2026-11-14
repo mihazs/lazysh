@@ -2549,10 +2549,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   </Suspense>
                 ))}
                 {active.connected && view === "usage" && (
-                  <>
+                  <div className="usage-view">
                   <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
-                  </>
+                  </div>
                 )}
                 {active.connected && !active.local && (view === "chat" || keptChat?.sessionId === active.id) && (
                   <ChatPanel
