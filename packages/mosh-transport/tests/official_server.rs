@@ -6,10 +6,16 @@ use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 const CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
+// #45: the first standalone simulator launch of a run intermittently stalls past
+// the deadline every later launch meets. Only that launch gets its own bound, and
+// every stage reports its elapsed time so the cold-start cost is recorded rather
+// than seen as a binary timeout. A launch that exceeds its deadline still fails.
+const FIRST_LAUNCH_DEADLINE: Duration = Duration::from_secs(120);
+const LAUNCH_DEADLINE: Duration = Duration::from_secs(45);
 
 #[derive(Default)]
 struct CaptureProgress {
@@ -66,7 +72,6 @@ fn bounded_output(
     on_timeout: impl FnOnce(u32) -> String,
 ) -> std::io::Result<(std::process::Output, bool, String)> {
     use std::os::unix::process::CommandExt;
-    use std::time::Duration;
     // Keep Cargo/compiler or adb children inside this fixture's process group.
     command.process_group(0);
     let mut child = command
@@ -243,7 +248,6 @@ fn simulator_diagnostics_with_inventory(
     inventory: Command,
     keys: &[String],
 ) -> String {
-    use std::time::{Duration, Instant};
     if leader == 0 || leader > libc::pid_t::MAX as u32 {
         return "simulator diagnostics: invalid owned process identifier".into();
     }
@@ -367,6 +371,21 @@ fn command_output(command: Command, timeout: std::time::Duration) -> std::proces
     assert!(
         output.status.success(),
         "native fixture failed ({description}). stdout: {stdout}\nstderr: {stderr}"
+    );
+    output
+}
+
+fn timed_command_output(command: Command, timeout: Duration) -> (std::process::Output, Duration) {
+    let started = Instant::now();
+    let output = command_output(command, timeout);
+    (output, started.elapsed())
+}
+
+fn timed_stage(stage: &str, command: Command, timeout: Duration) -> std::process::Output {
+    let (output, elapsed) = timed_command_output(command, timeout);
+    println!(
+        "iOS Mosh stage: {stage} finished in {} ms (deadline {timeout:?})",
+        elapsed.as_millis()
     );
     output
 }
@@ -520,7 +539,7 @@ fn ios_simulator_official_server_interoperability() {
     println!("iOS Mosh stage: waiting for simulator boot readiness");
     let mut boot = Command::new("xcrun");
     boot.args(["simctl", "bootstatus", &simulator, "-b"]);
-    command_output(boot, std::time::Duration::from_secs(180));
+    timed_stage("simulator boot readiness", boot, Duration::from_secs(180));
     // These are command-line Cargo executables, not installed applications.
     // Match Swift's simulator test runner by spawning directly instead of
     // routing their lifetime through the booted simulator's launchd service.
@@ -536,7 +555,11 @@ fn ios_simulator_official_server_interoperability() {
         &units,
         "--list",
     ]);
-    let discovered = command_output(discovery, std::time::Duration::from_secs(45));
+    let discovered = timed_stage(
+        "first standalone launch (native test discovery)",
+        discovery,
+        FIRST_LAUNCH_DEADLINE,
+    );
     let discovered = String::from_utf8(discovered.stdout).unwrap();
     for required in [
         "scoped_ipv6_addresses_preserve_the_interface_for_the_numeric_resolver",
@@ -564,7 +587,7 @@ fn ios_simulator_official_server_interoperability() {
         &units,
         "--nocapture",
     ]);
-    let output = command_output(unit_command, std::time::Duration::from_secs(45));
+    let output = timed_stage("native library unit suite", unit_command, LAUNCH_DEADLINE);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
         text.contains("test result: ok.") && !text.contains("running 0 tests"),
@@ -603,7 +626,7 @@ fn ios_simulator_official_server_interoperability() {
             "SIMCTL_CHILD_LAZYSH_MOSH_TEST_TWO_PORT",
             second.port.to_string(),
         );
-    let result = command_output(protocol, std::time::Duration::from_secs(45));
+    let result = timed_stage("two-client protocol suite", protocol, LAUNCH_DEADLINE);
     let text = String::from_utf8(result.stdout).unwrap();
     assert!(
         text.contains("1 passed"),
@@ -614,7 +637,7 @@ fn ios_simulator_official_server_interoperability() {
 
 #[test]
 fn capture_snapshot_freezes_progress_before_later_bytes_and_eof() {
-    use std::{io::Read, sync::mpsc, time::Duration};
+    use std::{io::Read, sync::mpsc};
     struct ControlledRead {
         chunks: mpsc::Receiver<Option<Vec<u8>>>,
         requested: mpsc::SyncSender<()>,
@@ -712,6 +735,16 @@ fn timed_out_fixture_reports_captured_diagnostics() {
         started.elapsed() < std::time::Duration::from_secs(2),
         "owned child group must be stopped and reaped"
     );
+}
+
+#[test]
+fn launch_inside_its_deadline_reports_the_elapsed_time_it_took() {
+    let mut launch = Command::new("sleep");
+    launch.arg("0.3");
+    let (output, elapsed) = timed_command_output(launch, Duration::from_secs(5));
+    assert!(output.status.success());
+    assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
 }
 
 #[test]
@@ -1133,7 +1166,6 @@ fn session(label: &str) {
 #[ignore = "requires official mosh-server and python3"]
 fn official_server_redraws_question_after_keyboard_resize() {
     use lazysh_mosh_transport::Client;
-    use std::time::Duration;
     let program = r#"import os,sys,signal,termios,tty,fcntl,struct
 fd=sys.stdin.fileno();tty.setraw(fd)
 def draw(*args):

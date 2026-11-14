@@ -38,12 +38,14 @@ and executes them through `xcrun simctl spawn --standalone`, matching
 [Swift's command-line simulator test runner](https://github.com/swiftlang/swift/blob/main/test/lit.cfg).
 A bounded `--list` preflight requires all six native security tests by name
 before executing the suite, distinguishing executable startup failures from
-test-body failures. It does not retry launches or increase suite deadlines.
+test-body failures. It does not retry launches or increase suite deadlines; only
+the first launch has its own bound, described below.
 This launch path passed all six native tests and the two-client protocol test
 in CI run 40172672432. The earlier intermittent stall happened before the test
 runner's first output; its exact CoreSimulator startup cause remains unproven.
-On a stalled simulator executable, the fixture keeps the original 45-second
-failure deadline and adds at most five seconds of diagnostic observation before
+On a stalled simulator executable, the fixture keeps the 45-second failure
+deadline of the unit and protocol launches (the first launch's own bound is
+below) and adds at most five seconds of diagnostic observation before
 terminating its owned process group. It records executable names/PIDs without
 argv or environment, and attempts one-second stack samples of its tracked launcher
 and an identifiable direct native child in that same process group. Shared
@@ -100,9 +102,28 @@ omitted rather than increasing the count. Case timeouts do not cover a runner
 that stalls before starting a case; the step bounds cover that phase. App
 installation is bounded to three minutes, and cleanup to two minutes.
 
+A logged aggregate of 70 hosted jobs (2026-11-09 and 2026-11-10; issue #45) found 23
+of 27 retained Mosh-step failure logs on the first standalone launch, the `--list` discovery,
+hitting the 45-second deadline, and no later launch of a job whose first launch
+finished hitting its deadline. The fixture therefore gives only that first launch
+its own 120-second bound (`FIRST_LAUNCH_DEADLINE`) and prints each stage's elapsed
+time, including simulator boot readiness, as
+`iOS Mosh stage: <stage> finished in <N> ms (deadline <D>)` in the job log and
+the immediately uploaded `lazysh-ios-mosh-diagnostics` artifact. The unit and
+protocol launches keep 45 seconds. This is an experiment to record the cold-start
+distribution rather than a binary timeout, not a diagnosis. A launch that exceeds
+its deadline still fails with the same diagnostics, no launch is retried and
+fixture-key redaction and cleanup are unchanged. A first launch that finishes
+between 45 and 120 seconds indicates start latency; one that still reaches 120
+seconds with empty output points to a hang. Neither identifies the CoreSimulator,
+host-contention or exec-policy mechanism, and one hosted run cannot show the
+stall is gone: the issue stays open until repeated hosted runs show the distribution.
+
 The outer raw-fixture step has an 18-minute bound covering its existing build,
-boot and execution budgets. Its 45-second executable deadlines and five-second
-diagnostic budget are unchanged. The existing Bun command is captured with
+boot and execution budgets. Its 45-second unit and protocol launch deadlines and
+five-second diagnostic budget are unchanged; with the first launch's 120 seconds,
+the worst case is 600 s build, 180 s boot, 120 s + 45 s + 45 s of launches and 5 s
+of diagnostics, 995 s in all. The existing Bun command is captured with
 `tee` and explicit `pipefail`, preserving its failure outcome. A separate
 `lazysh-ios-mosh-diagnostics` artifact is uploaded immediately afterward, before
 hosted acceptance, so a later stall cannot hide that completed raw evidence.
