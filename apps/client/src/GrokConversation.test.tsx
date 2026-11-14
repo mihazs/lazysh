@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,expect,it,vi} from 'vitest';
-import {fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import {cleanupNativeMocks} from './test/nativeCoreMock';
 import ChatPanel,{parseTranscript} from './ChatPanel';
@@ -36,4 +36,20 @@ it('keeps the explicit Records fallback available after a rejected reconstructio
   await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(2));
   expect(()=>parseTranscript(response('okay'))).not.toThrow();
   expect(()=>parseTranscript(response('wrong','future'))).toThrow('Unsupported transcript response');
+});
+const planPage=(card:object)=>({...response('x'),messages:[{id:'grok-record-3',role:'assistant',blocks:[{type:'tool_use',id:'grok-plan-3',name:'plan',text:'',card}]}]});
+async function openConversation() {
+  panel();fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+}
+it('shows a recorded Grok plan as the plan card with each step and its state',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce(planPage({kind:'plan',entries:[{text:'Read the code',status:'completed'},{text:'Write the fix',status:'in_progress'},{text:'Ship it',status:'pending'}]}));
+  await openConversation();
+  const card=await screen.findByRole('region',{name:'Plan'});
+  expect(within(card).getAllByRole('listitem').map(item=>item.textContent)).toEqual(['DoneRead the code','In progressWrite the fix','PendingShip it']);
+});
+it('accepts only the plan card on a Grok conversation',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce(planPage({kind:'question',questions:[{question:'Which?',multiple:false,options:[]}]}));
+  await openConversation();
+  expect((await screen.findByRole('alert')).textContent).toBe('Invalid recorded plan or question.');
 });
