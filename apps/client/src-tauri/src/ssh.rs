@@ -853,13 +853,30 @@ async fn register_with_core(
         .map_err(|message| SshError::new("native_terminal", message))?;
     let id = register_terminal(state, session).await?;
     if let Some(core) = core {
-        core.attach(
-            &id,
-            &session.core,
-            crate::terminal_core::credit_to(session, acknowledge),
-        );
+        attach_core(core, &id, session);
     }
     Ok(id)
+}
+/// The core's output credit returns to the session's window and its replies and encoded input go
+/// to the session's own input queue, which re-checks every lease before a byte reaches the transport.
+fn attach_core(core: crate::terminal_core::Prepared, id: &str, session: &Arc<Session>) {
+    use crate::terminal_core::{credit_to, input_to};
+    core.attach(
+        id,
+        &session.core,
+        credit_to(session, acknowledge),
+        input_to(session, queue_core_input),
+    );
+}
+fn queue_core_input(
+    session: &Session,
+    bytes: Vec<u8>,
+    lease: &AccessLease,
+) -> std::result::Result<(), String> {
+    session
+        .input
+        .try_send(Input::Data(bytes.into(), lease.clone()))
+        .map_err(|error| error.to_string())
 }
 async fn register_terminal(state: &AppState, session: &Arc<Session>) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -5143,13 +5160,24 @@ mod tests {
 
     /// An adopted session on a throwaway server, for tests that drive its output window directly.
     async fn output_session() -> (Arc<Session>, tempfile::TempDir, tokio::task::JoinHandle<()>) {
+        let (session, _, dir, server_task) = output_session_with_input().await;
+        (session, dir, server_task)
+    }
+    /// [`output_session`] and the receiving end of its input queue.
+    async fn output_session_with_input() -> (
+        Arc<Session>,
+        mpsc::Receiver<Input>,
+        tempfile::TempDir,
+        tokio::task::JoinHandle<()>,
+    ) {
         let (host, _, server_task) = server(false).await;
         let (dir, state) = fixture_state();
         let handle = password_handle(&state, &host).await;
-        let (input, _) = mpsc::channel(32);
+        let (input, queue) = mpsc::channel(32);
         let (cancel, _) = watch::channel(false);
         (
             Arc::new(adopted_fixture_session(handle, input, cancel)),
+            queue,
             dir,
             server_task,
         )
@@ -5196,19 +5224,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
-        use crate::terminal_core::{
-            credit_to,
-            fake::{workload, ChecksumCore},
+    async fn a_cores_replies_and_input_reach_the_session_input_queue_as_exact_bytes() {
+        use crate::terminal_core::fake::ChecksumCore;
+        let (session, mut queue, _dir, server_task) = output_session_with_input().await;
+        let (_core, prepared, link) = ChecksumCore::linked();
+        attach_core(prepared, "fixture-ssh-input", &session);
+        let lease = access_lease();
+        link.use_lease(&lease);
+        let report = [0x1b, b'[', b'M', 0x20, 0xe8, 0x00, 0xff];
+        link.write(&report).unwrap();
+        let Some(Input::Data(data, queued_lease)) = queue.recv().await else {
+            panic!("a data write was queued")
         };
+        assert_eq!(data.bytes(), report);
+        assert_eq!(queued_lease.generation(), lease.generation());
+        drop(queue);
+        assert!(
+            link.write(b"x").is_err(),
+            "a transport whose input is gone refuses"
+        );
+        crate::terminal_core::close("fixture-ssh-input");
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
+        use crate::terminal_core::fake::{workload, ChecksumCore};
         // SSH, ET and Mosh all deliver through `send_output`, so this covers their shared path.
         let (session, _dir, server_task) = output_session().await;
         let (core, prepared) = ChecksumCore::prepared();
-        prepared.attach(
-            "fixture-ssh-core",
-            &session.core,
-            credit_to(&session, acknowledge),
-        );
+        attach_core(prepared, "fixture-ssh-core", &session);
         let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let events = counting_events(&ipc);
         let payload = workload(3 * 1024 * 1024);
@@ -5392,11 +5437,7 @@ mod tests {
                 .await
                 .unwrap();
             let prepared = crate::terminal_core::prepare(&events).unwrap().unwrap();
-            prepared.attach(
-                "bench-core",
-                &session.core,
-                crate::terminal_core::credit_to(&session, acknowledge),
-            );
+            attach_core(prepared, "bench-core", &session);
             let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
             send_output(&session, &events, &payload).await.unwrap();
             while *session.output_inflight.lock().unwrap() != 0 {
@@ -8468,7 +8509,12 @@ mod tests {
             let id = uuid::Uuid::new_v4().to_string();
             let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
             if attach_core {
-                prepared.attach(&id, &session.core, Arc::new(|_| {}));
+                prepared.attach(
+                    &id,
+                    &session.core,
+                    Arc::new(|_| {}),
+                    Arc::new(|_, _| Ok(())),
+                );
             }
             state
                 .sessions
