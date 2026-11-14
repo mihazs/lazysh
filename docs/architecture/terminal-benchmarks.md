@@ -442,7 +442,7 @@ What this says, and does not say:
 
 - The style-heavy and wide-character cases parse several times slower than plain text, so those workloads are the ones to compare first on devices.
 - Copying every dirty cell into owned `String`-carrying structs costs far more than parsing; the current frame type is a correctness vehicle, not a renderer format, and [#1322](https://github.com/mihazs/lazysh/issues/1322) and [#1337](https://github.com/mihazs/lazysh/issues/1337) must replace it before any rendering number is meaningful.
-- The byte budget does not map to lines. A 256 KiB and a 1 MiB budget kept the same number of rows, so the budget appears to be enforced in coarse steps below a few MiB, and for a fixed budget the rows kept fall with the column count (10,267, 5,280 and 2,610 at 40, 80 and 160 columns) and with content. The default 4 MiB budget keeps about lazysh's default 5000 lines at 80 columns and fewer than 3000 at 160, so the line setting of 100 to 20000 cannot be honoured by a fixed byte budget; the mapping is part of [#1338](https://github.com/mihazs/lazysh/issues/1338).
+- The byte budget does not map to lines. A 256 KiB and a 1 MiB budget kept the same number of rows, so the budget appears to be enforced in coarse steps below a few MiB, and for a fixed budget the rows kept fall with the column count (10,267, 5,280 and 2,610 at 40, 80 and 160 columns) and with content. The default 4 MiB budget keeps about lazysh's default 5000 lines at 80 columns and fewer than 3000 at 160, so the line setting of 100 to 20000 cannot be honoured by a fixed byte budget; [the mapping](#history-lines-to-scrollback-bytes-1319) derives the budget from the setting and the width instead.
 
 ### Session service: pooled data path, flow control, input and memory (host microbenchmark, not a device baseline)
 
@@ -473,7 +473,7 @@ The slice is the longest a key press can wait for the session lock, so the defau
 
 Memory (resident set of the benchmark process, KiB): an empty session cost 8 KiB; each session that received 8 MiB of 80-column lines at the 4 MiB scrollback budget cost 3,923 KiB at 5 sessions and 3,921 KiB at 10, and the 100-session churn (create, 1 MiB of output each, close) held at 42,916 KiB across four rounds against 42,900 KiB before the first, so repeated create and close did not grow the process. `Session::close` frees the VT state at that moment, not at a later drop. These figures are for this host's allocator and libghostty-vt build; Android, iOS and Windows numbers do not exist yet.
 
-The same churn through the Tauri bridge (`a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget`, `--features native-terminal`, one process on this host): 110 rounds of `terminal_core_open`, a real local PTY printing 30,000 lines into a 1 MiB scrollback, reading the screen text and `terminal_core_close`. After a 10-round warm-up the resident set was 65,436, 67,784 and 65,864 KiB in three runs and grew by 316, 316 and 352 KiB over the next 100 rounds; the hub held no session and no reserved scrollback afterwards. The test fails above 32 MiB of growth; that bound is a guard, not a target. Single-host figures: Android, iOS and Windows do not exist yet.
+The same churn through the Tauri bridge (`a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget`, `--features native-terminal`, one process on this host): 110 rounds of `terminal_core_open`, a real local PTY printing 30,000 lines into a 1 MiB scrollback (the budget was in bytes when these three runs were taken; since [the History lines mapping](#history-lines-to-scrollback-bytes-1319) the test opens with 1000 lines, a 1.8 MiB budget, and one run on this host held 63,160 KiB after the warm-up and grew by 0 KiB over the next 100 rounds), reading the screen text and `terminal_core_close`. After a 10-round warm-up the resident set was 65,436, 67,784 and 65,864 KiB in three runs and grew by 316, 316 and 352 KiB over the next 100 rounds; the hub held no session and no reserved scrollback afterwards. The test fails above 32 MiB of growth; that bound is a guard, not a target. Single-host figures: Android, iOS and Windows do not exist yet.
 
 What this says, and does not say:
 
@@ -481,6 +481,30 @@ What this says, and does not say:
 - IPC calls per MB: the native path issues none per chunk (credits are returned inside Rust after VT processing). The xterm path issues one `ack_output` per `write` callback, so at the 16 KiB maximum chunk that is at most 64 calls per MiB by construction; the actual count depends on how the transports chunk, and was not measured.
 - **The bridge, Rust side only** (`bridge_throughput_channel_versus_core` in `ssh.rs`, run with `cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture`; built with opt-level 3 and no LTO, which is not the release profile). 64 MiB of 80-column text through `send_output` on this host, three runs, load average 3 to 4 at the start. The Channel path with a renderer that acknowledges every chunk the instant it is sent (an upper bound for the xterm path): 154, 151 and 152 MiB/s, 0.42 CPU s per 64 MiB, 64 Channel messages per MiB (the JSON serialization of `SshEvent::Data` is the cost). The core path (real libghostty-vt on the hub's workers, credit returned after VT processing): 666, 658 and 642 MiB/s, 0.11 to 0.12 CPU s per 64 MiB, zero Channel messages. The same test in a debug build ran the Channel path at 8 MiB/s, so a debug figure says nothing. These two are **not like for like**: the core's CPU includes VT parsing, which on the Channel path happens later in the WebView and is absent here, and none of the WebView decode, the xterm parse, the `ack_output` IPC or any rendering is measured. They bound the Rust-side cost of the data path; the comparison with the #1303 baseline needs the renderer wired in and a device.
 - With several sessions the p99 credit latency is 3 to 4 times the p95 (up to 16 ms with 10 sessions on one worker). The cause was not investigated; shared-host scheduling of the producer and worker threads is a candidate, queueing behind other sessions' windows is another.
+
+### History lines to scrollback bytes (#1319)
+
+lazysh's History lines setting counts lines (100 to 20000, default 5000); libghostty-vt budgets bytes, and the rows one budget holds depend on the width and the content. `cargo run --release --example scrollback_budget` in `packages/terminal-runtime` measures it with the workloads of `tests/support/mod.rs`: 16 MiB of budget, each width fed far past the budget, then the rows the core reports. Host: AMD Ryzen 9 5900X, 31 GiB, Linux 7.3.3-1-cachyos, rustc 1.96.1, Zig 0.16.0 (the numbers are deterministic across invocations; no device was involved).
+
+| Content, rows kept by a 16 MiB budget (bytes per cell) | 20 cols | 40 cols | 80 cols | 120 cols | 200 cols | 279 cols |
+| --- | --- | --- | --- | --- | --- | --- |
+| Plain digits | 91,156 (9.2) | 46,243 (9.1) | 23,336 (9.0) | 15,702 (8.9) | 9,300 (9.0) | 6,663 (9.0) |
+| 16-colour SGR runs with bold | 91,156 (9.2) | 46,243 (9.1) | 23,336 (9.0) | 15,702 (8.9) | 9,300 (9.0) | 6,663 (9.0) |
+| Truecolor syntax-highlight runs | 91,156 (9.2) | 46,243 (9.1) | 23,336 (9.0) | 15,702 (8.9) | 9,300 (9.0) | 6,663 (9.0) |
+| A different truecolor foreground and background on every cell | 15,234 (55.1) | 7,381 (56.8) | 3,684 (56.9) | 2,544 (55.0) | 1,611 (52.1) | 985 (61.0) |
+| ZWJ emoji, wide CJK, combining marks | 37,564 (22.3) | 11,953 (35.1) | 5,996 (35.0) | 4,092 (34.2) | 2,310 (36.3) | 1,653 (36.4) |
+| A distinct OSC 8 hyperlink on every row | 30,865 (27.2) | 15,382 (27.3) | 7,730 (27.1) | 5,253 (26.6) | 3,009 (27.9) | 2,154 (27.9) |
+
+Styles are shared per page, so colour costs nothing until a page runs out of distinct styles; graphemes and hyperlinks cost extra bytes per cell. `scrollback_bytes_for_lines(lines, cols)` requests `lines x max(cols, 80) x 10 + 1 MiB` (10 bytes per cell is the measured 8.9 to 9.2 with margin; the MiB covers libghostty-vt freeing whole pages, which loses up to a page and a half of a small budget). Rows kept at that budget divided by the requested lines, after feeding three times the lines (the ordinary workloads are identical; a value near 3.00 means the budget was not yet full):
+
+| Lines | 20 cols | 40 cols | 80 cols | 120 cols | 200 cols | 279 cols |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100 | 2.77 | 2.77 | 2.77 | 2.77 | 2.77 | 2.77 |
+| 1000 | 2.98 | 2.98 | 1.82 | 1.82 | 1.58 | 1.47 |
+| 5000 | 3.00 | 2.54 | 1.38 | 1.29 | 1.22 | 1.23 |
+| 20000 | 3.00 | 2.37 | 1.21 | 1.18 | 1.18 | 1.17 |
+
+At 5000 lines the three expensive contents keep, per width from 20 to 279 columns: 0.76, 0.25, 0.22, 0.21, 0.20 and 0.19 of the requested lines for a style on every cell; 2.10, 0.48, 0.34, 0.36, 0.29 and 0.32 for graphemes; 1.66, 0.71, 0.45, 0.44, 0.39 and 0.39 for a hyperlink on every row. So the setting is a floor for ordinary output at the width the session opened with, and an overestimate for content that defeats cell sharing. Before the mapping, the 4 MiB default kept about 5,300 rows of plain text at 80 columns and about 2,200 at 200. What this does not say: no device figure exists (Android and iOS cannot link the core yet), the width is fixed at open (a session that opens at 45 columns is budgeted as 80, one widened to 200 afterwards keeps fewer rows of what it prints next), and the hub's 64 MiB per-session cap clamps the largest setting (20000 lines) at about 330 columns and wider.
 
 ### Renderer pipeline cost (host microbenchmark, not a candidate)
 

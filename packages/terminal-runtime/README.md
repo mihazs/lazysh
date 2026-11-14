@@ -51,6 +51,7 @@ cargo +1.96.1 test --locked
 cargo +1.96.1 run --release --example parse_bench   # host throughput, see docs/architecture/terminal-benchmarks.md
 cargo +1.96.1 run --release --example session_bench # pooled data path, input latency, memory
 cargo +1.96.1 run --release --example mosh_bench    # one Mosh display update: canonical resize plus repaint
+cargo +1.96.1 run --release --example scrollback_budget # rows kept per byte budget by width and content (History lines mapping)
 ```
 
 ## Target status

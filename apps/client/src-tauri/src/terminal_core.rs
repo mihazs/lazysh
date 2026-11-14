@@ -255,20 +255,32 @@ pub(crate) fn close_all() {
 
 type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 
+/// The History lines setting's range (`scrollback` in `preferences.ts`).
+const HISTORY_LINES: std::ops::RangeInclusive<u32> = 100..=20_000;
+
 /// Like the terminal commands, the two that create or read a screen belong to the current renderer:
-/// a replaced renderer's lease is refused.
+/// a replaced renderer's lease is refused. `scrollback_lines` is the History lines setting; the core
+/// keeps at least that many rows of ordinary output (see `scrollback_bytes_for_lines`), and the
+/// core's default history when it is absent.
 #[tauri::command]
 pub async fn terminal_core_open(
     lease: AccessLease,
     events: Channel<SshEvent>,
     cols: u32,
     rows: u32,
-    scrollback_bytes: Option<u32>,
+    scrollback_lines: Option<u32>,
 ) -> AccessResult<()> {
     lease
         .run(async {
             crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
-            offer(&events, native::factory(cols, rows, scrollback_bytes)?);
+            if scrollback_lines.is_some_and(|lines| !HISTORY_LINES.contains(&lines)) {
+                return Err(format!(
+                    "scrollback lines must be {} to {}",
+                    HISTORY_LINES.start(),
+                    HISTORY_LINES.end()
+                ));
+            }
+            offer(&events, native::factory(cols, rows, scrollback_lines)?);
             Ok(())
         })
         .await
@@ -300,7 +312,8 @@ mod native {
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
-        Config, Hooks, Hub, HubConfig, Offer, Origin, PtyWriter, Refused, Session, Size,
+        scrollback_bytes_for_lines, Config, Hooks, Hub, HubConfig, Offer, Origin, PtyWriter,
+        Refused, Session, Size,
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
@@ -357,15 +370,19 @@ mod native {
     pub(super) fn factory(
         cols: u32,
         rows: u32,
-        scrollback_bytes: Option<u32>,
+        scrollback_lines: Option<u32>,
     ) -> Result<Factory, String> {
         let defaults = Config::default();
         let config = Config {
             size: Size::new(cols as u16, rows as u16),
-            scrollback_bytes: scrollback_bytes
-                .map_or(defaults.scrollback_bytes, |bytes| bytes as usize),
+            scrollback_bytes: scrollback_lines.map_or(defaults.scrollback_bytes, |lines| {
+                scrollback_bytes_for_lines(lines as usize, cols as u16)
+            }),
             // The transport windows are 256 KiB: a producer holding credit always fits.
             ingress_bytes: crate::ssh::OUTPUT_WINDOW as usize,
+            // A field the crate adds later keeps its default instead of breaking this build, as
+            // `canonical_frames` did while no CI job compiled the `native-terminal` feature.
+            ..defaults
         };
         Ok(Box::new(move || {
             let cell = Arc::new(CreditCell::default());
@@ -593,11 +610,23 @@ mod tests {
         assert!(offers.take_offer(MAX_OFFERS as u32).is_some());
     }
 
-    #[cfg(not(feature = "native-terminal"))]
     fn lease() -> AccessLease {
         crate::app_lock::AccessState::disabled()
             .lease(None)
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn open_refuses_history_lines_outside_the_setting_range() {
+        for lines in [0, 99, 20_001, u32::MAX] {
+            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines))
+                .await
+                .err()
+                .unwrap()
+                .into_inner()
+                .unwrap();
+            assert_eq!(error, "scrollback lines must be 100 to 20000", "{lines}");
+        }
     }
 
     #[cfg(not(feature = "native-terminal"))]
@@ -610,6 +639,16 @@ mod tests {
             .into_inner()
             .unwrap();
         assert!(error.contains("not built"), "{error}");
+        // The ends of the History lines range reach the core; only values outside it are refused.
+        for lines in [100, 20_000] {
+            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines))
+                .await
+                .err()
+                .unwrap()
+                .into_inner()
+                .unwrap();
+            assert!(error.contains("not built"), "{lines}: {error}");
+        }
         assert!(terminal_core_open(lease(), channel(), 0, 24, None)
             .await
             .is_err());

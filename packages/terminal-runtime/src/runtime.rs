@@ -26,6 +26,16 @@ enum Resize {
 const MODE_ORIGIN: u16 = 6;
 const MODE_WRAPAROUND: u16 = 7;
 const DEFAULT_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
+/// A scrollback cell costs 8 bytes in libghostty-vt plus page overhead: 8.9 to 9.2 bytes per cell
+/// measured at 20 to 279 columns, the same for plain, SGR-coloured and syntax-highlighted output
+/// (`examples/scrollback_budget.rs`). 10 leaves margin; see [`scrollback_bytes_for_lines`].
+const SCROLLBACK_BYTES_PER_CELL: usize = 10;
+/// libghostty-vt frees whole pages (about half a MiB each), so a budget of a few pages keeps up to
+/// a page and a half fewer rows than its byte size suggests; two pages of slack make up for it.
+const SCROLLBACK_PAGE_SLACK_BYTES: usize = 1024 * 1024;
+/// Narrower terminals are budgeted as this wide, so a phone that opens in portrait still keeps its
+/// history after the grid widens.
+const SCROLLBACK_REFERENCE_COLS: usize = 80;
 /// Matches the current transport credit window (OUTPUT_WINDOW/WINDOW in the Rust workers).
 const DEFAULT_INGRESS_BYTES: usize = 256 * 1024;
 
@@ -52,6 +62,22 @@ impl From<ghostty_vt::Error> for Error {
     fn from(err: ghostty_vt::Error) -> Self {
         Self::Vt(err)
     }
+}
+
+/// The scrollback byte budget that keeps at least `lines` rows of ordinary output (plain text,
+/// SGR colours, syntax highlighting) for a terminal `cols` wide: lazysh's History lines setting counts
+/// lines, libghostty-vt budgets bytes, and the rows one byte budget holds depend on the width.
+///
+/// The width is the one at open and is not revisited: output written after a later widening takes
+/// more bytes per row and keeps fewer rows, and content that defeats cell sharing (a different
+/// truecolor foreground and background on every cell: 5.5 times the plain cost at 80 columns) or
+/// leans on graphemes and hyperlinks keeps fewer rows too. The hub clamps the request to its
+/// per-session cap, so very wide terminals with the largest setting are clamped as well.
+pub fn scrollback_bytes_for_lines(lines: usize, cols: u16) -> usize {
+    lines
+        .saturating_mul(usize::from(cols).max(SCROLLBACK_REFERENCE_COLS))
+        .saturating_mul(SCROLLBACK_BYTES_PER_CELL)
+        .saturating_add(SCROLLBACK_PAGE_SLACK_BYTES)
 }
 
 #[derive(Debug, Clone, Copy)]
