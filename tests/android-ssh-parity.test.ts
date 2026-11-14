@@ -3,7 +3,7 @@ import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
-import {androidSshParityAcceptance,parityControl,sshdLogFacts,validateSshParityReport,sshParityCases} from './support/androidSshParity';
+import {androidSshParityAcceptance,etBinary,etTerminalCount,parityControl,sshdLogFacts,startOwnedEt,validateSshParityReport,sshParityCases} from './support/androidSshParity';
 import {sshCommand} from './support/sshFixture';
 
 const parity=process.env.LAZYSH_ANDROID_UI_SSH_PARITY==='1';
@@ -65,8 +65,27 @@ test.skipIf(!parity)('owned parity control answers only its nonce and closed act
     expect(await control.reply({nonce:primary.nonce,action:'observe',server:'bastion'})).toMatchObject({connections:0,acceptedPublickey:[]});
     await control.reply({nonce:primary.nonce,action:'rotate'});
     expect(rotations).toBe(1);
+    expect(await control.reply({nonce:primary.nonce,action:'et'})).toEqual({sessions:0});
   } finally {for(const fixture of started)await fixture.stop();}
 },20_000);
+
+test.skipIf(!parity)('owned etserver authorizes the etterminal its exec-capable sshd runs and counts only started terminals',async()=>{
+  const ssh=await SshFixture.start(undefined,{companion:true});
+  let et:Awaited<ReturnType<typeof startOwnedEt>>|undefined;
+  try {
+    et=await startOwnedEt(ssh,etBinary('ET_SERVER_BIN'));
+    // The command the app sends over SSH: it registers a fresh id and passkey with the server FIFO and prints them.
+    const bootstrap=await ssh.client(true,`'${etBinary('ET_TERMINAL_BIN')}' --logtostdout`);
+    bootstrap.child.stdin!.end('XXXabcdefghijklm/'+'k'.repeat(32)+'_xterm-256color\n');
+    expect(await bootstrap.finish('owned etterminal bootstrap',10_000)).toMatch(/IDPASSKEY:[A-Za-z0-9]{16}\/[A-Za-z0-9]{32}\n/);
+    expect(await et.sessions()).toBe(0);
+  } finally {await et?.stop();await ssh.stop();}
+},30_000);
+
+test('etserver terminals are counted only from its own start lines',()=>{
+  expect(etTerminalCount('Creating server\nWaiting for initial packet...\n')).toBe(0);
+  expect(etTerminalCount('Waiting for initial packet...\nRUNNING TERMINAL\nGot keep alive\nRUNNING TERMINAL\n')).toBe(2);
+});
 
 test('parity report counts only every expected native case passing exactly once',()=>{
   const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;
