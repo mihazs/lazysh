@@ -112,6 +112,14 @@ Companion events carry a typed pane identity: tmux server label plus `TMUX_PANE`
 rmux label plus `RMUX_PANE`; `ZELLIJ_SESSION_NAME` plus `ZELLIJ_PANE_ID`; the Herdr
 pane. A notification opens that exact pane.
 
+Shipped so far: the companion records `paneServer` (`tmux:<label>` or `rmux:<label>`, from the
+socket path in `TMUX` or `RMUX`) next to `paneId`, and the Agents panel's report details show
+it. A pane is rmux only when `RMUX_PANE` and `RMUX` equal `TMUX_PANE` and `TMUX`, so a tmux started
+inside an rmux pane stays tmux. Zellij and Herdr panes already carry their session in `paneId`.
+A `-S` socket has no label and records none. Using the label to focus the pane and to keep two
+servers' `%7` apart in the Agent view, tmux and rmux Jump To pane rows, and Herdr
+`events.subscribe` are still open.
+
 ## Capability table: remote hosts
 
 The multiplexer runs on a POSIX SSH or Mosh host (Linux or macOS). The client is

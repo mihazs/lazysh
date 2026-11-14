@@ -282,6 +282,7 @@ const translations = {
   agentsReportSession: ["ID de sessão reportado", "ID de sesión reportado"],
   agentsReportEvents: ["Eventos reportados", "Eventos reportados"],
   agentsReportPane: ["ID de painel reportado", "ID de panel reportado"],
+  agentsReportPaneServer: ["Servidor do multiplexador reportado", "Servidor del multiplexor reportado"],
   agentsReportContext: ["Último relato deste servidor. Confira o estado atual no terminal.", "Último informe de este servidor. Comprueba su estado actual en el terminal."],
   agentsNoMatches: ["Nenhum agente reportado corresponde", "No hay agentes reportados coincidentes"],
   agentsNoMatchesHint: ["Altere a busca ou o filtro de estado reportado para ver outros relatos.", "Cambia la búsqueda o el filtro de estado reportado para ver otros informes."],

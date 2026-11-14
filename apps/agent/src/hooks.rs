@@ -151,15 +151,35 @@ pub(crate) fn cursor_event(payload: &Value, pane: Option<&str>) -> Result<Option
         }
         _ => return Err(crate::Error::InvalidEvent),
     };
-    Ok(Some(Event {
-        session_id: field(payload, "conversation_id", 256)?,
-        agent: "Cursor CLI".into(),
+    Ok(Some(report(
+        field(payload, "conversation_id", 256)?,
+        "Cursor CLI",
+        project,
+        (state, summary),
+        pane,
+        None,
+    )))
+}
+
+/// A lifecycle report from the pane a hook runs in; the pane's server is attached later, where its environment is read.
+fn report(
+    session_id: String,
+    agent: &str,
+    project: String,
+    (state, summary): (SessionState, &str),
+    pane: Option<&str>,
+    waiting: Option<Waiting>,
+) -> Event {
+    Event {
+        session_id,
+        agent: agent.into(),
         project,
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
-        waiting: None,
-    }))
+        pane_server: None,
+        waiting,
+    }
 }
 
 pub(crate) fn amp_event(payload: &Value, pane: Option<&str>) -> Result<Option<Event>> {
@@ -173,16 +193,15 @@ pub(crate) fn amp_event(payload: &Value, pane: Option<&str>) -> Result<Option<Ev
         Some("error") => (SessionState::NeedsAttention, "Turn failed"),
         _ => return Ok(None),
     };
-    Ok(Some(Event {
-        session_id: field(payload, "threadId", 256)?,
-        agent: "Amp".into(),
-        project: field(payload, "directory", 4096)?,
-        state,
-        summary: summary.into(),
-        pane_id: pane.map(str::to_owned),
-        waiting: (state == SessionState::NeedsAttention && summary == "Permission requested")
+    Ok(Some(report(
+        field(payload, "threadId", 256)?,
+        "Amp",
+        field(payload, "directory", 4096)?,
+        (state, summary),
+        pane,
+        (state == SessionState::NeedsAttention && summary == "Permission requested")
             .then_some(Waiting::Approval),
-    }))
+    )))
 }
 
 pub fn cline_plugin() -> Value {
@@ -209,19 +228,18 @@ pub(crate) fn cline_event(payload: &Value, pane: Option<&str>) -> Result<Option<
         Some("failed") => (SessionState::NeedsAttention, "Turn failed"),
         _ => return Ok(None),
     };
-    Ok(Some(Event {
+    Ok(Some(report(
         // Validated identities exclude NUL, making this native pair unambiguous.
-        session_id: format!(
+        format!(
             "cline:{:x}",
             Sha256::digest(format!("cline-v1\0{agent}\0{conversation}").as_bytes())
         ),
-        agent: "Cline CLI".into(),
-        project: field(payload, "directory", 4096)?,
-        state,
-        summary: summary.into(),
-        pane_id: pane.map(str::to_owned),
-        waiting: None,
-    }))
+        "Cline CLI",
+        field(payload, "directory", 4096)?,
+        (state, summary),
+        pane,
+        None,
+    )))
 }
 
 // Additive health-only table; never insert an ambiguous Aider notification into sessions.
@@ -285,19 +303,18 @@ pub(crate) fn opencode_event(payload: &Value, pane: Option<&str>) -> Result<Opti
         }
         _ => return Ok(None),
     };
-    Ok(Some(Event {
-        session_id: field(&payload["properties"], "sessionID", 256)?,
-        agent: "OpenCode".into(),
-        project: field(payload, "directory", 4096)?,
-        state,
-        summary: summary.into(),
-        pane_id: pane.map(str::to_owned),
-        waiting: (state == SessionState::NeedsAttention).then_some(if kind == "question.asked" {
+    Ok(Some(report(
+        field(&payload["properties"], "sessionID", 256)?,
+        "OpenCode",
+        field(payload, "directory", 4096)?,
+        (state, summary),
+        pane,
+        (state == SessionState::NeedsAttention).then_some(if kind == "question.asked" {
             Waiting::Question
         } else if kind == "permission.asked" {
             Waiting::Approval
         } else {
             Waiting::Unknown
         }),
-    }))
+    )))
 }

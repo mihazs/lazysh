@@ -17,6 +17,7 @@
 | `state` | Required `working`, `needs_attention` or `done`. |
 | `summary` | Required nonblank string, at most 512 characters. |
 | `paneId` | Optional/null; when present, nonblank string of at most 256 characters. Reported metadata, not input authority. |
+| `paneServer` | Optional; `tmux:<label>` or `rmux:<label>`, the server `paneId` belongs to, as `tmux -L <label>` names it (`default` for the default socket). A hook run inside a tmux or rmux pane records it from the pane's `TMUX` or `RMUX` socket path; a socket outside the server's own `tmux-<uid>` or `rmux-<uid>` directory (`-S`) has no label and records none. The snapshot omits it when it is not recorded, and a client that does not know it ignores it. A generic event may name its own; one that is not `tmux:` or `rmux:` followed by a label of 1 to 64 bytes without `/` or control characters fails. |
 
 String fields reject characters below U+0020. Input JSON is bounded to 256 KiB; malformed or oversized input fails. These character limits are not the byte-based SSH selector limits.
 
