@@ -270,43 +270,50 @@ mod tests {
             .set_modified(time)
             .unwrap();
     }
+    /// The folders are written POSIX-style; Windows only accepts a drive-qualified absolute one.
+    fn folder(posix: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", posix.replace('/', "\\"))
+        } else {
+            posix.to_owned()
+        }
+    }
 
     #[test]
     fn claude_lists_the_folder_newest_first_with_titles_and_skips_a_folder_with_the_same_directory_name(
     ) {
         let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("-home-me-dev--worktrees-app");
+        let app = folder("/home/me/dev/.worktrees/app");
+        let directory = root.path().join(if cfg!(windows) {
+            "C--home-me-dev--worktrees-app"
+        } else {
+            "-home-me-dev--worktrees-app"
+        });
         let old = directory.join("11111111-1111-4111-8111-111111111111.jsonl");
         let new = directory.join("22222222-2222-4222-8222-222222222222.jsonl");
         let other = directory.join("33333333-3333-4333-8333-333333333333.jsonl");
         write(
             &old,
             &[
-                json!({"type":"user","cwd":"/home/me/dev/.worktrees/app"}),
+                json!({"type":"user","cwd":app}),
                 json!({"type":"last-prompt","lastPrompt":"  fix\nthe login\u{1b}[31m  bug "}),
             ],
         );
         write(
             &new,
             &[
-                json!({"type":"user","cwd":"/home/me/dev/.worktrees/app"}),
+                json!({"type":"user","cwd":app}),
                 json!({"type":"ai-title","aiTitle":"Old title"}),
                 json!({"type":"ai-title","aiTitle":"Add dark mode"}),
             ],
         );
         write(
             &other,
-            &[json!({"type":"user","cwd":"/home/me/dev/-worktrees/app"})],
+            &[json!({"type":"user","cwd":folder("/home/me/dev/-worktrees/app")})],
         );
         age(&old, 7200);
         age(&new, 60);
-        let page = history(
-            TranscriptAgent::Claude,
-            Some(root.path()),
-            "/home/me/dev/.worktrees/app",
-            10,
-        )
-        .unwrap();
+        let page = history(TranscriptAgent::Claude, Some(root.path()), &app, 10).unwrap();
         let sessions = page["sessions"].as_array().unwrap();
         assert_eq!(
             sessions
@@ -325,13 +332,7 @@ mod tests {
             sessions[0]["bytes"].as_u64().unwrap() > 0 && sessions[0]["modifiedAt"].is_string()
         );
         // The limit applies after the newest are chosen.
-        let one = history(
-            TranscriptAgent::Claude,
-            Some(root.path()),
-            "/home/me/dev/.worktrees/app",
-            1,
-        )
-        .unwrap();
+        let one = history(TranscriptAgent::Claude, Some(root.path()), &app, 1).unwrap();
         assert_eq!(one["sessions"].as_array().unwrap().len(), 1);
     }
 
@@ -340,19 +341,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mine = root.path().join("2026/11/10/rollout-a.jsonl");
         let theirs = root.path().join("2026/11/10/rollout-b.jsonl");
+        let app = folder("/work/app");
         write(
             &mine,
             &[
-                json!({"type":"session_meta","payload":{"id":"aaaa","cwd":"/work/app"}}),
+                json!({"type":"session_meta","payload":{"id":"aaaa","cwd":app}}),
                 json!({"type":"event_msg","payload":{"type":"agent_message","message":"not me"}}),
                 json!({"type":"event_msg","payload":{"type":"user_message","message":"Plan the release"}}),
             ],
         );
         write(
             &theirs,
-            &[json!({"type":"session_meta","payload":{"id":"bbbb","cwd":"/work/other"}})],
+            &[json!({"type":"session_meta","payload":{"id":"bbbb","cwd":folder("/work/other")}})],
         );
-        let page = history(TranscriptAgent::Codex, Some(root.path()), "/work/app", 10).unwrap();
+        let page = history(TranscriptAgent::Codex, Some(root.path()), &app, 10).unwrap();
         assert_eq!(
             page["sessions"],
             json!([{
@@ -365,18 +367,25 @@ mod tests {
     #[test]
     fn a_missing_root_or_an_unsupported_agent_or_a_bad_folder_is_an_empty_list_or_an_error() {
         let root = tempfile::tempdir().unwrap();
+        let work = folder("/work");
         let none = history(
             TranscriptAgent::Claude,
             Some(&root.path().join("absent")),
-            "/work",
+            &work,
             5,
         )
         .unwrap();
         assert_eq!(none["sessions"], json!([]));
-        assert!(history(TranscriptAgent::Pi, Some(root.path()), "/work", 5).is_err());
+        assert!(history(TranscriptAgent::Pi, Some(root.path()), &work, 5).is_err());
         assert!(history(TranscriptAgent::Claude, Some(root.path()), "relative", 5).is_err());
-        assert!(history(TranscriptAgent::Claude, Some(root.path()), "/work\n", 5).is_err());
-        assert!(history(TranscriptAgent::Claude, Some(root.path()), "/work", 0).is_err());
+        assert!(history(
+            TranscriptAgent::Claude,
+            Some(root.path()),
+            &format!("{work}\n"),
+            5
+        )
+        .is_err());
+        assert!(history(TranscriptAgent::Claude, Some(root.path()), &work, 0).is_err());
     }
 
     #[cfg(unix)]
