@@ -37,6 +37,7 @@ pub struct Glyph<'a> {
     pub text: &'a str,
     pub color: RgbColor,
     pub bold: bool,
+    pub italic: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +99,7 @@ fn paint<'a>(
             text: &cell.text,
             color: fg,
             bold: cell.style.bold,
+            italic: cell.style.italic,
         }));
     }
     if cell.style.underlined {

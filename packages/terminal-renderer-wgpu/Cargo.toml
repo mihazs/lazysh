@@ -18,6 +18,9 @@ lazysh-terminal-runtime = { path = "../terminal-runtime" }
 wgpu = { version = "30", default-features = false, features = ["wgsl", "counters"] }
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
+# Shaping (GSUB/GPOS), unhinted rasterization and color bitmaps/layers in one pure-Rust crate: no C
+# toolchain on the Android and iOS builds (#1325, docs/architecture/native-rendering.md).
+swash = { version = "0.2", default-features = false, features = ["std", "scale", "render"] }
 
 # Backends per platform (the policy in src/adapter.rs ranks them): Vulkan everywhere but Apple, with
 # OpenGL ES as the Android and Linux fallback, Metal on Apple, Direct3D 12 on Windows.

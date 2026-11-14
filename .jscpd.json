@@ -8,6 +8,7 @@
   ],
   "ignore": [
     "apps/client/src/font-licenses/NotoSansMonoCJK-OFL.txt",
+    "packages/terminal-renderer-wgpu/tests/fonts/LICENSE-*.txt",
     "fdroid/build/**",
     "fdroid/logs/**",
     "fdroid/repo/**",

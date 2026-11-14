@@ -2,9 +2,9 @@
 
 wgpu implementation of the [Terminal Renderer API](../../docs/architecture/native-rendering.md#terminal-renderer-api)
 ([#1324](https://github.com/mihazs/lazysh/issues/1324), epic [#1302](https://github.com/mihazs/lazysh/issues/1302)).
-Not wired into the app: the Android surface is [#1327](https://github.com/mihazs/lazysh/issues/1327) and text with real
-fonts is [#1325](https://github.com/mihazs/lazysh/issues/1325); cursor blink, scale changes and loss recovery
-([#1326](https://github.com/mihazs/lazysh/issues/1326)) are in, for the reference renderer's dot-pattern glyphs.
+Not wired into the app: the Android surface is [#1327](https://github.com/mihazs/lazysh/issues/1327). Real fonts
+([#1325](https://github.com/mihazs/lazysh/issues/1325)), cursor blink, scale changes and loss recovery
+([#1326](https://github.com/mihazs/lazysh/issues/1326)) are in.
 
 What it does, and where the tests that show it live:
 
@@ -19,10 +19,15 @@ What it does, and where the tests that show it live:
 | Device loss | `resume` builds a new device from core state; a loss reported by a device that was already replaced is ignored; a reset the renderer was not told about is learned from the device | `a_lost_device_recovers_from_a_snapshot`, `tests/lifecycle.rs` (five losses, identical pixels, resource counts, bounded time) |
 | Cursor blink | `wants_blink_timer()` and the host-side `BlinkClock`: one timer for every session, none for a steady or hidden cursor; a phase is one row in one pass | `tests/lifecycle.rs` (virtual time) |
 | Display scale and refresh rate | `CellMetrics::scaled` and `set_appearance` + `resize` repaint from the held screen; `FramePacer` draws at most once per refresh | `tests/lifecycle.rs`, goldens at 2x and 3x |
+| Fonts, fallback and grapheme clusters | `Target::with_fonts(FontLibrary)`: the host registers font bytes per family and style, `Appearance::font_families` orders them (preferred family, then the fallback list; unknown names skipped, other registered families last; `FontLibrary::restrict` limits a family such as the imported CJK font to its Unicode ranges, as `fonts.ts` does, so it never draws Latin text from the primary font). A cluster takes the first family that has all its scalars (a color face for emoji presentation), is shaped alone with `swash` (GPOS marks, GSUB ZWJ, flag and keycap sequences), fitted to the cells the core gave it (shrunk if wider, centered if narrower) on one baseline, and rasterized unhinted. Coverage goes to the `R8` atlas, color glyphs to a separate `RGBA8` atlas. Bold and italic use the family's faces, else are synthesized. `set_fonts` swaps fonts live | `tests/text.rs`, goldens `tests/golden/text_*.png` |
 | Selection highlight | the layout's selection overlay; a drag redraws only the rows it changes | `a_selection_drag_redraws_only_the_rows_it_changes_and_matches_the_reference` |
 
 The surface is an offscreen texture (`Target`), which is what the tests and examples read back with `read_image`.
-Glyphs are still the reference renderer's dot patterns; fonts are #1325.
+Without a `FontLibrary` glyphs are the reference renderer's dot patterns, which is what the pixel-for-pixel parity tests
+against the CPU renderer use; with one they are real glyphs and the checks are the text tests and goldens (within 2 per
+channel, because the GPU blends the last bit). The fonts of those tests are subsets, see [`tests/fonts`](tests/fonts/README.md).
+Fonts are bytes the host provides, never looked up by name on the machine: the user's imported fonts live in the
+WebView's storage and system fonts differ per platform.
 
 ## Build and test
 
@@ -36,6 +41,8 @@ tests use `Policy::for_platform().with_software()`; the shipping policy refuses 
 cargo +1.96.1 test --locked
 cargo +1.96.1 run --release --example wgpu_bench       # pipeline cost against the CPU reference renderer
 cargo +1.96.1 run --release --example renderer_stats   # idle, atlas, memory and churn counters
+cargo +1.96.1 run --release --example text_stats       # glyph cache hit rate and text time with real fonts
 ```
 
-`UPDATE_GOLDEN=1 cargo test --test renderer` in the runtime crate rewrites the goldens both renderers are compared with.
+`UPDATE_GOLDEN=1 cargo test --test renderer` in the runtime crate rewrites the goldens both renderers are compared with;
+`UPDATE_GOLDEN=1 cargo test --test text` here rewrites `tests/golden/text_*.png` (look at them before committing).

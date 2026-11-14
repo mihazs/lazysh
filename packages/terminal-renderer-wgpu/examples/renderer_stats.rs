@@ -7,15 +7,15 @@
 //! timer); and forced device loss (time to recover the picture).
 //! Run in release: `cargo run --release --example renderer_stats`; the caller records the environment.
 
-#[path = "../../terminal-runtime/tests/support/mod.rs"]
-mod support;
+mod common;
 
+use common::support::{feed, load_average, rss_kib, runtime, workloads};
+use common::{play, show};
 use lazysh_terminal_renderer_wgpu::{Target, WgpuRenderer};
 use lazysh_terminal_runtime::{
     Appearance, BlinkClock, Overlay, TerminalRenderer, TerminalRuntime, BLINK_HALF_PERIOD,
 };
 use std::time::{Duration, Instant};
-use support::{feed, feed_chunk, load_average, rss_kib, runtime, workloads, CHUNK, WINDOW};
 
 const VOLUME: usize = 16 * 1024 * 1024;
 const CELL: (u32, u32) = (8, 16);
@@ -25,14 +25,6 @@ fn renderer(cols: u16, rows: u16, atlas_side: u32) -> WgpuRenderer {
     let target = Target::new(u32::from(cols) * CELL.0, u32::from(rows) * CELL.1);
     WgpuRenderer::create(target.with_atlas_side(atlas_side), Appearance::default())
         .expect("a GPU adapter is required")
-}
-
-fn show(r: &mut WgpuRenderer, rt: &mut TerminalRuntime) {
-    if let Some(frame) = rt.take_frame().expect("frame") {
-        r.apply(&frame).expect("apply");
-        r.draw().expect("draw");
-        r.present().expect("present");
-    }
 }
 
 /// Voluntary and involuntary context switches of this process (Linux): what a polling loop would spend.
@@ -57,15 +49,7 @@ fn main() {
         for (name, data) in &workloads() {
             let mut r = renderer(cols, rows, 2048);
             let mut rt = runtime(cols, rows);
-            let mut taken = 0;
-            for chunk in data[..VOLUME].chunks(CHUNK) {
-                feed_chunk(&mut rt, chunk);
-                taken += chunk.len();
-                if taken >= WINDOW {
-                    taken = 0;
-                    show(&mut r, &mut rt);
-                }
-            }
+            play(&mut r, &mut rt, data, VOLUME);
             let (g, s) = (r.gpu_stats(), r.stats());
             println!(
                 "| {grid} | {name} | {} | {} | {} | {} | {} | {} | {} | {:.1} | {} | {:.2} |",

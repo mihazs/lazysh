@@ -3,7 +3,7 @@
 //! The texture is a grid of slots the size of one cell (narrow glyphs) or two cells (wide ones),
 //! so evicting a glyph frees exactly the room of the next one: there is no fragmentation and no
 //! compaction, and the memory is fixed when the atlas is created. A glyph is rasterized once per
-//! (cluster, width, weight) while it stays resident. Slots used since [`Atlas::begin_batch`] are
+//! (cluster, width, weight, slant) while it stays resident. Slots used since [`Atlas::begin_batch`] are
 //! never evicted, because the draw that references them has not been submitted yet; when a batch
 //! needs more than the atlas holds, [`Slot::Full`] tells the caller to submit and begin again.
 
@@ -12,11 +12,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 const NONE: u32 = u32::MAX;
-const VARIANTS: usize = 4;
+const VARIANTS: usize = 8;
 
-/// The masks one cluster can have: narrow or wide, regular or bold.
-fn variant(wide: bool, bold: bool) -> usize {
-    usize::from(wide) * 2 + usize::from(bold)
+/// The masks one cluster can have: narrow or wide, regular or bold, upright or italic.
+fn variant(wide: bool, bold: bool, italic: bool) -> usize {
+    usize::from(wide) * 4 + usize::from(bold) * 2 + usize::from(italic)
 }
 
 #[derive(Debug)]
@@ -166,8 +166,8 @@ impl Atlas {
         std::mem::take(&mut self.evictions)
     }
 
-    pub fn slot(&mut self, text: &str, wide: bool, bold: bool) -> Slot {
-        let (pool, v) = (usize::from(wide), variant(wide, bold));
+    pub fn slot(&mut self, text: &str, wide: bool, bold: bool, italic: bool) -> Slot {
+        let (pool, v) = (usize::from(wide), variant(wide, bold, italic));
         if let Some(&id) = self
             .slots
             .get(text)
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(a.capacity(), 24 + 4);
         let mut seen = std::collections::HashSet::new();
         for i in 0..24 {
-            let at = miss(a.slot(&format!("n{i}"), false, false));
+            let at = miss(a.slot(&format!("n{i}"), false, false, false));
             assert!(
                 at.0 + 8 <= 64 && at.1 + 16 <= 48,
                 "narrow slots stay above the wide row"
@@ -239,7 +239,7 @@ mod tests {
             assert!(seen.insert(at), "{at:?} handed out twice");
         }
         for i in 0..4 {
-            let at = miss(a.slot(&format!("w{i}"), true, false));
+            let at = miss(a.slot(&format!("w{i}"), true, false, false));
             assert!(at.0 + 16 <= 64 && at.1 == 48);
             assert!(seen.insert(at));
         }
@@ -248,39 +248,52 @@ mod tests {
     #[test]
     fn a_resident_glyph_hits_at_the_same_place_and_weights_are_separate() {
         let mut a = atlas();
-        let at = miss(a.slot("a", false, false));
-        assert_eq!(a.slot("a", false, false), Slot::Hit(at));
-        assert_ne!(miss(a.slot("a", false, true)), at, "bold is another mask");
-        assert_ne!(miss(a.slot("a", true, false)), at, "so is a wide one");
-        assert_eq!(a.resident(), 3);
+        let at = miss(a.slot("a", false, false, false));
+        assert_eq!(a.slot("a", false, false, false), Slot::Hit(at));
+        assert_ne!(
+            miss(a.slot("a", false, true, false)),
+            at,
+            "bold is another mask"
+        );
+        assert_ne!(
+            miss(a.slot("a", true, false, false)),
+            at,
+            "so is a wide one"
+        );
+        assert_ne!(
+            miss(a.slot("a", false, false, true)),
+            at,
+            "and an italic one"
+        );
+        assert_eq!(a.resident(), 4);
     }
 
     #[test]
     fn the_least_recently_used_glyph_is_evicted_once_the_batch_moves_on() {
         let mut a = atlas();
         let first: Vec<_> = (0..24)
-            .map(|i| miss(a.slot(&format!("n{i}"), false, false)))
+            .map(|i| miss(a.slot(&format!("n{i}"), false, false, false)))
             .collect();
         assert_eq!(
-            a.slot("extra", false, false),
+            a.slot("extra", false, false, false),
             Slot::Full,
             "all 24 belong to the batch that is still being drawn"
         );
         a.begin_batch();
-        a.slot("n0", false, false); // the oldest becomes the newest
+        a.slot("n0", false, false, false); // the oldest becomes the newest
         assert_eq!(
-            miss(a.slot("extra", false, false)),
+            miss(a.slot("extra", false, false, false)),
             first[1],
             "n1 was the victim"
         );
         assert_eq!(a.take_evictions(), 1);
         assert_eq!(a.take_evictions(), 0, "counted once");
         assert!(
-            matches!(a.slot("n0", false, false), Slot::Hit(_)),
+            matches!(a.slot("n0", false, false, false), Slot::Hit(_)),
             "n0 was refreshed"
         );
         assert!(
-            matches!(a.slot("n1", false, false), Slot::Miss(_)),
+            matches!(a.slot("n1", false, false, false), Slot::Miss(_)),
             "n1 is gone"
         );
         assert_eq!(
@@ -297,7 +310,7 @@ mod tests {
             if i % 4 == 0 {
                 a.begin_batch();
             }
-            a.slot(&format!("g{i}"), i % 3 == 0, i % 5 == 0);
+            a.slot(&format!("g{i}"), i % 3 == 0, i % 5 == 0, false);
             assert!(a.resident() <= a.capacity());
         }
         assert!(a.take_evictions() > 9_000 - a.capacity() as u64);

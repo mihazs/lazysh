@@ -18,17 +18,24 @@
 //!   keeps its fallback renderer.
 //!
 //! The surface of this crate is an offscreen texture (`Target`), which is what the tests and the
-//! benchmarks read back. A window or `ANativeWindow` surface is #1327; the text path with real
-//! fonts is #1325 (glyph masks still come from the reference dot patterns of the layout).
+//! benchmarks read back. A window or `ANativeWindow` surface is #1327.
+//!
+//! **Text.** Without fonts the glyph masks are the reference dot patterns of the layout. With a
+//! [`FontLibrary`] on the [`Target`] they come from real fonts ([`text`]): face choice with
+//! fallback, shaping, and rasterization into the cluster's cells, in an `R8` atlas for coverage and
+//! an `RGBA8` atlas for color glyphs (emoji), each of fixed size.
 
 mod adapter;
 mod atlas;
+mod fonts;
+mod text;
 
 pub use adapter::{rank, ranked, AdapterInfo, Policy};
+pub use fonts::{FontError, FontLibrary};
 
 use atlas::{Atlas, Slot};
 use bytemuck::{Pod, Zeroable};
-use lazysh_terminal_runtime::layout::{glyph_pixels, row_draws, Draw, Glyph, Rect};
+use lazysh_terminal_runtime::layout::{row_draws, Draw, Glyph, Rect};
 use lazysh_terminal_runtime::{
     forward_to_core, Appearance, CellMetrics, DrawPlan, Image, RenderError, RendererCore, Resume,
     RgbColor, TerminalRenderer,
@@ -36,6 +43,7 @@ use lazysh_terminal_runtime::{
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use text::{Glyphs, Kind};
 
 /// Default atlas side in texels: 4 MiB of masks.
 const ATLAS_SIDE: u32 = 2048;
@@ -44,6 +52,10 @@ const MAX_PASS_INSTANCES: usize = 1 << 16;
 const SOLID: u32 = u32::MAX;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+const COLOR_ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// Default side of the color glyph atlas: 1 MiB. A screen with more distinct emoji than it holds is
+/// drawn in several passes (a few dozen wide ones at phone sizes); a host that shows more raises it.
+const COLOR_ATLAS_SIDE: u32 = 512;
 const INSTANCE: u64 = std::mem::size_of::<Instance>() as u64;
 
 /// The surface: an offscreen texture of this size in device pixels, on the adapter the policy picks.
@@ -55,6 +67,10 @@ pub struct Target {
     /// Side of the square glyph atlas in texels (the device's limit if smaller). The default holds
     /// thousands of glyphs; tests shrink it to make eviction happen.
     pub atlas_side: u32,
+    /// The same for the color (emoji) atlas, which only fills when a color font draws.
+    pub color_atlas_side: u32,
+    /// Fonts to draw glyphs with; without them glyphs are the reference dot patterns.
+    pub fonts: Option<Arc<FontLibrary>>,
 }
 
 impl Target {
@@ -65,6 +81,8 @@ impl Target {
             height,
             policy: Policy::for_platform(),
             atlas_side: ATLAS_SIDE,
+            color_atlas_side: COLOR_ATLAS_SIDE,
+            fonts: None,
         }
     }
 
@@ -75,6 +93,21 @@ impl Target {
     pub fn with_atlas_side(self, atlas_side: u32) -> Self {
         Self { atlas_side, ..self }
     }
+
+    pub fn with_color_atlas_side(self, color_atlas_side: u32) -> Self {
+        Self {
+            color_atlas_side,
+            ..self
+        }
+    }
+
+    /// Draw glyphs with `fonts`, ordered by `Appearance::font_families`.
+    pub fn with_fonts(self, fonts: FontLibrary) -> Self {
+        Self {
+            fonts: Some(Arc::new(fonts)),
+            ..self
+        }
+    }
 }
 
 /// One rectangle of the shared layout: a solid fill, or a glyph mask taken from the atlas.
@@ -84,7 +117,8 @@ struct Instance {
     rect: [u32; 4],
     color: u32,
     mask: [u32; 2],
-    pad: u32,
+    /// 0: a solid or a coverage mask tinted with `color`; 1: an RGBA glyph from the color atlas.
+    kind: u32,
 }
 
 impl Instance {
@@ -93,7 +127,7 @@ impl Instance {
             rect: [x, y, w, h],
             color: u32::from(color.r) | u32::from(color.g) << 8 | u32::from(color.b) << 16,
             mask: [SOLID; 2],
-            pad: 0,
+            kind: 0,
         }
     }
 }
@@ -119,6 +153,9 @@ pub struct GpuStats {
     pub glyph_hits: u64,
     /// Masks rasterized and uploaded.
     pub glyph_misses: u64,
+    /// Time spent shaping and rasterizing the masks that missed (zero without fonts); the face lookup
+    /// every glyph pays, hit or miss, is not in it.
+    pub text_time: std::time::Duration,
     pub atlas_evictions: u64,
     /// Bytes of glyph masks written to the atlas.
     pub atlas_upload_bytes: u64,
@@ -140,6 +177,7 @@ impl GpuStats {
             instances: self.instances + other.instances,
             glyph_hits: self.glyph_hits + other.glyph_hits,
             glyph_misses: self.glyph_misses + other.glyph_misses,
+            text_time: self.text_time + other.text_time,
             atlas_evictions: self.atlas_evictions + other.atlas_evictions,
             atlas_upload_bytes: self.atlas_upload_bytes + other.atlas_upload_bytes,
             atlas_spills: self.atlas_spills + other.atlas_spills,
@@ -223,6 +261,19 @@ fn layout_entry(
     }
 }
 
+/// A glyph atlas the fragment shader reads with `textureLoad`.
+fn atlas_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    layout_entry(
+        binding,
+        wgpu::ShaderStages::FRAGMENT,
+        wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+    )
+}
+
 /// The cell backgrounds of a row as runs (neighbours of one color merged, the theme background
 /// dropped because the row is cleared to it first), and every other draw in layout order. The
 /// layout paints a cell's background before anything else of that cell and no draw leaves its
@@ -261,6 +312,47 @@ fn check_size(limit: u32, width: u32, height: u32) -> Result<(u32, u32), RenderE
     Ok((width, height))
 }
 
+/// A glyph atlas and the texture its masks are written to.
+struct GlyphAtlas {
+    texture: wgpu::Texture,
+    atlas: Atlas,
+    /// Bytes per texel: 1 for coverage, 4 for RGBA.
+    texel: u32,
+}
+
+impl GlyphAtlas {
+    fn new(
+        device: &wgpu::Device,
+        label: &str,
+        side: u32,
+        format: wgpu::TextureFormat,
+        texel: u32,
+        metrics: CellMetrics,
+    ) -> Result<(Self, wgpu::TextureView), RenderError> {
+        let atlas = Atlas::new(side, metrics).ok_or(RenderError::InvalidSize)?;
+        let (texture, view) = texture(
+            device,
+            label,
+            (side, side),
+            format,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        Ok((
+            Self {
+                texture,
+                atlas,
+                texel,
+            },
+            view,
+        ))
+    }
+
+    fn bytes(&self) -> u64 {
+        let side = u64::from(self.atlas.size);
+        side * side * u64::from(self.texel)
+    }
+}
+
 /// Everything that dies with the device: rebuilt from core state after a loss.
 struct Gpu {
     info: AdapterInfo,
@@ -268,8 +360,9 @@ struct Gpu {
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
-    atlas_texture: wgpu::Texture,
-    atlas: Atlas,
+    /// Coverage masks (text) and RGBA glyphs (emoji).
+    masks: GlyphAtlas,
+    colors: GlyphAtlas,
     bind_group: wgpu::BindGroup,
     target: wgpu::Texture,
     target_view: wgpu::TextureView,
@@ -340,15 +433,8 @@ impl Gpu {
                         min_binding_size: None,
                     },
                 ),
-                layout_entry(
-                    1,
-                    wgpu::ShaderStages::FRAGMENT,
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                ),
+                atlas_entry(1),
+                atlas_entry(2),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -366,7 +452,7 @@ impl Gpu {
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: INSTANCE,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Uint32x4, 1 => Uint32, 2 => Uint32x2],
+                    attributes: &wgpu::vertex_attr_array![0 => Uint32x4, 1 => Uint32, 2 => Uint32x2, 3 => Uint32],
                 })],
             },
             fragment: Some(wgpu::FragmentState {
@@ -394,15 +480,22 @@ impl Gpu {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let atlas_side = target.atlas_side.min(side);
-        let atlas = Atlas::new(atlas_side, appearance.metrics).ok_or(RenderError::InvalidSize)?;
-        let (atlas_texture, atlas_view) = texture(
+        let (masks, atlas_view) = GlyphAtlas::new(
             &device,
             "glyph atlas",
-            (atlas_side, atlas_side),
+            target.atlas_side.min(side),
             ATLAS_FORMAT,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        );
+            1,
+            appearance.metrics,
+        )?;
+        let (colors, color_view) = GlyphAtlas::new(
+            &device,
+            "color glyph atlas",
+            target.color_atlas_side.min(side),
+            COLOR_ATLAS_FORMAT,
+            4,
+            appearance.metrics,
+        )?;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("terminal bindings"),
             layout: &bind_layout,
@@ -415,6 +508,10 @@ impl Gpu {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&atlas_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
             ],
         });
         let (target, target_view) = Self::target(&device, size);
@@ -426,8 +523,8 @@ impl Gpu {
             queue,
             pipeline,
             globals,
-            atlas_texture,
-            atlas,
+            masks,
+            colors,
             bind_group,
             target,
             target_view,
@@ -469,15 +566,28 @@ impl Gpu {
         Ok(())
     }
 
-    /// An empty atlas of the same texture for the cells of `appearance`.
-    fn new_atlas(&self, appearance: &Appearance) -> Result<Atlas, RenderError> {
-        Atlas::new(self.atlas.size, appearance.metrics).ok_or(RenderError::InvalidSize)
+    /// Empty atlases of the same textures for the cells of `appearance`.
+    fn new_atlases(&self, appearance: &Appearance) -> Result<(Atlas, Atlas), RenderError> {
+        let m = appearance.metrics;
+        let make = |side| Atlas::new(side, m).ok_or(RenderError::InvalidSize);
+        Ok((make(self.masks.atlas.size)?, make(self.colors.atlas.size)?))
+    }
+
+    fn atlas(&mut self, kind: Kind) -> &mut GlyphAtlas {
+        match kind {
+            Kind::Mask => &mut self.masks,
+            Kind::Color => &mut self.colors,
+        }
+    }
+
+    fn begin_batch(&mut self) {
+        self.masks.atlas.begin_batch();
+        self.colors.atlas.begin_batch();
     }
 
     fn memory(&self) -> GpuMemory {
-        let side = u64::from(self.atlas.size);
         GpuMemory {
-            atlas_bytes: side * side,
+            atlas_bytes: self.masks.bytes() + self.colors.bytes(),
             target_bytes: u64::from(self.size.0) * u64::from(self.size.1) * 4,
             instance_bytes: self.instance_capacity as u64 * INSTANCE
                 + std::mem::size_of::<Globals>() as u64,
@@ -495,12 +605,17 @@ impl Gpu {
     }
 
     /// Paint `plan`'s rows into the persistent target. Returns the bytes sent to the GPU.
-    fn draw(&mut self, core: &RendererCore, plan: &DrawPlan) -> Result<u64, RenderError> {
+    fn draw(
+        &mut self,
+        core: &RendererCore,
+        plan: &DrawPlan,
+        glyphs: &mut Glyphs,
+    ) -> Result<u64, RenderError> {
         let m = core.appearance.metrics;
         let (bg, width) = (core.appearance.theme.background, self.size.0);
         let mut uploaded = 0;
         let mut clear = plan.repaint_all;
-        self.atlas.begin_batch();
+        self.begin_batch();
         self.scratch.clear();
         for &y in &plan.rows {
             let top = u32::from(y) * m.cell_height;
@@ -520,20 +635,21 @@ impl Gpu {
                 let instance = match draw {
                     Draw::Rect(Rect { x, y, w, h, color }) => Instance::solid(x, y, w, h, color),
                     Draw::Glyph(g) => {
-                        let (at, bytes) = match self.glyph(m, &g) {
+                        let (at, kind, bytes) = match self.glyph(glyphs, m, &g) {
                             Some(found) => found,
                             None => {
                                 // Every slot belongs to this frame: submit what is built (its
                                 // masks are written), after which any slot may be replaced.
                                 self.stats.atlas_spills += 1;
                                 uploaded += self.pass(core, std::mem::take(&mut clear));
-                                self.atlas.begin_batch();
-                                self.glyph(m, &g).ok_or(RenderError::InvalidSize)?
+                                self.begin_batch();
+                                self.glyph(glyphs, m, &g).ok_or(RenderError::InvalidSize)?
                             }
                         };
                         uploaded += bytes;
                         Instance {
                             mask: [at.0, at.1],
+                            kind: u32::from(kind == Kind::Color),
                             ..Instance::solid(
                                 g.x,
                                 g.y,
@@ -553,32 +669,46 @@ impl Gpu {
         if !self.scratch.is_empty() || clear {
             uploaded += self.pass(core, clear);
         }
-        self.stats.atlas_evictions += self.atlas.take_evictions();
+        self.stats.atlas_evictions +=
+            self.masks.atlas.take_evictions() + self.colors.atlas.take_evictions();
         Ok(uploaded)
     }
 
-    /// The origin of a glyph's mask in the atlas and the bytes it took to put it there; `None` when
-    /// the atlas has no slot left for this frame.
-    fn glyph(&mut self, m: CellMetrics, g: &Glyph<'_>) -> Option<((u32, u32), u64)> {
-        let at = match self.atlas.slot(g.text, g.cells == 2, g.bold) {
+    /// The origin of a glyph's mask in its atlas, which atlas that is, and the bytes it took to put
+    /// it there; `None` when the atlas has no slot left for this frame.
+    fn glyph(
+        &mut self,
+        glyphs: &mut Glyphs,
+        m: CellMetrics,
+        g: &Glyph<'_>,
+    ) -> Option<((u32, u32), Kind, u64)> {
+        let kind = glyphs.kind(g);
+        let at = match self
+            .atlas(kind)
+            .atlas
+            .slot(g.text, g.cells == 2, g.bold, g.italic)
+        {
             Slot::Hit(at) => {
                 self.stats.glyph_hits += 1;
-                return Some((at, 0));
+                return Some((at, kind, 0));
             }
             Slot::Miss(at) => at,
             Slot::Full => return None,
         };
         self.stats.glyph_misses += 1;
         let (w, h) = (g.cells * m.cell_width, m.cell_height);
-        self.mask.clear();
-        self.mask.resize((w * h) as usize, 0);
-        for (px, py, run) in glyph_pixels(m, g.cells, g.text, g.bold) {
-            let from = (py * w + px) as usize;
-            self.mask[from..from + run as usize].fill(255);
-        }
+        // The mask is as the font drew it; a color face decides the kind, which the atlas
+        // already assumed from the same choice.
+        let drawn = glyphs.render(m, g, &mut self.mask);
+        debug_assert_eq!(drawn, kind);
+        let into = match kind {
+            Kind::Mask => &self.masks,
+            Kind::Color => &self.colors,
+        };
+        let texel = into.texel;
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.atlas_texture,
+                texture: &into.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d {
                     x: at.0,
@@ -590,14 +720,14 @@ impl Gpu {
             &self.mask,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(w),
+                bytes_per_row: Some(w * texel),
                 rows_per_image: Some(h),
             },
             extent(w, h),
         );
-        let bytes = u64::from(w * h);
+        let bytes = u64::from(w * h * texel);
         self.stats.atlas_upload_bytes += bytes;
-        Some((at, bytes))
+        Some((at, kind, bytes))
     }
 
     /// Submit the instances built so far as one render pass; returns the bytes uploaded.
@@ -660,7 +790,8 @@ impl Gpu {
     /// Free every resource now rather than when the last reference drops.
     fn release(&self) {
         self.target.destroy();
-        self.atlas_texture.destroy();
+        self.masks.texture.destroy();
+        self.colors.texture.destroy();
         self.instances.destroy();
         self.globals.destroy();
     }
@@ -668,6 +799,8 @@ impl Gpu {
 
 pub struct WgpuRenderer {
     core: RendererCore,
+    /// Where glyph masks come from; lives beside the device, so a loss does not cost the fonts.
+    glyphs: Glyphs,
     /// `None` after `destroy`.
     gpu: Option<Gpu>,
     target: Target,
@@ -693,8 +826,11 @@ impl WgpuRenderer {
     }
 
     pub fn gpu_stats(&self) -> GpuStats {
-        self.carried
-            .plus(self.gpu.as_ref().map(|g| g.stats).unwrap_or_default())
+        let mut stats = self
+            .carried
+            .plus(self.gpu.as_ref().map(|g| g.stats).unwrap_or_default());
+        stats.text_time += self.glyphs.time();
+        stats
     }
 
     /// The GPU memory this renderer holds; zero after `destroy`.
@@ -704,9 +840,31 @@ impl WgpuRenderer {
 
     /// Distinct masks the atlas can hold, and how many it holds now.
     pub fn atlas_slots(&self) -> (usize, usize) {
-        self.gpu
-            .as_ref()
-            .map_or((0, 0), |g| (g.atlas.capacity(), g.atlas.resident()))
+        self.gpu.as_ref().map_or((0, 0), |g| {
+            (g.masks.atlas.capacity(), g.masks.atlas.resident())
+        })
+    }
+
+    /// The same for the color (emoji) atlas.
+    pub fn color_atlas_slots(&self) -> (usize, usize) {
+        self.gpu.as_ref().map_or((0, 0), |g| {
+            (g.colors.atlas.capacity(), g.colors.atlas.resident())
+        })
+    }
+
+    /// Replace the fonts glyphs are drawn with (the user imported or removed one in Preferences);
+    /// every row is repainted. Without any font the glyphs are the reference dot patterns.
+    pub fn set_fonts(&mut self, fonts: FontLibrary) -> Result<(), RenderError> {
+        self.core.live()?;
+        let appearance = self.core.appearance.clone();
+        let atlases = self.gpu()?.new_atlases(&appearance)?;
+        self.target.fonts = (!fonts.is_empty()).then(|| Arc::new(fonts));
+        self.carried.text_time += self.glyphs.time();
+        self.glyphs = Glyphs::new(self.target.fonts.as_deref(), &appearance);
+        let gpu = self.gpu_mut()?;
+        (gpu.masks.atlas, gpu.colors.atlas) = atlases;
+        self.core.repaint();
+        Ok(())
     }
 
     /// What wgpu's own counters say is alive on the device.
@@ -798,6 +956,7 @@ impl TerminalRenderer for WgpuRenderer {
         let epoch = Arc::new(AtomicU64::new(0));
         let gpu = Gpu::new(&surface, &core.appearance, core.lost_flag(), &epoch)?;
         Ok(Self {
+            glyphs: Glyphs::new(surface.fonts.as_deref(), &core.appearance),
             core,
             gpu: Some(gpu),
             target: surface,
@@ -811,18 +970,24 @@ impl TerminalRenderer for WgpuRenderer {
         self.core.live()?;
         appearance.metrics.validate()?;
         let before = &self.core.appearance;
-        // A new cell size or font list changes every mask: the new atlas is built first, so a
+        // A new cell size or font list changes every mask: the new atlases are built first, so a
         // size the texture cannot hold is refused with everything unchanged.
-        let atlas = if before.metrics != appearance.metrics
+        let atlases = if before.metrics != appearance.metrics
             || before.font_families != appearance.font_families
         {
-            Some(self.gpu()?.new_atlas(&appearance)?)
+            Some(self.gpu()?.new_atlases(&appearance)?)
         } else {
             None
         };
+        let glyphs = atlases
+            .is_some()
+            .then(|| Glyphs::new(self.target.fonts.as_deref(), &appearance));
         self.core.set_appearance(appearance)?;
-        if let Some(atlas) = atlas {
-            self.gpu_mut()?.atlas = atlas;
+        if let (Some((masks, colors)), Some(glyphs)) = (atlases, glyphs) {
+            let gpu = self.gpu_mut()?;
+            (gpu.masks.atlas, gpu.colors.atlas) = (masks, colors);
+            self.carried.text_time += self.glyphs.time();
+            self.glyphs = glyphs;
         }
         Ok(())
     }
@@ -845,7 +1010,7 @@ impl TerminalRenderer for WgpuRenderer {
             return Ok(0);
         };
         let gpu = self.gpu.as_mut().ok_or(RenderError::Destroyed)?;
-        self.core.stats.bytes_uploaded += gpu.draw(&self.core, &plan)?;
+        self.core.stats.bytes_uploaded += gpu.draw(&self.core, &plan, &mut self.glyphs)?;
         Ok(self.core.finish_draw(&plan))
     }
 
