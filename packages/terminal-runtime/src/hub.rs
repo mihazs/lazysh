@@ -15,7 +15,11 @@
 //!
 //! No thread per session: the pool size is fixed at construction and sessions are assigned to the
 //! least-loaded worker. A worker serves one bounded slice per turn and requeues a session that
-//! still has bytes, so a flood on one session cannot starve the others on its worker.
+//! still has bytes, so a flood on one session cannot starve the others on its worker. A session
+//! with an attached view is the one the user is looking at: it queues ahead of detached ones, and
+//! after [`PRIORITY_BURST`] such turns in a row a detached session gets one, so background
+//! sessions keep parsing (bounded by their credit window) without ever delaying the visible one by
+//! more than the turn in progress.
 //!
 //! [#1315]: https://github.com/mihazs/lazysh/issues/1315
 //! [#1316]: https://github.com/mihazs/lazysh/issues/1316
@@ -34,6 +38,9 @@ use std::thread::JoinHandle;
 
 /// Smallest scrollback grant; below this a session is refused instead of silently crippled.
 const MIN_SCROLLBACK_BYTES: usize = 64 * 1024;
+
+/// Turns an attached session may take in a row while a detached one waits on the same worker.
+const PRIORITY_BURST: u32 = 4;
 
 /// Who produced bytes headed to the peer, preserved so the host can apply its access policy
 /// (xterm today tags replies `terminal-nonuser`).
@@ -162,8 +169,40 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// A worker's run queue: sessions with an attached view first, the rest behind them.
+#[derive(Default)]
+struct Queue {
+    attached: VecDeque<Arc<Cell>>,
+    detached: VecDeque<Arc<Cell>>,
+    /// Attached turns taken since a detached one last ran.
+    streak: u32,
+}
+
+impl Queue {
+    fn push(&mut self, cell: Arc<Cell>) {
+        if cell.attached.load(Acquire) {
+            self.attached.push_back(cell);
+        } else {
+            self.detached.push_back(cell);
+        }
+    }
+
+    fn pop(&mut self) -> Option<Arc<Cell>> {
+        if self.streak < PRIORITY_BURST {
+            if let Some(cell) = self.attached.pop_front() {
+                self.streak += 1;
+                return Some(cell);
+            }
+        }
+        self.streak = 0;
+        self.detached
+            .pop_front()
+            .or_else(|| self.attached.pop_front())
+    }
+}
+
 struct Worker {
-    queue: Mutex<VecDeque<Arc<Cell>>>,
+    queue: Mutex<Queue>,
     wake: Condvar,
     sessions: AtomicUsize,
 }
@@ -213,7 +252,7 @@ impl Cell {
     fn enqueue(self: &Arc<Self>) {
         if let Some(shared) = self.shared.upgrade() {
             let worker = &shared.workers[self.worker];
-            lock(&worker.queue).push_back(Arc::clone(self));
+            lock(&worker.queue).push(Arc::clone(self));
             worker.wake.notify_one();
         }
     }
@@ -430,7 +469,7 @@ fn run(shared: &HubShared, index: usize) {
         let cell = {
             let mut queue = lock(&worker.queue);
             loop {
-                if let Some(cell) = queue.pop_front() {
+                if let Some(cell) = queue.pop() {
                     break cell;
                 }
                 if shared.shutdown.load(Acquire) {
@@ -508,7 +547,8 @@ impl Session {
     }
 
     /// A view appeared (or was recreated): the full screen to draw first, then
-    /// [`Hooks::changed`] fires as output arrives. The session and transport are untouched.
+    /// [`Hooks::changed`] fires as output arrives. The session and transport are untouched. While
+    /// attached, the session is served ahead of detached ones on its worker.
     pub fn attach(&self) -> Result<Frame, SessionError> {
         let frame = self.with(|runtime| runtime.snapshot())??;
         self.cell.attached.store(true, Release);
