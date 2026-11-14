@@ -1,4 +1,5 @@
 import {join} from 'node:path';
+import {SevereServiceError} from 'webdriverio';
 import {acquireDevice, adbFor, restoreFromJournal, type DeviceSession} from './support/device';
 import {ENDPOINTS_ENV, hostKinds, startHosts, type OwnedHosts} from './support/hosts';
 import {config as shared, here, reports} from './wdio.conf';
@@ -43,8 +44,15 @@ export const config: WebdriverIO.Config = {
     'appium:ensureWebviewsHavePages': true,
     ...(chromedriver ? {'appium:chromedriverExecutable': chromedriver} : {'appium:chromedriverExecutableDir': join(here, '.appium/chromedriver')}),
   }],
+  // wdio logs an onPrepare failure and starts the workers anyway, which then fail on missing hosts and hide the cause. Only a
+  // SevereServiceError stops the run: an unavailable device (a busy lock, a dirty baseline) must end it here, non-zero, naming why.
   onPrepare: async () => {
-    device = await acquireDevice(serial, {recover: process.env.LAZYSH_E2E_RECOVER === '1'});
+    const requested = Number(process.env.LAZYSH_E2E_LOCK_TIMEOUT_S ?? 600), waitSeconds = Number.isFinite(requested) && requested >= 0 ? requested : 600;
+    try {
+      device = await acquireDevice(serial, {recover: process.env.LAZYSH_E2E_RECOVER === '1', lockTimeoutMs: waitSeconds * 1000});
+    } catch (error) {
+      throw new SevereServiceError((error as Error).message);
+    }
     // LAZYSH_E2E_HOSTS=ssh,herdr,tmux (default ssh; empty for none). Workers inherit the variables set here.
     const kinds = hostKinds();
     if (kinds.length) {
