@@ -45,10 +45,15 @@ it('preserves the existing SSH terminal IO contract',async()=>{
 });
 it('rejects local sessions before invoking SSH-only file or multiplexer tools',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
-  for(const operation of [()=>api.uploadFile(id,'/a',[],'receipt'),()=>api.muxSessions(id),()=>api.tmuxJumpSnapshot(id),()=>api.tmuxJump(id,'generation','$1','@2'),()=>api.attachTmux(id,'work',()=>{}),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
+  for(const operation of [()=>api.hostClipboardCopy(id,'receipt'),()=>api.muxSessions(id),()=>api.tmuxJumpSnapshot(id),()=>api.tmuxJump(id,'generation','$1','@2'),()=>api.attachTmux(id,'work',()=>{}),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
     await expect(operation()).rejects.toThrow('requires an SSH connection');
   }
   expect(invoke).not.toHaveBeenCalled();
+});
+it('sends local uploads to the native host context and keeps the host clipboard for SSH',async()=>{
+  const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
+  await api.reserveUpload(id,3);await api.uploadFile(id,'shot.png',[1,2,3],'receipt',true);await api.cancelUpload(id,'receipt');
+  expect(invoke.mock.calls.map(([command,args])=>[command,args])).toEqual([['upload_reserve',{sessionId:id,size:3}],['upload_file',{sessionId:id,path:'shot.png',data:[1,2,3],uploadId:'receipt',temporary:true}],['upload_cancel',{sessionId:id,uploadId:'receipt'}]]);
 });
 it('sends local file reads and Git diffs to the native host context',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';

@@ -1,5 +1,8 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
+#[cfg(desktop)]
+use crate::host::Cmd;
+use crate::host::Host;
 use crate::ssh::{AppState, Result, SshError};
 use serde::Serialize;
 use std::{collections::HashMap, future::Future, sync::Arc, task::Poll, time::Duration};
@@ -45,9 +48,11 @@ impl PreviewState {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease and states plus the typed IPC fields.
 pub async fn start_preview(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     previews: State<'_, PreviewState>,
     session_id: String,
     remote_port: u16,
@@ -69,7 +74,7 @@ pub async fn start_preview(
                     "Previews can connect only to host loopback addresses",
                 ));
             }
-            let session = state.session(&session_id).await?;
+            let host = Arc::new(Host::resolve(&state, &local, &session_id, &access).await?);
             let mut forwards = previews.0.lock().await;
             if forwards.len() >= MAX_FORWARDS
                 || forwards
@@ -83,12 +88,22 @@ pub async fn start_preview(
                     "Close a preview before opening another",
                 ));
             }
-            // Keep the remote port when free, so dev-server redirects retain their port.
-            let listener =
-                match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, remote_port)).await {
-                    Ok(listener) => listener,
-                    Err(_) => TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?,
-                };
+            // Keep the remote port when free, so dev-server redirects retain their port. A local
+            // dev server owns its port (perhaps on another address family), so a local preview
+            // always takes a fresh one and never rebinds it.
+            let listener = match TcpListener::bind((
+                std::net::Ipv4Addr::LOCALHOST,
+                if matches!(*host, Host::Remote(_)) {
+                    remote_port
+                } else {
+                    0
+                },
+            ))
+            .await
+            {
+                Ok(listener) => listener,
+                Err(_) => TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?,
+            };
             let local_port = listener.local_addr()?.port();
             let id = uuid::Uuid::new_v4().to_string();
             let preview = Preview {
@@ -118,8 +133,7 @@ pub async fn start_preview(
             })?;
             drop(forwards);
             let store = previews.0.clone();
-            let handle = session.handle.clone();
-            let cancelled = session.cancel.subscribe();
+            let cancelled = host.closed();
             let worker_access = access.clone();
             tauri::async_runtime::spawn(async move {
                 let remote_host = if remote_address == "::1" {
@@ -129,13 +143,12 @@ pub async fn start_preview(
                 };
                 let connect_access = worker_access.clone();
                 let connect = move || {
-                    let handle = handle.clone();
+                    let host = host.clone();
                     let remote_address = remote_address.clone();
                     let access = connect_access.clone();
                     async move {
                         access.check()?;
-                        remote_stream(
-                            &handle,
+                        host.connect_tcp(
                             &access,
                             &remote_address,
                             remote_port,
@@ -263,12 +276,13 @@ async fn relay_listener<F, Fut, S>(
 pub async fn list_previews(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     previews: State<'_, PreviewState>,
     session_id: String,
 ) -> Protected<Vec<Preview>> {
     access
         .run(async {
-            state.session(&session_id).await?;
+            Host::resolve(&state, &local, &session_id, &access).await?;
             Ok(previews
                 .0
                 .lock()
@@ -332,6 +346,7 @@ struct HttpProbe {
     framework: Option<Framework>,
 }
 
+/// Lists the loopback and wildcard listeners in `ss -ltnp` or `lsof -F pcn` output.
 fn parse_listeners(text: &str) -> Vec<Listener> {
     let mut listeners = Vec::new();
     let mut process = None;
@@ -354,49 +369,90 @@ fn parse_listeners(text: &str) -> Vec<Listener> {
         } else {
             continue;
         };
-        let Some((host, port)) = address.rsplit_once(':') else {
-            continue;
+        let ss_process = line
+            .split("users:((\"")
+            .nth(1)
+            .and_then(|tail| tail.split('"').next())
+            .and_then(safe_process);
+        let ss_pid = line
+            .split(",pid=")
+            .nth(1)
+            .and_then(|tail| tail.split([',', ')']).next())
+            .and_then(|value| value.parse().ok());
+        let (process, pid) = if lsof {
+            (process.clone(), pid)
+        } else {
+            (ss_process, ss_pid)
         };
-        let Ok(port) = port.parse::<u16>() else {
-            continue;
-        };
-        if port == 0
-            || !matches!(
-                host,
-                "127.0.0.1" | "0.0.0.0" | "*" | "[::]" | "[::1]" | "::" | "::1"
-            )
-        {
-            continue;
-        }
-        if !listeners
-            .iter()
-            .any(|entry: &Listener| entry.port == port && entry.address == host)
-        {
-            let ss_process = line
-                .split("users:((\"")
-                .nth(1)
-                .and_then(|tail| tail.split('"').next())
-                .and_then(safe_process);
-            let ss_pid = line
-                .split(",pid=")
-                .nth(1)
-                .and_then(|tail| tail.split([',', ')']).next())
-                .and_then(|value| value.parse().ok());
-            listeners.push(Listener {
-                port,
-                address: host.to_owned(),
-                process: if lsof { process.clone() } else { ss_process },
-                pid: if lsof { pid } else { ss_pid },
-                http: None,
-                framework: None,
-            });
-        }
-        if listeners.len() == 256 {
+        if !add_listener(&mut listeners, address, process, pid) {
             break;
         }
     }
     listeners.sort_by_key(|entry| entry.port);
     listeners
+}
+#[cfg_attr(not(desktop), allow(dead_code))]
+/// Lists the TCP listeners in `netstat -ano` output (`TCP <local> <foreign> <state> <pid>`).
+/// The state word is localized, so a listener is a TCP row whose foreign port is 0.
+fn parse_netstat(text: &str) -> Vec<Listener> {
+    let mut listeners = Vec::new();
+    for line in text.lines().take(4096) {
+        let mut columns = line.split_whitespace();
+        let (Some("TCP"), Some(local), Some(foreign)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            continue;
+        };
+        if foreign.ends_with(":0")
+            && !add_listener(
+                &mut listeners,
+                local,
+                None,
+                columns.last().and_then(|pid| pid.parse().ok()),
+            )
+        {
+            break;
+        }
+    }
+    listeners.sort_by_key(|entry| entry.port);
+    listeners
+}
+/// Adds the listener at `address` (`host:port`) unless it is neither loopback nor wildcard
+/// or already listed. False once the list is full.
+fn add_listener(
+    listeners: &mut Vec<Listener>,
+    address: &str,
+    process: Option<String>,
+    pid: Option<u32>,
+) -> bool {
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return true;
+    };
+    let Ok(port) = port.parse::<u16>() else {
+        return true;
+    };
+    if port == 0
+        || !matches!(
+            host,
+            "127.0.0.1" | "0.0.0.0" | "*" | "[::]" | "[::1]" | "::" | "::1"
+        )
+    {
+        return true;
+    }
+    if !listeners
+        .iter()
+        .any(|entry| entry.port == port && entry.address == host)
+    {
+        listeners.push(Listener {
+            port,
+            address: host.to_owned(),
+            process,
+            pid,
+            http: None,
+            framework: None,
+        });
+    }
+    listeners.len() < 256
 }
 fn safe_process(value: &str) -> Option<String> {
     (!value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control))
@@ -407,6 +463,7 @@ fn safe_process(value: &str) -> Option<String> {
 pub async fn discover_preview_ports(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     allow_ports: Option<Vec<u16>>,
     probe_http: Option<bool>,
@@ -421,13 +478,12 @@ pub async fn discover_preview_ports(
             "Choose at most 1024 ports from 1 to 65535",
         ));
     }
-    let session = state.session(&session_id).await?;
+    let host = Arc::new(Host::resolve(&state, &local, &session_id, &access).await?);
     if allow_ports.as_ref().is_some_and(Vec::is_empty) {
         return Ok(Vec::new());
     }
     access.check()?;
-    let text = crate::ssh::exec_for_access(&session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into(), &access).await?;
-    let listeners: Vec<_> = parse_listeners(&text)
+    let listeners: Vec<_> = listening(&host, &access).await?
         .into_iter()
         .filter(|listener| {
             allow_ports
@@ -446,15 +502,15 @@ pub async fn discover_preview_ports(
                 result.push(row);
             }
         }
-        let session = session.clone();
+        let host = host.clone();
         let worker_access = access.clone();
         tasks.spawn(async move {
             let address = if listener.address.contains(':') { "::1" } else { "127.0.0.1" };
-            let mut cancel = session.cancel.subscribe();
+            let mut cancel = host.closed();
             let port = listener.port;
             let probe = async {
                 worker_access.check()?;
-                let stream = remote_stream(&session.handle, &worker_access, address, port, tokio::time::Instant::now() + Duration::from_millis(1500)).await?;
+                let stream = host.connect_tcp(&worker_access, address, port, tokio::time::Instant::now() + Duration::from_millis(1500)).await?;
                 read_http_status(stream, address, port).await
             };
             let observed = if *cancel.borrow() { None } else {
@@ -472,13 +528,41 @@ pub async fn discover_preview_ports(
     while let Some(Ok(row)) = tasks.join_next().await {
         result.push(row);
     }
-    if *session.cancel.borrow() {
+    if *host.closed().borrow() {
         return Err(SshError::new("disconnected", "Session is disconnected"));
     }
     result.sort_by_key(|row| row.port);
     Ok(result)
 
     }).await
+}
+
+const REMOTE_LISTENERS: &str = "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi";
+/// The host's TCP listeners: the remote shell line over SSH, argv on this device
+/// (`ss` or `lsof`, `netstat` on Windows) parsed here.
+async fn listening(host: &Host, access: &AccessLease) -> Result<Vec<Listener>> {
+    match host {
+        Host::Remote(session) => Ok(parse_listeners(
+            &crate::ssh::exec_for_access(session, REMOTE_LISTENERS.into(), access).await?,
+        )),
+        #[cfg(desktop)]
+        Host::Local(_) if cfg!(windows) => Ok(parse_netstat(
+            &host
+                .run(access, &Cmd::new(&[], &["netstat", "-ano"]))
+                .await?,
+        )),
+        #[cfg(desktop)]
+        Host::Local(_) => {
+            let ss = Cmd::new(&[], &["ss", "-H", "-ltnp"]);
+            let lsof = Cmd::new(&[], &["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"]);
+            let command = if crate::host::local_program("ss").await {
+                ss
+            } else {
+                lsof
+            };
+            Ok(parse_listeners(&host.run(access, &command).await?))
+        }
+    }
 }
 
 async fn read_http_status<S: AsyncRead + AsyncWrite + Unpin>(
@@ -741,6 +825,22 @@ mod tests {
         assert_eq!(
             rows.iter().map(|v| v.port).collect::<Vec<_>>(),
             [3000, 5173, 8000]
+        );
+    }
+
+    #[test]
+    fn netstat_listeners_are_found_by_their_empty_foreign_port_whatever_the_language() {
+        let rows = parse_netstat("\nActive Connections\n\n  Proto  Local Address          Foreign Address        State           PID\n  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1136\n  TCP    127.0.0.1:5173         0.0.0.0:0              ABH\u{d6}REN         4242\n  TCP    [::1]:3000             [::]:0                 ESCUCHANDO      77\n  TCP    [::]:3000              [::]:0                 LISTENING       77\n  TCP    127.0.0.1:5173         127.0.0.1:50321        ESTABLISHED     4242\n  TCP    10.0.0.8:9000          0.0.0.0:0              LISTENING       9\n  UDP    0.0.0.0:5353           *:*                                    1256\n");
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.port, row.address.as_str(), row.pid))
+                .collect::<Vec<_>>(),
+            [
+                (135, "0.0.0.0", Some(1136)),
+                (3000, "[::1]", Some(77)),
+                (3000, "[::]", Some(77)),
+                (5173, "127.0.0.1", Some(4242)),
+            ]
         );
     }
 

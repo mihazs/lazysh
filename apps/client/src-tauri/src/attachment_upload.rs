@@ -1,6 +1,7 @@
 //! Exact-receipt SFTP uploads. Cancellation stops future work, never removes a path.
 use crate::{
     app_lock::AccessLease,
+    host::Host,
     ssh::{self, AccessResult, AppState, Result, SshError},
 };
 use serde::Serialize;
@@ -490,15 +491,16 @@ impl Drop for Work {
 pub async fn upload_reserve(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     size: usize,
 ) -> AccessResult<Reserved> {
     lease
         .run(async {
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &lease).await?;
             state
                 .uploads
-                .reserve(session_id, session.cancel.subscribe(), lease.clone(), size)
+                .reserve(session_id, host.closed(), lease.clone(), size)
         })
         .await
 }
@@ -506,26 +508,31 @@ pub async fn upload_reserve(
 pub async fn upload_cancel(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     upload_id: String,
 ) -> AccessResult<Cancellation> {
     lease
         .run(async {
-            let session = state.session(&session_id).await.ok();
+            let host = Host::resolve(&state, &local, &session_id, &lease)
+                .await
+                .ok();
             state
                 .uploads
                 .cancel_with(&upload_id, &session_id, &lease, || {
-                    session.is_some_and(|session| {
-                        session.clipboard.cancel(&upload_id, lease.generation())
-                    })
+                    // Only SSH sessions publish a path to the host clipboard.
+                    matches!(host, Some(Host::Remote(session))
+                        if session.clipboard.cancel(&upload_id, lease.generation()))
                 })
         })
         .await
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease and states plus the typed IPC fields.
 pub async fn upload_file(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     upload_id: String,
     path: String,
@@ -543,13 +550,18 @@ pub async fn upload_file(
             let work = state
                 .uploads
                 .claim(&upload_id, &session_id, &lease, data.len())?;
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &lease).await?;
             work.run_published(
-                ssh::transfer_file(&session, &work.job.access, destination, data, &work),
-                |uploaded| {
-                    session
-                        .clipboard
-                        .publish(upload_id, uploaded.path.clone(), lease.clone())
+                host.create_new(&work.job.access, destination, data, &work),
+                |uploaded| match &host {
+                    Host::Remote(session) => {
+                        session
+                            .clipboard
+                            .publish(upload_id, uploaded.path.clone(), lease.clone())
+                    }
+                    // A local session has no host clipboard.
+                    #[cfg(desktop)]
+                    Host::Local(_) => {}
                 },
             )
             .await
