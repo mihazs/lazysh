@@ -2723,6 +2723,9 @@ class NativeWorkspaceTest {
             require(Regex("w[0-9]+:p[0-9]+").matches(target.getString("paneId")) && target.getString("paneId").length <= 50)
             require(Regex("NAV_(SOURCE|SHELL|AGENT)_[a-f0-9]{32}").matches(target.getString("marker")))
         }
+        // The host harness reports these states to the real server; the board must render exactly them.
+        val statusText = mapOf("working" to "Working", "blocked" to "Needs attention")
+        require(statusText.containsKey(source.getString("status")) && statusText.containsKey(agent.getString("status")) && !shell.has("status"))
         val first = "$parent / $server"
         val second = "$first / $server"
         val labels = listOf(parent, first, second)
@@ -2807,7 +2810,14 @@ class NativeWorkspaceTest {
                 Thread.sleep(100)
             } while (System.nanoTime() < settled)
         }
-        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false) {
+        // Herdr marks exactly the focused space, tab and pane current, and the marker follows the real shared focus.
+        var focused = source
+        fun currentLabels(target: JSONObject) = JSONArray(when {
+            target === agent -> listOf(navigation.getString("workspaceLabel"), agent.getString("label"), "codex")
+            target === shell -> listOf(navigation.getString("workspaceLabel"), shell.getString("label"), shell.getString("paneId"))
+            else -> listOf(source.getString("label"), "codex")
+        })
+        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false, status: String? = null) {
             // From the parent SSH display, the switch activates the first existing Herdr display.
             val display = if (fromParent) 1 else 2
             if (fromParent) {choose(0); closeSoftKeyboard()}
@@ -2815,17 +2825,23 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
             val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
-            val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]"
+            val state = if (status == null) "" else "[@data-agent-status='$status'][.//span[contains(@class,'row-tag-status')][normalize-space(.)='${statusText.getValue(status)}']]"
+            val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]$state"
             awaitDocument(scenario, "shared Herdr navigation target ready", """
                 (()=>{const rows=document.evaluate(${JSONObject.quote(row)},document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);
                   return Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.') &&
                     rows.snapshotLength===1 && !rows.snapshotItem(0).disabled;})()
+            """)
+            if (mode == "Workspaces") awaitDocument(scenario, "shared Herdr tree marks the focused space, tab and pane current", """
+                (()=>{const marked=Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) .herdr-navigation-row[data-current="true"]')).map(x=>x.querySelector('strong')?.textContent.trim());
+                  return marked.length===3 && ${currentLabels(focused)}.every(label=>marked.includes(label));})()
             """)
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
             screenshot(if (mode == "Agents") "agents" else "spaces")
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webClick())
             keyboardStaysClosed(display, "$mode $targetLabel")
             visible(display, target)
+            focused = target
             select(1, target) // Stock public focus must move the other real client too.
             select(2, target)
         }
@@ -2848,14 +2864,14 @@ class NativeWorkspaceTest {
             assertEquals("Stock Herdr cannot offer a private receipt", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             navigate("Workspaces", navigation.getString("workspaceLabel"), agent)
             navigate("Workspaces", shell.getString("label"), shell, fromParent = true)
-            navigate("Agents", "codex", agent, agent.getString("label"))
+            navigate("Agents", "codex", agent, agent.getString("label"), status = agent.getString("status"))
             navigate("Workspaces", shell.getString("paneId"), shell)
             sessionView(scenario, "Transcript")
             assertEquals("Navigation cannot create stock input authority", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             reopenSource()
             assertEquals("Reopening the old transcript cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             // Restore the exact old target through public navigation; stock still has no private receipt.
-            navigate("Agents", "codex", source, source.getString("label"))
+            navigate("Agents", "codex", source, source.getString("label"), status = source.getString("status"))
             reopenSource()
             assertEquals("Returning to the old destination cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus and unavailable private Chat input; no input action dispatched")

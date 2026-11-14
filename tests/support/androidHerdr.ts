@@ -9,6 +9,8 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
 type ReportedAgent={terminalId:string;workspaceId:string;tabId:string;paneId:string};
+/** Stock Herdr's own names for a hook-reported agent that is running (Working) or waiting on the user (Needs attention). */
+export type OwnedAgentState='working'|'blocked';
 export function ownedHerdrContext(snapshot:{workspaces:Record<string,unknown>[];tabs:Record<string,unknown>[]},agent:ReportedAgent,cwd:unknown,directory:string) {
   const workspaces=snapshot.workspaces.filter(value=>value.workspace_id===agent.workspaceId);
   const tabs=snapshot.tabs.filter(value=>value.tab_id===agent.tabId && value.workspace_id===agent.workspaceId);
@@ -53,7 +55,7 @@ export class HerdrFixture {
   private historyReceiver:OwnedPid|undefined;
   private stopped=false;
   private navigationReceivers:{directory:string;receiver:OwnedPid}[]=[];
-  private navigation: {source:ReportedAgent & {marker:string;label:string};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string};workspaceLabel:string}|undefined;
+  private navigation: {source:ReportedAgent & {marker:string;label:string;status:OwnedAgentState};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string;status:OwnedAgentState};workspaceLabel:string}|undefined;
   private constructor(readonly ssh:SshFixture) {
     this.name='owned-guard';
     this.record='OWNED_HERDR_RECORD_'+ssh.nonce;
@@ -62,6 +64,12 @@ export class HerdrFixture {
     this.pidFile=join(ssh.directory,'receiver-pid');
   }
   get draft(){return '  literal{'+this.ssh.nonce+'}<text>\nsecond\t世界  ';}
+  /** Reports the state through the hook mechanism and returns only after the real server's snapshot shows it on that agent's pane. */
+  async reportAgentState(pane:string,state:OwnedAgentState) {
+    await this.run(['pane','report-agent',pane,'--source','lazysh-owned-ui','--agent','codex','--state',state]);
+    const agent=(JSON.parse(await this.run(['api','snapshot']))?.result?.snapshot?.agents as Record<string,unknown>[]|undefined)?.find(row=>row.pane_id===pane);
+    if(agent?.agent!=='codex' || agent.agent_status!==state)throw new Error('Owned Herdr agent state not applied');
+  }
   async run(args:string[]) {
     const env=this.ssh.environment;
     if(!env)throw new Error('Owned Herdr environment required');
@@ -165,18 +173,20 @@ export class HerdrFixture {
   }
   private async prepareNavigation() {
     const nonce=this.ssh.nonce,workspaceLabel='NAV_WORKSPACE_'+nonce;
-    const source={...this.agent!,marker:'NAV_SOURCE_'+nonce,label:'HERDR_'+nonce};
+    const source={...this.agent!,marker:'NAV_SOURCE_'+nonce,label:'HERDR_'+nonce,status:'working' as OwnedAgentState};
     await this.run(['workspace','create','--focus','--label',workspaceLabel,'--cwd',this.ssh.directory]);
     const shell={...await this.navigationTarget(),marker:'NAV_SHELL_'+nonce,label:'NAV_SHELL_TAB_'+nonce};
     await this.run(['tab','rename',shell.tabId,shell.label]);
     await this.run(['tab','create','--workspace',shell.workspaceId,'--focus','--label','NAV_AGENT_TAB_'+nonce,'--cwd',this.ssh.directory]);
-    const agent={...await this.navigationTarget(),marker:'NAV_AGENT_'+nonce,label:'NAV_AGENT_TAB_'+nonce};
+    const agent={...await this.navigationTarget(),marker:'NAV_AGENT_'+nonce,label:'NAV_AGENT_TAB_'+nonce,status:'blocked' as OwnedAgentState};
     if(source.workspaceId===shell.workspaceId || shell.workspaceId!==agent.workspaceId || shell.tabId===agent.tabId)throw new Error('Owned navigation topology differs');
     for(const [kind,target] of [['shell',shell],['agent',agent]] as const) {
       const directory=join(this.ssh.directory,'navigation-'+kind);await mkdir(directory,{mode:0o700});
       this.navigationReceivers.push({directory,receiver:await this.startReceiver(target.paneId,directory,target.marker)});
     }
-    await this.run(['pane','report-agent',agent.paneId,'--source','lazysh-owned-ui','--agent','codex','--state','unknown']);
+    // One live agent per status group: the source works, the other needs attention, both from the real server.
+    await this.reportAgentState(agent.paneId,agent.status);
+    await this.reportAgentState(source.paneId,source.status);
     await this.run(['workspace','focus',source.workspaceId]);
     this.navigation={source,shell,agent,workspaceLabel};
     for(const name of ['herdr','lazysh-agent','owned-terminal-receiver']) {
@@ -300,6 +310,11 @@ export class HerdrFixture {
     if(sample.offset<=0 || sample.oldRows===0 || sample.newTail
       || JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id!==this.agent?.paneId)
       throw new Error('Owned remote history did not scroll and restore');
+  }
+  /** Ids from the real server: the reported agent and the second tab's pane (outside navigation mode). */
+  get targets() {
+    if(!this.agent || !this.historyPane)throw new Error('Owned Herdr targets required');
+    return {agent:this.agent,history:this.historyPane};
   }
   metadata() {
     if(!this.agent || !this.agentContext)throw new Error('Owned Herdr agent report required');

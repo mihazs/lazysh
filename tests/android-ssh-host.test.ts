@@ -406,12 +406,31 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     const metadata=owned.metadata(),sourcePane=snapshot.panes.find((pane:Record<string,unknown>)=>pane.pane_id===metadata.agent.paneId && pane.terminal_id===metadata.agent.terminalId);
     expect(metadata.agentContext).toBe([snapshot.workspaces.find((workspace:Record<string,unknown>)=>workspace.workspace_id===metadata.agent.workspaceId).label,snapshot.tabs.find((tab:Record<string,unknown>)=>tab.tab_id===metadata.agent.tabId && tab.workspace_id===metadata.agent.workspaceId).label,sourcePane.cwd].join(' / '));
     expect(snapshot.panes).toHaveLength(3);expect(snapshot.agents).toHaveLength(2);
+    // The real server, not the fixture, names these states: the native cases must see a Working and a Needs attention agent.
+    expect(Object.fromEntries(snapshot.agents.map((agent:Record<string,unknown>)=>[agent.pane_id,agent.agent_status]))).toEqual({[navigation!.source.paneId]:'working',[navigation!.agent.paneId]:'blocked'});
     for(const target of targets)expect(snapshot.panes.some((pane:Record<string,unknown>)=>pane.pane_id===target.paneId&&pane.terminal_id===target.terminalId&&pane.workspace_id===target.workspaceId&&pane.tab_id===target.tabId)).toBe(true);
     await owned.expectNavigationBytes();
   } finally {await owned.stop();}
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },20_000);
 
+
+
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr fixture drives its live agent through Working and Needs attention on the real server without receiver bytes',async()=>{
+  const owned=await HerdrFixture.start(herdrTools());
+  try {
+    const {agent}=owned.metadata();
+    const rows=async()=>JSON.parse(await owned.run(['api','snapshot'])).result.snapshot.agents.map((row:Record<string,unknown>)=>[row.pane_id,row.agent_status]);
+    expect(await rows()).toEqual([[agent.paneId,'unknown']]);
+    for(const state of ['working','blocked','working'] as const) {
+      await owned.reportAgentState(agent.paneId,state);
+      expect(await rows()).toEqual([[agent.paneId,state]]);
+    }
+    await expect(owned.reportAgentState('w999:p999','blocked')).rejects.toThrow();
+    expect(await rows()).toEqual([[agent.paneId,'working']]);
+    await owned.expectBytes(Buffer.alloc(0));
+  } finally {await owned.stop();}
+},30_000);
 
 
 test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery',async()=>{

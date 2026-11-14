@@ -19,6 +19,17 @@ async function ownedMoshFixture() {
   return fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary});
 }
 
+/** A fresh owned Herdr server and GUI with the saved Herdr default entered through Mosh. */
+async function openOwnedHerdrMosh() {
+  fixture.captureSafe=false;
+  const binary=process.env.LAZYSH_NATIVE_MOSH_SERVER;
+  if(!binary)throw new Error('Explicit pinned Mosh binary required');
+  const herdr=await HerdrFixture.start(herdrTools(),binary);
+  fixture.ssh=herdr;
+  const gui=fixture.gui=await NativeGui.start();
+  return {herdr,gui,...await openOwnedSsh(gui,herdr.ssh,'mosh',undefined,{kind:'herdr',name:herdr.name})};
+}
+
 it('trusts the exact ephemeral server and types a non-echoable challenge through the bundled SSH terminal',async()=>{
   fixture.captureSafe=false;
   const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
@@ -364,13 +375,7 @@ it('deleting a host that holds saved credentials removes its Secret Service item
 });
 
 it('enters the saved Herdr default through Mosh in the actual GUI and queues only confirmed input to its original receiver',async()=>{
-  fixture.captureSafe=false;
-  const binary=process.env.LAZYSH_NATIVE_MOSH_SERVER;
-  if(!binary)throw new Error('Explicit pinned Mosh binary required');
-  const herdr=await HerdrFixture.start(herdrTools(),binary);
-  fixture.ssh=herdr;
-  const gui=fixture.gui=await NativeGui.start();
-  const {browser,terminal,owner}=await openOwnedSsh(gui,herdr.ssh,'mosh',undefined,{kind:'herdr',name:herdr.name});
+  const {herdr,gui,browser,terminal,owner}=await openOwnedHerdrMosh();
   expect(await (await browser.$('.workspace-footer')).getText()).toContain('Mosh');
   expect(await browser.$$('[role="tab"]')).toHaveLength(1);
   expect(await terminal.getText()).not.toMatch(/MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:/);
@@ -514,6 +519,61 @@ it('keeps real app sessions first in Workspaces and returns to the same owned te
   await disconnectOwnedSsh(gui,first.terminal);
   await second.terminal.waitForDisplayed();
   await disconnectOwnedSsh(gui,second.terminal,`Owned SSH GUI second host / ${herdr.name}`);
+});
+
+it('shows the real Herdr agent states and a current marker that follows the real server focus in the actual GUI',async()=>{
+  const {herdr,gui,browser,terminal,owner}=await openOwnedHerdrMosh();
+  const {agent,history}=herdr.targets;
+  const snapshot=async()=>JSON.parse(await herdr.run(['api','snapshot'])).result.snapshot;
+  const label=(rows:Record<string,unknown>[],key:string,id:string)=>rows.find(row=>row[key]===id)!.label as string;
+  const modes=await browser.$('.workspace-navigation-modes');
+  const open=async(mode:'agents'|'workspaces')=>{
+    await (await modes.$(`button[data-workspace-mode="${mode}"]`)).click();
+    const panel=await browser.$(`.herdr-navigation[data-mode="${mode==='agents'?'agents':'spaces'}"]:not([hidden])`);
+    await panel.waitForDisplayed({timeout:20_000});
+    return panel;
+  };
+  gui.stage='owned live Herdr agent state';
+  const agents=await open('agents');
+  const shown=()=>browser.execute(()=>Array.from(document.querySelectorAll('.herdr-navigation[data-mode="agents"]:not([hidden]) .herdr-navigation-row'))
+    .map(row=>[row.getAttribute('data-agent-status'),row.querySelector('strong')?.textContent,row.querySelector('.row-tag-status')?.textContent]));
+  // A refresh is a read; repeating it until the server's report arrives cannot change the outcome.
+  const showing=(status:string,text:string)=>browser.waitUntil(async()=>{
+    const refresh=await agents.$('button[title="Refresh Herdr tree"]');
+    if(await refresh.isEnabled())await refresh.click();
+    return JSON.stringify(await shown())===JSON.stringify([[status,'codex',text]]);
+  },{timeout:30_000,interval:1000,timeoutMsg:`Herdr Agents did not show ${text}`});
+  await showing('unknown','Unknown status');
+  for(const [state,text] of [['working','Working'],['blocked','Needs attention']] as const) {
+    await herdr.reportAgentState(agent.paneId,state);
+    await showing(state,text);
+  }
+  gui.stage='owned live Herdr current marker';
+  const before=await snapshot();
+  const workspace=label(before.workspaces,'workspace_id',agent.workspaceId),agentTab=label(before.tabs,'tab_id',agent.tabId);
+  const spaces=await open('workspaces');
+  const current=()=>browser.execute(()=>Array.from(document.querySelectorAll('.herdr-navigation[data-mode="spaces"]:not([hidden]) .herdr-navigation-row[data-current="true"]'))
+    .map(row=>row.querySelector('strong')?.textContent?.trim()));
+  const marked=(expected:string[])=>browser.waitUntil(async()=>JSON.stringify(await current())===JSON.stringify(expected),
+    {timeout:30_000,interval:500,timeoutMsg:`Herdr Spaces did not mark ${expected.join(' / ')} current`});
+  await marked([workspace,agentTab,'codex']);
+  expect(before.focused_pane_id).toBe(agent.paneId);
+  // Choosing rows asks the real server to move focus; the marker must follow what the server reports, not the click.
+  const choose=async(strong:string)=>(await spaces.$(`.//button[contains(@class,"herdr-navigation-row")][.//strong[normalize-space(.)=${JSON.stringify(strong)}]]`)).click();
+  const focus=(pane:string,tab:string)=>browser.waitUntil(async()=>{const now=await snapshot();return now.focused_pane_id===pane && now.focused_tab_id===tab;},
+    {timeout:30_000,timeoutMsg:'The real Herdr server did not focus the target chosen in the GUI'});
+  await choose(history.paneId);
+  await focus(history.paneId,history.tabId);
+  await open('workspaces');
+  await marked([workspace,'OWNED_SCROLL',history.paneId]);
+  await choose(agentTab);
+  await focus(agent.paneId,agent.tabId);
+  await open('workspaces');
+  await marked([workspace,agentTab,'codex']);
+  expect(await browser.$$('[role="tab"]')).toHaveLength(1);
+  expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+  await herdr.expectBytes(Buffer.alloc(0));
+  await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
 });
 
 it.each(['client','server'] as const)('keeps the owned Mosh UDP daemon alive after %s-attributed SSH closure and retires the entire namespace',async attribution=>{
