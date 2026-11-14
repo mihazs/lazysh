@@ -659,34 +659,6 @@ button svg {
 .session-toolbar > button {
   flex-shrink: 0;
 }
-.view-tabs {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  overflow-x: auto;
-}
-.view-tabs button {
-  flex: 0 0 auto;
-  background: transparent;
-  color: var(--theme-muted, #849779);
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  padding: 9px 11px;
-  border-radius: 5px;
-  white-space: nowrap;
-}
-.view-tabs button:hover {
-  background: var(--theme-control, #202a1a);
-  color: var(--theme-text, #d2dfc7);
-}
-.view-tabs button[aria-current] {
-  background: var(--theme-control, #293622);
-  color: var(--theme-text, #c5e3a8);
-}
 .session-body {
   display: flex;
   position: relative;
@@ -1168,55 +1140,6 @@ button svg {
   overflow-wrap: anywhere;
   line-height: 1.8;
 }
-.palette-search {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 24px 16px;
-  color: var(--theme-muted, #91b077);
-}
-.palette-search input {
-  background: var(--theme-panel, #131e0d);
-}
-.palette-list {
-  padding: 0 15px 9px;
-  max-height: 300px;
-  overflow: auto;
-}
-.palette-list > button {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: transparent;
-  width: 100%;
-  text-align: left;
-  padding: 13px 11px;
-  border-radius: 7px;
-  color: var(--theme-text, #a9c494);
-}
-.palette-list > button:hover {
-  background: var(--theme-hover, #2b3d21);
-}
-.palette-list > button > span {
-  flex: 1;
-  min-width: 0;
-}
-.palette-list strong {
-  display: block;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.palette-list small {
-  display: block;
-  font-size: 10px;
-  margin-top: 4px;
-  color: var(--theme-muted, #7e9b69);
-}
-.palette-list > .muted {
-  font-size: 12px;
-  margin: 10px;
-}
 .dialog > .add-host-button {
   width: calc(100% - 48px);
   margin: 8px 24px 24px;
@@ -1247,13 +1170,6 @@ button svg {
   .file-list {
     min-width: 160px;
     width: 40%;
-  }
-  .view-tabs {
-    gap: 1px;
-  }
-  .view-tabs button {
-    padding: 9px 8px;
-    gap: 5px;
   }
   .connection-label {
     font-size: 9px;
@@ -1358,21 +1274,6 @@ button svg {
     padding: 0 8px;
     min-height: 46px;
   }
-  .view-tabs {
-    justify-content: flex-start;
-  }
-  .view-tabs button {
-    font-size: 10px;
-    padding: 9px 6px;
-    gap: 5px;
-  }
-  .view-tabs button svg {
-    width: 13px;
-    height: 13px;
-  }
-  .disconnect-button {
-    display: none;
-  }
   .terminal-keys {
     gap: 4px;
     padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
@@ -1459,9 +1360,6 @@ button svg {
   .subtle-button,
   .danger-button {
     min-height: 42px;
-  }
-  .palette-search {
-    padding: 6px 19px 14px;
   }
   .dialog > .add-host-button {
     width: calc(100% - 38px);
