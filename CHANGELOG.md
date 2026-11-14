@@ -945,6 +945,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   from overriding Mosh's system protobuf library; no client engine is enabled.
 
 - macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
+- Record whether a native terminal surface can sit next to the app's web view on Linux, as evidence for the terminal engine decision (#1331, part of #1302). On a virtual KWin session and on niri nested in it, a Wayland subsurface placed below a transparent window and web view stays at its page anchor through anchor changes, window resizes, removal and re-creation (at scale 1 and 2, with exact pixels), keeps DOM overlays on top and takes a wgpu Vulkan swapchain on an AMD GPU; an X11 child window does the same except that it covers DOM overlays, so X11 sessions are to keep xterm.js. Only a prototype under `packages/terminal-runtime/prototypes` and its measurements: the app is unchanged, xterm.js stays the only engine and no setting or default changes.
   descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
   preparation remain disabled; real recognition and platform acceptance stay open.
 

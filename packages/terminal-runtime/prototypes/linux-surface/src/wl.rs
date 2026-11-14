@@ -117,14 +117,18 @@ impl WlSurfaceChild {
 
 impl super::Surface for WlSurfaceChild {
     fn place(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        // The anchor is in logical (CSS) pixels; the buffer is in device pixels and says by how much (an integer scale).
+        let scale = self.parent.scale_factor().max(1);
         let (w, h) = (w.max(1), h.max(1));
+        self.surface.set_buffer_scale(scale);
         if let Some(v) = self.vulkan.as_mut() {
             self.sub.set_position(x, y);
-            v.present(w as u32, h as u32, self.color);
+            v.present((w * scale) as u32, (h * scale) as u32, self.color);
             self.parent.invalidate_rect(None, true); // a subsurface position takes effect with the parent's next commit
             self.flush();
             return;
         }
+        let (w, h) = (w * scale, h * scale);
         let size = (w * h * 4) as usize;
         let fd = unsafe { libc::memfd_create(c"surface-poc".as_ptr(), 0) };
         assert!(fd >= 0);
