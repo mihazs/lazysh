@@ -344,6 +344,6 @@ mod metadata {
                 scan.truncated = true;
             }
         }
-        json!({"schemaVersion":schema_version,"supported":true,"managedSetupSupported":cfg!(target_os="linux"),"agents":agents,"truncated":scan.truncated})
+        json!({"schemaVersion":schema_version,"supported":true,"managedSetupSupported":true,"agents":agents,"truncated":scan.truncated})
     }
 }
