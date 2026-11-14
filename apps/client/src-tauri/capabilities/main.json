@@ -97,6 +97,7 @@
     "allow-zellij-action",
     "allow-zellij-agent-input",
     "allow-zellij-tabs",
+    "allow-zellij-tree",
     "allow-generate-identity",
     "allow-inspect-identity",
     "allow-has-credentials",

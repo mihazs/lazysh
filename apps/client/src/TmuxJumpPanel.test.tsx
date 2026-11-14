@@ -123,3 +123,47 @@ it('retries a retired picker only through an explicit fresh snapshot read',async
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByRole('button',{name:'0: agent · Current'});
   expect(invoke).toHaveBeenLastCalledWith('tmux_jump_snapshot',{sessionId:'retry-display'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
 });
+
+const zellijTree={tabs:[
+  {id:4,position:0,name:'shell',active:true,panes:[{id:8,title:'sh',focused:true}]},
+  {id:9,position:1,name:'<b>logs</b>',active:false,panes:[{id:18,title:'sh',focused:true}]},
+]};
+it('lists the tabs of a Zellij session with exactly one current row and treats their names as text',async()=>{
+  access(false);
+  vi.mocked(invoke).mockResolvedValue(zellijTree);
+  const {container}=render(<TmuxJumpPanel sessionId="display" zellij="work" onClose={vi.fn()}/>);
+  expect(screen.getByRole('status').textContent).toBe('Reading Zellij tabs…');
+  const current=await screen.findByRole('button',{name:'1: shell · Current'});
+  expect(current.getAttribute('aria-current')).toBe('location');
+  expect(container.querySelectorAll('[aria-current]')).toHaveLength(1);
+  expect(await screen.findByRole('button',{name:'2: <b>logs</b>'})).toBeTruthy();
+  expect(container.querySelector('b')).toBeNull();
+  expect(screen.getByRole('region',{name:'Zellij Jump To'})).toBeTruthy();
+  expect(screen.getByText('Jumping changes the current tab of this Zellij session.')).toBeTruthy();
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('zellij_tree',{sessionId:'display',name:'work'},expect.anything());
+});
+it('jumps to a Zellij tab by its id and moves the current row without another read',async()=>{
+  access(false);
+  vi.mocked(invoke).mockResolvedValueOnce(zellijTree).mockResolvedValueOnce(undefined);
+  const close=vi.fn(),jumped=vi.fn();
+  const {container}=render(<TmuxJumpPanel sessionId="display" zellij="work" onClose={close} onJump={jumped}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'2: <b>logs</b>'}));
+  await screen.findByRole('button',{name:'2: <b>logs</b> · Current'});
+  expect(invoke).toHaveBeenLastCalledWith('zellij_action',{sessionId:'display',name:'work',action:{type:'jump',tabId:9}},expect.anything());
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(container.querySelectorAll('[aria-current]')).toHaveLength(1);
+  expect(close).toHaveBeenCalledOnce();
+  expect(jumped).toHaveBeenCalledOnce();
+});
+it('closes without a Zellij action when the current tab is chosen, and discloses a failed jump',async()=>{
+  access(false);
+  vi.mocked(invoke).mockResolvedValueOnce(zellijTree).mockRejectedValueOnce({message:'Tab 9 is gone'});
+  const close=vi.fn();
+  render(<TmuxJumpPanel sessionId="display" zellij="work" onClose={close}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'1: shell · Current'}));
+  expect(close).toHaveBeenCalledOnce();expect(invoke).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button',{name:'2: <b>logs</b>'}));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Jump To unavailable: Tab 9 is gone');
+  expect(screen.queryByRole('button',{name:'1: shell · Current'})).toBeNull();
+  expect(close).toHaveBeenCalledOnce();
+});

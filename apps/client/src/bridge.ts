@@ -1,6 +1,7 @@
 import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
 import { registerSessionOutput } from './pendingSessions';
+import { zellijSnapshot, type ZellijTree } from './zellijJump';
 
 export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
 export type UsageFreshness = "fresh" | "stale" | "unknown";
@@ -180,6 +181,9 @@ export const api = {
     invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
+  zellijJumpSnapshot: async (sessionId: string, name: string) => zellijSnapshot(name, await remoteInvoke<ZellijTree>('zellij_tree', { sessionId, name })),
+  /** Jumps to a tab by its stable id; Zellij applies it a moment later, so the result is the caller's to show. */
+  zellijJump: (sessionId: string, name: string, tabId: number) => remoteInvoke<void>('zellij_action', { sessionId, name, action: { type: 'jump', tabId } }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
   tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string) =>
     remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId }),

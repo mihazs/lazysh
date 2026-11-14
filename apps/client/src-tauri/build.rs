@@ -145,6 +145,7 @@ fn main() {
         "herdr_repository",
         "zellij_action",
         "zellij_tabs",
+        "zellij_tree",
         "multiplexer_sessions",
         "attach_multiplexer",
         "tmux_action",

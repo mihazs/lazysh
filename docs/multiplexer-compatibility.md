@@ -123,7 +123,7 @@ implemented without full evidence, *part* means partial.
 | --- | --- | --- | --- | --- |
 | Discovery | yes | impl → yes #1145 | yes | no → #1140 |
 | Attach, reattach | yes | yes | yes | no → #1140 |
-| Navigation, Jump To, current marker | yes; pane rows → #1146 | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
+| Navigation, Jump To, current marker | yes; pane rows → #1146 | impl (tab Jump To, one current row; real-Zellij test); Android evidence → #1145 | yes; marker assertion #990 | no → #1140 |
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
 | Create in a worktree | no → #1141 | no → #1141 | yes | no → #1141 |
 | Agent launch | no → #1141 | no → #1141 | yes | no → #1141 |
