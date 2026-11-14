@@ -439,6 +439,7 @@ prompts automatically. See the linked feature documentation for exact limits.
   Device-local durable intent preserves the lock on cold launch when its protected
   proof is missing; cancelled enrollment restores off only after confirmed cleanup.
 - Four opt-in touch actions for next/previous Zellij tabs and panes. They use
+- Explain the host companion installation before it starts (#476). **Agents → Host companion installation** now says what **Install companion** does before you press it: the host downloads the latest stable companion and checks its size and SHA-256, the app checks the installed version afterwards, the executable goes to `lazysh/companion/lazysh-agent` in your user data folder, nothing uses `sudo` or changes your PATH, hooks or settings, a newer companion is never replaced, and nothing is installed until you press the button. English, Brazilian Portuguese and Spanish. An owned OpenSSH host reporting an architecture with no published companion is now covered by a test: both routes refuse it before anything is fetched or written and leave the host's own companion working. No defaults change; installation is still never automatic.
   the existing named-session command interface for terminals attached through
   lazysh; plain, local and other multiplexer terminals are rejected. Existing
   gesture defaults remain unchanged. No session switching or timed key input.
