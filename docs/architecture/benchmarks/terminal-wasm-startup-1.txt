@@ -1,0 +1,8 @@
+# wasm module sha256 12e7b6f6b5c826a5d67369d14fda947d7a080e08200a49794913f9b314ff53c8, 4675760 bytes; built from the vendored libghostty-vt: zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Doptimize=ReleaseFast -Dsimd=false (Zig 0.16.0)
+node v26.6.0 (V8 14.6.202.34-node.26), AMD Ryzen 9 5900X 12-Core Processor, Linux 7.3.3-1-cachyos, load average at start 6.48 5.74 5.88
+30 fresh processes per engine, first 16 KiB written; milliseconds and MiB, median (min to max); wasm module 4.5 MiB
+| engine | load (import or file read) | compile | instantiate | start to first byte parsed, total | resident set added | wasm linear memory |
+|---|---|---|---|---|---|---|
+| xterm.js headless | 8.7 (8.5 to 10.7) | | | 21.6 (18.3 to 24.5) | 9.3 (7.2 to 10.1) | |
+| libghostty-vt wasm | 2.6 (2.5 to 2.7) | 2.2 (1.6 to 2.7) | 0.3 (0.3 to 0.4) | 8.1 (7.5 to 11.4) | 14.0 (13.6 to 18.0) | 1.3 (1.3 to 1.3) |
+# exit status 0
