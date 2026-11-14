@@ -141,6 +141,8 @@ fn main() {
         "herdr_action",
         "herdr_workspace_plan",
         "herdr_workspace_create",
+        "multiplexer_launch_plan",
+        "multiplexer_launch",
         "herdr_agent_kinds",
         "herdr_repository",
         "zellij_action",
