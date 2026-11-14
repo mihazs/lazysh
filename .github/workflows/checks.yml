@@ -1102,9 +1102,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lazysh-runtime-fixtures
-          key: lazysh-speech-fixtures-921e4cf8-59dfb9a4-1495e91b
+          key: lazysh-speech-fixtures-921e4cf8-be07e048-59dfb9a4-1495e91b
       - name: Download and verify pinned public speech model fixtures
-        # Whisper weights: Hugging Face LFS digest of ggml-tiny.en.bin at the pinned revision.
+        # Whisper weights: Hugging Face LFS digests of ggml-tiny.en.bin and ggml-tiny.bin at the pinned revision.
         # Parakeet digest and size: packages/parakeet-runtime/src/bundle.rs.
         env:
           LAZYSH_RUNTIME_FIXTURES: ${{ runner.temp }}/lazysh-runtime-fixtures
@@ -1127,9 +1127,10 @@ jobs:
             fi
           }
           fixture ggml-tiny.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin 921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f 77704715
+          fixture ggml-tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 77691713
           fixture jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e 352078
           fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 487211443
-          printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
+          printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_MULTILINGUAL_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
       - name: Exercise local sessions, files and Git review through the host context
         if: ${{ !cancelled() }}
         run: |
@@ -1207,7 +1208,7 @@ jobs:
       - name: Exercise official ET 7.0.0 transport and SSH bootstrap
         if: ${{ !cancelled() }}
         run: bun run test:et
-      - name: Exercise local Whisper inference on the public JFK sample
+      - name: Exercise local Whisper inference on the public JFK and Portuguese samples
         if: ${{ !cancelled() }}
         run: bun run test:voice
       - name: Exercise the real Parakeet manager install, warm reuse and removal

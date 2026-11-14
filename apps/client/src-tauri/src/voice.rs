@@ -489,6 +489,7 @@ pub fn voice_cancel(state: State<'_, VoiceState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const WER_LIMIT: f64 = 0.5;
     #[test]
     fn policy_change_discards_revoked_manual_import_without_background() {
         let dir = tempfile::tempdir().unwrap();
@@ -599,15 +600,8 @@ mod tests {
         )
         .unwrap();
     }
-    #[test]
-    #[ignore = "requires explicitly supplied GGML model and official 16 kHz PCM speech sample"]
-    fn local_whisper_transcribes_known_speech_without_network() {
-        let model =
-            std::env::var("LAZYSH_WHISPER_TEST_MODEL").expect("set LAZYSH_WHISPER_TEST_MODEL");
-        let wav = fs::read(
-            std::env::var("LAZYSH_WHISPER_TEST_WAV").expect("set LAZYSH_WHISPER_TEST_WAV"),
-        )
-        .unwrap();
+    fn read_pcm_wav(path: &str) -> Vec<f32> {
+        let wav = fs::read(path).unwrap();
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         let mut offset = 12;
@@ -634,6 +628,16 @@ mod tests {
             offset += 8 + length + (length % 2);
         }
         assert!(format_valid);
+        samples
+    }
+    #[test]
+    #[ignore = "requires explicitly supplied GGML model and official 16 kHz PCM speech sample"]
+    fn local_whisper_transcribes_known_speech_without_network() {
+        let model =
+            std::env::var("LAZYSH_WHISPER_TEST_MODEL").expect("set LAZYSH_WHISPER_TEST_MODEL");
+        let samples = read_pcm_wav(
+            &std::env::var("LAZYSH_WHISPER_TEST_WAV").expect("set LAZYSH_WHISPER_TEST_WAV"),
+        );
         let text = infer(
             Path::new(&model),
             &samples,
@@ -645,5 +649,60 @@ mod tests {
             text.to_lowercase().contains("ask not what your country"),
             "unexpected speech transcription: {text}"
         );
+    }
+    fn words(text: &str) -> Vec<String> {
+        text.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+    fn word_error_rate(reference: &[String], hypothesis: &[String]) -> f64 {
+        let mut row: Vec<usize> = (0..=hypothesis.len()).collect();
+        for (i, r) in reference.iter().enumerate() {
+            let mut diagonal = row[0];
+            row[0] = i + 1;
+            for (j, h) in hypothesis.iter().enumerate() {
+                let above = row[j + 1];
+                row[j + 1] = (above + 1)
+                    .min(row[j] + 1)
+                    .min(diagonal + usize::from(r != h));
+                diagonal = above;
+            }
+        }
+        row[hypothesis.len()] as f64 / reference.len() as f64
+    }
+    #[test]
+    #[ignore = "requires explicitly supplied multilingual and English-only GGML models"]
+    fn local_whisper_transcribes_non_english_speech_without_network() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mls-portuguese");
+        let samples = read_pcm_wav(fixtures.join("11247-10229-000002.wav").to_str().unwrap());
+        let reference = words(&fs::read_to_string(fixtures.join("reference.txt")).unwrap());
+        let multilingual = std::env::var("LAZYSH_WHISPER_TEST_MULTILINGUAL_MODEL")
+            .expect("set LAZYSH_WHISPER_TEST_MULTILINGUAL_MODEL");
+        // A language chosen explicitly and automatic detection both reach the same Portuguese text.
+        for language in ["pt", "auto"] {
+            let text = infer(
+                Path::new(&multilingual),
+                &samples,
+                language,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let wer = word_error_rate(&reference, &words(&text));
+            eprintln!("{language}: WER {wer:.3}: {text}");
+            assert!(wer <= WER_LIMIT, "{language}: WER {wer:.3} for {text}");
+        }
+        // An English-only model refuses the language before it decodes any audio.
+        let english =
+            std::env::var("LAZYSH_WHISPER_TEST_MODEL").expect("set LAZYSH_WHISPER_TEST_MODEL");
+        let error = infer(
+            Path::new(&english),
+            &samples,
+            "pt",
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert!(error.contains("English-only"), "{error}");
     }
 }
