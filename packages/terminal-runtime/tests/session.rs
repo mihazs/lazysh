@@ -522,3 +522,109 @@ fn dropping_the_hub_closes_its_sessions_and_stops_its_workers() {
     drop(hub);
     assert_closed(&f.session);
 }
+
+/// Floods nine detached sessions on a single worker, feeds the attached session one chunk, and
+/// counts the bytes the worker parsed for the floods between the feed and that session's screen
+/// update. Before the attached-first queue every other session's turn came first (eight turns of
+/// one 16 KiB slice here); now it is at most the turn in progress.
+#[test]
+fn an_attached_session_is_served_ahead_of_detached_floods_on_its_worker() {
+    let hub = Hub::new(HubConfig {
+        workers: 1,
+        ..HubConfig::default()
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let floods: Vec<_> = (0..9)
+        .map(|n| Arc::new(session(&hub, &format!("flood{n}"), config(80, 24, 1 << 20))))
+        .collect();
+    let flooded = {
+        let counters: Vec<_> = floods.iter().map(|f| f.credited.clone()).collect();
+        Arc::new(move || counters.iter().map(|c| c.load(SeqCst)).sum::<u64>())
+    };
+    let producers: Vec<_> = floods
+        .iter()
+        .map(|flood| {
+            let (flood, stop, data) = (flood.clone(), stop.clone(), plain(1 << 20));
+            std::thread::spawn(move || {
+                while !stop.load(SeqCst) {
+                    data.chunks(CHUNK).for_each(|chunk| flood.send(chunk));
+                }
+            })
+        })
+        .collect();
+    wait_until(|| {
+        floods
+            .iter()
+            .all(|flood| flood.session.stats().unwrap().queued > 0)
+    });
+
+    let updated_at = Arc::new(AtomicU64::new(u64::MAX));
+    let probe = hub
+        .create(
+            "probe",
+            config(80, 24, 1 << 20),
+            Hooks {
+                writer: Recorder::new(),
+                credit: Box::new(|_| {}),
+                changed: Some({
+                    let (flooded, updated_at) = (flooded.clone(), updated_at.clone());
+                    Box::new(move || updated_at.store(flooded(), SeqCst))
+                }),
+            },
+        )
+        .unwrap();
+    probe.attach().unwrap();
+    probe.feed(b"echo".to_vec()).unwrap();
+    // Read after the feed returns: a pause here can only hide turns, never invent them.
+    let before = flooded();
+    wait_until(|| updated_at.load(SeqCst) != u64::MAX);
+    let parsed_meanwhile = updated_at.load(SeqCst).saturating_sub(before);
+
+    stop.store(true, SeqCst);
+    producers.into_iter().for_each(|t| t.join().unwrap());
+    let slice = HubConfig::default().pump_slice as u64;
+    assert!(
+        parsed_meanwhile <= 4 * slice,
+        "the worker parsed {parsed_meanwhile} bytes for detached sessions before the attached one's screen update (slice {slice})"
+    );
+}
+
+/// Priority must not starve: an attached session that is refilled the moment its credit returns
+/// is never idle, yet a detached one on the same worker still finishes (it gets a turn after every
+/// few of the attached session's).
+#[test]
+fn a_detached_session_keeps_parsing_while_the_attached_one_never_idles() {
+    let hub = Hub::new(HubConfig {
+        workers: 1,
+        ..HubConfig::default()
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let active_handle: Arc<OnceLock<Session>> = Arc::default();
+    let chunk = plain(CHUNK);
+    let active = hub
+        .create(
+            "active",
+            config(80, 24, 1 << 20),
+            Hooks {
+                writer: Recorder::new(),
+                credit: {
+                    let (stop, active_handle, chunk) =
+                        (stop.clone(), active_handle.clone(), chunk.clone());
+                    Box::new(move |_| {
+                        if let (false, Some(active)) = (stop.load(SeqCst), active_handle.get()) {
+                            let _ = active.feed(chunk.clone());
+                        }
+                    })
+                },
+                changed: None,
+            },
+        )
+        .unwrap();
+    assert!(active_handle.set(active.clone()).is_ok());
+    active.attach().unwrap();
+    let background = session(&hub, "background", config(80, 24, 1 << 20));
+    active.feed(chunk).unwrap();
+    background.send(&plain(WINDOW));
+    background.settle(WINDOW as u64);
+    stop.store(true, SeqCst);
+}

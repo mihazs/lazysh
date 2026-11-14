@@ -1,5 +1,5 @@
 //! The session service on this machine: pooled throughput with credit flow control, credit
-//! (ack) latency, input-to-write latency under load, memory per session and churn. Host numbers
+//! (ack) latency, input-to-write and feed-to-screen-update latency under load, memory per session and churn. Host numbers
 //! only: no transport, no JS bridge, no renderer, no device. `cargo run --release --example
 //! session_bench`; the caller records host, toolchain and commit next to the output.
 
@@ -8,6 +8,7 @@ mod support;
 
 use lazysh_terminal_runtime::{ffi, Hooks, Hub, HubConfig, KeyInput, Offer};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering::*};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use support::*;
@@ -172,6 +173,78 @@ fn input_latency() {
     }
 }
 
+/// What typing feels like once the program has echoed: microseconds from `feed` of a small chunk
+/// to `changed` firing on the attached session, which is when its screen update is ready to draw.
+/// Idle, then while nine other sessions flood the same workers (they loop over the data until the
+/// probe is done), with plain text and with the slowest-to-parse workload.
+fn screen_update_latency() {
+    const ECHOES: usize = 2_000;
+    println!("\n| screen update, microseconds from feed to changed ({ECHOES} echoes) | p50 | p95 | p99 | max |\n|---|---|---|---|---|");
+    type Flood = Option<fn(usize) -> Vec<u8>>;
+    let cases: [(&str, usize, Flood); 5] = [
+        ("idle, 2 workers", 2, None),
+        (
+            "9 other sessions flooding plain text, 1 worker",
+            1,
+            Some(plain),
+        ),
+        (
+            "9 other sessions flooding plain text, 2 workers",
+            2,
+            Some(plain),
+        ),
+        (
+            "9 other sessions flooding CJK/emoji/combining, 1 worker",
+            1,
+            Some(unicode),
+        ),
+        (
+            "9 other sessions flooding CJK/emoji/combining, 2 workers",
+            2,
+            Some(unicode),
+        ),
+    ];
+    for (name, workers, flood) in cases {
+        let hub = Hub::new(HubConfig {
+            workers,
+            ..hub_config()
+        });
+        let (probe, changes) = session_watched(&hub, "probe", config(80, 24, 1 << 20));
+        probe.session.attach().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let floods: Vec<_> = (0..if flood.is_some() { 9 } else { 0 })
+            .map(|n| {
+                let flooder = session(&hub, &format!("flood{n}"), config(80, 24, 4 << 20));
+                let (stop, data) = (stop.clone(), flood.unwrap()(PER_SESSION));
+                std::thread::spawn(move || {
+                    while !stop.load(Relaxed) {
+                        data.chunks(CHUNK).for_each(|c| flooder.send(c));
+                    }
+                })
+            })
+            .collect();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mut samples: Vec<f64> = (0..ECHOES)
+            .map(|_| {
+                let seen = changes.load(SeqCst);
+                let at = Instant::now();
+                probe.send(b"echo\r\n");
+                while changes.load(SeqCst) == seen {
+                    std::hint::spin_loop();
+                }
+                let took = at.elapsed().as_secs_f64() * 1e6;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                took
+            })
+            .collect();
+        stop.store(true, Relaxed);
+        floods.into_iter().for_each(|t| t.join().unwrap());
+        samples.sort_by(f64::total_cmp);
+        let [p50, p95, p99, max] = [0.50, 0.95, 0.99, 1.0].map(|p| percentile(&samples, p));
+        println!("| {name} | {p50:.1} | {p95:.1} | {p99:.1} | {max:.1} |");
+    }
+}
+
 fn memory() {
     let text = Arc::new(plain(8 * 1024 * 1024));
     println!("\n| memory (RSS KiB) | baseline | after creating | per session |\n|---|---|---|---|");
@@ -211,13 +284,25 @@ fn memory() {
     println!("\nchurn, 100 sessions x 1 MiB each, created and closed per round: RSS before {start} KiB, after rounds {rounds:?} KiB");
 }
 
+/// `session_bench [section]` runs one section (throughput, input, screen, memory) or all of them.
 fn main() {
+    let only = std::env::args().nth(1);
+    let wanted = |name: &str| only.as_deref().is_none_or(|only| only == name);
     println!(
         "host load average at start: {}; pump slice {} KiB\n",
         load_average(),
         hub_config().pump_slice / 1024
     );
-    throughput();
-    input_latency();
-    memory();
+    if wanted("throughput") {
+        throughput();
+    }
+    if wanted("input") {
+        input_latency();
+    }
+    if wanted("screen") {
+        screen_update_latency();
+    }
+    if wanted("memory") {
+        memory();
+    }
 }

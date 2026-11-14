@@ -45,6 +45,8 @@ Released so far, with the first release that contains each pull request (from th
 
 Also released in v1.61.0: the core lifecycle ([#1501](https://github.com/mihazs/lazysh/pull/1501)) and the renderer shootout ([#1479](https://github.com/mihazs/lazysh/pull/1479)). Released in v1.62.0 (tagged and published on 2026-11-14): every other consumer behind the adapter ([#1500](https://github.com/mihazs/lazysh/pull/1500), closing [#1307](https://github.com/mihazs/lazysh/issues/1307) and [#1308](https://github.com/mihazs/lazysh/issues/1308)). Merged and waiting for the next version: the core's Mosh display frames as a top-anchored resize without reflow ([#1453](https://github.com/mihazs/lazysh/pull/1453)) and the write-path measurement ([#1306](https://github.com/mihazs/lazysh/issues/1306), [benchmarks](terminal-benchmarks.md#write-path-xterm-write-directly-versus-xtermterminaladapterwrite-1306)).
 
+Also merged and waiting for the next version: the attached-first worker queue of the session service ([#1339](https://github.com/mihazs/lazysh/issues/1339)), which cuts the queueing before an echo's screen update under nine flooding sessions; nothing a user can run uses it yet.
+
 **Release stage reached: step 2 complete, no rollout stage (S0 to S5) entered.** Nothing outside the xterm backend imports `@xterm/*` (an import-graph test enforces it), the adapter's write path costs nothing measurable on the desktop harness, and the first end-to-end native path (core, renderer and input on Linux desktop and Android) is the next thing to ship; it ships behind the opt-in the day it works, not after the other platforms.
 
 ## Rollout stages
