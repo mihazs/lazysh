@@ -1,9 +1,11 @@
-# Real ntfy encrypted-challenge acceptance
+# Real ntfy encrypted-challenge and event-display acceptance
 
-This opt-in native fixture targets the enrollment interoperability left unverified
-by the parser/Keystore tests. It does not enable host events or display a remote
-notification. Source preparation and compilation alone are not a passing runtime
-receipt; observed results must identify their exact checkout and artifacts.
+This opt-in native fixture targets the enrollment and bound-event display
+interoperability left unverified by the parser/Keystore tests. It enrolls through
+real ntfy, then delivers one finite owned event to one private generic
+notification. It does not establish physical-device, vendor, signed-release or
+process-death delivery. Source preparation and compilation alone are not a passing
+runtime receipt; observed results must identify their exact checkout and artifacts.
 
 The separate `native-android-ntfy` job owns a fresh API36 emulator and its own
 35-minute budget. The original Android runtime job and order are unchanged; its
@@ -36,19 +38,19 @@ AND_3.1.0 feature or enforces the application's VAPID key at registration.
 
 Run `bun run test:android-ntfy` only on the explicitly selected owned Linux/x86_64
 emulator. The original task builds the current FOSS native app and native Rust test
-fixture through Turbo/Cargo. CI retains that route and adds an independent Google
+fixture through moon/Cargo. CI retains that route and adds an independent Google
 variant of the same three native cases. The Google matrix job first builds the
 current Google emulator APK with `bun run build:android:emulator`, then invokes
-`LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy`.
+`LAZYSH_NTFY_ANDROID_VARIANT=google bun run test:android-ntfy`.
 It deliberately avoids the root task's FOSS build dependency. Only `google` and
 `fdroid` are accepted; absent input preserves the FOSS route. The fixture-only CA
 requires the matching explicit distribution/provider project and only the original
 debug acceptance tasks. Ordinary debug/release artifacts must still exclude it.
 Variant-labelled finite receipts retain APK/native-library/source bindings; the
 Google app may contain its optional FCM classes, while the pinned ntfy distributor
-must remain Firebase-free. This source route is not a passing Google native result:
-new-source CI must actually execute enrollment, authenticated notification/replay
-and cleanup before interoperability is qualified. The existing PID/start identity/UID/executable/AVD,
+must remain Firebase-free. A Google result exists only when CI actually executes enrollment, authenticated
+notification/replay and cleanup for that source; see
+[#810](https://github.com/mihazs/lazysh/issues/810) for the scoped qualification. The existing PID/start identity/UID/executable/AVD,
 unique port and imagefile/front-none attestation runs before commands and cleanup.
 All three fixture packages must initially be absent; no personal app data is
 cleared to make that precondition pass.
@@ -97,8 +99,17 @@ then uses the ordinary registration and relay code. A test-only relay gate waits
 until the Activity is backgrounded before sending its real encrypted challenge.
 The SDK must decrypt it and the native state must bind the original device and
 generation. The server independently observes an accepted confirmation with an
-active exact-generation subscription. The app then pauses through protected IPC,
-and both native cleanup and authenticated server revocation must complete.
+active exact-generation subscription.
+
+The test then opens the separate secure native display-consent dialog and accepts
+it; consent alone must not post a notification. The production relay worker, with
+a `bound-v2` destination and an owned source capability, sends one finite event
+through real ntfy while the Activity is backgrounded. The app must post exactly one
+private generic notification on its owned channel, with an immutable own-app intent
+and no remote actions, and keep one durable receipt. A replayed event wire must
+reach bound admission without replacing that notification or receipt. The app then
+pauses through protected IPC, and native cleanup, removal of its own notification,
+retired display consent and authenticated server revocation must complete.
 
 Distributor first launch retains the original combined six-second permission/menu
 budget. It permits one explicit Allow attempt only on the system controller's
@@ -125,7 +136,9 @@ after pause. The bounded observation requires only one server confirmation and
 no restored native authority. Transport acceptance of a replay is not proof that
 every replay callback ran, nor a universal exactly-once guarantee. The Activity
 background case is not Doze, process death, battery-optimization or physical-device
-background-delivery acceptance. Event delivery remains disabled throughout.
+background-delivery acceptance. After a pause, replayed challenge and event wires
+must restore neither enrollment nor the notification; the fixture then disables its
+relay destination.
 
 Framework reports/logcat may contain upstream registration metadata. They remain
 in the private temporary directory and are removed during owned cleanup. Only

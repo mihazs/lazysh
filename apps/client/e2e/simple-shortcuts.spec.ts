@@ -1,7 +1,9 @@
 import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {connectLocalTerminal,installLocalTerminal} from './fixtures/localTerminal';
+import {pressMore} from './fixtures/toolbarMore';
+import {emulateVisualViewportKeyboard} from './fixtures/softKeyboard';
 
 async function fixture(page:Page) {
   await installLocalTerminal(page);
@@ -247,7 +249,7 @@ test('momentary terminal touch feedback clears after release while modifiers rem
     const modifier=keys.getByRole('button',{name:new RegExp(`^${name}(?: · lock)?$`)});
     await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','true');
     expect(await colors(modifier)).not.toEqual(resting);
-    await activate(modifier);await expect(modifier).toContainText('lock');
+    await activate(modifier);await expect(modifier).toHaveAccessibleName(`${name} · lock`);await expect(modifier.locator('.terminal-key-lock')).toBeVisible();
     await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','false');
     await expect.poll(()=>colors(modifier)).toEqual(resting);
   }
@@ -314,8 +316,8 @@ test('Simple custom text survives reload and sends exact toolbar bytes only on e
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   await expect(page.getByLabel('Terminal keys',{exact:true})).toBeVisible();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
-  for (const [label] of cases) await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:label,exact:true}).click();
-  await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:'Unicode',exact:true}).click();
+  for (const [label] of cases) await pressMore(page,label);
+  await pressMore(page,'Unicode');
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([...cases.map(item=>item[2]),' 你好,, 😀 ']);
   expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x02','1'],['\x01','\x02'],['\x01',',','b'],['\x00','b',' '],[' 你好,, 😀 ']]);
 });
@@ -464,7 +466,7 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} retained parse
   await setLocale('en');await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:rawLabel,exact:true}).click();
+  await pressMore(page,rawLabel);
   expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x01',',','b']]);
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x01,b']);
 });
@@ -499,7 +501,7 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   const toolbar=page.getByLabel('Terminal keys',{exact:true});
   await expect(toolbar).toBeVisible();
-  await toolbar.getByRole('button',{name:'Agent action',exact:true}).click();
+  await pressMore(page,'Agent action');
   const terminal=page.locator('.terminal-canvas');
   await terminal.dispatchEvent('pointerdown',{pointerId:8,pointerType:'touch',clientX:160,clientY:120});
   await terminal.dispatchEvent('pointerup',{pointerId:8,pointerType:'touch',clientX:160,clientY:120});
@@ -714,13 +716,15 @@ for(const dismissKeyboardOnOverscroll of [false,true])test(`direct finger scroll
     return ['.terminal-canvas','.xterm-screen','.xterm-viewport','.xterm-helper-textarea'].map(selector=>{
       const element=selector==='.terminal-canvas'?canvas:canvas.querySelector(selector)!;
       const r=element.getBoundingClientRect();
-      const point=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-1]]
+      const point=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-4]]
         .find(([x,y])=>{const hit=document.elementFromPoint(x,y);return hit===element||(selector==='.xterm-screen'&&!!hit&&element.contains(hit));});
       return {selector,point:point?{x:point[0],y:point[1]}:null};
     });
   });
   const landings:unknown[]=[];
   for(const {selector,point} of starts) {
+    // The terminal covers its whole canvas, so no gutter is left to land on (terminal-fills-pane.spec.ts guards that).
+    if(selector==='.terminal-canvas'&&!point)continue;
     expect(point,`Real finger landing available on ${selector}`).not.toBeNull();
     await page.evaluate(()=>{window.simpleShortcutWrites=[];});
     const origin=point!;
@@ -859,13 +863,12 @@ test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and pr
   await clear(); await keys.getByRole('button',{name:'ctrl',exact:true}).click();
   await expect(input).toBeFocused();
   if ((page.viewportSize()?.width??1280)<=600) {
-    // Each toolbar row is its own horizontal scroller.
+    // A finger sliding across the fixed key grid types nothing.
     const line=keys.locator('.terminal-keys-row').first(),bounds=await line.boundingBox(); if (!bounds) throw new Error('toolbar must be visible');
     const y=bounds.y+bounds.height/2, x=bounds.x+bounds.width-30;
     await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
     for (const offset of [30,80,160]) await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-offset,y}]});
     await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-    await expect.poll(()=>line.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
     expect(await writes()).toEqual([]);
   }
 });
@@ -982,7 +985,7 @@ async function dragSelectedTerminalBody(page:Page,origin:{x:number;y:number},not
 }
 
 async function selectScrollSearchResult(page:Page,row:number) {
-  await page.getByRole('button',{name:'Find',exact:true}).click();
+  await pressMore(page,'Find');
   await page.locator('.terminal-search input').fill(`OWNED_SELECTION_ROW ${row}`);
   await page.locator('.terminal-search input').press('Enter');
   await expect.poll(()=>page.locator('.terminal-canvas .xterm-selection > div').count()).toBeGreaterThan(0);
@@ -1000,23 +1003,23 @@ test('normal scrollback finger scrolling preserves selected text',async({page},t
   const viewport=page.locator('.terminal-canvas:visible .xterm-viewport'),screen=page.locator('.terminal-canvas:visible .xterm-screen');
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(0);
   await selectScrollSearchResult(page,96);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();
+  await pressMore(page,'Copy');
   const selected=await page.evaluate(()=>window.simpleShortcutCopies.at(-1));expect(selected).toContain('OWNED_SELECTION_ROW 96');
   const box=(await screen.boundingBox())!,origin={x:box.x+80,y:box.y+Math.min(240,box.height/2)};
   const notch=await screen.evaluate(node=>Math.ceil(node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length)+1);
   const beforeWheel=await viewport.evaluate(node=>node.scrollTop);
   await page.mouse.move(origin.x,origin.y);await page.mouse.wheel(0,-notch);
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeWheel);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  await pressMore(page,'Copy');expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   const beforeTouch=await viewport.evaluate(node=>node.scrollTop);
   const input=await dragSelectedTerminalBody(page,origin,notch);
   await testInfo.attach('selected-scrollback',{body:JSON.stringify({beforeWheel,beforeTouch,afterTouch:await viewport.evaluate(node=>node.scrollTop),selected,writes:await page.evaluate(()=>window.simpleShortcutWrites)}),contentType:'application/json'});
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeTouch);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  await pressMore(page,'Copy');expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   const top=await screen.locator('.xterm-rows > div').first().innerText(),size=page.viewportSize()!;
   await page.setViewportSize({width:size.width,height:size.height-150});
   await expect(screen.locator('.xterm-rows > div').first()).toHaveText(top);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  await pressMore(page,'Copy');expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
   await input.detach();
 });
@@ -1203,7 +1206,7 @@ test.describe('terminal composer sheet',()=>{
     const stage=await page.locator('.terminal-stage:visible').boundingBox();
     await expect.poll(()=>sheet.boundingBox()).toEqual(stage);
     if(testInfo.project.name==='phone')await expect(page.locator('.terminal-keys')).toBeHidden();
-    else await expect(page.getByText('Ctrl+Enter to send',{exact:true})).toBeVisible();
+    else await expect(page.getByText('Ctrl+Enter to send · Ctrl+Shift+Enter to insert',{exact:true})).toBeVisible();
     await editor.pressSequentially('first line');await editor.press('Enter');await editor.pressSequentially('second line');
     await expect(page.getByText('22 characters · 2 lines',{exact:true})).toBeVisible();
     expect(await steps(page)).toEqual([]);
@@ -1244,49 +1247,43 @@ test.describe('terminal composer sheet',()=>{
     expect(await resizes(page)).toBe(before);
   });
 
-  test('turning off Send Enter restores paste without Enter and labels the action Paste draft',async({page})=>{
+  test('turning off Ctrl+Enter sends makes the shortcut insert without Enter while Send and Insert stay on screen',async({page})=>{
     await fixture(page);
     await openPreferenceCategory(page,'Input');
-    const option=page.getByRole('checkbox',{name:'Send Enter after pasting the draft',exact:true});
+    const option=page.getByRole('checkbox',{name:'Ctrl+Enter sends the draft (off: it only inserts it)',exact:true});
     await expect(option).toBeChecked();
     await option.uncheck();
     expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).composerSendEnter)).toBe(false);
     await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
-    if ((page.viewportSize()?.width??1280)<=600) await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-    await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-    await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+    await connectLocalTerminal(page);
     await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?2004h'));
     await page.getByRole('button',{name:'Compose',exact:true}).click();
-    await expect(page.getByRole('button',{name:'Send',exact:true})).toHaveCount(0);
+    await expect(page.getByRole('button',{name:'Send',exact:true})).toBeVisible();
     const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
-    await editor.fill('git status');
-    await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+    // The preference only points Ctrl+Enter at Insert; Ctrl+Shift+Enter then sends.
+    await editor.fill('git status');await editor.press('Control+Enter');
     await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[200~git status\x1b[201~']);
     expect(await steps(page)).toEqual([]);
-    await expect(editor).toHaveCount(0);
-    await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    await editor.fill('git log');await editor.press('Control+Shift+Enter');
+    await expect.poll(()=>steps(page)).toEqual([['\x1b[200~git log\x1b[201~','\r']]);
   });
 
   test('the sheet keeps its editor and actions above a soft keyboard that only shrinks the visual viewport',async({page},testInfo)=>{
     test.skip(testInfo.project.name!=='phone','Soft keyboard');
     await openShortcutTerminal(page);
     // WebKit-style keyboards keep the layout viewport and shrink only the visual viewport.
-    await page.evaluate(()=>{
-      const target=new EventTarget(), keyboard={height:window.innerHeight};
-      Object.defineProperties(target,{offsetTop:{value:0},offsetLeft:{value:0},scale:{value:1},width:{value:window.innerWidth},height:{get:()=>keyboard.height}});
-      Object.defineProperty(window,'visualViewport',{configurable:true,value:target});
-      Reflect.set(window,'showKeyboard',(height:number)=>{keyboard.height=window.innerHeight-height;target.dispatchEvent(new Event('resize'));});
-    });
+    const keyboard=await emulateVisualViewportKeyboard(page);
     await page.getByRole('button',{name:'Compose',exact:true}).click();
     const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
     await editor.fill('above the keyboard');
-    await page.evaluate(()=>(Reflect.get(window,'showKeyboard') as (height:number)=>void)(336));
+    await keyboard(336);
     const visible=await page.evaluate(()=>window.innerHeight-336);
     for(const control of [editor,page.getByRole('button',{name:'Send',exact:true}),page.getByRole('button',{name:'Close composer',exact:true})])
       await expect.poll(async()=>{const box=(await control.boundingBox())!;return box.y+box.height<=visible;}).toBe(true);
     expect((await editor.boundingBox())!.height).toBeGreaterThanOrEqual(96);
     await page.screenshot({path:testInfo.outputPath('composer-keyboard.png'),animations:'disabled'});
-    await page.evaluate(()=>(Reflect.get(window,'showKeyboard') as (height:number)=>void)(0));
+    await keyboard(0);
     await expect.poll(async()=>(await page.getByRole('button',{name:'Send',exact:true}).boundingBox())!.y).toBeGreaterThan(visible);
   });
 });

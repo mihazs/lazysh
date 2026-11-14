@@ -1,10 +1,11 @@
-import {useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
+import {useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {createPortal} from "react-dom";
-import {Keyboard, Paperclip, Plus, Trash2, X} from "lucide-react";
+import {Plus, Trash2, X} from "lucide-react";
+import {toolbarIcons} from "./toolbarIcons";
 import {t} from "./i18n/core";
-import {discreteGestureActions, maxToolbarRows, toolbarFromRows, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarKeys, toolbarRows, type GestureAction, type Preferences, type ToolbarKey} from "./preferences";
+import {discreteGestureActions, maxToolbarRows, toolbarFromRows, toolbarKeyHeights, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarKeys, toolbarRows, type GestureAction, type Preferences, type ToolbarKey} from "./preferences";
 import GestureBindingField from "./GestureBindingField";
-import {findToolbarKey, placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarStepSlot, type ToolbarRows, type ToolbarSlot, type ToolbarStep} from "./toolbarLayout";
+import {findToolbarKey, placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarCells, toolbarStepSlot, type ToolbarRows, type ToolbarSlot, type ToolbarStep} from "./toolbarLayout";
 import "./ToolbarKeysEditor.css";
 
 type Source = "row" | "palette";
@@ -33,8 +34,8 @@ const holdScroll = (event: TouchEvent) => { if (event.cancelable) event.preventD
 
 /** The face each key shows in the terminal toolbar, for the preview. */
 function terminalFace(key: ToolbarKey): ReactNode {
-  if (key === "attach") return <><Paperclip size={14} aria-hidden="true" />{t("terminalAttach")}</>;
-  if (key === "keyboard") return <Keyboard size={14} aria-hidden="true" />;
+  const Icon = toolbarIcons[key];
+  if (Icon) return <Icon size={14} aria-hidden="true" />;
   return glyphs[key] ?? (key === "paste" ? t("terminalPaste") : key === "dpad" ? t("terminalDpad") : toolbarKeyLabel(key));
 }
 
@@ -59,6 +60,7 @@ function scroller(element: HTMLElement | null): HTMLElement {
 
 export default function ToolbarKeysEditor({preferences, update}: {preferences: Preferences; update: (patch: Partial<Preferences>) => boolean}) {
   const rows = toolbarRows(preferences.toolbar);
+  const keyHeight = preferences.toolbarKeyHeight ?? toolbarKeyHeights.default;
   const [selected, setSelected] = useState<ToolbarKey>();
   const [drag, setDrag] = useState<Drag>();
   const [announcement, setAnnouncement] = useState("");
@@ -68,7 +70,7 @@ export default function ToolbarKeysEditor({preferences, update}: {preferences: P
   const clickGuard = useRef(0);
   const focusAfter = useRef<Focus | undefined>(undefined);
   const id = useId();
-  const shortcutsId = `${id}-shortcuts`, panelId = `${id}-actions`;
+  const shortcutsId = `${id}-shortcuts`, panelId = `${id}-actions`, sizeId = `${id}-size`;
 
   function show(next: Drag | undefined) { dragRef.current = next; setDrag(next); }
   function commit(next: ToolbarRows, message: string, focus?: Focus) {
@@ -271,19 +273,22 @@ export default function ToolbarKeysEditor({preferences, update}: {preferences: P
     <label>{t("preferencesToolbarRows")}<select value={rows.length} onChange={event => {const count = Number(event.target.value); commit(resizeToolbarRows(rows, count), t("preferencesToolbarRowsChangedValue1", {value1: String(count)}));}}>
       {Array.from({length: maxToolbarRows}, (_, index) => <option key={index} value={index + 1}>{index + 1}</option>)}
     </select></label>
+    <div className="toolbar-size">
+      <label htmlFor={sizeId}>{t("preferencesToolbarKeyHeight")}</label>
+      <span aria-hidden="true">{t("preferencesToolbarKeyHeightValue1", {value1: String(keyHeight)})}</span>
+      <input id={sizeId} type="range" min={toolbarKeyHeights.min} max={toolbarKeyHeights.max} step={toolbarKeyHeights.step} value={keyHeight}
+        aria-valuetext={t("preferencesToolbarKeyHeightValue1", {value1: String(keyHeight)})} aria-describedby={`${sizeId}-hint`} title={t("preferencesToolbarKeyHeightHint")}
+        onChange={event => update({toolbarKeyHeight: Number(event.target.value)})} />
+      <button type="button" disabled={keyHeight === toolbarKeyHeights.default} onClick={() => update({toolbarKeyHeight: toolbarKeyHeights.default})}>{t("preferencesToolbarKeyHeightReset")}</button>
+      <span id={`${sizeId}-hint`} className="sr-only">{t("preferencesToolbarKeyHeightHint")}</span>
+    </div>
     <p>{t("preferencesToolbarDragHint")}</p>
     <span id={shortcutsId} className="sr-only">{t("preferencesToolbarKeyShortcuts")}</span>
     <figure className="toolbar-preview">
       <figcaption>{t("preferencesToolbarPreview")}</figcaption>
-      <div className="toolbar-preview-keys" aria-hidden="true">
-        {preview.map((row, index) => <div key={index} className="toolbar-preview-row" data-empty={!row.length && index !== preview.length - 1 || undefined}>
-          {row.map(key => <span key={key} data-preview-key={key}>{terminalFace(key)}</span>)}
-          {index === preview.length - 1 && <>
-            {preferences.snippets.map((snippet, item) => <span key={`snippet-${item}`} className="toolbar-preview-fixed">{snippet.label}</span>)}
-            {preferences.chords.map((chord, item) => <span key={`chord-${item}`} className="toolbar-preview-fixed">{chord.label}</span>)}
-            <span className="toolbar-preview-fixed">{t("terminalFind")}</span>
-            <span className="toolbar-preview-fixed">{t("terminalCopy")}</span>
-          </>}
+      <div className="toolbar-preview-keys" aria-hidden="true" style={{"--terminal-key-height": `${keyHeight}px`} as CSSProperties}>
+        {toolbarCells(preview).map((row, index) => <div key={index} className="toolbar-preview-row" data-empty={!preview[index].length && index !== preview.length - 1 || undefined}>
+          {row.map((key, column) => key === "gap" ? <span key={`gap-${column}`} className="toolbar-preview-gap" /> : <span key={key} data-preview-key={key}>{terminalFace(key)}</span>)}
         </div>)}
       </div>
     </figure>

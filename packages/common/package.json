@@ -1,12 +1,6 @@
 {
   "name": "@lazysh/common",
-  "version": "1.29.1",
+  "version": "1.62.0",
   "private": true,
-  "license": "GPL-3.0-or-later",
-  "scripts": {
-    "check:rust": "cargo check --locked -p lazysh-common --all-features",
-    "test:rust": "cargo test --locked -p lazysh-common --all-features",
-    "lint": "cargo clippy --locked -p lazysh-common --all-features --all-targets -- -D warnings",
-    "format:check": "cargo fmt --package lazysh-common -- --check"
-  }
+  "license": "GPL-3.0-or-later"
 }

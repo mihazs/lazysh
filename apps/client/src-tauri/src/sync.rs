@@ -477,6 +477,8 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "composerSendEnter",
             "dismissKeyboardOnOverscroll",
             "toolbarAlternates",
+            "usageItem",
+            "usageProvider",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
         validate_theme_preferences(object)?;
@@ -489,6 +491,14 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             || object
                 .get("dismissKeyboardOnOverscroll")
                 .is_some_and(|value| !value.is_boolean())
+            || object
+                .get("usageItem")
+                .is_some_and(|value| !matches!(value.as_str(), Some("follow" | "fixed" | "hidden")))
+            || object.get("usageProvider").is_some_and(|value| {
+                !value
+                    .as_str()
+                    .is_some_and(|id| (1..=160).contains(&id.len()))
+            })
             || object.get("version").and_then(|v| v.as_u64()) != Some(1)
             || object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || serde_json::to_vec(preferences)
@@ -1315,6 +1325,7 @@ mod tests {
     fn host(id: &str) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -1375,6 +1386,48 @@ mod tests {
         bundle.hosts[0].default_multiplexer.as_mut().unwrap().name = "bad\nname".into();
         assert!(validate_bundle(&bundle, Scope::Settings).is_err());
         assert!(serde_json::from_slice::<Bundle>(&serde_json::to_vec(&bundle).unwrap()).is_err());
+    }
+
+    #[test]
+    fn synced_default_multiplexer_tolerates_kinds_this_client_does_not_know() {
+        let mut encoded = serde_json::to_value(settings()).unwrap();
+        encoded["hosts"][0]["defaultMultiplexer"] =
+            serde_json::json!({"kind":"future-mux","name":"work"});
+        let imported: Bundle = serde_json::from_value(encoded.clone()).unwrap();
+        validate_bundle(&imported, Scope::Settings).unwrap();
+        assert!(imported.hosts[0].default_multiplexer.is_none());
+        // The newer field round-trips here; a released reader skips unknown host fields.
+        let next = serde_json::json!({"kind":"zellij","name":"next"});
+        encoded["hosts"][0]["defaultMultiplexerNext"] = next.clone();
+        let imported: Bundle = serde_json::from_value(encoded.clone()).unwrap();
+        validate_bundle(&imported, Scope::Settings).unwrap();
+        assert_eq!(
+            serde_json::to_value(&imported).unwrap()["hosts"][0]["defaultMultiplexerNext"],
+            next
+        );
+        #[derive(Deserialize)]
+        struct ReleasedHost {
+            #[serde(rename = "defaultMultiplexer", default)]
+            default_multiplexer: Option<crate::ssh::DefaultMultiplexer>,
+            id: String,
+        }
+        #[derive(Deserialize)]
+        struct ReleasedBundle {
+            hosts: Vec<ReleasedHost>,
+        }
+        // Newer clients keep released kinds in the old field and new kinds in the new one.
+        encoded["hosts"][0]["defaultMultiplexer"] =
+            serde_json::json!({"kind":"tmux","name":"work"});
+        encoded["hosts"][0]["defaultMultiplexerNext"] =
+            serde_json::json!({"kind":"future-mux","name":"next"});
+        let released: ReleasedBundle = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(released.hosts[0].id, "remote");
+        assert_eq!(
+            released.hosts[0].default_multiplexer.as_ref().unwrap().name,
+            "work"
+        );
+        let current: Bundle = serde_json::from_value(encoded).unwrap();
+        assert!(current.hosts[0].default_multiplexer_next.is_none());
     }
 
     #[test]
@@ -1484,6 +1537,40 @@ mod tests {
             serde_json::json!({"version":1,"toolbarAlternates":{"esc":{"action":"zoomPane"}}}),
         );
         validate_bundle(&bundle, Scope::Settings).unwrap();
+    }
+
+    #[test]
+    fn device_local_settings_are_refused_in_a_settings_snapshot() {
+        let mut bundle = settings();
+        // The client keeps these on the device that chose them; a snapshot that carries one is not from this app.
+        for field in [
+            ("toolbarKeyHeight", serde_json::json!(44)),
+            ("privateKeyboard", serde_json::json!(true)),
+        ] {
+            bundle.preferences = Some(serde_json::json!({"version":1,(field.0):field.1}));
+            assert!(
+                validate_bundle(&bundle, Scope::Settings).is_err(),
+                "{}",
+                field.0
+            );
+        }
+    }
+
+    #[test]
+    fn usage_item_choice_syncs_only_with_known_values() {
+        let mut bundle = settings();
+        bundle.preferences =
+            Some(serde_json::json!({"version":1,"usageItem":"fixed","usageProvider":"openai"}));
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        for invalid in [
+            serde_json::json!({"version":1,"usageItem":"always"}),
+            serde_json::json!({"version":1,"usageItem":true}),
+            serde_json::json!({"version":1,"usageProvider":""}),
+            serde_json::json!({"version":1,"usageProvider":7}),
+        ] {
+            bundle.preferences = Some(invalid);
+            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+        }
     }
 
     #[test]

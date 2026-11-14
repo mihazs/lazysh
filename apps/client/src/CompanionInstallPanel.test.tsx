@@ -2,13 +2,14 @@
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 const install=vi.hoisted(()=>vi.fn());
-vi.mock('./bridge',()=>({api:{installCompanion:install}}));
-import CompanionInstallPanel,{companionInstallStage,companionInstallFailure,parseCompanionInstall} from './CompanionInstallPanel';
+const fromDevice=vi.hoisted(()=>vi.fn());
+vi.mock('./bridge',()=>({api:{installCompanion:install,installCompanionFromDevice:fromDevice}}));
+import CompanionInstallPanel,{companionInstallStage,companionInstallProgress,companionInstallFailure,parseCompanionInstall} from './CompanionInstallPanel';
 import {applyAccessStatus} from './access';
 import {uiI18n} from './i18n/core';
 const result={schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh-agent',cleanup:'complete'};
 let generation=0;
-beforeEach(async()=>{install.mockReset();await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++generation),nonce:'a'.repeat(64)});});
+beforeEach(async()=>{install.mockReset();fromDevice.mockReset();await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++generation),nonce:'a'.repeat(64)});});
 afterEach(()=>cleanup());
 
 it('accepts only finite progress and complete installation results',()=>{
@@ -151,8 +152,8 @@ it('retains the native failed phase across cleanup and synchronous settlement be
 
 it('projects unknown error payloads to finite values without adding private diagnostic attributes',async()=>{
   const marker='/private/host/error-secret';
-  expect(companionInstallFailure({kind:marker,phase:marker,message:marker})).toEqual({failure:'other',phase:undefined});
-  expect(companionInstallFailure({kind:'constructor',phase:'cleaningUp'})).toEqual({failure:'other',phase:undefined});
+  expect(companionInstallFailure({kind:marker,phase:marker,message:marker,detail:marker})).toEqual({failure:'other',phase:undefined,detail:'none'});
+  expect(companionInstallFailure({kind:'constructor',phase:'cleaningUp'})).toEqual({failure:'other',phase:undefined,detail:'none'});
   install.mockRejectedValue({kind:marker,phase:marker,message:'Existing message'});
   render(<CompanionInstallPanel sessionId="unknown-failure" onInstalled={vi.fn()}/>);
   fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
@@ -203,4 +204,71 @@ it('projects only complete tag recheck codes at the matching native failure boun
   fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
   expect(panel.hasAttribute('data-install-recheck')).toBe(false);
   expect(panel.textContent).not.toContain('/private/host');
+});
+
+it('accepts the host download counts only on the downloading stage and only within the declared total',()=>{
+  expect(companionInstallProgress({stage:'downloading',bytes:5,total:9})).toEqual({stage:'downloading',bytes:5,total:9});
+  expect(companionInstallProgress({stage:'selfTesting'})).toEqual({stage:'selfTesting'});
+  for(const value of [{stage:'verifying',bytes:5,total:9},{stage:'downloading',bytes:10,total:9},{stage:'downloading',bytes:-1,total:9},{stage:'downloading',bytes:1.5,total:9},{stage:'downloading',bytes:'5',total:9},{stage:'downloading',bytes:5},{stage:'downloading',bytes:5,total:9,path:'/private'},{stage:'constructor',bytes:1,total:2}])
+    expect(companionInstallProgress(value)).toBeUndefined();
+});
+it('updates through the host route, shows what the host reports and never touches the device download',async()=>{
+  const requests=pendingInstall(),installed=vi.fn();render(<CompanionInstallPanel sessionId="host-route" ready onInstalled={installed}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Update companion'}));
+  act(()=>requests[0].progress({stage:'downloading'}));expect(screen.getByText('The host is downloading the companion…')).toBeTruthy();
+  act(()=>requests[0].progress({stage:'downloading',bytes:3_145_728,total:11_534_336}));expect(screen.getByText('The host is downloading the companion: 3 of 11 MB')).toBeTruthy();
+  act(()=>requests[0].progress({stage:'selfTesting'}));expect(screen.getByText('Testing the companion on the host…')).toBeTruthy();
+  await act(async()=>{requests[0].finish(result);});
+  expect(installed).toHaveBeenCalledTimes(1);expect(fromDevice).not.toHaveBeenCalled();
+  expect(document.querySelector('details')?.dataset).toMatchObject({installRoute:'host',installOutcome:'installed'});
+  expect(screen.queryByText('Install through this device')).toBeNull();
+});
+it.each([
+  ['companion_host_network','dns','The host could not download the companion from GitHub. It needs outbound HTTPS access.'],
+  ['companion_host_tool_missing','noDownloader','The host has no curl or GNU wget, or no SHA-256 tool, so it cannot download the companion.'],
+])('offers the labelled device fallback after %s and only then installs through the device',async(kind,detail,message)=>{
+  install.mockRejectedValue({kind,detail,phase:'downloading',message:'Private remote text'});fromDevice.mockResolvedValue({...result,status:'installed'});
+  const installed=vi.fn();render(<CompanionInstallPanel sessionId="offline-host" onInstalled={installed}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  expect(screen.getByRole('alert').textContent).toBe(message);
+  const panel=screen.getByText('Host companion installation').closest('details')!;
+  expect(panel.dataset).toMatchObject({installFailure:kind,installDetail:detail,installRoute:'host',installOutcome:'failed'});
+  expect(screen.getByText(/download it on this device/)).toBeTruthy();expect(fromDevice).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Install through this device'}));await act(async()=>{});
+  expect(fromDevice).toHaveBeenCalledTimes(1);expect(fromDevice.mock.calls[0][0]).toBe('offline-host');expect(install).toHaveBeenCalledTimes(1);
+  expect(installed).toHaveBeenCalledTimes(1);expect(panel.dataset).toMatchObject({installRoute:'device',installOutcome:'installed'});
+  expect(screen.queryByText('Install through this device')).toBeNull();
+});
+it.each([
+  ['companion_verification_failed','The file the host downloaded did not match the release and was discarded. Nothing was installed.'],
+  ['companion_self_test_failed','The downloaded companion failed its self test. The installed companion was not changed.'],
+  ['companion_rolled_back','The new companion failed after installation, so the previous one was restored.'],
+  ['companion_host_busy','Another companion update is running on this host.'],
+  ['companion_unsafe_location','The companion location on this host is not safe to use, so nothing was changed.'],
+  ['companion_newer_installed','The host already has a newer companion. It has been preserved.'],
+  ['companion_install_timeout',undefined],
+])('does not offer the device download after the host reported %s',async(kind,message)=>{
+  install.mockRejectedValue({kind,detail:'digestMismatch',phase:'verifying',message:'Native diagnostic text'});
+  render(<CompanionInstallPanel sessionId="refused" onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  if(message)expect(screen.getByRole('alert').textContent).toBe(message);
+  expect(screen.queryByText('Install through this device')).toBeNull();expect(fromDevice).not.toHaveBeenCalled();
+});
+it('keeps the fallback out of a device-route failure and retires it with its source',async()=>{
+  install.mockRejectedValue({kind:'companion_host_network',phase:'downloading',message:'x'});fromDevice.mockRejectedValue({kind:'companion_host_network',phase:'downloading',message:'x'});
+  const view=render(<CompanionInstallPanel sessionId="first-host" onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  fireEvent.click(screen.getByRole('button',{name:'Install through this device'}));await act(async()=>{});
+  expect(screen.queryByText('Install through this device')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  expect(screen.getByText('Install through this device')).toBeTruthy();
+  view.rerender(<CompanionInstallPanel sessionId="second-host" onInstalled={vi.fn()}/>);
+  expect(screen.queryByText('Install through this device')).toBeNull();
+});
+it.each([['pt-BR','Instalar por este dispositivo'],['es','Instalar desde este dispositivo']])('shows the labelled fallback in %s',async(language,label)=>{
+  await uiI18n.changeLanguage(language);
+  install.mockRejectedValue({kind:'companion_host_tool_missing',phase:'verifying',message:'x'});
+  render(<CompanionInstallPanel sessionId={`locale-${language}`} onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Instalar companion'}));await act(async()=>{});
+  expect(screen.getByRole('button',{name:label})).toBeTruthy();
 });

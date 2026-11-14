@@ -55,3 +55,13 @@ test('OpenCode todos keep cancelled entries and multiple-choice questions',async
   await expect(page.getByRole('region',{name:'Plan',exact:true}).getByRole('listitem')).toHaveText(['DoneRecord the fixture shapes','In progressChoose a layout','CancelledDrop the legacy layout']);
   await expect(page.getByRole('region',{name:'Question',exact:true})).toContainText('More than one option can be chosen.');
 });
+
+test('recorded Claude API failures read as error cards with the next step and fit the screen',async({page})=>{
+  await fixture(page,[pages.claudeErrors],'claude');
+  const cards=page.getByRole('alert').filter({has:page.getByRole('heading',{name:'The agent could not continue',exact:true})});
+  await expect(cards).toHaveCount(4);
+  await expect(cards.first()).toContainText('Wait for it to reset');
+  await expect(cards.nth(1)).toContainText("Check the host's network");
+  for(let index=0;index<4;index++)await fitsViewport(page,cards.nth(index));
+  await expect(page.getByText('API Error: 529 Synthetic overload',{exact:true})).toBeVisible();
+});

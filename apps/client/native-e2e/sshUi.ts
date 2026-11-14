@@ -1,4 +1,6 @@
 import {afterEach,expect} from 'vitest';
+import {chmod,mkdir,readFile,writeFile} from 'node:fs/promises';
+import {dirname,join} from 'node:path';
 import {NativeGui} from './fixture';
 import {SshFixture} from '../../../tests/support/sshFixture';
 
@@ -135,6 +137,19 @@ async function cleanupOwnedSshGui(window:NativeGui|undefined,server:Pick<SshFixt
   try{await window?.stop();}catch(error){failures.push(error);}
   try{await server?.stop();}catch(error){failures.push(error);}
   if(failures.length)throw new AggregateError(failures,'Owned SSH GUI cleanup failed');
+}
+
+/** An owned SSH server whose managed companion path holds `image`, by default the current-source companion (`LAZYSH_TEST_AGENT_BIN`). */
+export async function ownedCompanionSsh(fixture:ReturnType<typeof ownedSshGui>,image?:Buffer) {
+  if(!image) {
+    const source=process.env.LAZYSH_TEST_AGENT_BIN;
+    if(!source?.startsWith('/'))throw new Error('An owned current-source companion binary is required');
+    image=await readFile(source);
+  }
+  const ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});fixture.ssh=ssh;
+  const companion=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
+  await mkdir(dirname(companion),{recursive:true,mode:0o700});await writeFile(companion,image,{flag:'wx',mode:0o700});await chmod(companion,0o700);
+  return {ssh,companion};
 }
 
 export function ownedSshGui() {

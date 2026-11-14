@@ -132,7 +132,11 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
+        queued: Vec::new(),
+        work: None,
+        session: None,
     })
 }
 

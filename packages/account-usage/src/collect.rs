@@ -78,7 +78,8 @@ fn config_path() -> Option<PathBuf> {
     }
     ai_usagebar_core::resolved_config_path().filter(|path| path.exists())
 }
-struct ProcessTree {
+/// Owns a child's process tree until dropped.
+pub struct ProcessTree {
     id: u32,
     #[cfg(windows)]
     job: isize,
@@ -211,17 +212,11 @@ async fn external(command: Command, deadline: Duration) -> Option<Response> {
             .is_some_and(|report| !report.entries.is_empty()))
     .then_some(response)
 }
-async fn bounded_output(
-    mut command: Command,
-    arguments: &[&str],
-    deadline: Duration,
-) -> Option<Vec<u8>> {
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+/// Starts a native-chosen argv command whose whole process tree is owned: a process
+/// group on Unix, a kill-on-close job object on Windows. Dropping the tree kills it.
+/// The caller chooses stdio; the child is killed on drop.
+pub fn spawn_owned(command: &mut Command) -> std::io::Result<(tokio::process::Child, ProcessTree)> {
+    command.kill_on_drop(true);
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -233,26 +228,34 @@ async fn bounded_output(
                 | windows_sys::Win32::System::Threading::CREATE_SUSPENDED,
         );
     }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            #[cfg(all(windows, test))]
-            eprintln!(
-                "owned quota admission stage=spawn error={:?}",
-                error.raw_os_error()
-            );
-            let _ = error;
-            return None;
-        }
-    };
-    let _tree = match ProcessTree::own(&child) {
-        Some(tree) => tree,
+    let mut child = command.spawn().inspect_err(|_error| {
+        #[cfg(all(windows, test))]
+        eprintln!(
+            "owned quota admission stage=spawn error={:?}",
+            _error.raw_os_error()
+        );
+    })?;
+    match ProcessTree::own(&child) {
+        Some(tree) => Ok((child, tree)),
         None => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            return None;
+            let _ = child.start_kill();
+            Err(std::io::Error::other(
+                "Could not take ownership of the child process",
+            ))
         }
-    };
+    }
+}
+async fn bounded_output(
+    mut command: Command,
+    arguments: &[&str],
+    deadline: Duration,
+) -> Option<Vec<u8>> {
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let (mut child, _tree) = spawn_owned(&mut command).ok()?;
     let stdout = child.stdout.take()?;
     let result = tokio::time::timeout(deadline, async {
         let mut bytes = Vec::new();

@@ -1,0 +1,119 @@
+# ADR 0001: terminal adapter and shared Rust runtime
+
+- Status: **Proposed**. It becomes Accepted only when the validation listed at the end exists. Date: 2026-11-11.
+- Decision makers: repository maintainer. Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302).
+- Related: [PRD](terminal-performance-prd.md) · [runtime](terminal-runtime.md) · [adapter](terminal-adapter.md) · [native rendering](native-rendering.md) · [migration plan](terminal-migration-plan.md).
+
+## Context
+
+The terminal is xterm.js 5.5.0 (DOM renderer) in the Tauri WebView. Its state lives in JavaScript, its output arrives as a JSON number array with one acknowledgement IPC per chunk, and four modules patch xterm private fields. Android battery and responsiveness are the priority, but no terminal measurement exists.
+
+Evidence read from the repository (not measured behaviour):
+
+| Evidence | Source |
+| --- | --- |
+| xterm pinned to 5.5.0, no WebGL or canvas addon dependency | `apps/client/package.json` |
+| Output is `number[]`, copied to `Uint8Array`, acknowledged from the write callback | `bridge.ts`, `App.tsx` |
+| Credit window 256 KiB; SSH chunks 16 KiB | `ssh.rs`, `local.rs` |
+| Terminal state exists only in the WebView; WebView replacement closes sessions | `terminal.ts`, `ssh.rs` `cancel_for_renderer_rebind`, [session lifetime](../explanation/session-lifetime.md) |
+| xterm-private seams: IME, Mosh resize, bold color, viewport, fit | `terminalIme.ts`, `moshResize.ts`, `terminalBold.ts`, `terminal.ts`, `terminalFit.ts` |
+| libghostty-vt and a Rust binding are already vendored with patches and provenance; Android is not a mapped build target; only Linux x86_64 builds in CI | `packages/herdr-upstream` |
+| No terminal performance data; #20 states gates only | `docs/reference-evidence.md` |
+
+## Decision
+
+1. Introduce a `TerminalAdapter` contract and make the existing xterm.js behaviour its first implementation (`XtermTerminalAdapter`). This is justified independently of performance: it isolates version-pinned internals and makes terminal behaviour testable by one contract suite.
+2. Build one shared Rust terminal core on the **existing** libghostty-vt binding. No second Ghostty dependency or VT engine is added without a documented justification that the existing engine fails a stated requirement.
+3. The core owns one authoritative display state per session. The native adapter sends small commands and events, never cells.
+4. **The renderer is not decided here.** wgpu is the first candidate; the choice per platform follows the benchmarks. If a native renderer does not beat xterm.js on a device, that device keeps xterm.js.
+5. Native composition is gated by proof-of-concept results per platform; a failed gate means that platform keeps xterm.js or uses a documented alternative.
+6. xterm.js stays as the working fallback with observable, recorded selection. Native is never the default before its platform gates pass.
+7. Source integrity checks and tests for the vendored Ghostty source (#384) are not weakened to make the integration easier.
+
+## Consequences
+
+Positive (expected, to be confirmed by measurement): terminal state can outlive a renderer; the bridge no longer carries per-byte JSON for the native path; xterm-specific code is confined; behaviour parity is testable.
+
+Negative or risky: a second terminal implementation to keep behaviourally aligned (mitigated by shared conformance fixtures); build complexity for Zig and the Android NDK; ghostty-vt's resize reflows by default, which conflicts with Mosh's canonical resize; scrollback is configured in bytes there and in lines in lazysh; and renderer-replacement semantics are security-relevant and need review.
+
+## Alternatives considered
+
+| Alternative | Why not chosen now |
+| --- | --- |
+| Keep xterm.js and only optimize it | Kept as a measured candidate; it does not by itself move state out of the WebView |
+| Native renderer first, adapter later | Risks building for a surface that cannot be composed; breaks the "no behaviour change first" rule |
+| A second VT engine (for example Alacritty or WezTerm terminal crates) | Second dependency without evidence of need; the vendored engine already covers parsing, dirty rows and input encoding |
+| WASM terminal inside the WebView | Retains the byte bridge; kept as a measured candidate |
+| Thread per session | No profiling justification |
+
+## Validation required before Accepted
+
+- A recorded xterm.js baseline and an optimized xterm.js variant ([benchmarks](terminal-benchmarks.md)).
+- Composition PoC results on a physical Android device (and iOS) ([native rendering](native-rendering.md#composition-gate)).
+- libghostty-vt cross-built for Android and iOS with integrity checks intact.
+- A passing contract suite for both adapters and conformance fixtures with reviewed divergences.
+- A security review of renderer-replacement session behaviour.
+
+## Validation gaps at the time of writing
+
+No physical Android device, no emulator, no Zig toolchain and no iOS, Windows or macOS host were available to the author. No claim about performance, energy, rendering, build success on other targets or device behaviour is made in this ADR.
+
+## Amendment 1 (2026-11-12): first renderer shootout results
+
+Scope: [#1323](https://github.com/mihazs/lazysh/issues/1323), the part that can run on the available host. Evidence: [renderer shootout](terminal-benchmarks.md#renderer-shootout-xtermjs-renderers-1323), raw files `benchmarks/terminal-shootout-*.json`. The decision rule of [native rendering](native-rendering.md#renderer-candidates) and the [acceptance of a candidate](terminal-benchmarks.md#acceptance-of-a-candidate) apply unchanged. The status of this ADR stays **Proposed**.
+
+**What was measured.** xterm.js 5.5.0 with its DOM renderer, its canvas addon and its WebGL addon (software and hardware GL), the same workloads and fixtures, one desktop host, headless Chromium, one geometry, three invocations for DOM and WebGL on hardware GL. **What was not:** every device (no Android, iOS, Windows or macOS), energy, thermal and battery, the Linux and Apple WebViews, and every native candidate: wgpu, Skia or Android Canvas drawing and a WASM terminal were not built. Candidates that were not built are neither eliminated nor selected.
+
+Criteria, for the WebGL addon on hardware GL against the DOM renderer (this host only):
+
+| Criterion | Result |
+| --- | --- |
+| No correctness regression | Met: every workload ended on the expected screen in all runs. |
+| No input-latency regression under heavy output | Met: echo p50 14.3 to 14.6 ms against 14.7 to 15.3; p95 and p99 higher by 2 to 3 % (30.7 and 32.5 ms against 30.0 and 31.7), within one 16.7 ms frame. |
+| Near-zero idle activity | Met, better with a blinking cursor (no style recalculation against 640 to 675 per 10 s); equal with blink off. |
+| Stable memory across session churn | Met per session (6.5 to 6.8 MiB against 7.3 to 7.7); fixed cost higher (JS heap about 14 MiB, renderer resident set about 8 to 12 %). |
+| At least 25 % better in one key latency or CPU metric | Met on ANSI-heavy output (W3 total process CPU 0.8 to 1.0 s against 2.1 to 2.9 s) and on the ten-session echo p99 (16.2 against 25.4 ms). |
+| Without a material regression elsewhere | **Not cleared**: W3 frame interval p99 33 to 116 to 197 ms with 13 to 21 dropped frames against 2 to 5; W4 total process CPU about 10 % higher at the median (0.34 against 0.31 s). |
+| At least 20 % lower Android energy | **Not measurable here**: no Android device, no battery counters. |
+
+Decisions, recorded per candidate and platform:
+
+| Candidate or platform | Decision |
+| --- | --- |
+| xterm.js DOM renderer | Stays the default and the fallback everywhere. No default changes. |
+| xterm.js canvas addon | Does not proceed. It was 16 to 46 times slower than the DOM renderer on W2 and W4 and slower under sustained output, with and without GPU flags. |
+| xterm.js WebGL addon on a software rasterizer | Not a usable configuration (0.22 to 0.26 MiB/s). Any use of the WebGL addon must be gated on real hardware acceleration and must fall back to the DOM renderer, which is capability probing ([#1336](https://github.com/mihazs/lazysh/issues/1336)) before anything else. |
+| xterm.js WebGL addon on hardware GL | **Proceeds to the next gate as the leading measured candidate** and is the cheapest to adopt (no native composition risk). It does not ship: it needs device measurements on Android (energy, thermal, context loss and recovery, memory pressure, background and resume), a fix or mitigation for the W3 frame-pacing regression, a replacement for the custom bold color seam (`configureTerminalBold` was refused on the WebGL and canvas renderers in smoke runs of the harness), and a screen-reader decision. |
+| wgpu, native Skia or Android Canvas drawing | Not built, so no decision. They remain candidates for devices where the WebGL addon fails the criteria, which only device runs can show. The Renderer API and a CPU reference renderer ([#1322](https://github.com/mihazs/lazysh/issues/1322)) are the plug point and the correctness oracle. |
+| WASM terminal | Not built, so no decision. One existing implementation, ghostty-web 0.4.0 (MIT, libghostty-vt compiled to WebAssembly; its npm metadata and package contents were inspected, it was not installed in the repository or run), bundles its own prebuilt `ghostty-vt.wasm`; adding it would put a second Ghostty build, whose provenance was not verified, beside the vendored and hash-checked source ([#384](https://github.com/mihazs/lazysh/issues/384)). Building a WASM from the vendored source is the alternative; either needs a maintainer decision. |
+| Android, iOS, macOS, Windows, Linux | Undecided for every platform: no device measurement exists. Tauri's Linux WebView is WebKitGTK and the Apple ones WKWebView, so Chromium results do not apply to them; Android System WebView and WebView2 are Chromium, but their GPU paths were not measured. |
+
+Next measurements, in order: the Android manual procedure with the WebGL addon and the DOM renderer on a physical device ([#1340](https://github.com/mihazs/lazysh/issues/1340)); W3 frame pacing with the WebGL addon on the phone viewport; a WebGL context-loss run. A native candidate is built only if those show the WebGL addon missing the criteria on a device.
+
+## Amendment 2 (2026-11-13): native candidates measured on the host and on Waydroid
+
+Scope: [#1323](https://github.com/mihazs/lazysh/issues/1323), the native candidates that could be built and run without a physical device. Evidence: [renderer pipeline cost](terminal-benchmarks.md#renderer-pipeline-cost-host-microbenchmark-not-a-candidate), [WebAssembly VT versus xterm.js, parse only](terminal-benchmarks.md#webassembly-vt-versus-xtermjs-parse-only-host-microbenchmark-not-a-candidate), [Android Canvas drawing of the shared layout](terminal-benchmarks.md#android-canvas-drawing-of-the-shared-layout-waydroid-not-a-device) and [wgpu prototype against the CPU reference renderer](terminal-benchmarks.md#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device). The decision rule and the [acceptance of a candidate](terminal-benchmarks.md#acceptance-of-a-candidate) apply unchanged. The status of this ADR stays **Proposed**; this amendment supersedes the rows of Amendment 1 for wgpu, native drawing and the WASM terminal.
+
+**What was measured.** A wgpu 30 prototype of the Renderer API (offscreen, dot-pattern glyphs, no text) against the CPU reference renderer on one discrete desktop GPU, identical in pixels on every case it was checked on; the Android `Canvas` (Skia) replaying the same layout on Waydroid, whose GPU is the same desktop part; libghostty-vt built to WebAssembly from the vendored, hash-checked source against xterm.js's parser on one V8. **What was not:** any phone, any Android GPU driver, wgpu on Android, a text pipeline on the GPU (glyph rasterization, shaping, font fallback, atlas eviction), desktop Skia, a WASM terminal's renderer and bridge, energy, thermal behaviour, a window surface. These results rank nothing on any device.
+
+Decisions, recorded per candidate:
+
+| Candidate | Decision |
+| --- | --- |
+| wgpu | **Stays a candidate; not measured where it matters.** The prototype is correct against the oracle and a frame is cheap on a desktop GPU (draw plus present 0.25 to 0.51 ms at the median against 0.45 to 1.72 ms for the CPU reference renderer), but that excludes all text cost, the first GPU context added about 61 MiB resident on this driver (an xterm.js session costs 7 to 8 MiB), and no phone GPU was measured. It does not displace the xterm.js WebGL addon as the next thing to measure on a device. It becomes the native candidate to continue only if device runs show the WebGL addon missing the criteria, and its next gates are a text path with real fonts ([#1325](https://github.com/mihazs/lazysh/issues/1325), [#1337](https://github.com/mihazs/lazysh/issues/1337)) and a Vulkan surface on Android ([#1327](https://github.com/mihazs/lazysh/issues/1327)). |
+| Native drawing (Android `Canvas`, which is Skia) | **Stays the Android-specific candidate; not selected.** On Waydroid the number of Canvas calls, not the GPU, decided the frame: batching text runs made a full-screen repaint 1.6 to 4.2 times faster than one call per draw, and no hardware frame exceeded 10 ms. Per-row display lists were not built, wide, combining and emoji clusters cannot be batched, there is no wire format for sending a frame from Rust to Kotlin ([#1337](https://github.com/mihazs/lazysh/issues/1337)), and nothing ran on a device. |
+| WASM terminal | **Does not proceed on current evidence.** libghostty-vt as WebAssembly parsed 1.3 to 5.8 times faster than xterm.js's parser on the same V8, but parsing is not what costs most in the baseline (ANSI colour through `xterm.write` with the DOM renderer ran at 4.3 MiB/s while the parser alone ran at 61 MiB/s), a WASM terminal still needs a renderer in the WebView (the xterm.js shootout again) and a JavaScript bridge that carries every byte and every dirty row. Reconsider only if a device shows parse-bound CPU. The supply-chain question of Amendment 1 does not arise: the module was built from the vendored source, not taken from a package. |
+| xterm.js DOM renderer, WebGL addon, canvas addon, software GL, every platform | **Unchanged from Amendment 1.** The DOM renderer stays the default and the fallback everywhere; no platform, rollout stage or default changes. |
+
+Next measurements, in order: the xterm.js WebGL addon and the DOM renderer on a physical Android device ([#1340](https://github.com/mihazs/lazysh/issues/1340)); only if the WebGL addon fails a criterion there, a wgpu text path and a Vulkan surface on the same device.
+
+## Amendment 5 (2026-11-14): wgpu on its OpenGL and OpenGL ES backends against Vulkan
+
+Scope: [#1323](https://github.com/mihazs/lazysh/issues/1323), the one wgpu question that a host without a phone can still answer: what the OpenGL ES path costs next to Vulkan. Evidence: [wgpu on its OpenGL and OpenGL ES backends against Vulkan](terminal-benchmarks.md#wgpu-on-its-opengl-and-opengl-es-backends-against-vulkan-same-host-gpu-not-a-device), six runs of the unmodified bench on one AMD GPU with Mesa 26.2.6 (Vulkan through RADV, OpenGL 4.6 and OpenGL ES 3.2 through radeonsi), the pixel-for-pixel comparison with the CPU reference renderer under each. The status of this ADR stays **Proposed**; this amendment supersedes only the wgpu row of Amendment 2.
+
+**What was measured.** The same wgpu prototype, frames and workloads on three backends of one GPU. Correct under all three (the four comparison tests pass). At the phone-sized 80x24 grid a frame cost the same within the host noise (median p50 ratio to Vulkan 1.07 for GL 4.6 and 1.00 for GLES 3.2, full repaints 0.97 to 1.08); at 152x38 it cost 1.36 and 1.19 times more at the median; the p99 was higher than Vulkan's in 31 of the 32 stream-row comparisons (median 1.7 and 1.4 times) and exceeded 10 ms once in 120 cells (18.1 ms, in a run taken under load); the first context added about 65 MiB resident against 61 MiB. **What was not:** any Android GLES driver (the GLES context was Mesa's, forced from the environment), wgpu on Android at all, an EGL window surface, energy, text.
+
+| Candidate | Decision |
+| --- | --- |
+| wgpu | **Stays a candidate; its OpenGL ES fallback works on one desktop driver and is unmeasured on Android.** Where Vulkan is missing, the prototype renders the same pixels through wgpu's OpenGL ES path at about the same median frame cost at the phone grid and a worse tail. That removes one reason to rule wgpu out and adds none to choose it: no phone GPU, no Android build, no text path and no energy figure exist, so the decision of Amendment 2 stands (it becomes the native candidate to continue only if device runs show the xterm.js WebGL addon missing the criteria, and its next gates are text, [#1325](https://github.com/mihazs/lazysh/issues/1325) and [#1337](https://github.com/mihazs/lazysh/issues/1337), and a Vulkan surface on Android, [#1327](https://github.com/mihazs/lazysh/issues/1327)). |
+| Native drawing, WASM terminal, xterm.js renderers, every platform | **Unchanged** from Amendments 1 and 2. The DOM renderer stays the default and the fallback everywhere; no platform, rollout stage or default changes. |

@@ -6,7 +6,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {applyAccessStatus,bindProtectedInvoke,captureAccess} from './access';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {t,uiI18n} from './i18n/core';
-import ChatTerminalInput,{parseTerminalBinding,parseTerminalDelivered,parseTerminalSnapshot,parseHerdrPrepared,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
+import ChatTerminalInput,{parseTerminalBinding,parseTerminalCycle,parseTerminalDelivered,parseTerminalSnapshot,parseHerdrPrepared,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
 
 import {herdrCandidate,herdrReceipt,herdrTarget,herdrPrepared,herdrBound,herdrChatReply} from './test/herdrChat';
 import {confirmChatTerminal as confirm} from './test/confirmChatTerminal';
@@ -66,6 +66,8 @@ it('rejects malformed/forged destination, receipt, source and operation shapes',
   for(const value of [{...bound,receipt:'forged'},{...bound,nextOperation:2},{...bound,destination:{...target,paneId:'%4'}},{...bound,unexpected:0}])expect(()=>parseTerminalBinding(value,target)).toThrow();
   for(const nextOperation of [0,1,3,-1,0x100000000])expect(()=>parseTerminalDelivered({kind:'delivered',nextOperation},1)).toThrow();
   expect(parseTerminalDelivered({kind:'delivered',nextOperation:2},1)).toBe(2);
+  expect(parseTerminalCycle({kind:'delivered',nextOperation:2,mode:'plan'},1)).toEqual({nextOperation:2,mode:'plan'});
+  for(const value of [{kind:'delivered',nextOperation:2},{kind:'delivered',nextOperation:2,mode:'yolo'},{kind:'delivered',nextOperation:3,mode:'plan'},{kind:'delivered',nextOperation:2,mode:'plan',extra:1}])expect(()=>parseTerminalCycle(value,1)).toThrow();
   for(const value of [{...source,agent:'gemini'},{...source,view:'future'},{...source,path:'bad\npath'},{...source,transcriptSessionId:'invented'}])expect(validTerminalSource(value)).toBe(false);
 });
 it('rejects a malformed input acknowledgement as uncertain and never clears or resends the draft',async()=>{

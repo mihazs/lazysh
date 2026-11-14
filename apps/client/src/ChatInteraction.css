@@ -23,3 +23,12 @@
   .chat-activity[data-activity="working"] .chat-activity-dot { animation: chat-activity-pulse 1.4s ease-in-out infinite; }
 }
 @keyframes chat-activity-pulse { 50% { opacity: 0.35; } }
+/* Answer controls: big enough to tap, stacked on a phone. */
+.chat-question-answer { display: grid; gap: 8px; }
+.chat-question-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.chat-question-choices > button, .chat-question-answer > button, .chat-question-other > button { min-height: 44px; }
+.chat-question-other { display: flex; flex-wrap: wrap; gap: 8px; }
+.chat-question-other > input { flex: 1 1 10rem; min-width: 0; min-height: 44px; }
+.chat-question-answer label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.chat-error-card { border-inline-start: 3px solid var(--theme-danger, var(--accent)); }
+.chat-error-card > p:last-child { margin-block-end: 0; color: var(--muted); }

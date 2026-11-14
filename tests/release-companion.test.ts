@@ -6,6 +6,7 @@ import { candidateCompanion, checkCompanionCopy, companionFormat, companionNotic
 import { artifactName, companionMaximumBytes, companionTargets, digestFile, releaseTargets, validateReceipt,
   type CompanionTarget } from '../.changeset/release-artifacts';
 import * as platform from '../.changeset/release-platform';
+import { commandLine, moonTask, plannedTargets } from './support/moon';
 
 const identity = { sha: 'a'.repeat(40), version: '0.23.0' };
 async function owned(run: (root: string) => Promise<void>) {
@@ -79,25 +80,21 @@ test('native matrix is complete and candidates cannot upload publication receipt
   expect(release.jobs.aggregate.needs).toContain('companion');
 });
 test('quota consumer graphs and native desktop CI select the existing Rust ownership suite', async () => {
-  async function plan(args: string[]) {
-    const child = Bun.spawn([process.execPath, 'node_modules/turbo/bin/turbo', ...args, '--dry=json'], {
-      cwd: new URL('../', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe', timeout: 10_000,
-    });
-    const [status, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    if (status !== 0) throw new Error(`Turbo routing failed: ${error}`);
-    return JSON.parse(output).tasks as {taskId: string; command: string}[];
+  // Both quota consumers reach the owner's Rust suite: the companion tag for the agent, the native aggregate for the client.
+  for (const target of ['#companion:test-rust', 'client-native:verify-native']) {
+    expect(await plannedTargets(target)).toContain('account-usage:test-rust');
   }
-  for (const consumer of ['client', 'agent']) {
-    const tasks = await plan(['run', 'test:rust', `--filter=@lazysh/${consumer}...`]);
-    expect(tasks.some(task => task.taskId === '@lazysh/account-usage#test:rust')).toBe(true);
-  }
+  expect(await plannedTargets('#companion:test-rust')).toContain('agent:test-rust');
   const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as any;
   const desktop = workflow.jobs['native-desktop'];
   expect(desktop.strategy.matrix.os).toContain('windows-latest');
-  const quota = desktop.steps.find((step: any) => step.run?.startsWith('bunx turbo run test:rust --filter=@lazysh/account-usage'));
-  const tasks = await plan(quota.run.trim().split(/\s+/).slice(2));
-  const owner = await Bun.file(new URL('../packages/account-usage/package.json', import.meta.url)).json();
-  expect(tasks.find(task => task.taskId === '@lazysh/account-usage#test:rust')?.command).toBe(owner.scripts['test:rust']);
+  const quota = desktop.steps.find((step: any) => step.run?.startsWith('bunx moon run account-usage:test-rust'));
+  const targets = quota.run.trim().split(/\s+/).slice(3);
+  expect(targets).toContain('account-usage:test-rust');
+  expect(await plannedTargets(...targets)).toContain('account-usage:test-rust');
+  // The workflow runs exactly the owner's task: moon resolves it to the Cargo test with every feature.
+  const task = await moonTask('account-usage:test-rust');
+  expect(commandLine(task)).toBe('cargo test --locked --all-features');
   const linux = workflow.jobs['native-linux'].steps.find((step: any) => step.name?.startsWith('Exercise owned companion transfer'));
   expect(linux.env.LAZYSH_TEST_AGENT_BIN).toBe('${{ github.workspace }}/target/release/lazysh-agent');
   const cases = linux.run.match(/cases=\(([^)]*)\)/)[1].trim().split(/\s+/);

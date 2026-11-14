@@ -25,6 +25,8 @@ fn describe(phase: Phase, error: &Error) -> Failure {
         Error::UnsupportedStateFilesystem => ResultClass::UnsupportedStateFilesystem,
         // These variants contain extensible static strings. Do not expose them here.
         Error::Relay(_)
+        | Error::Browser(_)
+        | Error::Listeners(_)
         | Error::Settings(_)
         | Error::Device(_)
         | Error::Herdr(_)

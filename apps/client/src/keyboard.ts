@@ -1,4 +1,5 @@
 import {useEffect, useRef} from "react";
+import {terminalEditorSelector} from "./terminalAdapter";
 
 export type AppShortcut = { action: "palette" | "switcher" | "newConnection" | "closeSession" } | { action: "session"; index: number };
 
@@ -6,8 +7,8 @@ export type AppShortcut = { action: "palette" | "switcher" | "newConnection" | "
 function appTarget(target: EventTarget | null, agentDraft = false): boolean {
   if (!(target instanceof Element)) return true;
   if (target.closest('[role="dialog"]')) return false;
-  const terminalInput = target.matches('.xterm-helper-textarea') && target.closest('.terminal-canvas');
-  return !!terminalInput || (agentDraft && target.matches('.chat-draft textarea') && !!target.closest('.agent-view')) || !target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
+  const terminalInput = target.matches(terminalEditorSelector) && target.closest('.terminal-canvas');
+  return !!terminalInput || (agentDraft && target.matches('.chat-draft textarea, .agent-composer textarea') && !!target.closest('.agent-view')) || !target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
 }
 
 export function appShortcut(event: KeyboardEvent): AppShortcut | undefined {

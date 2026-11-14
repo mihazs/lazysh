@@ -6,12 +6,13 @@ import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
+import {commandLine,moonTask} from './support/moon';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
 import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,IME_TRANSACTION_WIRE,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -671,6 +672,51 @@ test.each([
   expect(JSON.stringify(flags)).not.toContain('private-secret');
 });
 
+const junit=(...cases:string[])=>`<?xml version='1.0' encoding='UTF-8' ?>\n<testsuites tests="${cases.length}" failures="${cases.length}">\n  <testsuite name="app.lazysh.client.NativeWorkspaceTest">\n${cases.join('')}  </testsuite>\n</testsuites>\n`;
+const failedCase=(name:string,message:string,...frames:string[])=>`    <testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1.0">\n      <failure>${message}\n${frames.map(frame=>`at ${frame}\n`).join('')}</failure>\n    </testcase>\n`;
+
+test('instrumentation failures name the failed case, its message and the first app frame from a JUnit file',()=>{
+  const xml=junit('    <testcase name="passes" classname="app.lazysh.client.NativeWorkspaceTest" time="1.0"/>\n',
+    failedCase('ownedSshDpadPanThroughRealUi','java.lang.AssertionError: Original trusted contact: receipt={&quot;trusted&quot;:false} &lt;ok&gt;','org.junit.Assert.fail(Assert.java:89)',
+      'app.lazysh.client.NativeWorkspaceTest.verifyPastBottomKeyboardDismiss$stroke$received(NativeWorkspaceTest.kt:5243)','app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4005)'));
+  expect(instrumentationFailures(xml)).toEqual([{test:'ownedSshDpadPanThroughRealUi',
+    failure:'java.lang.AssertionError: Original trusted contact: receipt={"trusted":false} <ok>',
+    at:'at app.lazysh.client.NativeWorkspaceTest.verifyPastBottomKeyboardDismiss$stroke$received(NativeWorkspaceTest.kt:5243)'}]);
+  // An error raised by a class-level @BeforeClass has no test name; its frame is still named.
+  expect(instrumentationFailures(junit(failedCase('null','java.lang.IllegalStateException: Fingerprint enrollment did not complete after 314 touches',
+    'app.lazysh.client.NativeBiometricVaultTest$Companion.enroll(NativeBiometricVaultTest.kt:130)')))).toEqual([{test:'null',
+    failure:'java.lang.IllegalStateException: Fingerprint enrollment did not complete after 314 touches',
+    at:'at app.lazysh.client.NativeBiometricVaultTest$Companion.enroll(NativeBiometricVaultTest.kt:130)'}]);
+});
+
+test('instrumentation failures are bounded, printable and mask nonces, and ignore text that is not a failed case',()=>{
+  const many=instrumentationFailures(junit(...Array.from({length:6},(_,index)=>failedCase(`case${index}`,`java.lang.AssertionError: ${'x'.repeat(900)}`))));
+  expect(many.map(item=>item.test)).toEqual(['case0','case1','case2','case3']);
+  expect(many.every(item=>item.failure.length===400)).toBe(true);
+  const masked=instrumentationFailures(junit(failedCase('masked',`java.lang.AssertionError: nonce ${'0123456789abcdef'.repeat(2)} \u001b[31mred\u0007`)))[0];
+  expect(masked.failure).toBe('java.lang.AssertionError: nonce <nonce> ?[31mred?');
+  expect(instrumentationFailures('private-secret\n<testcase name="skipped"><skipped/></testcase>\n')).toEqual([]);
+  expect(instrumentationFailures('')).toEqual([]);
+});
+
+test('the failure report reads every JUnit file below its results directory and never throws',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-junit-report-'));
+  const logged=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await reportInstrumentationFailures(join(directory,'absent'));
+    await reportInstrumentationFailures(directory);
+    expect(logged).not.toHaveBeenCalled();
+    const device=join(directory,'connected/debug/flavors/universal');
+    await mkdir(device,{recursive:true});
+    await writeFile(join(device,'TEST-device-_app-universal.xml'),junit(failedCase('ownedSshUi','java.lang.AssertionError: boom','app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4005)')));
+    await writeFile(join(device,'TEST-huge.xml'),junit(failedCase('oversized','x'.repeat(300_000))));
+    await writeFile(join(device,'notes.txt'),junit(failedCase('ignored','not a result file')));
+    await reportInstrumentationFailures(directory);
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(logged).toHaveBeenCalledWith('Owned instrumentation failure '+JSON.stringify([{test:'ownedSshUi',failure:'java.lang.AssertionError: boom',at:'at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4005)'}]));
+  } finally {logged.mockRestore();await rm(directory,{recursive:true,force:true});}
+});
+
 const nonce='a'.repeat(32);
 const row=(tag:string,message:string,pid=123)=>`10-28 01:37:10.123 ${pid} 124 F ${tag}: ${message}\n`;
 const marker=(verb='start',pid=123,value=nonce)=>row('LazyshOwnedCase',`${verb}:${value}:pid:${pid}`,pid);
@@ -992,7 +1038,7 @@ test('Herdr discovery observation retains only closed state and capped counts',a
     .replaceAll("${'$'}",'$').replace('$childDisconnect',JSON.stringify("button[aria-label='Disconnect owned child']"));
   const observe=new Function('document',`return (${script.trim()});`);
   let panels:unknown[]=[],buttons=[{textContent:'List herdr sessions',disabled:false}];
-  let capability='tmux available · Herdr detected · Zellij missing';
+  let capability='tmux 3.4 (Supported) · Herdr 0.9.5 (Supported) · Zellij not installed';
   let endedText:string|undefined,childPresent=true,childSelected=false;
   const otherSelected={private:'another selected tab must not establish child ownership'};
   const child={closest:(selector:string)=>selector==='.session-tab'?{
@@ -1194,10 +1240,11 @@ test('owned attachment readback detects changed content, inode, size and timesta
 
 test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
   const root=join(import.meta.dir,'..');
-  const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
-  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_RECORDED=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 LAZYSH_ANDROID_UI_DPAD=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
-  const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
+  const ssh=await moonTask('client:test-android-ssh');
+  expect(ssh.env).toEqual({LAZYSH_ANDROID_UI_SSH:'1',LAZYSH_ANDROID_UI_RECORDED:'1',LAZYSH_ANDROID_UI_ATTACHMENTS:'1',LAZYSH_ANDROID_UI_IME:'1',LAZYSH_ANDROID_UI_DPAD:'1'});
+  expect(ssh.options.envOverride).toBe(true);
+  expect(commandLine(ssh)).toBe('bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_ATTACHMENTS!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,true)');
@@ -1453,8 +1500,8 @@ test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observe
 
 test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
-  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
-  const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`there\x7f\x7ftheowned-old-${nonce}`),Buffer.from('private-payload')];
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2uowned-private-${nonce}`);
+  const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`${IME_TRANSACTION_WIRE}owned-old-${nonce}`),Buffer.from('private-payload')];
   try {
     for(const bytes of samples) {
       await writeFile(path,bytes,{mode:0o600});let prefix=0;
@@ -1522,11 +1569,11 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const end=source.indexOf('  } finally {\n    await moshWitness?.stop();',start);
   expect(start>0 && end>start).toBe(true);
   const body=source.slice(start+'  } catch(error) {'.length,end);
-  const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
+  const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','deniedNotification','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','reportInstrumentationFailures','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
-  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
-  const logger=spyOn(console,'error').mockImplementation(()=>{});
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2uowned-private-${nonce}`);
+  const logger=spyOn(console,'error').mockImplementation(()=>{}),reported:string[]=[];
   try {
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
     for(const mode of ['available','missing','write-failure','observer-failure','non-ime']) {
@@ -1534,9 +1581,11 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
       const context={root,recorded:false,imeDirectory:mode==='missing'?join(directory,'absent'):imeDirectory,ime,fixture:{nonce,port:1},failure,mkdir,join,
         observeImeReceiverWire:async(path:string,value:string)=>{observations++;if(mode==='observer-failure')throw new Error('private-observer');return observeImeReceiverWire(path,value);},
         hostAdbServerIdentity:async()=>({}),packageExitInfo:async()=>({}),emulatorContinuity:async()=>({}),
-        timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
+        timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),reportInstrumentationFailures:async(results:string)=>{reported.push(results);},compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
         writeFile:async(...args:Parameters<typeof writeFile>)=>{if(mode==='write-failure')throw new Error('private-receipt');return writeFile(...args);}};
       expect(await run(context).catch(error=>error)).toBe(failure);expect(observations).toBe(ime?1:0);
+      // The failing case is named from this mode's own results directory, before any observation that could itself fail.
+      expect(reported.splice(0)).toEqual([join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',ime?'ssh-ime-ui':'ssh-ui')]);
       if(['write-failure','observer-failure'].includes(mode))continue;
       const receipt=JSON.parse(await readFile(join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',ime?'ssh-ime-ui':'ssh-ui','package-exit.json'),'utf8'));
       if(mode==='non-ime')expect(Object.hasOwn(receipt,'imeWire')).toBe(false);
@@ -1565,29 +1614,39 @@ test('native soft Enter observer filters foreign targets, settles after the Ente
   expect(JSON.stringify(result)).not.toContain('private');expect(handlers.size).toBe(0);expect(window.owned).toBeUndefined();
 });
 
-test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
-  const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
-  const expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`);
+test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits, a duplicated current marker and a Private keyboard text that is missing, repeated, early or stale',()=>{
+  const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`,typed=`owned-private-${nonce}`;
+  const expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u${typed}`);
   expect(()=>verifyImeReceiverBytes(expected,nonce)).not.toThrow();
   for(const bytes of [Buffer.alloc(0),Buffer.from(`thethe${current}`),Buffer.from(`therethe${current}`),
-    Buffer.from(`there\x7f\x7ftheowned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
+    Buffer.from(`${IME_TRANSACTION_WIRE}owned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
     Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
-    expected.subarray(0,expected.length-1),Buffer.concat([expected,Buffer.from('\r')])]) {
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u${typed}`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u${typed}`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u${typed}`),
+    // Before the setting existed the wire stopped after the two line breaks; without the typed text the setting did nothing.
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    Buffer.concat([expected,Buffer.from(typed)]),Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}${typed}\r\x1b[13;2u`),
+    Buffer.from(expected.toString('latin1').replace(typed,`owned-private-${'f'.repeat(32)}`),'latin1'),Buffer.from(expected.toString('latin1').replace(typed,typed.slice(0,-1)),'latin1'),
+    expected.subarray(0,expected.length-1),Buffer.concat([expected,Buffer.from('\r')]),
+    // SwiftKey-shaped edits: a skipped Backspace after the toolbar key, a lost autocorrect erase, a lost or repeated word.
+    Buffer.from(expected.toString('latin1').replace('\x1b\x7f','\x1b'),'latin1'),Buffer.from(expected.toString('latin1').replace('\x7f\x7f\x7f\x7ftan','\x7f\x7ftan'),'latin1'),
+    Buffer.from(expected.toString('latin1').replace('ten ','ten ten '),'latin1'),Buffer.from(expected.toString('latin1').replace('swipe ',''),'latin1'),
+    Buffer.from(expected.toString('latin1').replace('owned ','own'),'latin1'),
+    Buffer.from(expected.toString('latin1').replace('web ','webweb '),'latin1'),Buffer.from(expected.toString('latin1').replace('web ','we'),'latin1')]) {
     expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
   }
   expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');
   expect(()=>verifyImeReceiverBytes(undefined as never,'private-invalid')).toThrow('Owned IME nonce invalid');
-  let visible='';for(const byte of Buffer.from('there\x7f\x7fthe'))visible=byte===127?visible.slice(0,-1):visible+String.fromCharCode(byte);
-  expect(visible).toBe('thethe');
+  // Escape is a key, not text: the line a shell holds after these bytes is what the user typed, once and in order.
+  let visible='';for(const byte of Buffer.from(IME_TRANSACTION_WIRE))visible=byte===127?visible.slice(0,-1):byte===27?visible:visible+String.fromCharCode(byte);
+  expect(visible).toBe('thetheowned swipe tanweb ');
 });
 
 test('packaged SSH IME case uses ordinary native routing, a separate report, and no harness navigation',async()=>{
-  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_IME=1');
-  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi');
+  const root=join(import.meta.dir,'..');
+  expect((await moonTask('client:test-android-ssh')).env?.LAZYSH_ANDROID_UI_IME).toBe('1');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true)');
@@ -1603,6 +1662,8 @@ test('packaged SSH IME case uses ordinary native routing, a separate report, and
   for(const forbidden of ['loadUrl(', 'loadData', 'ownedIme.', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
   expect(/\.value\s*=(?!=)/.test(body)).toBe(false);
   expect(body).toContain('ime.restore()');expect(body).toContain('ime.call("old")');expect(body).toContain('ime.call("current")');
+  // Private keyboard goes through the real Preferences switch, never a bridge call, and is switched back off.
+  expect(body).toContain('ime.call("private")');expect(body).toContain('privateKeyboard(true)');expect(body).toContain('privateKeyboard(false)');expect(body).not.toContain('terminal_private_keyboard');
   const setup=kotlin.split('private inner class OwnedRawSshInput(')[1].split('private fun verifySshImeTransactions(')[0];
   expect(setup).toContain('assertSame("Packaged WebView must remain original"');
   for(const forbidden of ['loadUrl(', 'loadData', 'dispatchEvent(', 'terminal.input('])expect(setup).not.toContain(forbidden);
@@ -1621,9 +1682,9 @@ test('D-pad receipt and wire oracle reject malformed counts, stale/reordered arr
 });
 
 test('native D-pad routing preserves default isolation and the packaged/raw-SSH ownership path',async()=>{
-  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_DPAD=1');
-  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshDpadPanThroughRealUi');
+  const root=join(import.meta.dir,'..');
+  expect((await moonTask('client:test-android-ssh')).env?.LAZYSH_ANDROID_UI_DPAD).toBe('1');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedSshDpadPanThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')");
   expect(native).toContain('androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true)');
   const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
@@ -1774,8 +1835,8 @@ test('past-bottom passive actual-owner receipt waits for trusted same-contact DO
       addEventListener:(kind:string,handler:(event:unknown)=>void,options:unknown)=>{expect(options).toEqual({capture:true,passive:true});hooks.set(kind,handler);},
       removeEventListener:(kind:string,handler:unknown,capture:unknown)=>{expect(capture).toBe(true);expect(hooks.get(kind)).toBe(handler);hooks.delete(kind);}};
     const receipt=new Function('owner','document',`${source};return ownedPastBottomTouchReceipt(owner);`)(owner,document);
-    const fire=(kind:string,y:number,extra:Record<string,unknown>={})=>{
-      const touch={identifier:7,clientY:y};
+    const fire=(kind:string,y:number,extra:Record<string,unknown>={},screenY=y+500)=>{
+      const touch={identifier:7,clientY:y,screenY};
       hooks.get(kind)!({isTrusted:true,currentTarget:owner,composedPath:()=>[owner],touches:kind==='touchend'?[]:[touch],changedTouches:[touch],
         privatePrompt:'PRIVATE_CONTEXT',preventDefault(){throw Error('Must remain passive');},stopPropagation(){throw Error('Must remain passive');},...extra});
     };
@@ -1786,12 +1847,15 @@ test('past-bottom passive actual-owner receipt waits for trusted same-contact DO
   good.fire('touchmove',72);expect(good.receipt.read()).toMatchObject({moves:1,ends:0,distance48:false});
   good.fire('touchmove',44);expect(good.receipt.read()).toMatchObject({moves:2,ends:0,distance48:true,monotonicUp:true});
   good.document.activeElement=null;good.fire('touchend',44);
-  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,focused:false});
+  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,screenBack:0,clientBack:0,focused:false});
   good.receipt.dispose();expect(good.hooks.size).toBe(0);
   for(const [extra,field] of [[{isTrusted:false},'trusted'],[{currentTarget:null},'insideOwner'],[{composedPath:()=>[]},'insideOwner']] as const){
     const sample=create();sample.fire('touchstart',100,extra);expect(sample.receipt.read()[field]).toBe(false);sample.receipt.dispose();
   }
-  const wrong=create();wrong.fire('touchstart',100);wrong.fire('touchmove',110);expect(wrong.receipt.read().monotonicUp).toBe(false);
+  // A viewport shift under a still finger moves clientY alone; only the contact's screen position decides.
+  const shifted=create();shifted.fire('touchstart',100);shifted.fire('touchmove',110,{},590);shifted.fire('touchmove',120,{},560);
+  expect(shifted.receipt.read()).toMatchObject({monotonicUp:true,clientBack:10});shifted.receipt.dispose();
+  const wrong=create();wrong.fire('touchstart',100);wrong.fire('touchmove',110);expect(wrong.receipt.read()).toMatchObject({monotonicUp:false,screenBack:10});
   wrong.fire('touchmove',40,{touches:[{identifier:8,clientY:40}]});expect(wrong.receipt.read().sameContact).toBe(false);
   wrong.owner.isConnected=false;expect(wrong.receipt.read().retained).toBe(false);wrong.receipt.dispose();
 });
@@ -2393,7 +2457,7 @@ test('native toolbar paint observation distinguishes latched Shift from released
 });
 
 test('recorded companion preflight compares full protocol values independently of JSON object key order',async()=>{
-  const owner=await readFile(join(import.meta.dir,'support/androidSsh.ts'),'utf8');
+  const owner=await readFile(join(import.meta.dir,'support/recordedConversation.ts'),'utf8');
   const expression=owner.split("const page=JSON.parse(await control.finish('synthetic recorded companion preflight',5000));")[1].split('\n  }')[0];
   const {isDeepStrictEqual}=await import('node:util');
   const source={agent:'codex',sessionId:'owned-session',messages:[{role:'user',text:'Original question\nwith interior whitespace'},{role:'assistant',text:'Original complete answer'}]};
@@ -2415,9 +2479,9 @@ test('recorded companion preflight compares full protocol values independently o
 });
 
 test('recorded Android routing preserves the ordinary owner and uses its own report and default exclusion',async()=>{
-  const root=join(import.meta.dir,'..'),script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(script['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_RECORDED=1');
-  expect(script['test:android']).toContain('NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi');
+  const root=join(import.meta.dir,'..');
+  expect((await moonTask('client:test-android-ssh')).env?.LAZYSH_ANDROID_UI_RECORDED).toBe('1');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi');
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/recorded-conversation-ui');
   expect(gradle).toContain('"lazyshRecordedConversationAcceptance"');
@@ -2430,14 +2494,13 @@ test('recorded Android routing preserves the ordinary owner and uses its own rep
   expect(new Set([specification.codexThreadId,...Object.values(specification.opencodeSessions)]).size).toBe(3);
   const texts=Object.values(specification.labels).map(label=>specification.messages.map((message:{text:string})=>`${label}: ${message.text}`));
   for(let i=0;i<texts.length;i++)for(let j=0;j<i;j++)for(let message=0;message<2;message++)expect(texts[i][message]).not.toBe(texts[j][message]);
-  const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const body=kotlin.split('fun verifyRecordedConversations()')[1].split('fun verifyCompanionInstallation()')[0];
-  const expression=body.match(/fun exactMessages\(\): String = """([\s\S]+?)"""/)![1];
+  // The shared page function both native cases evaluate, against a minimal Chat panel.
+  const {recordedPageCall}=await import('./support/recordedCards');
   const {english:en}=await import('../apps/client/src/i18n/en');
   const check=(expected:string[],actual:string[],paragraphs=1,firstRole=en.chatRoleUser)=>{
-    const source=expression.replace('$messages',JSON.stringify(expected.map((text,index)=>({role:index?'assistant':'user',text}))));
+    const source=recordedPageCall('messages',expected.map((text,index)=>({role:index?'assistant':'user',text})));
     const cards=actual.map((text,index)=>({querySelectorAll:()=>Array.from({length:paragraphs},()=>({})),querySelector:(selector:string)=>({textContent:selector==='h4'?(index?en.chatRoleAssistant:firstRole):text})}));
-    return Function('document',`return (${source});`)({querySelectorAll:()=>cards});
+    return Function('document',`return (${source});`)({querySelector:()=>({querySelectorAll:()=>cards})});
   };
   for(let i=0;i<texts.length;i++){
     expect(check(texts[i],texts[i])).toBe(true);
@@ -2452,7 +2515,7 @@ test('recorded Android routing preserves the ordinary owner and uses its own rep
 
 test('recorded select geometry reports only the bounded hit category from its existing hit test',async()=>{
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const body=kotlin.split('fun selectOwnedOption(')[1].split('val tapScript')[0];
+  const body=kotlin.split('fun selectNativeOption(')[1].split('val tapScript')[0];
   const expression=body.match(/val geometry = JSONArray\(evaluate\(scenario, """([\s\S]*?)"""\)\)/)![1]
     .replace('${JSONObject.quote(selector)}',JSON.stringify('owned-select'));
   let calls=0,hit:unknown;

@@ -102,12 +102,19 @@ impl DefaultMultiplexer {
 fn deserialize_default_multiplexer<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<DefaultMultiplexer>, D::Error> {
-    let value = Option::<DefaultMultiplexer>::deserialize(deserializer)?;
-    if let Some(mux) = &value {
-        mux.validate()
-            .map_err(|_| serde::de::Error::custom("Invalid default multiplexer"))?;
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    // A kind added by a newer client imports as no default instead of rejecting the host.
+    if value["kind"].is_string()
+        && crate::multiplexer::MultiplexerKind::deserialize(&value["kind"]).is_err()
+    {
+        return Ok(None);
     }
-    Ok(value)
+    let mux = DefaultMultiplexer::deserialize(value).map_err(serde::de::Error::custom)?;
+    mux.validate()
+        .map_err(|_| serde::de::Error::custom("Invalid default multiplexer"))?;
+    Ok(Some(mux))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,6 +126,14 @@ pub struct Host {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_multiplexer: Option<DefaultMultiplexer>,
+    /// Defaults whose kind released clients reject; they ignore this field (unknown host fields are skipped).
+    #[serde(
+        default,
+        rename = "defaultMultiplexerNext",
+        deserialize_with = "deserialize_default_multiplexer",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_multiplexer_next: Option<DefaultMultiplexer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<Transport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,7 +195,10 @@ impl Host {
         )
     }
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Some(mux) = &self.default_multiplexer {
+        for mux in [&self.default_multiplexer, &self.default_multiplexer_next]
+            .into_iter()
+            .flatten()
+        {
             mux.validate()?;
         }
         if let Some(options) = &self.mosh {
@@ -285,6 +303,7 @@ impl AppState {
         })
     }
     pub(crate) async fn cancel_for_renderer_rebind(&self) {
+        crate::terminal_core::close_all();
         let sessions = {
             let mut active = self.sessions.lock().await;
             let mut retiring = self.retiring.lock().await;
@@ -727,6 +746,10 @@ pub(crate) struct SshHandle {
     handle: Arc<client::Handle<HostVerifier>>,
     open_slots: Arc<Semaphore>,
     pub(crate) herdr_unix: std::sync::atomic::AtomicU8,
+    pub(crate) host_probe: crate::companion::HostProbe,
+    /// Execs started on this connection, so a test can assert how many a user action costs.
+    #[cfg(test)]
+    pub(crate) execs: std::sync::atomic::AtomicU64,
     open_owner_gone: watch::Sender<bool>,
     forward_agent: crate::forward_agent::ForwardAgent,
     pub(crate) peer_address: Option<std::net::SocketAddr>,
@@ -761,6 +784,8 @@ pub(crate) struct Session {
     input: mpsc::Sender<Input>,
     output_credits: Semaphore,
     output_inflight: StdMutex<u32>,
+    /// Set when the native terminal core consumes this session's output instead of the WebView.
+    core: crate::terminal_core::CoreSlot,
     renderer_gone: watch::Sender<bool>,
     finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
@@ -806,6 +831,7 @@ impl Session {
             tmux_server: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
+            core: Default::default(),
             renderer_gone: watch::channel(false).0,
             finished: watch::channel(false).0,
             access: creation.state(),
@@ -816,6 +842,25 @@ impl Session {
     }
 }
 
+/// Register the terminal and, if the renderer offered a core for `events`, route its output there
+/// before the first byte is read; the core's credit returns into this session's output window.
+async fn register_with_core(
+    state: &AppState,
+    session: &Arc<Session>,
+    events: &Channel<SshEvent>,
+) -> Result<String> {
+    let core = crate::terminal_core::prepare(events)
+        .map_err(|message| SshError::new("native_terminal", message))?;
+    let id = register_terminal(state, session).await?;
+    if let Some(core) = core {
+        core.attach(
+            &id,
+            &session.core,
+            crate::terminal_core::credit_to(session, acknowledge),
+        );
+    }
+    Ok(id)
+}
 async fn register_terminal(state: &AppState, session: &Arc<Session>) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     {
@@ -884,6 +929,7 @@ fn watch_adoption(state: &AppState, id: &str, session: &Arc<Session>) {
         {
             session.cancel.send_replace(true);
             session.output_credits.close();
+            session.core.discard();
             retire_session(&sessions, &retiring, &id, &session).await;
         }
     });
@@ -954,6 +1000,7 @@ impl Drop for PendingTerminal {
         if self.armed {
             self.session.cancel.send_replace(true);
             self.session.output_credits.close();
+            self.session.core.discard();
         }
     }
 }
@@ -1098,6 +1145,9 @@ where
         handle: Arc::new(handle),
         open_slots: Arc::new(Semaphore::new(4)),
         herdr_unix: crate::herdr_path::new_cache(),
+        host_probe: Default::default(),
+        #[cfg(test)]
+        execs: Default::default(),
         open_owner_gone: watch::channel(false).0,
         forward_agent,
         peer_address: None,
@@ -1777,7 +1827,7 @@ pub(crate) async fn deliver_output(
     credits: &Semaphore,
     inflight: &StdMutex<u32>,
     cancellation: &mut watch::Receiver<bool>,
-    events: &Channel<SshEvent>,
+    events: &(impl crate::terminal_core::OutputSink + ?Sized),
     data: &[u8],
     owner: Option<(
         &AccessLease,
@@ -1828,12 +1878,7 @@ pub(crate) async fn deliver_output(
                 return Err("Renderer replaced".into());
             }
             *inflight.lock().map_err(|_| "Output accounting failed")? += data.len() as u32;
-            events
-                .send(SshEvent::Data {
-                    data: data.to_vec(),
-                })
-                .map_err(|_| "Terminal output closed")?;
-            Ok(())
+            events.data(data)
         };
         let sent = match owner {
             Some((creation, adopted, _)) => creation.with_transport_output(adopted, send),
@@ -1863,7 +1908,7 @@ pub(crate) async fn close_output(
         &std::sync::atomic::AtomicBool,
         &watch::Sender<bool>,
     )>,
-    events: &Channel<SshEvent>,
+    events: &(impl crate::terminal_core::OutputSink + ?Sized),
     message: String,
     lost: bool,
 ) {
@@ -1881,10 +1926,7 @@ pub(crate) async fn close_output(
             if owner.is_some_and(|(_, _, gone)| *gone.borrow()) {
                 return Ok(());
             }
-            events.send(SshEvent::Closed {
-                message: message.clone(),
-                lost,
-            })
+            events.closed(message.clone(), lost)
         };
         let sent = match owner {
             Some((creation, adopted, gone)) => {
@@ -1898,10 +1940,7 @@ pub(crate) async fn close_output(
                         if *gone.borrow() {
                             return Ok(());
                         }
-                        events.send(SshEvent::Closed {
-                            message: "Session cancelled before adoption".into(),
-                            lost: false,
-                        })
+                        events.closed("Session cancelled before adoption".into(), false)
                     })
                 } else {
                     creation.with_transport_output(adopted, send)
@@ -1923,7 +1962,7 @@ async fn send_output(session: &Session, events: &Channel<SshEvent>, data: &[u8])
             &session.output_credits,
             &session.output_inflight,
             &mut cancellation,
-            events,
+            &session.core.route(events),
             chunk,
             Some((&session.creation, &session.adopted, &session.renderer_gone)),
         )
@@ -1950,7 +1989,7 @@ async fn spawn_terminal(
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
     let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
-    let id = register_terminal(state, &session).await?;
+    let id = register_with_core(state, &session, &events).await?;
     let sessions = state.sessions.clone();
     let retiring = state.retiring.clone();
     let task_id = id.clone();
@@ -2156,7 +2195,7 @@ where
         session: session.clone(),
         armed: true,
     };
-    let id = register_terminal(state, &session).await?;
+    let id = register_with_core(state, &session, &events).await?;
     let (output, mut output_rx) = mpsc::channel(1);
     let (ready, response) = tokio::sync::oneshot::channel();
     let initial_cancel = parent.cancel.subscribe();
@@ -2297,6 +2336,12 @@ where
 #[tauri::command]
 pub async fn ack_output(state: State<'_, AppState>, session_id: String, bytes: u32) -> Result<()> {
     let session = state.session(&session_id).await?;
+    if session.core.is_attached() {
+        return Err(SshError::new(
+            "invalid_ack",
+            "The native terminal core acknowledges this output",
+        ));
+    }
     acknowledge(&session, bytes)
 }
 fn acknowledge(session: &Session, bytes: u32) -> Result<()> {
@@ -2373,6 +2418,10 @@ pub async fn resize(
                 .send(Input::Resize(cols, rows, lease.clone()))
                 .await
                 .map_err(|_| SshError::new("disconnected", "Session is disconnected"))?;
+            session
+                .core
+                .resize(cols, rows)
+                .map_err(|message| SshError::new("native_terminal", message))?;
             Ok(())
         })
         .await
@@ -2426,7 +2475,7 @@ pub(crate) async fn probe_connections_inner(
     .await;
 }
 
-fn check_path(path: &str) -> Result<()> {
+pub(crate) fn check_path(path: &str) -> Result<()> {
     if path.is_empty() || path.len() > 4096 || path.contains('\0') {
         return Err(SshError::new("invalid_path", "Enter a valid remote path"));
     }
@@ -2495,81 +2544,154 @@ pub(crate) async fn sftp(session: &Session, lease: &AccessLease) -> Result<SftpS
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
-    name: String,
-    is_dir: bool,
-    size: u64,
+    pub(crate) name: String,
+    pub(crate) is_dir: bool,
+    pub(crate) size: u64,
+}
+/// The directory preview bound shared by every host.
+pub(crate) fn admit_entry(entries: usize, name_bytes: usize) -> Result<()> {
+    if entries >= 10000 || name_bytes > 2 * 1024 * 1024 {
+        return Err(SshError::new(
+            "directory_too_large",
+            "Directory preview is limited to 10000 entries or 2 MiB of names",
+        ));
+    }
+    Ok(())
+}
+pub(crate) fn sort_entries(entries: &mut [FileEntry]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+/// Text preview of at most FILE_LIMIT UTF-8 bytes; `bytes` holds up to one byte more.
+pub(crate) fn preview_text(bytes: Vec<u8>) -> Result<String> {
+    if bytes.len() as u64 > FILE_LIMIT {
+        return Err(SshError::new(
+            "file_too_large",
+            "Text preview is limited to 1 MiB",
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| SshError::new("binary_file", "This file is not UTF-8 text"))
 }
 #[tauri::command]
 pub async fn list_directory(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
 ) -> AccessResult<Vec<FileEntry>> {
     lease
         .run(async {
             check_path(&path)?;
-            let session = state.session(&session_id).await?;
-            let raw = timeout(OP_TIMEOUT, async {
-                let raw = russh_sftp::client::RawSftpSession::new(
-                    crate::sftp_stream::SftpStream::new(sftp_channel(&session, &lease).await?),
-                );
-                raw.init().await?;
-                Ok::<_, SshError>(raw)
-            })
-            .await
-            .map_err(|_| SshError::new("timeout", "Opening SFTP timed out"))??;
-            let handle = raw.opendir(path).await?.handle;
-            let result = match timeout(OP_TIMEOUT, async {
-                let mut entries = Vec::new();
-                let mut name_bytes = 0usize;
-                loop {
-                    match raw.readdir(handle.clone()).await {
-                        Ok(batch) => {
-                            for entry in batch.files {
-                                if entry.filename == "." || entry.filename == ".." {
-                                    continue;
-                                }
-                                name_bytes += entry.filename.len();
-                                if entries.len() >= 10000 || name_bytes > 2 * 1024 * 1024 {
-                                    return Err(SshError::new(
-                                "directory_too_large",
-                                "Directory preview is limited to 10000 entries or 2 MiB of names",
-                            ));
-                                }
-                                entries.push(FileEntry {
-                                    name: entry.filename,
-                                    is_dir: entry.attrs.is_dir(),
-                                    size: entry.attrs.size.unwrap_or(0),
-                                });
-                            }
-                        }
-                        Err(russh_sftp::client::error::Error::Status(status))
-                            if status.status_code == russh_sftp::protocol::StatusCode::Eof =>
-                        {
-                            break
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                entries.sort_by(|a, b| {
-                    b.is_dir
-                        .cmp(&a.is_dir)
-                        .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                });
-                Ok(entries)
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(SshError::new("timeout", "Directory listing timed out")),
-            };
-            let _ = timeout(Duration::from_secs(2), raw.close(handle)).await;
-            let _ = raw.close_session();
-            result
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .list_dir(&lease, path)
+                .await
         })
         .await
+}
+pub(crate) async fn sftp_list_dir(
+    session: &Session,
+    lease: &AccessLease,
+    path: String,
+) -> Result<Vec<FileEntry>> {
+    let raw = timeout(OP_TIMEOUT, async {
+        let raw = russh_sftp::client::RawSftpSession::new(crate::sftp_stream::SftpStream::new(
+            sftp_channel(session, lease).await?,
+        ));
+        raw.init().await?;
+        Ok::<_, SshError>(raw)
+    })
+    .await
+    .map_err(|_| SshError::new("timeout", "Opening SFTP timed out"))??;
+    let handle = raw.opendir(path).await?.handle;
+    let result = match timeout(OP_TIMEOUT, async {
+        let mut entries = Vec::new();
+        let mut name_bytes = 0usize;
+        loop {
+            match raw.readdir(handle.clone()).await {
+                Ok(batch) => {
+                    for entry in batch.files {
+                        if entry.filename == "." || entry.filename == ".." {
+                            continue;
+                        }
+                        name_bytes += entry.filename.len();
+                        admit_entry(entries.len(), name_bytes)?;
+                        entries.push(FileEntry {
+                            name: entry.filename,
+                            is_dir: entry.attrs.is_dir(),
+                            size: entry.attrs.size.unwrap_or(0),
+                        });
+                    }
+                }
+                Err(russh_sftp::client::error::Error::Status(status))
+                    if status.status_code == russh_sftp::protocol::StatusCode::Eof =>
+                {
+                    break
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        sort_entries(&mut entries);
+        Ok(entries)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(SshError::new("timeout", "Directory listing timed out")),
+    };
+    let _ = timeout(Duration::from_secs(2), raw.close(handle)).await;
+    let _ = raw.close_session();
+    result
+}
+
+/// A home directory the renderer may expand `~` to: absolute, bounded, one line.
+pub(crate) fn absolute_home(home: String) -> Result<String> {
+    let drive = home
+        .as_bytes()
+        .get(..2)
+        .is_some_and(|prefix| prefix[0].is_ascii_alphabetic() && prefix[1] == b':');
+    if (home.starts_with('/') || drive) && home.len() <= 4096 && !home.contains(['\0', '\n']) {
+        return Ok(home);
+    }
+    Err(SshError::new(
+        "home_unavailable",
+        "The host did not report an absolute home directory",
+    ))
+}
+/// The one place `~` is resolved for host tools: the renderer expands `~` and `$HOME`
+/// against this, so Files and terminal file paths agree on the same home.
+#[tauri::command]
+pub async fn host_home(
+    lease: AccessLease,
+
+    state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
+    session_id: String,
+) -> AccessResult<String> {
+    lease
+        .run(async {
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .home(&lease)
+                .await
+        })
+        .await
+}
+pub(crate) async fn sftp_home(session: &Session, lease: &AccessLease) -> Result<String> {
+    timeout(OP_TIMEOUT, async {
+        let sftp = sftp(session, lease).await?;
+        let home = sftp.canonicalize(".").await;
+        let _ = timeout(Duration::from_secs(2), sftp.close()).await;
+        absolute_home(home?)
+    })
+    .await
+    .map_err(|_| SshError::new("timeout", "Resolving the home directory timed out"))?
 }
 
 #[tauri::command]
@@ -2577,31 +2699,34 @@ pub async fn read_file(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
 ) -> AccessResult<String> {
     lease
         .run(async {
             check_path(&path)?;
-            let session = state.session(&session_id).await?;
-            timeout(OP_TIMEOUT, async {
-                let sftp = sftp(&session, &lease).await?;
-                let file = sftp.open(path).await?;
-                let mut bytes = Vec::new();
-                file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
-                if bytes.len() as u64 > FILE_LIMIT {
-                    return Err(SshError::new(
-                        "file_too_large",
-                        "Text preview is limited to 1 MiB",
-                    ));
-                }
-                String::from_utf8(bytes)
-                    .map_err(|_| SshError::new("binary_file", "This file is not UTF-8 text"))
-            })
-            .await
-            .map_err(|_| SshError::new("timeout", "Reading file timed out"))?
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .read_text(&lease, path)
+                .await
         })
         .await
+}
+pub(crate) async fn sftp_read_text(
+    session: &Session,
+    lease: &AccessLease,
+    path: String,
+) -> Result<String> {
+    timeout(OP_TIMEOUT, async {
+        let sftp = sftp(session, lease).await?;
+        let file = sftp.open(path).await?;
+        let mut bytes = Vec::new();
+        file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
+        preview_text(bytes)
+    })
+    .await
+    .map_err(|_| SshError::new("timeout", "Reading file timed out"))?
 }
 #[cfg(test)]
 async fn upload_file(
@@ -2793,8 +2918,25 @@ pub(crate) async fn exec_bounded(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
+    exec_status(
+        session,
+        command,
+        lease,
+        duration,
+        limit,
+        retained,
+        &mut |_| {},
+    )
+    .await?
+    .text()
+}
+/// Runs host work until it settles, app access changes or its session closes.
+pub(crate) async fn until_closed<T>(
+    lease: &AccessLease,
+    mut cancellation: watch::Receiver<bool>,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
     lease.check()?;
-    let mut cancellation = session.cancel.subscribe();
     if *cancellation.borrow() {
         return Err(SshError::new("disconnected", "Session closed"));
     }
@@ -2802,31 +2944,88 @@ pub(crate) async fn exec_bounded(
         biased;
         _ = lease.cancelled() => Err(SshError::new("app_locked", "App access changed")),
         _ = cancellation.changed() => Err(SshError::new("disconnected", "Session closed")),
-        result = exec_inner(session, command, lease, duration, limit, retained) => result,
+        result = work => result,
     }
 }
-async fn exec_inner(
+/// Shared stdout plus stderr budget of a one-shot host command.
+pub(crate) fn check_output_budget(used: usize, limit: usize) -> Result<()> {
+    if used <= limit {
+        return Ok(());
+    }
+    Err(SshError::new(
+        "output_too_large",
+        if limit == FILE_LIMIT as usize {
+            "Remote command output exceeds 1 MiB"
+        } else {
+            "Remote command output exceeds its bound"
+        },
+    ))
+}
+/// A one-shot host command succeeds only with exit status 0.
+pub(crate) fn check_exit(status: Option<u32>, error: &[u8]) -> Result<()> {
+    if status == Some(0) {
+        return Ok(());
+    }
+    let message = String::from_utf8_lossy(error);
+    Err(SshError::new(
+        "remote_command_failed",
+        if message.trim().is_empty() {
+            format!("Remote command exited with status {status:?}")
+        } else {
+            message.trim().to_owned()
+        },
+    ))
+}
+pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes)
+        .map_err(|_| SshError::new("invalid_output", "Remote command did not return UTF-8"))
+}
+/// What a host command printed and how it ended; a non-zero exit is data here, not an error.
+pub(crate) struct ExecOutput {
+    pub(crate) status: Option<u32>,
+    pub(crate) stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+impl ExecOutput {
+    /// The output of a command that had to succeed.
+    fn text(self) -> Result<String> {
+        check_exit(self.status, &self.stderr)?;
+        command_text(self.stdout)
+    }
+}
+/// Runs a host command whose exit status the caller interprets, handing every stdout chunk to
+/// `on_stdout` as it arrives. `exec_bounded` stays the only way to run a command that must succeed.
+pub(crate) async fn exec_status(
     session: &Session,
     command: String,
     lease: &AccessLease,
     duration: Duration,
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
-) -> Result<String> {
-    let handle = match &session.file_control {
-        Some(control) => control.command_handle()?,
-        None => session.handle.clone(),
-    };
-    let closed = || {
-        SshError::new(
-            "ssh_host_tools_closed",
-            "The host-tools SSH connection is closed. Reconnect host tools to continue.",
+    on_stdout: &mut (dyn FnMut(&[u8]) + Send),
+) -> Result<ExecOutput> {
+    until_closed(lease, session.cancel.subscribe(), async {
+        let handle = match &session.file_control {
+            Some(control) => control.command_handle()?,
+            None => session.handle.clone(),
+        };
+        let closed = || {
+            SshError::new(
+                "ssh_host_tools_closed",
+                "The host-tools SSH connection is closed. Reconnect host tools to continue.",
+            )
+        };
+        if handle.is_closed() {
+            return Err(closed());
+        }
+        collect(
+            &handle,
+            command,
+            lease,
+            (duration, limit),
+            retained,
+            on_stdout,
         )
-    };
-    if handle.is_closed() {
-        return Err(closed());
-    }
-    exec_inner_with_handle(&handle, command, lease, duration, limit, retained)
         .await
         .map_err(|error| {
             if error.kind() == "ssh_error" && handle.is_closed() {
@@ -2835,6 +3034,8 @@ async fn exec_inner(
                 error
             }
         })
+    })
+    .await
 }
 async fn exec_inner_with_handle(
     handle: &SshHandle,
@@ -2844,6 +3045,29 @@ async fn exec_inner_with_handle(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
+    collect(
+        handle,
+        command,
+        lease,
+        (duration, limit),
+        retained,
+        &mut |_| {},
+    )
+    .await?
+    .text()
+}
+async fn collect(
+    handle: &SshHandle,
+    command: String,
+    lease: &AccessLease,
+    (duration, limit): (Duration, usize),
+    retained: Option<Arc<dyn Send + Sync>>,
+    on_stdout: &mut (dyn FnMut(&[u8]) + Send),
+) -> Result<ExecOutput> {
+    #[cfg(test)]
+    handle
+        .execs
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let deadline = tokio::time::Instant::now() + duration;
     let mut channel = match retained {
         Some(retained) => open_owned_channel_retained(handle, lease, deadline, retained).await?,
@@ -2852,40 +3076,24 @@ async fn exec_inner_with_handle(
     let result = timeout(duration, async {
         lease.check()?;
         channel.exec(true, command).await?;
-        let mut bytes = Vec::new();
-        let mut error = Vec::new();
-        let mut status = None;
+        let mut output = ExecOutput {
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
         while let Some(msg) = channel.wait().await {
             match msg {
-                ChannelMsg::Data { data } => bytes.extend_from_slice(&data),
-                ChannelMsg::ExtendedData { data, .. } => error.extend_from_slice(&data),
-                ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                ChannelMsg::Data { data } => {
+                    on_stdout(&data);
+                    output.stdout.extend_from_slice(&data)
+                }
+                ChannelMsg::ExtendedData { data, .. } => output.stderr.extend_from_slice(&data),
+                ChannelMsg::ExitStatus { exit_status } => output.status = Some(exit_status),
                 _ => {}
             }
-            if bytes.len() + error.len() > limit {
-                return Err(SshError::new(
-                    "output_too_large",
-                    if limit == FILE_LIMIT as usize {
-                        "Remote command output exceeds 1 MiB"
-                    } else {
-                        "Remote command output exceeds its bound"
-                    },
-                ));
-            }
+            check_output_budget(output.stdout.len() + output.stderr.len(), limit)?;
         }
-        if status != Some(0) {
-            let message = String::from_utf8_lossy(&error);
-            return Err(SshError::new(
-                "remote_command_failed",
-                if message.trim().is_empty() {
-                    format!("Remote command exited with status {status:?}")
-                } else {
-                    message.trim().to_owned()
-                },
-            ));
-        }
-        String::from_utf8(bytes)
-            .map_err(|_| SshError::new("invalid_output", "Remote command did not return UTF-8"))
+        Ok(output)
     })
     .await
     .map_err(|_| SshError::new("timeout", "Remote command timed out"));
@@ -2897,6 +3105,7 @@ pub async fn get_diff(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
     staged: bool,
@@ -2904,17 +3113,23 @@ pub async fn get_diff(
     lease
         .run(async {
             check_path(&path)?;
-            let session = state.session(&session_id).await?;
-            exec(
-                &session,
-                &lease,
-                format!(
-                    "git --no-pager -C {} diff --no-ext-diff --no-textconv {} --",
-                    quote(&path),
-                    if staged { "--cached" } else { "" }
-                ),
-            )
-            .await
+            let mut argv = vec![
+                "git",
+                "--no-pager",
+                "-C",
+                &path,
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+            ];
+            if staged {
+                argv.push("--cached");
+            }
+            argv.push("--");
+            crate::host::Host::resolve_dir(&state, &local, &session_id, &lease, &path)
+                .await?
+                .run(&lease, &crate::host::Cmd::new(&[], &argv))
+                .await
         })
         .await
 }
@@ -3026,6 +3241,47 @@ fn transcript_view_command(
     Ok(command)
 }
 
+/// Which part of a conversation to read: the newest messages unless one of these is set.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptWindow {
+    before: Option<String>,
+    after: Option<String>,
+    #[serde(default)]
+    from_start: bool,
+}
+
+impl TranscriptWindow {
+    /// Command-line flags for the companion; a message id is opaque text, so it is quoted and bounded.
+    pub(crate) fn flags(&self) -> Result<String> {
+        let anchors = [("--before", &self.before), ("--after", &self.after)];
+        let set =
+            anchors.iter().filter(|(_, id)| id.is_some()).count() + usize::from(self.from_start);
+        if set > 1 {
+            return Err(SshError::new(
+                "invalid_input",
+                "Choose one transcript window",
+            ));
+        }
+        let mut flags = String::new();
+        for (flag, id) in anchors {
+            if let Some(id) = id {
+                if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Invalid transcript message identifier",
+                    ));
+                }
+                flags.push_str(&format!(" {flag}={}", quote(id)));
+            }
+        }
+        if self.from_start {
+            flags.push_str(" --from-start");
+        }
+        Ok(flags)
+    }
+}
+
 #[derive(Default)]
 struct TranscriptFlags {
     checkpointed: bool,
@@ -3056,12 +3312,12 @@ fn transcript_request_command(
         return transcript_view_command(agent, path, offset, checkpoint, view);
     }
     let grok_records = agent == "grok-acp" && matches!(view, None | Some("records"));
-    let codex_records = agent == "codex" && matches!(view, None | Some("records"));
+    let codex_images = agent == "codex" && matches!(view, None | Some("records" | "conversation"));
     let claude_images =
         agent == "claude" && matches!(view, None | Some("records" | "conversation"));
     if transcript_session_id.is_some()
         || (flags.checkpointed && !grok_records)
-        || (flags.inline_images && !grok_records && !claude_images && !codex_records)
+        || (flags.inline_images && !grok_records && !claude_images && !codex_images)
     {
         return Err(SshError::new(
             "invalid_input",
@@ -3156,10 +3412,11 @@ pub async fn agent_transcript(
     checkpointed: Option<bool>,
     inline_images: Option<bool>,
     transcript_session_id: Option<String>,
+    window: Option<TranscriptWindow>,
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let command = transcript_request_command(
+            let mut command = transcript_request_command(
                 &agent,
                 &path,
                 offset,
@@ -3171,6 +3428,14 @@ pub async fn agent_transcript(
                     inline_images: inline_images.unwrap_or(false),
                 },
             )?;
+            let flags = window.unwrap_or_default().flags()?;
+            if !flags.is_empty() && view.as_deref() != Some("conversation") {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "Windows read the conversation view",
+                ));
+            }
+            command.push_str(&flags);
             transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
         .await
@@ -3203,10 +3468,7 @@ pub async fn agent_reported_history(
     lease
         .run(async {
             let command = reported_history_command(&agent_session_id)?;
-            let session = state.session(&session_id).await?;
-            Ok(serde_json::from_str(
-                &crate::companion::exec(&session, command, &lease).await?,
-            )?)
+            transcript_result(&lease, &state, &session_id, command, None).await
         })
         .await
 }
@@ -3260,6 +3522,38 @@ pub async fn agent_transcripts(
                 )
                 .await?,
             )?)
+        })
+        .await
+}
+fn history_command(agent: &str, folder: &str) -> Result<String> {
+    if !matches!(agent, "claude" | "codex") {
+        return Err(SshError::new(
+            "invalid_input",
+            "Unsupported history adapter",
+        ));
+    }
+    if !folder.starts_with('/') || folder.len() > 4096 || folder.chars().any(char::is_control) {
+        return Err(SshError::new("invalid_input", "Invalid folder"));
+    }
+    Ok(format!(
+        "lazysh-agent history --agent {agent} --limit 30 --folder {}",
+        quote(folder)
+    ))
+}
+
+/// The earlier sessions of one folder, from the host companion (`lazysh-agent history`).
+#[tauri::command]
+pub async fn agent_history(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    agent: String,
+    folder: String,
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let command = history_command(&agent, &folder)?;
+            transcript_result(&lease, &state, &session_id, command, None).await
         })
         .await
 }
@@ -3488,17 +3782,26 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "connection_parity_fixture.rs"]
     mod connection_parity_fixture;
+    #[cfg(unix)]
+    #[path = "file_download_fixture.rs"]
+    mod file_download_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
     #[cfg(unix)]
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
     #[cfg(unix)]
+    #[path = "repository_review_fixture.rs"]
+    mod repository_review_fixture;
+    #[cfg(unix)]
     #[path = "temporary_attachment_fixture.rs"]
     mod temporary_attachment_fixture;
     #[cfg(unix)]
     #[path = "transcript_image_fixture.rs"]
     mod transcript_image_fixture;
+    #[cfg(unix)]
+    #[path = "transcript_watch_fixture.rs"]
+    mod transcript_watch_fixture;
     use super::test_support::*;
     fn fixture_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
@@ -3592,6 +3895,7 @@ mod tests {
     fn metadata_host(id: &str, name: &str) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3633,6 +3937,7 @@ mod tests {
         });
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3700,6 +4005,27 @@ mod tests {
     }
 
     #[test]
+    fn history_command_lists_one_quoted_folder_for_claude_and_codex_only() {
+        assert_eq!(
+            history_command("claude", "/work/it's here").unwrap(),
+            "lazysh-agent history --agent claude --limit 30 --folder '/work/it'\\''s here'"
+        );
+        assert!(history_command("codex", "/work").is_ok());
+        for (agent, folder) in [
+            ("pi", "/work"),
+            ("claude", "relative"),
+            ("claude", ""),
+            ("claude", "/work\n; rm -rf /"),
+            ("claude", &format!("/{}", "a".repeat(4096))),
+        ] {
+            assert!(
+                history_command(agent, folder).is_err(),
+                "{agent} {folder:?}"
+            );
+        }
+    }
+
+    #[test]
     fn default_multiplexer_is_optional_validated_and_preserved_without_changing_transport_or_credentials(
     ) {
         let base = serde_json::to_value(metadata_host("mux-default", "Default")).unwrap();
@@ -3731,8 +4057,14 @@ mod tests {
                 kind
             );
         }
+        let mut future = base.clone();
+        future["defaultMultiplexer"] = serde_json::json!({"kind":"future-mux","name":"work"});
+        assert!(serde_json::from_value::<Host>(future)
+            .unwrap()
+            .default_multiplexer
+            .is_none());
         for invalid in [
-            serde_json::json!({"kind":"unknown","name":"work"}),
+            serde_json::json!({"kind":7,"name":"work"}),
             serde_json::json!({"kind":"tmux","name":""}),
             serde_json::json!({"kind":"tmux","name":"   "}),
             serde_json::json!({"kind":"tmux","name":"bad.name"}),
@@ -3857,6 +4189,7 @@ mod tests {
         let (_dir, state) = fixture_state();
         let jump = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3874,6 +4207,7 @@ mod tests {
         };
         let mut target = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -4029,7 +4363,9 @@ mod tests {
             ("claude", None, Some("recording"), 0, None, false, false),
             ("codex", None, None, 0, None, false, true),
             ("codex", Some("records"), None, 10, None, false, true),
-            ("codex", Some("conversation"), None, 0, None, false, false),
+            ("codex", Some("conversation"), None, 0, None, true, false),
+            ("codex", Some("conversation"), None, 0, None, false, true),
+            ("codex", Some("conversation"), None, 1, None, false, false),
             ("codex", None, None, 0, Some("invalid"), false, false),
             ("codex", None, None, 0, None, true, false),
             ("codex", None, Some("recording"), 0, None, false, false),
@@ -4093,6 +4429,35 @@ mod tests {
     }
 
     #[test]
+    fn transcript_windows_quote_the_message_id_and_admit_one_anchor() {
+        let window =
+            |json: serde_json::Value| serde_json::from_value::<TranscriptWindow>(json).unwrap();
+        assert_eq!(window(serde_json::json!({})).flags().unwrap(), "");
+        assert_eq!(
+            window(serde_json::json!({"fromStart": true}))
+                .flags()
+                .unwrap(),
+            " --from-start"
+        );
+        assert_eq!(
+            window(serde_json::json!({"before": "a'b;$(x)"}))
+                .flags()
+                .unwrap(),
+            " --before='a'\\''b;$(x)'"
+        );
+        for bad in [
+            serde_json::json!({"before": ""}),
+            serde_json::json!({"after": "a\nb"}),
+            serde_json::json!({"before": "a", "fromStart": true}),
+        ] {
+            assert!(window(bad).flags().is_err());
+        }
+        assert!(
+            serde_json::from_value::<TranscriptWindow>(serde_json::json!({"offset": 1})).is_err()
+        );
+    }
+
+    #[test]
     fn transcript_views_only_admit_proven_conversation_readers_from_zero() {
         for (agent, offset, view, accepted) in [
             ("grok-acp", 0, Some("conversation"), true),
@@ -4151,12 +4516,16 @@ mod tests {
         }
     }
 
+    /// Stdout chunks and the exit status of a scripted exec.
+    type ScriptedExec = (Vec<Vec<u8>>, u32);
     #[derive(Clone)]
     struct TestServer {
         /// When set, public-key authentication accepts only this exact key.
         authorized_key: Arc<StdMutex<Option<russh::keys::PublicKey>>>,
         clipboard_mode: Arc<AtomicUsize>,
         legacy_exec: Arc<std::sync::atomic::AtomicBool>,
+        /// Stdout chunks and exit status the next exec requests answer with.
+        scripted_exec: Arc<StdMutex<Option<ScriptedExec>>>,
         clipboard_eof: Arc<tokio::sync::Notify>,
         auth_attempts: Arc<AtomicUsize>,
         sizes: Arc<StdMutex<Vec<(u32, u32)>>>,
@@ -4344,6 +4713,15 @@ mod tests {
                 .unwrap()
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
+            let scripted = self.scripted_exec.lock().unwrap().clone();
+            if let Some((chunks, status)) = scripted {
+                for chunk in chunks {
+                    session.data(channel, chunk)?;
+                }
+                session.exit_status_request(channel, status)?;
+                session.close(channel)?;
+                return Ok(());
+            }
             if self.legacy_exec.load(Ordering::SeqCst) {
                 let probe = text.starts_with("sh -c ");
                 session.data(
@@ -4634,6 +5012,7 @@ mod tests {
         });
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -4652,6 +5031,7 @@ mod tests {
         let test_server = TestServer {
             authorized_key: Arc::new(StdMutex::new(None)),
             legacy_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scripted_exec: Arc::new(StdMutex::new(None)),
             clipboard_mode: Arc::new(AtomicUsize::new(0)),
             clipboard_eof: Arc::new(tokio::sync::Notify::new()),
             auth_attempts: Arc::new(AtomicUsize::new(0)),
@@ -4761,14 +5141,22 @@ mod tests {
         task.abort();
     }
 
-    #[tokio::test]
-    async fn output_waits_for_consumption_and_rejects_forged_credit() {
+    /// An adopted session on a throwaway server, for tests that drive its output window directly.
+    async fn output_session() -> (Arc<Session>, tempfile::TempDir, tokio::task::JoinHandle<()>) {
         let (host, _, server_task) = server(false).await;
-        let (_dir, state) = fixture_state();
+        let (dir, state) = fixture_state();
         let handle = password_handle(&state, &host).await;
         let (input, _) = mpsc::channel(32);
         let (cancel, _) = watch::channel(false);
-        let session = Arc::new(adopted_fixture_session(handle, input, cancel));
+        (
+            Arc::new(adopted_fixture_session(handle, input, cancel)),
+            dir,
+            server_task,
+        )
+    }
+    #[tokio::test]
+    async fn output_waits_for_consumption_and_rejects_forged_credit() {
+        let (session, _dir, server_task) = output_session().await;
         let received = Arc::new(AtomicUsize::new(0));
         let observed = received.clone();
         let events = Channel::new(move |body| {
@@ -4807,6 +5195,293 @@ mod tests {
         server_task.abort();
     }
 
+    #[tokio::test]
+    async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
+        use crate::terminal_core::{
+            credit_to,
+            fake::{workload, ChecksumCore},
+        };
+        // SSH, ET and Mosh all deliver through `send_output`, so this covers their shared path.
+        let (session, _dir, server_task) = output_session().await;
+        let (core, prepared) = ChecksumCore::prepared();
+        prepared.attach(
+            "fixture-ssh-core",
+            &session.core,
+            credit_to(&session, acknowledge),
+        );
+        let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = counting_events(&ipc);
+        let payload = workload(3 * 1024 * 1024);
+        send_output(&session, &events, &payload).await.unwrap();
+        core.assert_received(&payload, &ipc).await;
+        timeout(Duration::from_secs(3), async {
+            while *session.output_inflight.lock().unwrap() != 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            session.output_credits.available_permits(),
+            OUTPUT_WINDOW as usize
+        );
+        assert!(session.core.is_attached());
+        crate::terminal_core::close("fixture-ssh-core");
+        assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(crate::terminal_core::live("fixture-ssh-core").is_err());
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn a_native_terminal_that_fails_to_start_frees_the_core_the_renderer_offered() {
+        use crate::terminal_core::{self, fake::ChecksumCore};
+        let (parent, _dir, server_task) = output_session().await;
+        let (_state_dir, state) = fixture_state();
+        let (core, prepared) = ChecksumCore::prepared();
+        let events = Channel::new(|_| Ok(()));
+        terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+        let result = spawn_native_terminal(
+            &state,
+            access_lease(),
+            parent,
+            events,
+            NativeTerminalKind::Fixture,
+            None,
+            check_size,
+            |_access, input, _cancel, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _ = (input, output);
+                    let _ = ready.send(Err(SshError::new("fixture", "the worker could not start")));
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(state.sessions.lock().await.is_empty());
+        assert!(
+            core.closed.load(std::sync::atomic::Ordering::SeqCst),
+            "the renderer never learns this session's id, so only the failure path can free the core"
+        );
+        server_task.abort();
+    }
+    /// A Channel that counts what crosses it, with a core offered for it (taken by the next terminal
+    /// started with that Channel).
+    fn counted_events_with_core() -> (
+        Arc<crate::terminal_core::fake::ChecksumCore>,
+        Channel<SshEvent>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+        let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = counting_events(&ipc);
+        crate::terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+        (core, events, ipc)
+    }
+    #[tokio::test]
+    async fn a_russh_terminal_delivers_its_channel_data_to_the_core_byte_exact_and_in_order() {
+        use crate::terminal_core::{self, fake::workload};
+        let (host, _, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let (core, events, ipc) = counted_events_with_core();
+        let creation = access_lease();
+        let connected = spawn_terminal(&state, creation.clone(), handle, channel, initial, events)
+            .await
+            .unwrap();
+        let session = state.session(&connected.session_id).await.unwrap();
+        // The test server echoes what it is sent: 1 MiB of printable pseudo-random text in 32 KiB
+        // writes, so the stream crosses a real russh channel in both directions.
+        let text: String = workload(1024 * 1024)
+            .iter()
+            .map(|byte| (b'!' + byte % 90) as char)
+            .collect();
+        for piece in text.as_bytes().chunks(32 * 1024) {
+            let piece = String::from_utf8(piece.to_vec()).unwrap();
+            session
+                .input
+                .send(Input::Data(piece.into(), creation.clone()))
+                .await
+                .unwrap();
+        }
+        let expected = [b"ready\r\n".as_slice(), text.as_bytes()].concat();
+        core.assert_received(&expected, &ipc).await;
+        terminal_core::close(&connected.session_id);
+        let _ = session.cancel.send(true);
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn native_terminal_driver_output_the_mosh_and_et_shape_reaches_the_core_byte_exact() {
+        use crate::terminal_core::{self, fake::workload};
+        let (parent, _dir, server_task) = output_session().await;
+        let (_state_dir, state) = fixture_state();
+        let (core, events, ipc) = counted_events_with_core();
+        let payload = workload(2 * 1024 * 1024);
+        let produced = payload.clone();
+        // Mosh and ET drivers hand 16 KiB-bounded chunks to `output`; this one only plays that part.
+        let connected = spawn_native_terminal(
+            &state,
+            access_lease(),
+            parent,
+            events,
+            NativeTerminalKind::Fixture,
+            None,
+            check_size,
+            move |_access, input, mut cancellation, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    ready.send(Ok(())).unwrap();
+                    for chunk in produced.chunks(16 * 1024) {
+                        output
+                            .send(chunk.to_vec())
+                            .await
+                            .map_err(|_| SshError::new("fixture", "output closed"))?;
+                    }
+                    // Stay open: a finished driver would add the Closed notice to the Channel count.
+                    let _ = cancellation.changed().await;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        core.assert_received(&payload, &ipc).await;
+        terminal_core::close(&connected.session_id);
+        server_task.abort();
+    }
+    /// Rust-side cost of the data path, host microbenchmark: 64 MiB of 80-column text through
+    /// `send_output` to (a) the Channel with an instant renderer that acknowledges every chunk, and
+    /// (b) the real core. Wall time and the process's CPU time (user + system, all threads).
+    #[cfg(feature = "native-terminal")]
+    #[tokio::test]
+    #[ignore = "benchmark: cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture"]
+    async fn bridge_throughput_channel_versus_core() {
+        fn cpu_seconds() -> f64 {
+            let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+            let seconds = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+            seconds(usage.ru_utime) + seconds(usage.ru_stime)
+        }
+        const MIB: usize = 64;
+        let payload: Vec<u8> = (0..)
+            .flat_map(|n: u32| format!("line {n:08} {}\r\n", "x".repeat(60)).into_bytes())
+            .take(MIB * 1024 * 1024)
+            .collect();
+        for run in 0..3 {
+            let (session, _dir, server_task) = output_session().await;
+            let acknowledged = session.clone();
+            let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = ipc.clone();
+            let events = Channel::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                // The renderer is instant: it returns the credit of a full 16 KiB chunk.
+                let _ = acknowledge(&acknowledged, 16384);
+                Ok(())
+            });
+            let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
+            send_output(&session, &events, &payload).await.unwrap();
+            eprintln!(
+                "run {run} channel: {:.0} MiB/s, {:.2} CPU s per {MIB} MiB, {:.0} Channel messages per MiB",
+                MIB as f64 / wall.elapsed().as_secs_f64(),
+                cpu_seconds() - cpu,
+                ipc.load(Ordering::SeqCst) as f64 / MIB as f64,
+            );
+            let (session, _dir, core_server) = output_session().await;
+            let events = Channel::new(|_| Ok(()));
+            crate::terminal_core::terminal_core_open(access_lease(), events.clone(), 80, 24, None)
+                .await
+                .unwrap();
+            let prepared = crate::terminal_core::prepare(&events).unwrap().unwrap();
+            prepared.attach(
+                "bench-core",
+                &session.core,
+                crate::terminal_core::credit_to(&session, acknowledge),
+            );
+            let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
+            send_output(&session, &events, &payload).await.unwrap();
+            while *session.output_inflight.lock().unwrap() != 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            eprintln!(
+                "run {run} core:    {:.0} MiB/s, {:.2} CPU s per {MIB} MiB, 0 Channel messages (every credit returned after VT processing)",
+                MIB as f64 / wall.elapsed().as_secs_f64(),
+                cpu_seconds() - cpu,
+            );
+            crate::terminal_core::close("bench-core");
+            server_task.abort();
+            core_server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn a_resize_command_reaches_the_remote_pty_and_the_core_of_a_core_fed_session() {
+        use tauri::Manager;
+        let (host, server, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let (core, events, _) = counted_events_with_core();
+        let connected = spawn_terminal(&state, access_lease(), handle, channel, initial, events)
+            .await
+            .unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        let id = connected.session_id;
+        resize(access_lease(), app.state(), id.clone(), 132, 43)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+        assert!(resize(access_lease(), app.state(), id.clone(), 0, 43)
+            .await
+            .is_err());
+        assert_eq!(*core.sizes.lock().unwrap(), [(132, 43)]);
+        timeout(Duration::from_secs(5), async {
+            while !server.sizes.lock().unwrap().contains(&(132, 43)) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the remote PTY was resized too");
+        crate::terminal_core::close(&id);
+        server_task.abort();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn core_output_respects_the_lock_and_background_gates_like_the_channel() {
+        use crate::terminal_core::fake::ChecksumCore;
+        let access = unlocked_access();
+        let credits = Semaphore::new(16);
+        let inflight = StdMutex::new(0);
+        let (_cancel, mut cancellation) = watch::channel(false);
+        let core = ChecksumCore::new(Arc::new(|_| {}));
+        let delivery = deliver_output(
+            &access,
+            &credits,
+            &inflight,
+            &mut cancellation,
+            &*core,
+            b"abc",
+            None,
+        );
+        tokio::pin!(delivery);
+        access.lock().unwrap();
+        assert_pending(delivery.as_mut()).await;
+        assert_eq!(
+            core.feeds.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a locked terminal reaches no core"
+        );
+        assert_eq!(*inflight.lock().unwrap(), 0);
+        access.authorize(access.generation().unwrap()).unwrap();
+        assert_pending(delivery.as_mut()).await;
+        access.ready(access.generation().unwrap()).unwrap();
+        delivery.await.unwrap();
+        assert_eq!(core.feeds.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            *inflight.lock().unwrap(),
+            3,
+            "credit stays outstanding until the core returns it"
+        );
+    }
     #[tokio::test]
     async fn tmux_attach_cancellation_closes_display_during_handshake() {
         cancelled_tmux_attach(AttachPause::Handshake).await;
@@ -4925,6 +5600,51 @@ mod tests {
                 original.as_bytes()
             );
         }
+    }
+    #[tokio::test]
+    async fn exec_status_returns_a_failing_exit_with_streamed_stdout_where_exec_bounded_discards_it(
+    ) {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        let chunks = vec![b"{\"stage\":1}\n{\"sta".to_vec(), b"ge\":2}\n".to_vec()];
+        *fixture.server.scripted_exec.lock().unwrap() = Some((chunks.clone(), 22));
+        let mut seen = Vec::new();
+        let output = exec_status(
+            &fixture.session,
+            "owned update".into(),
+            &lease,
+            Duration::from_secs(5),
+            1024,
+            None,
+            &mut |chunk| seen.extend_from_slice(chunk),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.status, Some(22));
+        assert_eq!(output.stdout, chunks.concat());
+        assert_eq!(seen, chunks.concat(), "stdout is handed over as it arrives");
+        let discarded = exec_bounded(
+            &fixture.session,
+            "owned update".into(),
+            &lease,
+            Duration::from_secs(5),
+            1024,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(discarded.kind(), "remote_command_failed");
+        let over = exec_status(
+            &fixture.session,
+            "owned update".into(),
+            &lease,
+            Duration::from_secs(5),
+            8,
+            None,
+            &mut |_| {},
+        )
+        .await;
+        assert_eq!(over.err().unwrap().kind(), "output_too_large");
     }
     #[tokio::test]
     async fn non_unix_herdr_probe_runs_once_per_ssh_handle() {
@@ -5613,6 +6333,7 @@ mod tests {
         let (_dir, state) = fixture_state();
         let mut host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -5870,6 +6591,33 @@ mod tests {
         assert_eq!(output.stdout, b"a'b; $(touch /tmp/nope)");
     }
     #[test]
+    fn a_home_directory_must_be_absolute_one_line_and_bounded() {
+        for home in [
+            "/home/mihazs",
+            "/",
+            "/home/用户 with space",
+            "C:\\Users\\me",
+            "/C:/Users/me",
+        ] {
+            assert_eq!(absolute_home(home.into()).unwrap(), home);
+        }
+        for home in [
+            "",
+            ".",
+            "home/me",
+            "/home/\nme",
+            "/home/\0me",
+            "C",
+            &format!("/{}", "a".repeat(4096)),
+        ] {
+            assert_eq!(
+                absolute_home(home.into()).unwrap_err().kind(),
+                "home_unavailable",
+                "{home:?}"
+            );
+        }
+    }
+    #[test]
     fn dimensions_reject_invalid_or_unbounded_allocations() {
         assert!(check_size(80, 24).is_ok());
         assert!(check_size(0, 24).is_err());
@@ -5890,8 +6638,14 @@ mod tests {
         let mut context = tauri::generate_context!(test = true);
         for command in [
             "install_companion",
+            "install_companion_from_device",
             "restore_file_transfer",
             "restore_host_tools",
+            "host_home",
+            "host_file_stat",
+            "host_file_download",
+            "host_file_cancel",
+            "host_file_deliver",
             "get_companion_settings",
             "update_companion_settings",
         ] {
@@ -5925,7 +6679,8 @@ mod tests {
                 crate::host_clipboard::host_clipboard_copy,
                 crate::companion_settings::get_companion_settings,
                 crate::companion_settings::update_companion_settings,
-                crate::companion::install_companion
+                crate::companion::install_companion,
+                crate::companion::install_companion_from_device
             ])
             .build(context)
             .unwrap();
@@ -5996,19 +6751,21 @@ mod tests {
         );
         let installer =
             serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"});
-        let failure = tauri::test::get_ipc_response(
-            &main,
-            request(local_url, "install_companion", installer.clone()),
-        )
-        .unwrap_err();
-        assert_eq!(
-            failure["kind"], "disconnected",
-            "the real installer handler must accept the Channel/body and reach session preflight"
-        );
-        assert!(
-            failure.get("phase").is_some_and(serde_json::Value::is_null),
-            "preflight rejection must carry the companion-only structured failure phase"
-        );
+        for command in ["install_companion", "install_companion_from_device"] {
+            let failure = tauri::test::get_ipc_response(
+                &main,
+                request(local_url, command, installer.clone()),
+            )
+            .unwrap_err();
+            assert_eq!(
+                failure["kind"], "disconnected",
+                "the real installer handler must accept the Channel/body and reach session preflight: {command}"
+            );
+            assert!(
+                failure.get("phase").is_some_and(serde_json::Value::is_null),
+                "preflight rejection must carry the companion-only structured failure phase"
+            );
+        }
         let clipboard_read = serde_json::json!({"request":{"token":"00000000-0000-4000-8000-000000000001","kind":"text"}});
         let clipboard_cancel = serde_json::json!({"token":"00000000-0000-4000-8000-000000000001"});
         assert!(
@@ -6043,7 +6800,8 @@ mod tests {
             );
         }
         for (command, body) in [
-            ("install_companion", installer),
+            ("install_companion", installer.clone()),
+            ("install_companion_from_device", installer),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
             ("list_hosts", serde_json::json!({})),
@@ -6110,6 +6868,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH and a current-source companion binary with transcript-watch"]
+    async fn openssh_transcript_watch_streams_appends_and_closes_with_the_channel() {
+        openssh_interoperability(OpenSshCheck::TranscriptWatch).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
     async fn openssh_companion_install_and_managed_path() {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
@@ -6154,6 +6919,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         Clipboard,
         TranscriptImages,
+        TranscriptWatch,
         TemporaryAttachments,
         CompanionInstall,
         #[cfg(target_os = "linux")]
@@ -6182,8 +6948,14 @@ mod tests {
         )
     }
 
+    /// Boxed: the whole check is too large for a debug test thread's stack otherwise.
     #[cfg(unix)]
-    async fn openssh_interoperability(check: OpenSshCheck) {
+    fn openssh_interoperability(check: OpenSshCheck) -> impl std::future::Future<Output = ()> {
+        Box::pin(openssh_check(check))
+    }
+
+    #[cfg(unix)]
+    async fn openssh_check(check: OpenSshCheck) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let mosh = matches!(check, OpenSshCheck::Mosh);
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -6220,7 +6992,10 @@ mod tests {
             account_usage_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::CompanionInstall) {
             companion_fixture::environment(dir.path())
-        } else if matches!(check, OpenSshCheck::TranscriptImages) {
+        } else if matches!(
+            check,
+            OpenSshCheck::TranscriptImages | OpenSshCheck::TranscriptWatch
+        ) {
             transcript_image_fixture::companion_path(dir.path())
         } else {
             String::new()
@@ -6245,6 +7020,7 @@ mod tests {
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -6263,6 +7039,7 @@ mod tests {
         state.config().unwrap().hosts.push(host.clone());
         let app = tauri::test::mock_app();
         app.manage(state);
+        app.manage(crate::local::LocalState::default());
         async fn manual_session(
             state: &AppState,
             host: &Host,
@@ -6302,6 +7079,11 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::TranscriptWatch) {
+            app.manage(crate::transcript_watch::TranscriptWatches::default());
+            transcript_watch_fixture::verify(&app, &id, dir.path()).await;
             return;
         }
         if matches!(check, OpenSshCheck::TemporaryAttachments) {
@@ -6468,11 +7250,17 @@ mod tests {
             .into_inner()
             .unwrap();
             assert_eq!(
-                read_file(access_lease(), app.state(), mosh_id.clone(), file)
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .unwrap(),
+                read_file(
+                    access_lease(),
+                    app.state(),
+                    app.state(),
+                    mosh_id.clone(),
+                    file
+                )
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap(),
                 "SSH control remains alive"
             );
             let screenshot = vec![0xa5; 462_702];
@@ -6656,7 +7444,6 @@ mod tests {
             let sessions_before = state.sessions.lock().await.len();
             // Upload-only recovery must not silently grant remote-command authority.
             // Exercise the real closed-command-to-quota boundary without a provider read.
-            app.manage(crate::local::LocalState::default());
             app.manage(crate::account_usage::UsageState::default());
             let quota = crate::account_usage::account_usage(
                 access_lease(),
@@ -7005,6 +7792,18 @@ mod tests {
                 );
             }
         }
+        // `internal-sftp -d` starts in the fixture directory: home is what SFTP canonicalizes.
+        assert_eq!(
+            fs::canonicalize(
+                host_home(access_lease(), app.state(), app.state(), id.clone())
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .unwrap()
+            )
+            .unwrap(),
+            fs::canonicalize(dir.path()).unwrap()
+        );
         let upload = dir
             .path()
             .join("new file' safe.txt")
@@ -7022,11 +7821,17 @@ mod tests {
         .into_inner()
         .unwrap();
         assert_eq!(
-            read_file(access_lease(), app.state(), id.clone(), upload.clone())
-                .await
-                .unwrap()
-                .into_inner()
-                .unwrap(),
+            read_file(
+                access_lease(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                upload.clone()
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
             "hello 世界"
         );
         assert!(upload_file(
@@ -7041,6 +7846,7 @@ mod tests {
         assert_eq!(fs::read(&upload).unwrap(), "hello 世界".as_bytes());
         let entries = list_directory(
             access_lease(),
+            app.state(),
             app.state(),
             id.clone(),
             dir.path().to_string_lossy().into_owned(),
@@ -7058,6 +7864,7 @@ mod tests {
             read_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 id.clone(),
                 large.to_string_lossy().into_owned()
             )
@@ -7074,6 +7881,7 @@ mod tests {
         assert_eq!(
             read_file(
                 access_lease(),
+                app.state(),
                 app.state(),
                 id.clone(),
                 binary.to_string_lossy().into_owned()
@@ -7094,6 +7902,7 @@ mod tests {
         assert_eq!(
             list_directory(
                 access_lease(),
+                app.state(),
                 app.state(),
                 id.clone(),
                 crowded.to_string_lossy().into_owned()
@@ -7143,6 +7952,7 @@ mod tests {
         let diff = get_diff(
             access_lease(),
             app.state(),
+            app.state(),
             id.clone(),
             repo.to_string_lossy().into_owned(),
             false,
@@ -7156,6 +7966,7 @@ mod tests {
         let staged = get_diff(
             access_lease(),
             app.state(),
+            app.state(),
             id.clone(),
             repo.to_string_lossy().into_owned(),
             true,
@@ -7165,6 +7976,9 @@ mod tests {
         .into_inner()
         .unwrap();
         assert!(staged.contains("+before"));
+        repository_review_fixture::verify(&app, &id, &repo).await;
+        file_download_fixture::verify(&app, &id, dir.path()).await;
+        repository_review_fixture::verify_discovery(&app, &id).await;
         app.manage(crate::previews::PreviewState::default());
         let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let http_port = http.local_addr().unwrap().port();
@@ -7641,19 +8455,28 @@ mod tests {
             state: &AppState,
             handle: Arc<SshHandle>,
             creation: AccessLease,
-        ) -> (String, Arc<Session>) {
+            attach_core: bool,
+        ) -> (
+            String,
+            Arc<Session>,
+            Arc<crate::terminal_core::fake::ChecksumCore>,
+        ) {
             let (input, _) = mpsc::channel(1);
             let (cancel, _) = watch::channel(false);
             let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
             session.finished.send_replace(true);
             let id = uuid::Uuid::new_v4().to_string();
+            let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+            if attach_core {
+                prepared.attach(&id, &session.core, Arc::new(|_| {}));
+            }
             state
                 .sessions
                 .lock()
                 .await
                 .insert(id.clone(), session.clone());
             watch_adoption(state, &id, &session);
-            (id, session)
+            (id, session, core)
         }
         let (host, _, server_task) = server(false).await;
         let (_directory, state) = fixture_state();
@@ -7666,7 +8489,8 @@ mod tests {
             access.ready(access.generation().unwrap()).unwrap();
             let nonce = access.status().unwrap().nonce.unwrap();
             let creation = access.lease(Some(&nonce)).unwrap();
-            let (id, session) = register(&state, handle.clone(), creation.clone()).await;
+            let (id, session, core) =
+                register(&state, handle.clone(), creation.clone(), true).await;
             let response = creation
                 .guard(Connected {
                     session_id: id.clone(),
@@ -7690,6 +8514,10 @@ mod tests {
             .await
             .unwrap();
             assert!(*session.cancel.borrow());
+            assert!(
+                core.closed.load(std::sync::atomic::Ordering::SeqCst),
+                "an unadopted session's screen is freed with it"
+            );
             access.authorize(access.generation().unwrap()).unwrap();
             let fresh = ready_lease(&access);
             assert!(mark_adopted(&session, &fresh).is_err());
@@ -7697,7 +8525,7 @@ mod tests {
         let creation = access
             .lease(access.status().unwrap().nonce.as_deref())
             .unwrap();
-        let (id, session) = register(&state, handle, creation.clone()).await;
+        let (id, session, _) = register(&state, handle, creation.clone(), false).await;
         mark_adopted(&session, &creation).unwrap();
         creation
             .guard(Connected {
@@ -7808,14 +8636,18 @@ mod tests {
         let shutdowns = Arc::new(AtomicUsize::new(0));
         let stopped = shutdowns.clone();
         let observed = old_events.clone();
+        let pending_events = Channel::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        // The old renderer's native core must not outlive it either.
+        let (old_core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+        crate::terminal_core::offer(&pending_events, Box::new(move || Ok(prepared)));
         let pending = spawn_native_terminal(
             &state,
             creation.clone(),
             parent_session.clone(),
-            Channel::new(move |_| {
-                observed.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }),
+            pending_events,
             NativeTerminalKind::Fixture,
             None,
             check_size,
@@ -7835,6 +8667,8 @@ mod tests {
         .await
         .unwrap();
         let pending_session = state.session(&pending.session_id).await.unwrap();
+        let pending_id = pending.session_id.clone();
+        assert!(crate::terminal_core::live(&pending_id).is_ok());
         creation.guard(pending).unwrap().body().unwrap(); // ACK can be lost in the replaced renderer.
         access.replace_renderer().unwrap();
         assert!(creation.check().is_err());
@@ -7844,6 +8678,8 @@ mod tests {
             .unwrap();
         assert!(state.sessions.lock().await.is_empty());
         assert!(state.retiring.lock().await.is_empty());
+        assert!(old_core.closed.load(Ordering::SeqCst));
+        assert!(crate::terminal_core::live(&pending_id).is_err());
         for session in [&parent_session, &pending_session] {
             assert!(*session.renderer_gone.borrow());
             assert!(*session.cancel.borrow());

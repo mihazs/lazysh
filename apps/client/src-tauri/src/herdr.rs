@@ -391,6 +391,48 @@ fn selected_agent(tree: &HerdrTree, pane: &str, terminal: &str, agent: &str, id:
         && matches[0].agent.as_deref() == Some(agent)
 }
 
+/// Printed instead of a page when the host companion predates `herdr-conversation`.
+const CONVERSATION_COMPANION_REQUIRED: &str = "lazysh-herdr-conversation-companion-required";
+
+fn conversation_page(raw: &str, agent: &str) -> Result<serde_json::Value> {
+    if raw.trim() == CONVERSATION_COMPANION_REQUIRED {
+        return Err(SshError::new(
+            "herdr_conversation_companion_required",
+            "Update the companion to read this agent conversation",
+        ));
+    }
+    let page: serde_json::Value = serde_json::from_str(raw)?;
+    if page["schemaVersion"] != 1 || page["view"] != "active_branch" || page["agent"] != agent {
+        return Err(SshError::new(
+            "invalid_output",
+            "Invalid agent conversation",
+        ));
+    }
+    Ok(page)
+}
+
+/// Fails unless the live Herdr tree still names this pane's one agent session.
+pub(crate) async fn check_selected(
+    session: &crate::ssh::Session,
+    name: &str,
+    pane: &str,
+    terminal: &str,
+    agent: &str,
+    id: &str,
+    access: &AccessLease,
+) -> Result<()> {
+    target(pane, Some('p'))?;
+    text(terminal, 256)?;
+    let tree = read_tree(session, name, access).await?;
+    if selected_agent(&tree, pane, terminal, agent, id) {
+        return Ok(());
+    }
+    Err(SshError::new(
+        "herdr_target_missing",
+        "The selected agent session is no longer available",
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HerdrConversationTarget {
@@ -399,6 +441,7 @@ pub struct HerdrConversationTarget {
     terminal_id: String,
     agent: String,
     agent_session_id: String,
+    window: Option<crate::ssh::TranscriptWindow>,
 }
 
 #[tauri::command]
@@ -414,6 +457,7 @@ pub async fn agent_herdr_conversation(
         terminal_id,
         agent,
         agent_session_id,
+        window,
     } = target;
     access
         .run(async {
@@ -430,29 +474,31 @@ pub async fn agent_herdr_conversation(
                 ));
             }
             let session = state.session(&session_id).await?;
-            let before = read_tree(&session, &herdr_session, &access).await?;
-            if !selected_agent(&before, &pane_id, &terminal_id, &agent, &agent_session_id) {
+            let command = format!(
+                "lazysh-agent herdr-conversation --agent {} --session-id {}",
+                quote(&agent),
+                quote(&agent_session_id)
+            ) + &window.unwrap_or_default().flags()?;
+            // The check of the pane and the read of the conversation do not depend on each other, so they overlap; what the
+            // check found still decides first, and the tree is read again after the conversation (below).
+            let (before, raw) = tokio::join!(read_tree(&session, &herdr_session, &access), async {
+                let command = crate::companion::required_command(
+                    &session,
+                    command,
+                    CONVERSATION_COMPANION_REQUIRED,
+                    &access,
+                )
+                .await?;
+                crate::ssh::exec_for_access(&session, command, &access).await
+            });
+            if !selected_agent(&before?, &pane_id, &terminal_id, &agent, &agent_session_id) {
                 return Err(SshError::new(
                     "herdr_target_missing",
                     "The selected agent session is no longer available",
                 ));
             }
-            let command = format!(
-                "lazysh-agent herdr-conversation --agent {} --session-id {}",
-                quote(&agent),
-                quote(&agent_session_id)
-            );
-            let raw = crate::companion::exec(&session, command, &access).await?;
-            let page: serde_json::Value = serde_json::from_str(&raw)?;
-            if page["schemaVersion"] != 1
-                || page["view"] != "active_branch"
-                || page["agent"] != agent
-            {
-                return Err(SshError::new(
-                    "invalid_output",
-                    "Invalid agent conversation",
-                ));
-            }
+            let raw = raw?;
+            let page = conversation_page(&raw, &agent)?;
             let after = read_tree(&session, &herdr_session, &access).await?;
             if !selected_agent(&after, &pane_id, &terminal_id, &agent, &agent_session_id)
                 || !std::sync::Arc::ptr_eq(&session, &state.session(&session_id).await?)
@@ -562,6 +608,29 @@ mod tests {
         let mut extra = target;
         extra["unexpected"] = true.into();
         assert!(serde_json::from_value::<HerdrConversationTarget>(extra).is_err());
+    }
+
+    #[test]
+    fn old_companion_is_reported_as_an_update_requirement_not_a_parse_failure() {
+        let page = r#"{"schemaVersion":1,"view":"active_branch","agent":"claude","messages":[]}"#;
+        assert_eq!(
+            conversation_page(page, "claude").unwrap()["agent"],
+            "claude"
+        );
+        for wrong in [
+            page.replace("claude", "codex"),
+            page.replace("active_branch", "record_stream"),
+        ] {
+            assert_eq!(
+                conversation_page(&wrong, "claude").unwrap_err().kind(),
+                "invalid_output"
+            );
+        }
+        let old = format!("{CONVERSATION_COMPANION_REQUIRED}\n");
+        assert_eq!(
+            conversation_page(&old, "claude").unwrap_err().kind(),
+            "herdr_conversation_companion_required"
+        );
     }
 
     fn reported_snapshot() -> serde_json::Value {

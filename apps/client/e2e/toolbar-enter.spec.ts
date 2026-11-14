@@ -1,5 +1,6 @@
 import {expect,test,type Locator,type Page} from '@playwright/test';
 import {installLocalTerminal} from './fixtures/localTerminal';
+import {pressMore} from './fixtures/toolbarMore';
 
 /** An agent-style select menu: Down moves the highlight in place, a redraw (as after a keyboard resize) leaves the earlier copy in scrollback, and Enter streams the answer. */
 async function openAgentMenu(page:Page,phone:boolean) {
@@ -57,7 +58,7 @@ for(const via of ['toolbar','chord button','keyboard'] as const) test(`${via} En
   await expect(rows).toContainText('❯ 2. Blue');
   await readStaleMenu(page,viewport);
   if(via==='toolbar')await press('enter');
-  else if(via==='chord button')await press('Confirm');
+  else if(via==='chord button')await pressMore(page,'Confirm');
   else await page.locator('.terminal-canvas:visible .xterm-helper-textarea').press('Enter');
   // Every Enter path delivers the same single carriage return, never a modified or newline key.
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.filter(data=>data!=='\x1b[I'&&data!=='\x1b[O'))).toEqual(['\x1b[B','\r']);

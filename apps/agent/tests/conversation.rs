@@ -89,7 +89,7 @@ fn latest_main_leaf_selects_one_branch_ignoring_progress_sidechains_and_old_fork
 }
 
 #[test]
-fn compaction_replaces_earlier_chain_and_recent_limit_is_explicit() {
+fn compaction_keeps_the_earlier_conversation_above_the_summary_and_recent_limit_is_explicit() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("session.jsonl");
     let mut summary = message(
@@ -109,7 +109,8 @@ fn compaction_replaces_earlier_chain_and_recent_limit_is_explicit() {
         ],
     );
     let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
-    assert_eq!(ids(&page), vec!["summary", "reply"]);
+    // The boundary restarts the parent chain; the conversation before it is still the session's history.
+    assert_eq!(ids(&page), vec!["old", "summary", "reply"]);
     let latest = conversation(&path, TranscriptAgent::Claude, 1).unwrap();
     assert_eq!(ids(&latest), vec!["reply"]);
     assert!(latest.truncated);
@@ -255,6 +256,13 @@ fn codex_file(records: &[Value]) -> (tempfile::TempDir, std::path::PathBuf) {
     write(&path, records);
     (directory, path)
 }
+/// The records in order, each carrying its ordinal.
+fn codex_ordered(mut records: Vec<Value>) -> (tempfile::TempDir, std::path::PathBuf) {
+    for (ordinal, record) in records.iter_mut().enumerate() {
+        record["ordinal"] = json!(ordinal);
+    }
+    codex_file(&records)
+}
 // Independently authored records matching the official 0.166.0 persistence envelope.
 fn codex_record(kind: &str, payload: Value) -> Value {
     json!({"timestamp":"2026-01-02T03:04:05Z","type":kind,"payload":payload})
@@ -349,6 +357,141 @@ fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {
     let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
     assert_eq!(codex_text(&page), "question|corrected");
     assert_eq!(ids(&page), ["3:oneuser-1", "3:oneassistant-1"]);
+}
+
+#[test]
+fn codex_file_changes_become_one_patch_call_with_its_outcome() {
+    // Independently authored `FileChange` items in the recorded shape: a map of path to add, update or delete.
+    let change = |id: &str, status: &str, changes: Value| {
+        codex_event(
+            "item_completed",
+            json!({"turn_id":"one","item":{"type":"FileChange","id":id,"status":status,"stdout":"Done!","stderr":"","changes":changes}}),
+        )
+    };
+    let records = vec![
+        codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+        codex_turn("one"),
+        change(
+            "edit-1",
+            "completed",
+            json!({"src/a.rs":{"type":"update","unified_diff":"@@ -1,3 +1,3 @@\n fn a() {\n-    old();\n+    new();\n }\n","move_path":null},
+                   "docs/b.md":{"type":"add","content":"# B\nhello\n"}}),
+        ),
+        change(
+            "edit-2",
+            "failed",
+            json!({"old.txt":{"type":"delete","content":"gone\n"}}),
+        ),
+        change(
+            "edit-3",
+            "completed",
+            json!({"big.txt":{"type":"add","content":"x".repeat(100_000)}}),
+        ),
+    ];
+    let (_directory, path) = codex_ordered(records);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    let blocks = |index: usize| page.messages[index]["blocks"].clone();
+    let first = blocks(0);
+    assert_eq!(first[0]["type"], "tool_use");
+    assert_eq!(first[0]["name"], "apply_patch");
+    assert_eq!(
+        first[0]["text"],
+        "*** Begin Patch\n*** Add File: docs/b.md\n+# B\n+hello\n*** Update File: src/a.rs\n@@ -1,3 +1,3 @@\n fn a() {\n-    old();\n+    new();\n }\n*** End Patch"
+    );
+    assert_eq!(
+        (
+            first[1]["type"].clone(),
+            first[1]["id"].clone(),
+            first[1]["isError"].clone(),
+            first[1]["text"].clone()
+        ),
+        (
+            json!("tool_result"),
+            first[0]["id"].clone(),
+            json!(false),
+            json!("Done!")
+        )
+    );
+    let second = blocks(1);
+    assert!(second[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("*** Delete File: old.txt\n-gone\n"));
+    assert_eq!(second[1]["isError"], true);
+    // A large new file is cut, and the patch still ends where a reader expects.
+    let big = blocks(2)[0]["text"].as_str().unwrap().to_owned();
+    assert!(big.len() < 33 * 1024 && big.ends_with("\n*** End Patch"));
+}
+
+#[test]
+fn codex_sub_agents_run_from_their_start_until_their_recorded_completion() {
+    // `SubAgentActivity` items as Codex records them: the agent is named by its thread id and its path.
+    let activity = |kind: &str, thread: &str, path: &str, minute: u32| {
+        let mut record = codex_event(
+            "item_completed",
+            json!({"turn_id":"one","item":{"type":"SubAgentActivity","id":format!("{kind}-{thread}"),"kind":kind,"agent_thread_id":thread,"agent_path":path}}),
+        );
+        record["timestamp"] = json!(format!("2026-01-02T03:{minute:02}:00Z"));
+        record
+    };
+    let records = vec![
+        codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+        codex_turn("one"),
+        activity("started", "t-audit", "/root/audit_diff_review", 1),
+        activity("started", "t-fix", "/root/fix_plan", 2),
+        activity("started", "t-qa", "/root/qa_pass", 2),
+        activity("interacted", "t-fix", "/root/fix_plan", 3),
+        // Most sub-agents end with their final answer to the parent, not with a `completed` item.
+        {
+            let mut answer = codex_record(
+                "response_item",
+                json!({"type":"agent_message","author":"/root/qa_pass","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/qa_pass\nPayload:\nAll checks pass.\nSecond line"}]}),
+            );
+            answer["timestamp"] = json!("2026-01-02T03:04:00Z");
+            answer
+        },
+        activity("completed", "t-audit", "/root/audit_diff_review", 5),
+        // An end for an agent that was never seen starting changes nothing.
+        activity("completed", "t-ghost", "/root/ghost", 6),
+    ];
+    let (_directory, path) = codex_ordered(records);
+    let page =
+        serde_json::to_value(conversation(&path, TranscriptAgent::Codex, 100).unwrap()).unwrap();
+    let work = page["work"].as_array().unwrap();
+    let rows: Vec<_> = work
+        .iter()
+        .map(|task| {
+            (
+                task["title"].clone(),
+                task["kind"].clone(),
+                task["state"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (json!("audit_diff_review"), json!("agent"), json!("done")),
+            (json!("fix_plan"), json!("agent"), json!("running")),
+            (json!("qa_pass"), json!("agent"), json!("done")),
+        ]
+    );
+    assert_eq!(work[0]["startedAt"], "2026-01-02T03:01:00Z");
+    assert_eq!(work[0]["endedAt"], "2026-01-02T03:05:00Z");
+    assert_eq!(
+        (work[2]["last"].clone(), work[2]["endedAt"].clone()),
+        (json!("All checks pass."), json!("2026-01-02T03:04:00Z"))
+    );
+    // A session without sub-agents reports no work.
+    let (_directory, plain) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+    ]);
+    assert!(
+        serde_json::to_value(conversation(&plain, TranscriptAgent::Codex, 100).unwrap()).unwrap()
+            ["work"]
+            .is_null()
+    );
 }
 
 fn paginated(mut records: Vec<Value>, start: u64) -> Vec<Value> {
@@ -519,6 +662,49 @@ fn codex_rollback_counts_empty_and_compaction_only_turns_and_recent_limit_is_exp
     );
 }
 #[test]
+fn codex_goal_and_compaction_records_become_event_lines_once() {
+    let goal = |status: &str, used: u64| {
+        codex_event(
+            "thread_goal_updated",
+            json!({"goal":{"objective":"Fix the build","status":status,"tokensUsed":used}}),
+        )
+    };
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        goal("active", 0),
+        codex_event("user_message", json!({"message":"go"})),
+        goal("active", 10),
+        goal("paused", 11),
+        codex_record("compacted", json!({"message":"PRIVATE"})),
+        goal("complete", 12),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    let lines: Vec<Value> = page
+        .messages
+        .iter()
+        .map(|message| {
+            if message["role"] == "event" {
+                json!([message["event"]["kind"], message["event"]["text"]])
+            } else {
+                json!(message["role"])
+            }
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            json!(["goal", "Fix the build"]),
+            json!("user"),
+            json!(["compacted", ""]),
+            json!(["goalMet", "Fix the build"]),
+        ]
+    );
+    assert!(!serde_json::to_string(&page.messages)
+        .unwrap()
+        .contains("PRIVATE"));
+}
+#[test]
 fn codex_complete_lines_are_followable_without_admitting_a_partial_tail() {
     use std::io::Write;
     let (_directory, path) = codex_file(&[
@@ -550,6 +736,7 @@ fn codex_cli_uses_the_same_recorded_projection_and_rejects_other_reader_options(
     ]);
     for option in [
         None,
+        // The opt-in is admitted for Codex conversations: same text, plus previews only where an image was attached.
         Some("--inline-images"),
         Some("--checkpoint=invalid"),
         Some("--offset=1"),
@@ -570,8 +757,12 @@ fn codex_cli_uses_the_same_recorded_projection_and_rejects_other_reader_options(
             command.arg(option);
         }
         let output = command.output().unwrap();
-        assert_eq!(output.status.success(), option.is_none(), "{option:?}");
-        if option.is_none() {
+        assert_eq!(
+            output.status.success(),
+            matches!(option, None | Some("--inline-images")),
+            "{option:?}"
+        );
+        if output.status.success() {
             let page: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(page["view"], "active_branch");
             assert_eq!(page["agent"], "codex");
@@ -778,4 +969,204 @@ fn shared_synthetic_android_codex_conversation_matches_original_messages() {
         specification["codexThreadId"].as_str()
     );
     recorded_conversations::assert_messages(&page.messages, &expected);
+}
+
+fn queue_operation(operation: &str, content: &str, at: &str) -> Value {
+    json!({"type":"queue-operation","operation":operation,"timestamp":at,"sessionId":"s","content":content})
+}
+fn queued_text(page: &lazysh_agent::transcript::TranscriptPage) -> Vec<&str> {
+    page.queued
+        .iter()
+        .map(|entry| entry["text"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn prompts_typed_while_the_agent_works_are_queued_until_they_are_taken() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let mut records = vec![
+        message("root", None, "user", "first"),
+        queue_operation("enqueue", "then run the tests", "2026-11-11T10:00:00Z"),
+        queue_operation("enqueue", "and update the docs", "2026-11-11T10:00:05Z"),
+        // Text the harness injects is not something a person typed.
+        queue_operation(
+            "enqueue",
+            "<task-notification>done</task-notification>",
+            "2026-11-11T10:00:06Z",
+        ),
+    ];
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(
+        queued_text(&page),
+        ["then run the tests", "and update the docs"]
+    );
+    assert_eq!(page.queued[0]["timestamp"], "2026-11-11T10:00:00Z");
+    // The oldest is taken and shows up as the user's message in the same step.
+    records.push(queue_operation(
+        "dequeue",
+        "then run the tests",
+        "2026-11-11T10:00:10Z",
+    ));
+    records.push(message("taken", Some("root"), "user", "then run the tests"));
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(queued_text(&page), ["and update the docs"]);
+    assert_eq!(ids(&page), ["root", "taken"]);
+    // Removing an entry by its text, and emptying the queue.
+    records.push(queue_operation("enqueue", "extra", "2026-11-11T10:00:11Z"));
+    records.push(queue_operation("remove", "extra", "2026-11-11T10:00:12Z"));
+    write(&path, &records);
+    assert_eq!(
+        queued_text(&conversation(&path, TranscriptAgent::Claude, 50).unwrap()),
+        ["and update the docs"]
+    );
+    records.push(queue_operation("popAll", "", "2026-11-11T10:00:13Z"));
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert!(page.queued.is_empty());
+    // An empty queue is not serialised, so older clients see the page they always saw.
+    assert!(serde_json::to_value(&page).unwrap().get("queued").is_none());
+}
+
+#[test]
+fn a_long_queue_keeps_its_first_entries_and_bounds_each_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let mut records = vec![message("root", None, "user", "first")];
+    for index in 0..30 {
+        records.push(queue_operation(
+            "enqueue",
+            &format!("{index}{}", "世".repeat(3000)),
+            "2026-11-11T10:00:00Z",
+        ));
+    }
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(page.queued.len(), 20);
+    assert!(page.queued[0]["text"].as_str().unwrap().len() <= 4096);
+    assert!(page.queued[0]["text"].as_str().unwrap().starts_with("0世"));
+}
+
+#[test]
+fn history_command_lists_one_folder_and_honors_the_discovery_setting() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("projects");
+    let state = directory.path().join("companion-state");
+    fs::create_dir_all(root.join("-work-app")).unwrap();
+    fs::create_dir_all(root.join("-work-other")).unwrap();
+    write(
+        &root.join("-work-app/11111111-1111-4111-8111-111111111111.jsonl"),
+        &[
+            json!({"type":"user","cwd":"/work/app","message":{"content":"SECRET prompt"}}),
+            json!({"type":"ai-title","aiTitle":"Fix the build"}),
+        ],
+    );
+    write(
+        &root.join("-work-other/22222222-2222-4222-8222-222222222222.jsonl"),
+        &[json!({"type":"user","cwd":"/work/other"})],
+    );
+    let run = |folder: &str| {
+        Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+            .env("LAZYSH_STATE_DIR", &state)
+            .args(["history", "--agent", "claude", "--folder", folder, "--root"])
+            .arg(&root)
+            .output()
+            .unwrap()
+    };
+    let output = run("/work/app");
+    assert!(output.status.success());
+    let page: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(page["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(page["sessions"][0]["title"], "Fix the build");
+    assert_eq!(
+        page["sessions"][0]["sessionId"],
+        "11111111-1111-4111-8111-111111111111"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("SECRET"));
+    assert!(!run("relative/path").status.success());
+    // Turning transcript discovery off turns the list off with it.
+    let settings = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", &state)
+        .args(["settings", "show"])
+        .output()
+        .unwrap();
+    let revision = serde_json::from_slice::<Value>(&settings.stdout).unwrap()["revision"]
+        .as_u64()
+        .unwrap();
+    let off = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", &state)
+        .args([
+            "settings",
+            "update",
+            "--expected-revision",
+            &revision.to_string(),
+            "--transcript-discovery-enabled",
+            "false",
+            "--recorded-usage-enabled",
+            "true",
+            "--device-tools-enabled",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        off.status.success(),
+        "{}",
+        String::from_utf8_lossy(&off.stderr)
+    );
+    assert!(!run("/work/app").status.success());
+}
+
+#[test]
+fn claude_page_lists_what_the_session_loaded_without_copying_any_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let attachment = |id: &str, parent: &str, value: Value| json!({"type":"attachment","uuid":id,"parentUuid":parent,"attachment":value});
+    write(
+        &path,
+        &[
+            message("root", None, "user", "hello"),
+            attachment(
+                "a1",
+                "root",
+                json!({"type":"mcp_instructions_delta","addedNames":["ai-memory"],"addedBlocks":["PRIVATE instructions"]}),
+            ),
+            attachment(
+                "a2",
+                "a1",
+                json!({"type":"deferred_tools_delta","addedNames":["mcp__ai-memory__memory_query"],"failedMcpServers":[{"name":"codegraph","error":"PRIVATE error"}]}),
+            ),
+            attachment(
+                "a3",
+                "a2",
+                json!({"type":"skill_listing","isInitial":true,"names":["handoff"],"content":"PRIVATE descriptions"}),
+            ),
+            attachment(
+                "a4",
+                "a3",
+                json!({"type":"instructions","files":[{"path":"/home/me/.claude/CLAUDE.md","type":"User","content":"PRIVATE rules"}]}),
+            ),
+            message("answer", Some("a4"), "assistant", "hi"),
+        ],
+    );
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(
+        page.session.as_ref().unwrap()["info"],
+        json!({
+            "mcp":[{"name":"ai-memory","state":"connected","toolCount":1},{"name":"codegraph","state":"failed"}],
+            "skills":["handoff"],
+            "instructionFiles":[{"name":".claude/CLAUDE.md","kind":"User"}],
+        })
+    );
+    assert!(!serde_json::to_string(&page.session)
+        .unwrap()
+        .contains("PRIVATE"));
+    // A session with no such records has no `info`.
+    write(&path, &[message("root", None, "user", "hello")]);
+    assert!(conversation(&path, TranscriptAgent::Claude, 50)
+        .unwrap()
+        .session
+        .is_none());
 }

@@ -1,0 +1,35 @@
+.agent-status { display: grid; gap: 6px; margin-inline: 12px; min-width: 0; font-size: 13px; }
+.agent-status-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.agent-status-bar > button { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--theme-control, transparent); color: inherit; }
+.agent-status-bar > .agent-status-toggle { padding-inline-start: 8px; font-weight: 600; }
+.agent-status-tree { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: 30vh; overflow-y: auto; }
+.agent-status-tree > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; padding: 6px 10px; border-inline-start: 2px solid var(--border); }
+.agent-status-tree > li[data-state="running"] { border-inline-start-color: var(--accent); }
+.agent-status-tree > li[data-state="failed"] { border-inline-start-color: var(--danger, currentColor); }
+.agent-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-status-type, .agent-status-meta, .agent-status-tree small { color: var(--muted); }
+.agent-status-meta { grid-column: 1 / -1; font-variant-numeric: tabular-nums; }
+.agent-status-tree small { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.agent-status-tree summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; }
+.agent-status-tree pre { max-height: 30vh; margin: 4px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-status-open { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
+.agent-child { display: grid; grid-template-rows: auto 1fr; min-height: 0; gap: 8px; }
+.agent-child > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-child > header > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-panel[data-child-open] > :not(.agent-child) { display: none; }
+.agent-workflow { display: grid; gap: 6px; min-width: 0; }
+.agent-workflow h5 { margin: 0; font-size: 0.9rem; }
+.agent-workflow ol, .agent-workflow ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-workflow ul { padding-inline-start: 12px; }
+.agent-workflow-totals { margin: 0; color: var(--muted); }
+.agent-status-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.agent-status-head small, .agent-status-last { color: var(--muted); }
+.agent-status-last { flex-basis: 100%; }
+.agent-status-state { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; color: var(--muted); }
+.agent-status-state[data-state="running"] { color: var(--accent); border-color: var(--accent); }
+.agent-status-state[data-state="failed"] { color: var(--danger, currentColor); border-color: var(--danger, currentColor); }
+.agent-task-stop, .agent-task-stop-receipt { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.agent-task-stop .subtle-button { min-height: 44px; }
+.agent-task-stop p { margin: 0; flex-basis: 100%; }
+.agent-task-stop-receipt { color: var(--muted); }
+.agent-task-stop-receipt[data-state="unconfirmed"] { color: inherit; }

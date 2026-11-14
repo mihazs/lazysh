@@ -408,7 +408,7 @@ impl Work {
         self.check_cancel()
     }
     async fn cancelled(&mut self) {
-        tokio::select! {biased; _=self.access.cancelled()=>{}, _=async { loop { if *self.cancel.borrow() || self.cancel.changed().await.is_err() { break; } } }=>{}}
+        tokio::select! {biased; _=self.access.cancelled()=>{}, _=crate::voice::cancelled(&mut self.cancel)=>{}}
     }
     fn progress(&self, stage: &'static str, received: u64) {
         if let Ok(mut inner) = self.manager.inner.lock() {

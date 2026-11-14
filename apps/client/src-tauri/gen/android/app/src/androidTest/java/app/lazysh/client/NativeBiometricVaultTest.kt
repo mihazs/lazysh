@@ -297,7 +297,9 @@ class NativeBiometricVaultTest {
     }
 
     private fun workspace(scenario: ActivityScenario<MainActivity>) = until("unlocked workspace") {
-        !covered(scenario) && js(scenario, "Boolean(window.__TAURI_INTERNALS__?.invoke&&document.querySelector(\"button[aria-label='Add host']\"))") == "true"
+        var visible = false
+        scenario.onActivity { visible = webView(it.window.decorView)?.visibility == View.VISIBLE }
+        visible && js(scenario, "Boolean(window.__TAURI_INTERNALS__?.invoke&&document.querySelector(\"button[aria-label='Add host']\"))") == "true"
     }
 
     /**

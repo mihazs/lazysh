@@ -24,10 +24,11 @@ package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
     herdr-upstream/* | herdr-guard/*) add herdr ;;
+    terminal-runtime/*) add terminal_runtime ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
-    account-usage/* | ai-usagebar-vendor/*) add client agent ;;
+    account-usage/* | ai-usagebar-vendor/* | companion-release/*) add client agent ;;
     notification-client/*) add agent push relay ;; # native-linux-runtimes runs the real Apprise API relay case.
     push-registration/*) add client android ios push ;;
     mosh-transport/*) add client ios mosh ;;
@@ -46,10 +47,12 @@ classify() {
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;
-    apps/client/package.json | apps/client/turbo.json | apps/client/src-tauri/Cargo.toml | \
+    apps/client/package.json | apps/client/moon.yml | apps/client/src-tauri/Cargo.toml | \
       apps/client/src-tauri/build.rs | apps/client/src-tauri/tauri.conf.json | \
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
       apps/client/src-tauri/src/apple_*) add client ios ;;
+    # The terminal runtime replays this file in herdr-native; the client e2e suite reads it too.
+    apps/client/e2e/fixtures/mosh-resize-frames.json) add client terminal_runtime ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
     apps/notification-service/*) add agent push relay ;;
@@ -61,17 +64,21 @@ classify() {
     tests/android-*.test.ts | tests/support/android*.ts) add android ;;
     # native-desktop runs release consistency and the Windows installer cases.
     tests/release-consistency.test.ts | tests/release-artifacts.test.ts) add client ;;
-    # Checked only by the always-running client and agent jobs, or by fdroid.yml.
+    # Checked only by the always-running client and agent jobs, or by fdroid.yml. main-verdict.yml
+    # runs on pushes to main alone, and tests/main-verdict.test.ts is part of test:ci.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/native-changes.test.ts | \
-      tests/pinned-download.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs) add none ;;
+      tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
+      .github/workflows/main-verdict.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
     *.md) add docs ;;
     *) add all ;;
   esac
 }
 
-if [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
+if [ "${EVENT-}" = schedule ]; then
+  add nightly # only the device suite: main's push run is the parity evidence for everything else.
+elif [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
   add all
 elif ! start=$(git merge-base "$BASE" "$HEAD" 2>/dev/null) ||
   ! files=$(git diff --name-only --no-renames "$start" "$HEAD" 2>/dev/null) || [ -z "$files" ]; then
@@ -87,9 +94,14 @@ linux=$(flag any client agent herdr)
 linux_runtimes=$(flag any client herdr relay)
 android_runtime=$(flag any client android agent herdr)
 android_herdr=$(flag any herdr android agent)
+# The Appium suite drives the packaged app against owned SSH and stock Herdr hosts with the real companion.
+android_appium=$(flag any client android agent herdr nightly)
+# Quarantined (@flaky) specs run in their own non-gating job, never on a pull request, and only when one exists.
+quarantine=false
+if [ "${EVENT-}" != pull_request ] && [ "$android_appium" = true ] && grep -rqs --include='*.e2e.ts' '@flaky' apps/client/mobile-e2e/specs; then quarantine=true; fi
 # herdr-native produces the same-run binaries these consumers verify, so it runs for any of them.
-herdr=$(flag has herdr)
-case "$linux$linux_runtimes$android_runtime$android_herdr" in *true*) herdr=true ;; esac
+herdr=$(flag any herdr terminal_runtime)
+case "$linux$linux_runtimes$android_runtime$android_herdr$android_appium" in *true*) herdr=true ;; esac
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
 native=false
@@ -103,6 +115,8 @@ for output in \
   "android_runtime=$android_runtime" \
   "android_mosh=$(flag has mosh)" \
   "android_herdr=$android_herdr" \
+  "android_appium=$android_appium" \
+  "android_appium_quarantine=$quarantine" \
   "android_auxiliary=$(flag any android agent push)" \
   "android_ntfy=$(flag any android push)" \
   "ios=$(flag has ios)"; do

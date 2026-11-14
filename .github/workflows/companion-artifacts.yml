@@ -148,7 +148,7 @@ jobs:
         if: runner.os != 'Windows'
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
-        run: cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal --test installation
+        run: cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal --test installation --test update_shipped
       - name: Revalidate exact prepared bytes after the native owners
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}

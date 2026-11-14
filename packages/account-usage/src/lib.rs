@@ -8,7 +8,7 @@ mod collect;
 #[cfg(feature = "collector")]
 mod collector;
 #[cfg(feature = "collector")]
-pub use collect::{read, worker_main};
+pub use collect::{read, spawn_owned, worker_main, ProcessTree};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Response {

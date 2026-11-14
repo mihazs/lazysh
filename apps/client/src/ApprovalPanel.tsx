@@ -1,10 +1,11 @@
 import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
-import { Check, Clock, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { Clock, RefreshCw, ShieldAlert } from 'lucide-react';
 import { formatCountdown, formatRelativeTime, pathBasename, useNow } from './relativeTime';
 import './ApprovalPanel.css';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
+import {ApprovalActions, parseOptions, type Answer, type Suggestion} from './ApprovalChoices';
 
 
 type Approval = {
@@ -16,6 +17,9 @@ type Approval = {
   paneId: string | null;
   toolName: string;
   toolInput: unknown;
+  options: readonly Suggestion[];
+  /** Only a companion that lists `options` (even empty) takes a denial message. */
+  canMessage: boolean;
   createdAt: string;
   expiresAt: string;
 };
@@ -51,10 +55,11 @@ export function parseApprovals(value: unknown): Approval[] {
       JSON.stringify(item.toolInput ?? null).length > 32768
     )
       throw new LocalUiError('approvalsInvalidIdentity');
-    return item as Approval;
+    return {...item, options: parseOptions(item.options), canMessage: Array.isArray(item.options)} as Approval;
   });
 }
-export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false }: { sessionId: string; visible?:boolean; compactEmpty?:boolean }) {
+/** `match` shows only the requests of one agent session in one pane; `validate` must hold again when a decision is sent. */
+export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false, match, validate, delay=0 }: { sessionId: string; visible?:boolean; compactEmpty?:boolean; match?:{agentSessionId:string;paneId:string}; validate?:()=>Promise<boolean>; delay?:number }) {
   useUi();
   const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
@@ -62,6 +67,9 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const running = useRef(false);
+  const [elsewhere, setElsewhere] = useState(false);
+  const shown = useRef<Approval[]>([]);
+  const decided = useRef(new Set<string>());
   const scope=useRef({sessionId,visible});scope.current={sessionId,visible};
   const owns=(current:number)=>current===generation.current && scope.current.visible && scope.current.sessionId===sessionId;
   function beginRequest() {
@@ -69,13 +77,22 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
     running.current=true;setBusy(true);setError('');
     return generation.current;
   }
+  async function list() {
+    const rows = parseApprovals(await invoke("agent_approvals", { sessionId }));
+    return match ? rows.filter(row=>row.agent==='claude' && row.sessionId===match.agentSessionId && row.paneId===match.paneId) : rows;
+  }
+  /** Shows `rows`; a request this view showed that is gone, was not answered here and had not expired was answered at the host. */
+  function show(rows: Approval[]) {
+    const left=shown.current.some(item=>!decided.current.has(item.id) && Date.parse(item.expiresAt)>Date.now() && !rows.some(row=>row.id===item.id));
+    shown.current=rows;
+    setRequests(rows);
+    if(match)setElsewhere(rows.length===0 ? left || elsewhere : false);
+  }
   async function refresh() {
     const current=beginRequest();if(current===null)return;
     try {
-      const rows = parseApprovals(
-        await invoke("agent_approvals", { sessionId }),
-      );
-      if (owns(current)) setRequests(rows);
+      const rows = await list();
+      if (owns(current)) show(rows);
     } catch (e) {
       if (owns(current)) setError(captureUiError(e));
     } finally {
@@ -88,7 +105,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
   useEffect(() => {
     generation.current++;
     running.current = false;
-    setRequests([]);setBusy(false);setError("");
+    setRequests([]);shown.current=[];setElsewhere(false);setBusy(false);setError("");
     if(!visible)return ()=>{generation.current++;};
     void refresh();
     const interval = window.setInterval(() => {
@@ -98,10 +115,18 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       generation.current++;
       window.clearInterval(interval);
     };
-  }, [sessionId,visible]);
-  async function decide(request: Approval, decision: "allow" | "deny") {
+  }, [sessionId,visible,match?.agentSessionId,match?.paneId]);
+  async function decide(request: Approval, {decision, option, message}: Answer) {
     const current=beginRequest();if(current===null)return;
     try {
+      if (validate && (!await validate() || !owns(current) || Date.parse(request.expiresAt)<=Date.now())) throw new LocalUiError('approvalsNotAccepted');
+      if (match) {
+        // The terminal may have answered it since the last poll: send nothing for a request the host no longer lists.
+        const rows = await list();
+        if (!owns(current)) return;
+        if (!rows.some(row=>row.id===request.id && row.expectedHash===request.expectedHash)) {show(rows);setElsewhere(true);return;}
+      }
+      decided.current.add(request.id);
       const result = await invoke<{ schemaVersion: number; accepted: boolean }>(
         "resolve_agent_approval",
         {
@@ -111,14 +136,16 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
           agentSessionId: request.sessionId,
           paneId: request.paneId,
           decision,
+          ...(option === undefined ? {} : { option }),
+          ...(message === undefined ? {} : { message }),
         },
       );
       if (result?.schemaVersion !== 1 || result.accepted !== true)
         throw new LocalUiError('approvalsNotAccepted');
-      if (owns(current))
-        setRequests((previous) =>
-          previous.filter((item) => item.id !== request.id),
-        );
+      if (owns(current)) {
+        shown.current = shown.current.filter((item) => item.id !== request.id);
+        setRequests(shown.current);
+      }
     } catch (e) {
       if (owns(current)) setError(captureUiError(e));
     } finally {
@@ -129,7 +156,8 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
     }
   }
   const now=useNow(1000,visible && requests.length>0);
-  if(compactEmpty && requests.length===0 && !error)return null;
+  useEffect(()=>{if(!elsewhere)return;const timer=window.setTimeout(()=>setElsewhere(false),8000);return ()=>window.clearTimeout(timer);},[elsewhere]);
+  if(compactEmpty && requests.length===0 && !error && !elsewhere)return null;
   return (
     <section hidden={!visible} style={visible?undefined:{display:'none'}} aria-label={t('approvalsTitle')} className="approval-panel">
       <div className="approval-header">
@@ -141,6 +169,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       <p className="approval-hint">
         {t('approvalsHint')}
       </p>
+      {elsewhere && <p role="status" className="approval-note">{t('approvalsAnsweredElsewhere')}</p>}
       {error && (
         <p role="alert" className="inline-error">
           {uiErrorText(error)}
@@ -170,14 +199,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
               {expired?t('approvalsExpired'):t('approvalsExpiresIn',{time:formatCountdown(expires-now)})}
             </time>
           </p>
-          <div className="approval-actions">
-            <button type="button" className="approval-deny" disabled={!visible || busy || expired} onClick={() => void decide(request, "deny")}>
-              <X size={16} aria-hidden="true" />{t('approvalsDeny')}
-            </button>
-            <button type="button" className="approval-allow" disabled={!visible || busy || expired} onClick={() => void decide(request, "allow")}>
-              <Check size={16} aria-hidden="true" />{t('approvalsAllow')}
-            </button>
-          </div>
+          <ApprovalActions key={`${request.id}:${request.expectedHash}`} options={request.options} canMessage={request.canMessage} disabled={!visible || busy || expired} delay={delay} decide={answer=>void decide(request,answer)} />
           <dl className="approval-facts">
             <div><dt>{t('approvalsProjectLabel')}</dt><dd>{request.project}</dd></div>
             <div><dt>{t('approvalsSessionLabel')}</dt><dd>{request.sessionId}</dd></div>

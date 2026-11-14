@@ -42,7 +42,7 @@ fn on_path(name: &str) -> Option<PathBuf> {
 /// `/bin/sh` plus every installed bash, zsh and fish, invoked as sshd invokes a
 /// login shell (`<shell> -c <command>`), without user startup files. Fish is
 /// skipped explicitly when absent, unless `LAZYSH_REQUIRE_FISH` is set (CI).
-fn login_shells() -> Vec<Vec<String>> {
+pub(crate) fn login_shells() -> Vec<Vec<String>> {
     let mut shells = vec![args(&["/bin/sh"])];
     for (name, flags) in [
         ("bash", &["--norc"][..]),

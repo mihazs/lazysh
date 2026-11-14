@@ -27,6 +27,7 @@ test.beforeEach(async ({ page }) => {
       if(command==='local_capability')return {available:false,reason:'Relaunch fixture'};
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
       if(command==='apple_status_capability')return {available:false,reason:'Relaunch fixture'};
+      if(command==='multiplexer_tree')return {tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[]};
       window.relaunchCalls.push({command,args});
       if(remote.includes(command))return {sessionId:`native-${++sessions}`};
       if(['resize','ack_output','disconnect'].includes(command))return;

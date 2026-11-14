@@ -1,5 +1,5 @@
 import {ArrowLeft,ChevronDown,ChevronRight,RefreshCw,Settings2,Info} from 'lucide-react';
-import {StatusRing,agentKind,type StatusTone} from './AgentStatus';
+import {StatusRing,agentKind,herdrTones} from './AgentStatus';
 import {useEffect,useLayoutEffect,useRef,useState,type Dispatch,type SetStateAction} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import {HerdrSpaceActions,HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
@@ -16,9 +16,8 @@ import './HerdrSpaces.css';
 export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-const tones:Record<LiveAgent['agent_status'],StatusTone>={blocked:'attention',working:'working',done:'done',idle:'idle',unknown:'unknown'};
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,statusGroups,statusHostId=sessionId}:{
-  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,navigationOnly=false,statusGroups,statusHostId=sessionId}:{
+  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;navigationOnly?:boolean;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onContentSettled?:(receipt:HerdrContentReceipt)=>void;
@@ -74,8 +73,9 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   function row(target:HerdrNavigationTarget,label:string,status:LiveAgent['agent_status'],context?:string,kind?:string|null,{inherited=false,title=context}:{inherited?:boolean;title?:string}={}) {
     const selected=target.kind==='workspace'?tree?.workspaces.some(item=>item.workspace_id===target.workspace&&item.focused):target.kind==='tab'?tree?.tabs.some(item=>item.tab_id===target.tab&&item.focused):tree?.panes.some(item=>item.pane_id===target.pane&&item.terminal_id===target.terminal&&item.focused);
     const agentRow=mode==='agents' && target.kind==='pane';
-    return <button className="herdr-navigation-row" data-agent-status={status} data-current={selected||undefined} disabled={working} onClick={()=>void open(target)}>
-      {agentRow && <StatusRing tone={tones[status]}/>}
+    // A press keeps focus where it is, so a terminal's soft keyboard that is already open does not close and reopen around the switch.
+    return <button className="herdr-navigation-row" data-agent-status={status} data-current={selected||undefined} disabled={working} onPointerDown={event=>event.preventDefault()} onClick={()=>void open(target)}>
+      {agentRow && <StatusRing tone={herdrTones[status]}/>}
       <span><strong title={mode==='spaces'?label:undefined}>{label}</strong>{context && <small title={title}>{context}</small>}{agentRow && <span className="row-tags" aria-hidden="true">{kind && <span className="row-tag" data-agent-kind={agentKind(kind)}>{kind}</span>}<span className="row-tag-status">{t(herdrStatusKeys[status])}</span></span>}</span><small className={mode==='agents'||inherited?'sr-only':'herdr-row-status'}>{t(herdrStatusKeys[status])}</small>
       {agentRow && <ChevronRight className="row-chevron" size={18} aria-hidden="true"/>}
     </button>;
@@ -130,15 +130,15 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {data.server && <>
         <label><span className="sr-only">{t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')}</span><input type="search" placeholder={t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
-        {mode==='spaces' && tree && <HerdrWorkspaceCreate {...create}/>}
+        {mode==='spaces' && tree && !navigationOnly && <HerdrWorkspaceCreate {...create}/>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,shownPath(pane.cwd),pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
           const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || !collapsed.has(key);
           return <li key={workspace.workspace_id} className="herdr-space">
-            <div className="herdr-navigation-heading" onContextMenu={event=>{if(!working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
+            <div className="herdr-navigation-heading" onContextMenu={event=>{if(!navigationOnly && !working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
               {row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status,t('herdrTabCount',{total:formatNumber(tabs.length),count:tabs.length}))}
-              <HerdrSpaceActions {...create} tree={tree} workspace={workspace} open={spaceMenu===workspace.workspace_id} onOpenChange={value=>setSpaceMenu(value?workspace.workspace_id:undefined)}/>
+              {!navigationOnly && <HerdrSpaceActions {...create} tree={tree} workspace={workspace} open={spaceMenu===workspace.workspace_id} onOpenChange={value=>setSpaceMenu(value?workspace.workspace_id:undefined)}/>}
               {disclosure(key,workspace.label,open)}
             </div>
             {open && <ul>{tabs.map(tab=>{

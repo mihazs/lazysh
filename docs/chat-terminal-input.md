@@ -4,7 +4,7 @@ The native `tmux_chat` command adds an explicit terminal destination to a suppor
 recorded Chat view. It does not establish that the recorded file and a running agent
 process are the same session. It never launches an agent or uses a provider API.
 Without a verified display-owned tmux binding, ordinary terminal input and Stage
-remain the fallback. Zellij and plain shells remain outside confirmed input. Guarded Herdr input is described below.
+remain the fallback. Plain shells remain outside confirmed input. Zellij input is sent only from the Agent view, to the pane the agent's own hook report names ([Zellij input](agent-view.md#zellij-input)). Guarded Herdr input is described below.
 
 The destination comes from the retained control channel on the authenticated
 terminal's immutable tmux server. It matches the original displayed client by
@@ -53,7 +53,19 @@ Send accepts nonempty text of at most 4,096 UTF-8 bytes, including LF and TAB.
 CR, other C0 controls, DEL/C1, Unicode line/paragraph separators and malformed
 Unicode are rejected. Accepted bytes are preserved without newline normalization.
 Ordinary single-line text retains literal hexadecimal byte arguments followed
-by one carriage-return Enter byte. Request stop still sends fixed Escape.
+by one carriage-return Enter byte. Request stop still sends fixed Escape. `cycle_mode` (tmux, Claude Code sources only) sends one fixed Shift+Tab (`ESC [ Z`) and the reply carries `mode`, read from the last six lines of the pane after the terminal repainted (`default`, `acceptEdits`, `plan`, `auto`, `bypassPermissions`, or `unconfirmed` when the status line is not the one the `claude-2.1` profile knows or two modes show at once). A guarded Herdr pane refuses the kind.
+
+Long prompt (`send_long`, tmux only, used by the Agent view composer): nonempty text of
+4,097 to 65,536 UTF-8 bytes under the same character rules, never split into several
+messages. The bytes go to a private tmux paste buffer as ASCII octal escapes over
+several bounded commands (4 KiB of payload each, one marked reply per command, every
+one guarded by the same original-context condition as `send`). Only when every chunk
+was stored does one last guarded command paste the buffer (`paste-buffer -p -r -d`,
+bracketed only when the program enabled it, line feeds kept) and press Enter once. A
+step that finds the destination changed deletes the buffer and sends nothing; a
+partial or lost reply retires the receipt like `send`, so a failed long prompt is never
+resent. A prompt of at most 4,096 bytes is still `send`, a longer one is refused by
+`send` itself, and a guarded Herdr pane has no paste buffer and refuses the kind.
 Unsupported and oversized drafts retain Stage.
 
 Text containing LF or TAB instead uses native tmux `paste-buffer -p -r -d`,
@@ -64,6 +76,8 @@ LF/TAB are ordinary terminal input and may cause intermediate actions. tmux 3.4
 exposes no public format guard for that mode. This is not a guaranteed atomic
 agent message or provider identity proof. The existing explicit destination
 confirmation and visible explanation apply; Stage remains the default.
+
+The Agent view answers a Claude Code `AskUserQuestion` dialog through the same receipt with two more bounded inputs: `select` (`option`, `of`; 1 to 9, option within `of`) sends the option's digit alone, and `submit` (`of`) sends Down for each of the `of` options plus the "Type something" row, then Enter, which is how Claude Code 2.1.318 confirms a multi-select list (checked live; a digit selects at once, no Enter). The review page's "Submit answers" is `select` 1, and a typed answer is `select` of the free-text row then an ordinary `send`. There is no other key path. Herdr's guard rejects both, so those questions stay in the terminal. A third bounded input, `pick` (`rows`, `enter`), answers a list dialog the way a person does: `rows` Up or Down arrows (at most 30, negative is up) and, with `enter`, one Enter; it must send at least one key. The Agent view sends the move first, reads the dialog back from the terminal screen, and sends the Enter as a second `pick` only when the chosen option is highlighted ([List dialogs](agent-view.md#list-dialogs)). Herdr's guard rejects `pick` too. Before every key the client re-reads the hook report of the pane and sends nothing unless the same session still needs attention; the dialog is recorded as answered only when the transcript shows its tool result.
 
 Every payload byte is encoded as fixed octal inside a quoted argument in one
 generated ASCII control line, capped at 32 KiB before dispatch. The original

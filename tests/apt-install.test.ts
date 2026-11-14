@@ -10,15 +10,17 @@ const temporary: string[] = [];
 afterAll(() => Promise.all(temporary.map(path => rm(path, { recursive: true, force: true }))));
 
 const config = 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::ftp::Timeout "30";\nAcquire::Retries "5";\n';
-const oneLine = 'deb http://azure.archive.ubuntu.com/ubuntu/ jammy main\ndeb http://security.ubuntu.com/ubuntu jammy-security main\n';
+const oneLine = 'deb http://azure.archive.ubuntu.com/ubuntu/ jammy main\ndeb http://security.ubuntu.com/ubuntu jammy-security main\ndeb http://ports.ubuntu.com/ubuntu-ports/ jammy main\n';
 const deb822 = 'Types: deb\nURIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main universe\n';
-const mirrors = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\n';
-const archived = (text: string) => text.replaceAll('azure.archive.ubuntu.com', 'archive.ubuntu.com');
+const mirrors = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://archive.ubuntu.com/ubuntu/\tpriority:3\n';
+const mirrored = (text: string) => archived(text).replaceAll('https://archive.ubuntu.com/ubuntu/', 'https://mirrors.mit.edu/ubuntu/')
+  .replaceAll('http://security.ubuntu.com/ubuntu', 'https://mirrors.mit.edu/ubuntu/').replaceAll('http://ports.ubuntu.com/ubuntu-ports/', 'https://mirrors.mit.edu/ubuntu-ports/');
+const archived = (text: string) => text.replaceAll('azure.archive.ubuntu.com', 'archive.ubuntu.com').replaceAll('http://archive.ubuntu.com', 'https://archive.ubuntu.com');
 
 /**
  * A fake root whose apt-get records each call, refuses to run before the bounded network
  * configuration exists, and behaves per `APT_BEHAVIOUR`: `hang` stalls while any source still
- * names the Azure mirror, `stall` always stalls, `fail` fails every call, `fail-install` every
+ * names the Azure mirror, `stall` always stalls, `canonical` fails while any source names ubuntu.com, `fail` fails every call, `fail-install` every
  * install and `fail-install-once` only the first install.
  */
 async function aptRoot() {
@@ -31,14 +33,16 @@ async function aptRoot() {
   await writeFile(join(etc, 'sources.list.d', 'ubuntu.sources'), deb822);
   await writeFile(join(etc, 'apt-mirrors.txt'), mirrors);
   await writeFile(join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
+  await writeFile(join(bin, 'dpkg'), '#!/bin/sh\necho "dpkg $*" >> "$CALLS"\n[ "$APT_BEHAVIOUR" != stall-dpkg ] || sleep 60\n[ "$APT_BEHAVIOUR" != fail-dpkg ]\n', { mode: 0o700 });
   await writeFile(join(bin, 'apt-get'), `#!/bin/sh
 [ -f "$LAZYSH_APT_ROOT/etc/apt/apt.conf.d/99lazysh-bounded-network" ] || { echo unbounded >> "$CALLS"; exit 97; }
 echo "$*" >> "$CALLS"
 case $APT_BEHAVIOUR:$1 in
   hang:*) if grep -qr azure "$LAZYSH_APT_ROOT/etc/apt"; then sleep 60; fi ;;
   stall:*) sleep 60 ;;
+  canonical:*) if grep -qr 'ubuntu\.com' "$LAZYSH_APT_ROOT/etc/apt"; then exit 100; fi ;;
   fail:* | fail-install:install) exit 100 ;;
-  fail-install-once:install) [ "$(grep -c '^install' "$CALLS")" -gt 1 ] || exit 100 ;;
+  fail-install-once:install | fail-dpkg:install | stall-dpkg:install) [ "$(grep -c '^install' "$CALLS")" -gt 1 ] || exit 100 ;;
 esac
 `, { mode: 0o700 });
   const read = (path: string) => readFile(join(etc, path), 'utf8').catch(() => undefined);
@@ -70,24 +74,41 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
     expect(result.seconds).toBeLessThan(20);
   });
 
+  test('when Canonical hosts stay unreachable, sources move to a non-Canonical HTTPS mirror, ports included', async () => {
+    const result = await install(['strace'], 'canonical');
+    expect(result).toMatchObject({ exit: 0, calls: ['update', 'update', 'update', 'install -y strace'], sources: [mirrored(oneLine), mirrored(deb822), mirrored(mirrors)] });
+    expect(result.sources[0]).toContain('https://mirrors.mit.edu/ubuntu-ports/ jammy main');
+    expect(result.stdout).toContain('retrying against mirrors.mit.edu');
+  });
+
   test('a failed install switches mirrors, refreshes the lists and installs once more', async () => {
     const result = await install(['strace'], 'fail-install-once');
-    expect(result).toMatchObject({ exit: 0, calls: ['update', 'install -y strace', 'update', 'install -y strace'] });
+    expect(result).toMatchObject({ exit: 0, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a', 'install -y strace'] });
     expect(result.sources).toEqual([archived(oneLine), archived(deb822), archived(mirrors)]);
   });
 
   test('exhausted update retries fail the step before any install', async () => {
-    expect(await install(['strace'], 'fail')).toMatchObject({ exit: 100, calls: ['update', 'update'] });
+    expect(await install(['strace'], 'fail')).toMatchObject({ exit: 100, calls: ['update', 'update', 'update'] });
   });
 
   test('exhausted install retries fail the step', async () => {
-    expect(await install(['strace'], 'fail-install')).toMatchObject({ exit: 100, calls: ['update', 'install -y strace', 'update', 'install -y strace'] });
+    expect(await install(['strace'], 'fail-install')).toMatchObject({ exit: 100, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a', 'install -y strace', 'update', 'dpkg --configure -a', 'install -y strace'] });
+  });
+
+  test('failed dpkg recovery stops before retrying install', async () => {
+    expect(await install(['strace'], 'fail-dpkg')).toMatchObject({ exit: 1, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a'] });
+  });
+
+  test('stalled dpkg recovery is bounded and stops before retrying install', async () => {
+    const result = await install(['strace'], 'stall-dpkg');
+    expect(result).toMatchObject({ exit: 124, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a'] });
+    expect(result.seconds).toBeLessThan(20);
   });
 
   test('a mirror that stalls every attempt fails the step within its bound instead of hanging', async () => {
     const result = await install(['strace'], 'stall');
-    expect(result).toMatchObject({ exit: 124, calls: ['update', 'update'] });
-    expect(result.seconds).toBeLessThan(20);
+    expect(result).toMatchObject({ exit: 124, calls: ['update', 'update', 'update'] });
+    expect(result.seconds).toBeLessThan(30);
   });
 
   test('--no-update installs from the current lists, and alone only writes the configuration', async () => {

@@ -1,144 +1,90 @@
 import {t} from './i18n/core';
-import {useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type TouchEvent as ReactTouchEvent} from "react";
-import {nearestPage, pageEdges, touchOverscroll, wheelOverscroll, type PageStep} from "./toolbarPaging";
+import {useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject} from "react";
+import {usePreferences} from "./preferences";
 
-export type ToolbarPageId = "tools" | "snippets";
+export type ToolbarPageId = "keys" | "tools" | "snippets";
 export type ToolbarPage = {id: ToolbarPageId; content: ReactNode};
 
-const storageKey = "lazysh.terminal-toolbar-page.v1";
-const pageLabels = {tools: "terminalToolsPage", snippets: "terminalSnippetsPage"} as const;
+/** How long the page indicator stays after the page changes, or after the toolbar stops scrolling. */
+export const PAGER_VISIBLE_MS = 2000;
 
-function storedPage(): string | null {
-  try {return localStorage.getItem(storageKey);} catch {return null;}
-}
-function storePage(id: ToolbarPageId) {
-  try {localStorage.setItem(storageKey, id);} catch {/* The remembered page is a per-device convenience. */}
-}
+const pageLabels = {keys: "terminalKeysPage", tools: "terminalToolsPage", snippets: "terminalSnippetsPage"} as const;
 
 /**
- * A horizontal carousel of toolbar pages. A slide moves between pages with scroll snapping, and a
- * vertical drag or wheel that continues past a page's last or first row opens the adjacent page.
- * `repeats` reports how many held keys have started repeating; a drag during which one starts
- * belongs to that key and never turns the page.
+ * Horizontally swipeable toolbar pages: native scroll snapping moves between them, so a swipe, a
+ * trackpad or a focused key all work, and the page indicator below is a row of buttons that selects a
+ * page without a gesture. The indicator is hidden until the page changes, then fades in for a moment; it
+ * stays reachable by keyboard and screen reader while hidden, and screen-reader mode keeps it shown.
+ * `repeats` counts held keys that began repeating; a drag during which one
+ * starts belongs to that key and never turns the page.
  */
-export default function ToolbarPages({pages, repeats}: {pages: readonly ToolbarPage[]; repeats?: () => number}) {
-  const [selected, setSelected] = useState(storedPage);
-  const id = useId();
-  const found = pages.findIndex(page => page.id === selected);
-  const index = found < 0 ? 0 : found;
+export default function ToolbarPages({pages, repeats}: {pages: readonly ToolbarPage[]; repeats: RefObject<number>}) {
+  const [selected, setSelected] = useState(0);
+  const index = Math.min(selected, pages.length - 1);
   const indexRef = useRef(index);
   indexRef.current = index;
   const track = useRef<HTMLDivElement>(null);
-  const touch = useRef<ReturnType<typeof touchOverscroll> | null>(null);
-  const touchRepeats = useRef(0);
-  const wheel = useRef(wheelOverscroll());
-  // A requested page wins over intermediate scroll positions until the smooth scroll arrives.
-  const target = useRef<{index: number; timer: ReturnType<typeof setTimeout>} | null>(null);
-  const elements = () => Array.from(track.current?.children ?? []) as HTMLElement[];
+  const [shown, setShown] = useState(false);
+  const hideTimer = useRef(0);
+  const screenReader = usePreferences().screenReader;
+  function reveal() {
+    setShown(true);
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setShown(false), PAGER_VISIBLE_MS);
+  }
+  useEffect(() => () => window.clearTimeout(hideTimer.current), []);
+  const lastIndex = useRef(index);
+  useEffect(() => {
+    if (lastIndex.current === index) return;
+    lastIndex.current = index;
+    reveal();
+  }, [index]);
 
-  function choose(next: number) {
-    const page = pages[next]?.id;
-    if (!page) return;
-    setSelected(page); storePage(page);
+  const show = (next: number) => {if (track.current) track.current.scrollLeft = next * track.current.clientWidth;};
+  function select(next: number) {setSelected(next); show(next);}
+  // Pages share the track's width, so the page in view is the scroll position in track widths.
+  function scrolled() {
+    const element = track.current;
+    if (!element?.clientWidth) return;
+    setSelected(Math.round(element.scrollLeft / element.clientWidth));
+    // Still scrolling while the indicator shows: it goes once the toolbar has been still for the whole delay.
+    if (shown) reveal();
   }
-  function show(next: number, smooth: boolean) {
-    const page = elements()[next], element = track.current;
-    if (!page || !element) return;
-    if (target.current) clearTimeout(target.current.timer);
-    target.current = smooth ? {index: next, timer: setTimeout(() => {target.current = null;}, 700)} : null;
-    if (smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) element.scrollTo({left: page.offsetLeft, behavior: "smooth"});
-    else element.scrollLeft = page.offsetLeft;
-  }
-  function select(next: number) {choose(next); show(next, true);}
-  function go(step: PageStep) {
-    const next = indexRef.current + step;
-    if (!step || next < 0 || next >= pages.length) return;
-    select(next);
-  }
-  // Keep the remembered page in view when the toolbar returns from being hidden or the width changes.
-  // Only a width change moves the pages, so a height change (a docked keyboard opening during a
-  // fling) leaves an in-flight slide alone.
+  // A width change (rotation, the toolbar returning from behind the composer) keeps the page in view.
   useLayoutEffect(() => {
     const element = track.current;
     if (!element) return;
-    show(indexRef.current, false);
-    let width = element.clientWidth;
+    let width = 0;
     const resize = new ResizeObserver(() => {
       if (element.clientWidth === width) return;
       width = element.clientWidth;
-      if (!touch.current && !target.current) show(indexRef.current, false);
+      show(indexRef.current);
     });
     resize.observe(element);
     return () => resize.disconnect();
-  }, [pages.length]);
-  useEffect(() => () => {if (target.current) clearTimeout(target.current.timer);}, []);
-
-  function scrolled() {
+  }, []);
+  // A blocking listener can still cancel the first move of a drag that began while a held key repeats.
+  useEffect(() => {
     const element = track.current;
     if (!element) return;
-    const nearest = nearestPage(elements().map(page => page.offsetLeft), element.scrollLeft);
-    if (target.current) {
-      if (nearest !== target.current.index) return;
-      clearTimeout(target.current.timer); target.current = null;
-    }
-    if (nearest !== indexRef.current) choose(nearest);
-  }
-  const current = () => elements()[indexRef.current];
-  // An edge only counts when a page lies beyond it, so the first and last pages never wrap.
-  function edges(page: HTMLElement) {
-    const {atStart, atEnd} = pageEdges(page);
-    return {atStart: atStart && indexRef.current > 0, atEnd: atEnd && indexRef.current < pages.length - 1};
-  }
-  function touchStart(event: ReactTouchEvent) {
-    const point = event.touches[0];
-    touch.current = event.touches.length === 1 && point ? touchOverscroll(point.clientX, point.clientY) : null;
-    touchRepeats.current = repeats?.() ?? 0;
-  }
-  function touchMove(event: ReactTouchEvent) {
-    const point = event.touches[0], page = current();
-    if (!touch.current || !point || !page || event.touches.length !== 1 || (repeats?.() ?? 0) !== touchRepeats.current) {touch.current = null; return;}
-    go(touch.current(point.clientX, point.clientY, edges(page)));
-  }
-  function wheelMove(event: WheelEvent) {
-    const page = current();
-    if (!page || event.ctrlKey) return;
-    const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? page.clientHeight : 1;
-    go(wheel.current(event.deltaX * scale, event.deltaY * scale, edges(page), performance.now()));
-  }
-  const ended = () => {touch.current = null;};
-  const wheelRef = useRef(wheelMove);
-  wheelRef.current = wheelMove;
-  // A blocking listener sees the page before the wheel scrolls it, so the notch that reaches the
-  // last row never also turns the page.
-  useEffect(() => {
-    const element = track.current, listener = (event: WheelEvent) => wheelRef.current(event);
-    element?.addEventListener("wheel", listener, {passive: false});
-    return () => element?.removeEventListener("wheel", listener);
-  }, []);
+    let started = 0;
+    const start = () => {started = repeats.current;};
+    const move = (event: TouchEvent) => {if (repeats.current !== started && event.cancelable) event.preventDefault();};
+    element.addEventListener("touchstart", start, {passive: true});
+    element.addEventListener("touchmove", move, {passive: false});
+    return () => {element.removeEventListener("touchstart", start); element.removeEventListener("touchmove", move);};
+  }, [repeats]);
 
-  // The tabs pattern: one tab stop, with the arrow keys, Home and End moving between pages.
-  function tabKey(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const last = pages.length - 1;
-    const next = {ArrowRight: index < last ? index + 1 : 0, ArrowLeft: index > 0 ? index - 1 : last, Home: 0, End: last}[event.key];
-    if (next === undefined) return;
-    event.preventDefault();
-    select(next);
-    (event.currentTarget.children[next] as HTMLElement | undefined)?.focus();
-  }
-
+  // Not role="tab": session tabs are the only tabs of the workspace, and tests and assistive technology count them.
   return <>
-    <div ref={track} className="terminal-keys-pages" onScroll={scrolled}
-      onTouchStart={touchStart} onTouchMove={touchMove} onTouchEnd={ended} onTouchCancel={ended}>
-      {pages.map((page, position) => <div key={page.id} id={`${id}-${page.id}`} role="tabpanel" className="terminal-keys-page"
-        data-toolbar-page={page.id} data-current={position === index} aria-labelledby={`${id}-tab-${page.id}`}>{page.content}</div>)}
+    <div ref={track} className="terminal-keys-pages" onScroll={scrolled}>
+      {pages.map(page => <div key={page.id} role="group" aria-label={t(pageLabels[page.id])} className="terminal-keys-page" data-toolbar-page={page.id}>{page.content}</div>)}
     </div>
-    <div className="terminal-keys-pager" role="tablist" aria-label={t('terminalToolbarPages')} onKeyDown={tabKey}>
-      {pages.map((page, position) => <button key={page.id} id={`${id}-tab-${page.id}`} type="button" role="tab" aria-selected={position === index}
-        tabIndex={position === index ? 0 : -1}
-        aria-controls={`${id}-${page.id}`} aria-label={t(pageLabels[page.id])} title={t(pageLabels[page.id])}
+    <div className="terminal-keys-pager" data-visible={screenReader || shown} role="group" aria-label={t('terminalToolbarPages')}>
+      {pages.map((page, position) => <button key={page.id} type="button" aria-current={position === index || undefined} aria-label={t(pageLabels[page.id])} title={t(pageLabels[page.id])}
         // Choosing a page leaves focus, and so the on-screen keyboard, where it was.
         onPointerDown={event => event.preventDefault()}
-        onClick={() => select(position)}><span aria-hidden="true" /></button>)}
+        onClick={() => {select(position); reveal();}}><span aria-hidden="true" /></button>)}
     </div>
   </>;
 }

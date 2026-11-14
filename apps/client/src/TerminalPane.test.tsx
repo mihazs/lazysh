@@ -8,16 +8,29 @@ import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
+import {XtermTerminalAdapter} from "./xtermTerminalAdapter";
 import {accessSnapshot,applyAccessStatus} from './access';
+import {setGestureInsets,unknownInsets} from './gestureInsets';
 const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), invoke: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
 vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
 vi.mock("./bridge", () => ({api: mocks}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
-vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
+vi.mock("./xterm/links", () => ({installTerminalLinks: (_terminal: unknown, open: (uri: string) => void) => {mocks.link = (_event, uri) => open(uri); return {dispose() {}};}}));
+const adapters = new WeakMap<object, XtermTerminalAdapter>();
+/** The real xterm backend over a mock terminal, one per terminal like a session's adapter. */
+function adapterOf(mock: unknown) {
+  let adapter = adapters.get(mock as object);
+  if (!adapter) adapters.set(mock as object, adapter = new XtermTerminalAdapter(mock as never));
+  return adapter;
+}
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), onRender: (_listener:()=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), scrollToBottom: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((code: number, handler: typeof osc) => {if (code === 52) osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), onRender: (_listener:()=>void) => ({dispose() {}}), onScroll: (_listener:()=>void) => ({dispose() {}}), onSelectionChange: (_listener:()=>void) => ({dispose() {}}), onTitleChange: (_listener:(title:string)=>void) => ({dispose() {}}), onBell: (_listener:()=>void) => ({dispose() {}}), onWriteParsed: (_listener:()=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {onBufferChange: (_listener:()=>void) => ({dispose() {}}), active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), scrollToBottom: vi.fn(), select: vi.fn()};
+}
+/** The same session over another terminal and its adapter. */
+function withTerminal(session: LiveSession, mock: unknown): LiveSession {
+  return {...session, terminal: mock, adapter: adapterOf(mock)} as unknown as LiveSession;
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -42,14 +55,155 @@ beforeEach(() => {
 });
 afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealTimers(); vi.unstubAllGlobals();});
 function mount() {
-  return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
+  return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+it('sizes the toolbar keys from the saved key height and follows a change without remounting',()=>{
+  savePreferences({...defaults});
+  mount();
+  const keys=screen.getByLabelText('Terminal keys');
+  const height=()=>keys.style.getPropertyValue('--terminal-key-height');
+  expect(height()).toBe('32px');
+  act(()=>savePreferences({...getPreferences(),toolbarKeyHeight:48}));
+  expect(screen.getByLabelText('Terminal keys')).toBe(keys);
+  expect(height()).toBe('48px');
+  act(()=>savePreferences({...getPreferences(),toolbarKeyHeight:undefined}));
+  expect(height()).toBe('32px');
+});
+/** A window of the given width class; every other media query is false. */
+function stubWindow(phone:boolean) {
+  vi.stubGlobal('matchMedia',(query:string)=>({matches:phone&&query==='(max-width: 600px)',media:query,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){}}));
+}
+describe('bottom menu',()=>{
+  it('remembers a hidden toolbar on a phone for the next session, and a desktop window does not',()=>{
+    stubWindow(true);
+    const first=mount();
+    fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    expect(getPreferences().toolbarHidden).toBe(true);
+    first.unmount();
+    const second=mount();
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Show terminal keys'}));
+    expect(screen.getByLabelText('Terminal keys')).toBeTruthy();
+    expect(getPreferences().toolbarHidden).toBe(false);
+    second.unmount();
+    savePreferences({...defaults});stubWindow(false);
+    mount();
+    fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    expect(getPreferences().toolbarHidden).toBeUndefined();
+  });
+  it('offers the menu as a visible button in screen-reader mode, and its toolbar and composer actions drive the pane',()=>{
+    stubWindow(true);
+    savePreferences({...defaults,screenReader:true});
+    mount();
+    fireEvent.click(screen.getByRole('button',{name:'Open bottom menu'}));
+    fireEvent.click(screen.getByRole('button',{name:'Show composer'}));
+    expect(screen.getByRole('textbox',{name:/./})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Open bottom menu'}));
+    fireEvent.click(screen.getByRole('button',{name:'Hide toolbar'}));
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    expect(screen.getByRole('button',{name:'Hide composer',hidden:true})).toBeTruthy();
+  });
+  it('closes on Android Back before anything else, and the menu button reflects it',()=>{
+    stubWindow(true);
+    savePreferences({...defaults,screenReader:true});
+    const onBackChange=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} onBackChange={onBackChange} />);
+    expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+    const button=screen.getByRole('button',{name:'Open bottom menu'});
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    const back=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+    act(()=>{expect(back()).toBe(true);});
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  });
+  /** #1380, #1435: a bottom menu opened by its handle (gesture navigation, no button) is closed by Back, which never leaves the app. */
+  it('is closed by Android Back from the moment it opens, every time, and the scrim a system Back lands on does not close it',()=>{
+    stubWindow(true);
+    act(()=>setGestureInsets({left:32,right:32,bottom:48,mandatoryBottom:48,navigation:'gesture'}));
+    const onBackChange=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} onBackChange={onBackChange} />);
+    const state=()=>document.querySelector('.bottom-menu')?.getAttribute('data-open');
+    const handler=()=>onBackChange.mock.lastCall?.[1] as (()=>boolean)|null;
+    for(let cycle=0;cycle<100;cycle++){
+      expect(handler(),`cycle ${cycle}: nothing to close, so Back is left to the system`).toBeNull();
+      fireEvent.click(document.querySelector('[data-gesture-handle="bottom"]')!);
+      // The handler exists in the same commit that opens the menu: no moment where Back would leave the app.
+      expect(state()).toBe('true');
+      expect(handler(),`cycle ${cycle}`).toBeTypeOf('function');
+      const scrim=document.querySelector('.bottom-menu-scrim')!;
+      fireEvent.pointerDown(scrim);fireEvent.pointerCancel(scrim);
+      expect(state()).toBe('true');
+      act(()=>{expect(handler()!()).toBe(true);});
+      expect(state()).toBe('false');
+    }
+    act(()=>setGestureInsets(unknownInsets));
+  });
+  describe('as a two-finger swipe from anywhere on the terminal',()=>{
+    const swipeTwoUp=(canvas:HTMLElement)=>{
+      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:300});
+      fireEvent.pointerDown(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:300});
+      fireEvent.pointerMove(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:200});
+      fireEvent.pointerMove(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:200});
+      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:200});
+      fireEvent.pointerUp(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:200});
+    };
+    const bind=(action:'bottomMenu'|'agentView')=>savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,up:action}});
+    const menu=()=>document.querySelector('.bottom-menu');
+    it('opens the bottom menu on a phone, and not on a desktop window',()=>{
+      stubWindow(true);bind('bottomMenu');
+      mount();
+      expect(menu()?.getAttribute('data-open')).toBe('false');
+      swipeTwoUp(screen.getByLabelText('Terminal for Host'));
+      expect(menu()?.getAttribute('data-open')).toBe('true');
+      cleanup();
+      stubWindow(false);
+      mount();
+      swipeTwoUp(screen.getByLabelText('Terminal for Host'));
+      expect(menu()).toBeNull();
+    });
+    it('asks the app to switch between the terminal and the Agent view',()=>{
+      stubWindow(true);bind('agentView');
+      const action=vi.fn();window.addEventListener('lazysh-terminal-action',action);
+      try{
+        mount();
+        swipeTwoUp(screen.getByLabelText('Terminal for Host'));
+        expect(action.mock.calls.map(([event])=>(event as CustomEvent).detail)).toEqual([{sessionId:'ssh',action:'agentView'}]);
+        expect(mocks.write).not.toHaveBeenCalled();
+      }finally{window.removeEventListener('lazysh-terminal-action',action);}
+    });
+    it('keeps the typing and selection guard of the edge swipes',()=>{
+      stubWindow(true);bind('bottomMenu');
+      mount();
+      const canvas=screen.getByLabelText('Terminal for Host');
+      act(()=>{document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'a',bubbles:true}));});
+      swipeTwoUp(canvas);
+      expect(menu()?.getAttribute('data-open')).toBe('false');
+      terminal.hasSelection.mockReturnValue(true);
+      swipeTwoUp(canvas);
+      expect(menu()?.getAttribute('data-open')).toBe('false');
+    });
+  });
+  it('has no menu on a desktop window or for a session that ended',()=>{
+    stubWindow(false);
+    savePreferences({...defaults,screenReader:true});
+    const {container,unmount}=mount();
+    expect(container.querySelector('.bottom-menu')).toBeNull();
+    unmount();
+    stubWindow(true);
+    const ended=render(<TerminalPane session={{id:'ssh',name:'Host',connected:false,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} />);
+    expect(ended.container.querySelector('.bottom-menu')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Open bottom menu'})).toBeNull();
+  });
+});
 it.each(['write','resize'] as const)('keeps structured native and localized %s failures readable',async operation=>{
   let receive!:(data:string)=>void, resized!:(size:{cols:number;rows:number})=>void;
   terminal.onData=listener=>{receive=listener;return{dispose(){}};};
   terminal.onResize=(listener:(size:{cols:number;rows:number})=>void)=>{resized=listener;return{dispose(){}};};
   const reportError=vi.fn();
-  render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+  render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={reportError} />);
   for(const cause of [{kind:'transport_error',message:'Owned transport unavailable'},new LocalUiError('hostToolsClosed')]) {
     mocks[operation].mockRejectedValueOnce(cause);
     await act(async()=>{if(operation==='write')receive('reply');else resized({cols:80,rows:24});});
@@ -64,12 +218,14 @@ function mountInputOwner(initial = "") {
   terminal._core.coreService.onUserInput=(listener:()=>void)=>{mark=listener;return{dispose(){}};};
   terminal.onData=listener=>{receive=listener;return{dispose(){}};};
   terminal.focus.mockImplementation(()=>textarea.focus());
-  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
   const reportError=vi.fn();
   const view=render(<TerminalPane session={session} active reportError={reportError} />);
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
+/** Find, Copy and the saved snippets and chords sit on toolbar pages after the keys; every page is in the document, so a press needs no slide. */
+function pressMore(name:string){fireEvent.click(screen.getByRole('button',{name}));}
 function installCompositionHelper(){Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});}
 function skipLocalCorrection(textarea:HTMLTextAreaElement){act(()=>{
   textarea.value='local correction';textarea.setSelectionRange(16,16);
@@ -95,7 +251,7 @@ it.each([[undefined,2],[false,0]] as const)('returns toolbar keys and chord butt
   mount();
   Object.assign(terminal.options,{scrollOnUserInput});
   fireEvent.click(screen.getByRole('button',{name:'enter'}));
-  fireEvent.click(screen.getByRole('button',{name:'Confirm'}));
+  pressMore('Confirm');
   expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\r']);
   expect(mocks.writeSequence.mock.calls.map(call=>call[1])).toEqual([['\r']]);
   expect(terminal.scrollToBottom).toHaveBeenCalledTimes(follows);
@@ -270,7 +426,7 @@ describe('expanded D-pad pointer ownership',()=>{
       if(boundary==='hidden')hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
       if(boundary==='lock')act(()=>access(true));
       if(['inactive','disconnect','session','terminal'].includes(boundary)){
-        const session=boundary==='session'?{...pad.session,id:'replacement'}:boundary==='terminal'?{...pad.session,terminal:createMockTerminal() as unknown as LiveSession['terminal']}:boundary==='disconnect'?{...pad.session,connected:false}:pad.session;
+        const session=boundary==='session'?{...pad.session,id:'replacement'}:boundary==='terminal'?withTerminal(pad.session,createMockTerminal()):boundary==='disconnect'?{...pad.session,connected:false}:pad.session;
         pad.view.rerender(<TerminalPane session={session} active={boundary!=='inactive'} reportError={pad.reportError} />);
       }
       if(boundary==='close')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
@@ -304,7 +460,7 @@ describe('expanded D-pad pointer ownership',()=>{
     const renamed={...pad.session,name:'Renamed host'};
     pad.view.rerender(<TerminalPane session={renamed} active reportError={pad.reportError} />);
     pad.move(140,100);pad.advance(80);expect(pad.bytes()).toEqual(['\x1b[A','\x1b[C']);
-    pad.view.rerender(<TerminalPane session={{...renamed,terminal:createMockTerminal() as unknown as LiveSession['terminal']}} active reportError={pad.reportError} />);
+    pad.view.rerender(<TerminalPane session={withTerminal(renamed,createMockTerminal())} active reportError={pad.reportError} />);
     pad.advance(800);expect(pad.bytes()).toHaveLength(2);pad.up();
     pad.down();pad.advance(800);expect(pad.bytes()).toHaveLength(2);pad.up();
   });
@@ -381,7 +537,7 @@ it.each(['terminal','composer','search'])('keeps a credential dialog focused whe
   const owner=mountInputOwner();
   screen.getByLabelText('Terminal for Host').append(owner.textarea);
   if(mode==='composer')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
-  if(mode==='search')fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  if(mode==='search')pressMore('Find');
   const dialog=document.createElement('div'),password=document.createElement('input');
   dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');password.type='password';
   dialog.append(password);document.body.append(dialog);password.focus();terminal.focus.mockClear();
@@ -442,6 +598,11 @@ it.each(['inactive','disconnect','replacement','dispose'] as const)('captures di
     expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
   } finally {warn.mockRestore();}
 });
+/** A Herdr host whose guarded history requests fail with this error kind. */
+function herdrHistoryFails(kind:string) {
+  mocks.invoke.mockRejectedValue({kind,message:'Herdr history unavailable'});
+}
+const swipe=async(touch:(type:string,x:number,y:number)=>void)=>act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
 function touchScrollFixture(height?:number, herdr=false, reportError=vi.fn()) {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
@@ -452,7 +613,7 @@ function touchScrollFixture(height?:number, herdr=false, reportError=vi.fn()) {
   target.addEventListener('wheel', event => {wheels.push(event); moves.push(event.deltaY);});
   Object.assign(terminal, {scrollLines: vi.fn((lines: number) => moves.push(lines * (target.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / terminal.rows))});
   if(herdr) Object.assign(terminal,{cols:80});
-  const view = herdr ? render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'herdr',name:'owned'},terminal} as unknown as LiveSession} active reportError={reportError}/>) : mount();
+  const view = herdr ? render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'herdr',name:'owned'},terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={reportError}/>) : mount();
   const canvas = screen.getByLabelText('Terminal for Host');
   const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
     bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
@@ -521,28 +682,40 @@ describe("terminal interactions", () => {
       owner.emit('\x1b[1;1R',false);expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[1;1R');
     } finally {windowFocus.mockRestore();hidden.mockRestore();}
   });
-  it.each([true,false])('submits a guarded composer paste from a focused composer with sendEnter=%s',sendEnter=>{
+  it.each(['Send','Insert'])('%s delivers a composer draft as one bracketed paste, with Enter only for Send',action=>{
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
     try {
-      savePreferences({...defaults,composerSendEnter:sendEnter});
       // xterm brackets the literal paste itself while the remote enables mode 2004.
       const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(`\x1b[200~${text}\x1b[201~`));
       fireEvent.click(screen.getByRole('button',{name:'Compose'}));
       const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'first line\nsecond line'}});composer.focus();
       expect(document.activeElement).toBe(composer);
-      fireEvent.click(screen.getByRole('button',{name:sendEnter?'Send':'Paste draft'}));
+      fireEvent.click(screen.getByRole('button',{name:action}));
       expect(terminal.paste).toHaveBeenCalledExactlyOnceWith('first line\nsecond line');
-      if(sendEnter){
+      if(action==='Send'){
         expect(mocks.writeSequence).toHaveBeenCalledExactlyOnceWith('ssh',['\x1b[200~first line\nsecond line\x1b[201~','\r']);
         expect(mocks.write).not.toHaveBeenCalled();
       } else {
         expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[200~first line\nsecond line\x1b[201~');
         expect(mocks.writeSequence).not.toHaveBeenCalled();
       }
-      expect(screen.queryByLabelText('Compose text')).toBeNull();
-      expect(document.activeElement).toBe(owner.textarea);
+      return waitFor(()=>expect(screen.queryByLabelText('Compose text')).toBeNull()).then(()=>{
+        expect(document.activeElement).toBe(owner.textarea);
+        fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+        expect(screen.getByLabelText('Compose text')).toHaveProperty('value','');
+      });
+    } finally {windowFocus.mockRestore();}
+  });
+  it.each(['Send','Insert'])('keeps the draft and the composer when %s could not write',async action=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    try {
+      const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(text));
+      (action==='Send'?mocks.writeSequence:mocks.write).mockRejectedValueOnce(new Error('queue full'));
       fireEvent.click(screen.getByRole('button',{name:'Compose'}));
-      expect(screen.getByLabelText('Compose text')).toHaveProperty('value','');
+      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'keep me'}});
+      fireEvent.click(screen.getByRole('button',{name:action}));
+      await waitFor(()=>expect(owner.reportError).toHaveBeenCalled());
+      expect(screen.getByLabelText('Compose text')).toHaveProperty('value','keep me');
     } finally {windowFocus.mockRestore();}
   });
   it('never sends Enter for a whitespace-only draft or a paste the terminal did not accept',()=>{
@@ -589,7 +762,7 @@ describe("terminal interactions", () => {
     let finish!: (value: unknown) => void;
     let reject!: (error: string) => void;
     mocks.clipboardRead.mockImplementation(() => new Promise((resolve, fail) => { finish = resolve; reject = fail; }));
-    const session = {id:'native-paste',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const session = {id:'native-paste',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
     const reportError = vi.fn();
     const view = render(<TerminalPane session={session} active reportError={reportError} />);
     const paste = screen.getByRole('button', {name:'paste'});
@@ -625,12 +798,12 @@ describe("terminal interactions", () => {
   it.each(['active tab', 'connection', 'terminal context'] as const)('discards a held paste after %s leaves and returns to the original state', async change => {
     let finish!: (value: string) => void;
     vi.mocked(navigator.clipboard.readText).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-    const original = { id: 'clipboard-original', name: 'Host', connected: true, terminal } as unknown as LiveSession;
+    const original = { id: 'clipboard-original', name: 'Host', connected: true, terminal, adapter: adapterOf(terminal) } as unknown as LiveSession;
     const reportError = vi.fn();
     const view = render(<TerminalPane session={original} active reportError={reportError} />);
     fireEvent.click(screen.getByRole('button', {name: 'paste'}));
     expect(navigator.clipboard.readText).toHaveBeenCalledOnce();
-    const replacement = change === 'terminal context' ? {...original, terminal: createMockTerminal()} as unknown as LiveSession
+    const replacement = change === 'terminal context' ? withTerminal(original, createMockTerminal())
       : change === 'connection' ? {...original, connected: false} : original;
     view.rerender(<TerminalPane session={replacement} active={change !== 'active tab'} reportError={reportError} />);
     view.rerender(<TerminalPane session={original} active reportError={reportError} />);
@@ -644,9 +817,9 @@ describe("terminal interactions", () => {
     let reject!:(error:Error)=>void;
     mocks.writeSequence.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
     const reportError=vi.fn();
-    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={reportError} />);
     if(source==='custom D-pad')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
-    const send=()=>fireEvent.click(screen.getByRole('button',{name:source==='toolbar'?'Timed':'D-pad left corner'}));
+    const send=()=>{if(source==='toolbar')pressMore('Timed');else fireEvent.click(screen.getByRole('button',{name:'D-pad left corner'}));};
     send();expect(mocks.writeSequence).toHaveBeenCalledTimes(1);
     access(true);access();
     await act(async()=>reject(new Error('old request failure')));
@@ -691,13 +864,13 @@ describe("terminal interactions", () => {
     vi.mocked(navigator.clipboard.readText).mockReturnValueOnce(new Promise((_,reject)=>{rejectRead=reject;}));
     vi.mocked(navigator.clipboard.writeText).mockReturnValueOnce(new Promise((_,reject)=>{rejectWrite=reject;}));
     const reportError=vi.fn();
-    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={reportError} />);
     fireEvent.click(screen.getByRole('button',{name:'paste'}));
-    fireEvent.click(screen.getByRole('button',{name:'Copy'}));
+    pressMore('Copy');
     expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected');
     access(true);access();
     fireEvent.click(screen.getByRole('button',{name:'paste'}));
-    fireEvent.click(screen.getByRole('button',{name:'Copy'}));
+    pressMore('Copy');
     expect(navigator.clipboard.readText).toHaveBeenCalledTimes(1);
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
     await act(async()=>{rejectRead(new Error('old read'));rejectWrite(new Error('old write'));});
@@ -709,7 +882,7 @@ describe("terminal interactions", () => {
     ['nextZellijPane','nextPane'],['previousZellijPane','previousPane'],
   ] as const)('routes %s through the attached Zellij command without writing terminal bytes', async (action, command) => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:action}});
-    render(<StrictMode><TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:"literal'$(touch nope)"},terminal} as unknown as LiveSession} active reportError={vi.fn()} /></StrictMode>);
+    render(<StrictMode><TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:"literal'$(touch nope)"},terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} /></StrictMode>);
     const canvas=screen.getByLabelText('Terminal for Host');
     fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
     fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
@@ -731,7 +904,7 @@ describe("terminal interactions", () => {
   it('rejects Zellij navigation on plain, local and other multiplexer terminals and ignores inactive, disconnected, selected or composing views', () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
     const reportError=vi.fn();
-    const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
     const view=render(<TerminalPane session={session} active reportError={reportError} />);
     const swipe=()=>{
       const canvas=screen.getByLabelText('Terminal for Host');
@@ -754,6 +927,16 @@ describe("terminal interactions", () => {
     fireEvent.compositionStart(screen.getByLabelText('Terminal for Host')); swipe();
     expect(reportError).toHaveBeenCalledTimes(4);
     expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
+  });
+  it('refuses the Herdr zoom gesture when discovery allows navigation only', () => {
+    savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,left:'zoomPane'}});
+    const reportError=vi.fn();
+    const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal),attached:{kind:'herdr',name:'work'}} as unknown as LiveSession;
+    render(<TerminalPane session={session} active reportError={reportError} herdrNavigationOnly />);
+    swipeTwoLeft(screen.getByLabelText('Terminal for Host'));
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(reportError.mock.calls[0][0]).toMatchObject({key:'muxLimitedHerdr'});
+    expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it('discards old Zellij errors and starts after an access generation changes', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
@@ -898,7 +1081,7 @@ describe("terminal interactions", () => {
       if(boundary==='access')act(()=>{access(true);access();});
       if(boundary==='blur'){fireEvent(window,new Event('blur'));area.focus();}
       if(boundary==='input')fireEvent.input(area,{inputType:'insertText',data:''});
-      if(['inactive','disconnected','session','terminal'].includes(boundary))view.rerender(<TerminalPane session={{id:boundary==='session'?'new':'ssh',name:'Host',connected:boundary!=='disconnected',terminal:boundary==='terminal'?createMockTerminal():terminal} as unknown as LiveSession} active={boundary!=='inactive'} reportError={vi.fn()} />);
+      if(['inactive','disconnected','session','terminal'].includes(boundary))view.rerender(<TerminalPane session={{id:boundary==='session'?'new':'ssh',name:'Host',connected:boundary!=='disconnected',...(()=>{const next=boundary==='terminal'?createMockTerminal():terminal;return {terminal:next,adapter:adapterOf(next)};})()} as unknown as LiveSession} active={boundary!=='inactive'} reportError={vi.fn()} />);
       touch('touchmove',boundary==='horizontal'?180:100,boundary==='historyward'?260:boundary==='short'?160:140);
       expect(terminal.blur, boundary).not.toHaveBeenCalled();expect(mocks.write).not.toHaveBeenCalled();
       expect(terminal.paste).not.toHaveBeenCalled();expect(mocks.writeSequence).not.toHaveBeenCalled();
@@ -961,7 +1144,7 @@ describe("terminal interactions", () => {
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
     fireEvent.compositionEnd(canvas);
-    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
+    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
     expect(mocks.write).not.toHaveBeenCalled();
@@ -1018,7 +1201,7 @@ describe("terminal interactions", () => {
   it.each(['none','vt200'])('retires short-drag debt at ownership and gesture boundaries in %s mode',mode=>{
     terminal.modes.mouseTrackingMode=mode;
     const {view,canvas,moves,touch,target}=touchScrollFixture(480);
-    const show=(id='ssh',active=true,connected=true)=>view.rerender(<TerminalPane session={{id,name:'Host',connected,terminal} as unknown as LiveSession} active={active} reportError={vi.fn()} />);
+    const show=(id='ssh',active=true,connected=true)=>view.rerender(<TerminalPane session={{id,name:'Host',connected,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active={active} reportError={vi.fn()} />);
     for(const boundary of ['cancel','multitouch','tap','horizontal','mode','height','buffer','scrollback','inactive','disconnect','session','preferences','reader']) {
       terminal.modes.mouseTrackingMode=mode;
       Object.assign(terminal.buffer.active,{type:'normal'});Object.assign(terminal.options,{scrollback:1000});
@@ -1108,12 +1291,35 @@ describe("terminal interactions", () => {
     await act(async()=>observe({kind:'observed',destination:{pane:'owned'}}));
     expect(mocks.invoke).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
   });
-  it.each(['tracking','alternate'])('reports unsupported Herdr history in %s mode without forwarding the swipe into the menu',async mode=>{
+  it.each([
+    ['tracking','herdr_chat_unavailable'],['alternate','herdr_chat_unavailable'],['tracking','herdr_chat_uncertain'],['tracking','herdr_chat_protocol'],
+  ])('scrolls like a wheel in %s mode after guarded history cannot be observed (%s) and reports nothing',async(mode,kind)=>{
     if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
     else Object.assign(terminal.buffer.active,{type:'alternate'});
-    mocks.invoke.mockRejectedValue({kind:'herdr_chat_unavailable',message:'Herdr history unavailable'});
+    herdrHistoryFails(kind);
     const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
-    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    await swipe(touch);
+    expect(wheels).toHaveLength(0);
+    await swipe(touch);
+    expect(reportError).not.toHaveBeenCalled();
+    expect(wheels.length).toBeGreaterThan(0);
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([{kind:'observe'}]);
+  });
+  it('keeps trying guarded history after a busy guard and reports it',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    herdrHistoryFails('herdr_chat_busy');
+    const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
+    await swipe(touch);await swipe(touch);
+    expect(reportError).toHaveBeenCalledTimes(2);
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([{kind:'observe'},{kind:'observe'}]);
+    expect(wheels).toHaveLength(0);
+  });
+  it.each(['tracking','alternate'])('reports a failed Herdr history scroll in %s mode without forwarding the swipe into the menu',async mode=>{
+    if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
+    else Object.assign(terminal.buffer.active,{type:'alternate'});
+    mocks.invoke.mockResolvedValueOnce({kind:'observed',destination:{pane:'owned'}}).mockRejectedValue({kind:'herdr_chat_unavailable',message:'Herdr history unavailable'});
+    const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
+    await swipe(touch);
     expect(reportError).toHaveBeenCalledWith(expect.objectContaining({key:'unavailable'}));
     await uiI18n.changeLanguage('pt-BR');
     expect(uiErrorText(reportError.mock.calls[0][0])).toBe('Indisponível.');
@@ -1224,7 +1430,7 @@ describe("terminal interactions", () => {
     fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100});
     fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0});
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "Next window"}));
+    pressMore("Next window");
     expect(mocks.writeSequence).toHaveBeenCalledWith("ssh", ["\x02","n"]);
   });
   it("requires one explicit approval per remote clipboard write and ignores read requests", () => {
@@ -1268,7 +1474,7 @@ describe("terminal interactions", () => {
   it("keeps the confirmation available when the OS browser cannot open the link", async () => {
     mocks.openWebUrl.mockRejectedValue('No browser is installed.');
     const reportError = vi.fn();
-    render(<TerminalPane session={{id: 'ssh', name: 'Host', connected: true, terminal} as unknown as LiveSession} active reportError={reportError} />);
+    render(<TerminalPane session={{id: 'ssh', name: 'Host', connected: true, terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={reportError} />);
     act(() => {mocks.link?.(new MouseEvent('click'), 'https://example.com/a');});
     fireEvent.click(screen.getByRole('button', { name: 'Open in browser' }));
     await waitFor(() => expect(reportError).toHaveBeenCalledWith('No browser is installed.'));
@@ -1281,14 +1487,14 @@ describe("terminal interactions", () => {
   it("keeps snippets editable and uses xterm paste for composition, then searches retained history", () => {
     savePreferences({...defaults, snippets: [{label: "project", text: "cd hello"}]});
     mount();
-    fireEvent.click(screen.getByRole("button", {name: "project"}));
+    pressMore("project");
     expect(terminal.paste).not.toHaveBeenCalled();
     expect((screen.getByLabelText("Compose text") as HTMLTextAreaElement).value).toBe("cd hello");
     fireEvent.change(screen.getByLabelText("Compose text"), {target: {value: "你好"}});
     fireEvent.click(screen.getByRole("button", {name: "Send"}));
     expect(terminal.paste).toHaveBeenCalledWith("你好");
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "Find"}));
+    pressMore("Find");
     fireEvent.change(screen.getByLabelText("Search terminal history"), {target: {value: "world"}});
     fireEvent.click(screen.getByRole("button", {name: "Next"}));
     expect(terminal.scrollToLine).toHaveBeenCalledWith(1);
@@ -1300,7 +1506,7 @@ function pendingZellijNavigation() {
   let reject!: (error: unknown) => void;
   mocks.zellijNavigate.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
   const reportError = vi.fn();
-  const session = {id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession;
+  const session = {id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
   const view = render(<TerminalPane session={session} active reportError={reportError} />);
   return {reject: (error: unknown) => reject(error), reportError, session, view, canvas: screen.getByLabelText('Terminal for Host')};
 }
@@ -1315,7 +1521,7 @@ function swipeTwoLeft(canvas: HTMLElement, releaseSecond = true) {
 
 function LocaleTerminal() {
   useUi();
-  const [session]=useState(()=>({id:"ssh",name:"Host <raw> {{name}} 中文",connected:true,terminal} as unknown as LiveSession));
+  const [session]=useState(()=>({id:"ssh",name:"Host <raw> {{name}} 中文",connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession));
   const [error,setError]=useState<UiErrorCause>("");
   return <><TerminalPane session={session} active reportError={setError}/>{error && <p role="alert">{uiErrorText(error)}</p>}</>;
 }
@@ -1344,7 +1550,7 @@ it.each([
 it('retains search result, modifier state and exact input bytes across language changes',async()=>{
   render(<LocaleTerminal/>);
   const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.click(ctrl);fireEvent.click(ctrl);
-  fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  pressMore('Find');
   const input=screen.getByRole('textbox',{name:'Search terminal history'});
   fireEvent.change(input,{target:{value:'world'}});input.focus();fireEvent.submit(input.closest('form')!);
   expect(screen.getByText('Match on line 2')).toBeTruthy();
@@ -1355,7 +1561,7 @@ it('retains search result, modifier state and exact input bytes across language 
   expect(terminal.select).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
   await act(async()=>{await uiI18n.changeLanguage('es');});
   expect(screen.getByText('Coincidencia en la línea 2')).toBeTruthy();
-  expect(ctrl.textContent).toBe('ctrl · bloqueado');
+  expect(ctrl.getAttribute('aria-label')).toBe('ctrl · bloqueado');
   fireEvent.click(screen.getByRole('button',{name:'c'}));expect(mocks.write).toHaveBeenCalledWith('ssh','\x03');
   fireEvent.change(input,{target:{value:'raw-no-match'}});fireEvent.submit(input.closest('form')!);
   await act(async()=>{await uiI18n.changeLanguage('en');});
@@ -1378,7 +1584,7 @@ it('keeps one explicit OSC copy through a held write and retranslates only its l
   expect(screen.getByRole('alert').textContent).toContain('El acceso al portapapeles no estaba disponible.');
   await act(async()=>{await uiI18n.changeLanguage('en');});
   expect(screen.getByRole('alert').textContent).toBe('Clipboard access was unavailable. Use your system copy menu.');
-  expect(terminal.parser.registerOscHandler).toHaveBeenCalledTimes(1);
+  expect(terminal.parser.registerOscHandler.mock.calls.filter(([code])=>code===52)).toHaveLength(1);
   expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
 });
 it('retains a held paste and the same link operation without translating raw diagnostics',async()=>{
@@ -1428,7 +1634,7 @@ it.each(['key','chord'] as const)('retains a synchronous %s parser cause without
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw new LocalUiError('validationUnknownKeyValue1','{{<literal>}}');});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Parser fixture'}));
+    if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'tab'}));else pressMore('Parser fixture');
     expect(parse).toHaveBeenCalledTimes(1);
     for(const locale of ['pt-BR','es','en']){
       await act(async()=>{await uiI18n.changeLanguage(locale);});
@@ -1443,7 +1649,7 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw raw;});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Raw parser fixture'}));
+    if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'tab'}));else pressMore('Raw parser fixture');
     await act(async()=>{await uiI18n.changeLanguage('es');});
     expect(screen.getByRole('alert').textContent).toBe(branch==='key'?String(raw):raw.message);
   }finally{parse.mockRestore();}
@@ -1453,7 +1659,7 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
 describe("extended touch toolbar", () => {
   it("keeps Tab, arrows and Attach momentary and dispatches only once after a touch release", () => {
     vi.useFakeTimers(); const onOpenAttachments=vi.fn();
-    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
     for (const name of ['tab','Arrow right','Attach']) {
       const button=screen.getByRole('button',{name});
       fireEvent.pointerDown(button,{pointerId:11,pointerType:'touch'});
@@ -1516,7 +1722,7 @@ describe("extended touch toolbar", () => {
     act(()=>vi.advanceTimersByTime(560)); expect(mocks.write).toHaveBeenCalledTimes(3);
     fireEvent.pointerCancel(left,{pointerId:7}); act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
     fireEvent.pointerDown(left,{pointerId:8});
-    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
+    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
   });
   it.each((["pending", "repeating"] as const).flatMap(phase=>[true,false].map(notify=>({phase,notify}))))("cancels a $phase held key when hidden (visibility event=$notify)", ({phase,notify}) => {
@@ -1545,7 +1751,7 @@ describe("extended touch toolbar", () => {
   });
   it("opens the existing attachment flow only for an active connected remote terminal", () => {
     const onOpenAttachments=vi.fn();
-    const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
     const view=render(<TerminalPane session={session} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
     fireEvent.click(screen.getByRole('button',{name:'Attach'})); expect(onOpenAttachments).toHaveBeenCalledOnce();
     view.rerender(<TerminalPane session={{...session,local:true}} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
@@ -1559,9 +1765,15 @@ it("keeps ordinary terminal input usable and disables virtual modifiers when xte
   fireEvent.click(screen.getByRole('button',{name:'esc'})); expect(mocks.write).toHaveBeenCalledWith('ssh','\x1b');
 });
 
-it("portals only the active terminal controls into the existing header and retains literal drafts", () => {
+it("portals only the active terminal controls into the existing header and retains literal drafts", async () => {
   const target=document.createElement('div'); document.body.append(target);
-  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
+  // The terminal accepts the literal paste, as xterm does, so the draft leaves with it.
+  let mark!:()=>void, receive!:(data:string)=>void;
+  terminal._core.coreService.onUserInput=(listener:()=>void)=>{mark=listener;return{dispose(){}};};
+  terminal.onData=listener=>{receive=listener;return{dispose(){}};};
+  terminal.paste.mockImplementation(text=>{mark();receive(text);});
+  const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
   const reportError=vi.fn(); const view=render(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
   try {
     expect(within(target).getAllByRole('button')).toHaveLength(2);
@@ -1573,17 +1785,17 @@ it("portals only the active terminal controls into the existing header and retai
     fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
     expect(screen.getByLabelText('Compose text')).toHaveProperty('value','c');
     fireEvent.click(screen.getByRole('button',{name:'Send'})); expect(terminal.paste).toHaveBeenCalledWith('c');
-    expect(screen.queryByLabelText('Compose text')).toBeNull();
+    await waitFor(()=>expect(screen.queryByLabelText('Compose text')).toBeNull());
     view.rerender(<TerminalPane session={session} active={false} reportError={reportError} controlsTarget={target} />);
     expect(target.childElementCount).toBe(0);
     view.rerender(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
     expect(within(target).getAllByRole('button')).toHaveLength(2);
     view.unmount(); expect(target.childElementCount).toBe(0);
-  } finally {target.remove();}
+  } finally {windowFocus.mockRestore();target.remove();}
 });
 
 it('publishes only the active local overlay Back handler and keeps its draft without sending',()=>{
-  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
   const onBackChange=vi.fn(),reportError=vi.fn();
   const view=render(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
   expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
@@ -1608,7 +1820,7 @@ it('routes every Mosh fit path through proposals and guarded intents without cle
   let observe!:()=>void,receive!:(size:{cols:number;rows:number})=>void;
   vi.stubGlobal('ResizeObserver',class {constructor(callback:()=>void){observe=callback;}observe(){}disconnect(){}});
   const stop=vi.fn(),controller={onResizeIntent:vi.fn(callback=>{receive=callback;return{dispose:stop};}),requestSize:vi.fn(),dispose:vi.fn()};
-  const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
+  const session={id:'mosh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal),moshResize:controller} as unknown as LiveSession;
   const resized=vi.spyOn(terminal,'onResize'),reportError=vi.fn();
   try {
     const view=render(<TerminalPane session={session} active reportError={reportError}/>);
@@ -1652,6 +1864,84 @@ it('keeps ordinary non-Mosh fits and resize notifications on the stock path',asy
 it('reports an unsupported measured Mosh size without clearing the canonical screen or issuing remote resize',()=>{
   const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(6000),reportError=vi.fn();
   const controller={onResizeIntent:()=>({dispose(){}}),requestSize:()=>{throw new Error('unsupported measured grid');}};
-  const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
+  const session={id:'mosh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal),moshResize:controller} as unknown as LiveSession;
   try{render(<TerminalPane session={session} active reportError={reportError}/>);expect(reportError).toHaveBeenCalled();expect(mocks.fit).not.toHaveBeenCalled();expect(mocks.resize).not.toHaveBeenCalled();}finally{width.mockRestore();}
+});
+
+describe('soft keyboard on a touch screen', () => {
+  const touchScreen = () => vi.stubGlobal('matchMedia', (query: string) => ({matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {}}));
+  // Each test starts long after the last one, so a keyboard carried by an earlier test has expired.
+  let clock = 0;
+  let now: { mockReturnValue(value: number): unknown; mockRestore(): void };
+  beforeEach(() => {clock += 100_000; now = vi.spyOn(performance, 'now').mockReturnValue(clock);});
+  afterEach(() => now.mockRestore());
+  function editableTerminal() {
+    const element = document.createElement('div'), textarea = document.createElement('textarea');
+    element.append(textarea);
+    const mock = Object.assign(createMockTerminal(), {element, textarea});
+    mock.focus.mockImplementation(() => textarea.focus());
+    return mock;
+  }
+  const pair = (first = editableTerminal(), second = editableTerminal()) => ({
+    first, second,
+    panes: (shown: 'first' | 'second', typing?: 'first') => <>{([['first', first], ['second', second]] as const).map(([id, mock]) =>
+      <TerminalPane key={id} session={{id, name: id, connected: true, terminal: mock, adapter: adapterOf(mock)} as unknown as LiveSession} active={shown === id} typingActivation={typing === id} reportError={vi.fn()} />)}</>,
+  });
+
+  it('never focuses a terminal that navigation activates, and keeps the keyboard it already holds', () => {
+    touchScreen();
+    const {first, second, panes} = pair();
+    const view = render(panes('first'));
+    expect(first.focus).not.toHaveBeenCalled();
+    // The user taps the terminal, which raises the keyboard.
+    act(() => first.textarea.focus());
+    view.rerender(panes('second'));
+    expect(second.focus).toHaveBeenCalled();
+    expect(document.activeElement).toBe(second.textarea);
+    // A terminal activated with no keyboard open stays unfocused.
+    act(() => second.textarea.blur());
+    now.mockReturnValue(clock + 10_000);
+    first.focus.mockClear();
+    view.rerender(panes('first'));
+    expect(first.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(first.textarea);
+  });
+
+  it('focuses a terminal opened to type in once, and treats every later activation as navigation', () => {
+    touchScreen();
+    const {first, second, panes} = pair();
+    const view = render(panes('first', 'first'));
+    expect(first.focus).toHaveBeenCalled();
+    act(() => first.textarea.blur());
+    view.rerender(panes('second'));
+    first.focus.mockClear();
+    view.rerender(panes('first'));
+    expect(first.focus).not.toHaveBeenCalled();
+    expect(second.focus).not.toHaveBeenCalled();
+  });
+
+  it('keeps focusing an activated terminal with a mouse', () => {
+    const {first, panes} = pair();
+    const view = render(panes('second'));
+    view.rerender(panes('first'));
+    expect(first.focus).toHaveBeenCalled();
+  });
+});
+
+describe('the Herdr switch in the session header', () => {
+  const session = (attached?: {kind: string; name: string}) => ({id: 'ssh', name: 'Host', connected: true, terminal, adapter: adapterOf(terminal), ...(attached ? {attached} : {})}) as unknown as LiveSession;
+  it('opens Spaces for a Herdr terminal and is absent from any other terminal', () => {
+    const action = vi.fn(); window.addEventListener('lazysh-terminal-action', action);
+    try {
+      const view = render(<TerminalPane session={session()} active reportError={vi.fn()} />);
+      expect(screen.queryByRole('button', {name: 'Switch Herdr workspace, tab or pane'})).toBeNull();
+      view.rerender(<TerminalPane session={session({kind: 'tmux', name: 'work'})} active reportError={vi.fn()} />);
+      expect(screen.queryByRole('button', {name: 'Switch Herdr workspace, tab or pane'})).toBeNull();
+      view.rerender(<TerminalPane session={session({kind: 'herdr', name: 'work'})} active reportError={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', {name: 'Switch Herdr workspace, tab or pane'}));
+      expect(action.mock.calls.map(([event]) => (event as CustomEvent).detail)).toEqual([{sessionId: 'ssh', action: 'openWorkspaces'}]);
+      // Opening Spaces is navigation: it writes nothing to the terminal.
+      expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
+    } finally {window.removeEventListener('lazysh-terminal-action', action);}
+  });
 });

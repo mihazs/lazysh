@@ -1,0 +1,23 @@
+
+
+❯ Reply with only the word ok
+
+● ok
+
+✻ Cogitated for 1s · done 12:37
+
+❯ Use the AskUserQuestion tool to ask me to pick a color, options Red and Blue. Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you want to pick?
+
+❯ 1. Red
+     Pick red.
+  2. Blue
+     Pick blue.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

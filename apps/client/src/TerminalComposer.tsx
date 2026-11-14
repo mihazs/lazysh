@@ -1,15 +1,16 @@
-import {ClipboardPaste,Eraser,FileText,Image as ImageIcon,Paperclip,SendHorizontal,X} from 'lucide-react';
+import {ClipboardPaste,Eraser,FileText,GripHorizontal,Image as ImageIcon,Keyboard,KeyboardOff,Minimize2,Paperclip,PenLine,SendHorizontal,X} from 'lucide-react';
 import {Fragment,useEffect,useId,useLayoutEffect,useRef,useState,type KeyboardEvent,type Ref} from 'react';
 import {t,useUi} from './i18n/core';
 import {shellPath} from './attachment';
+import {useFloatingComposer} from './useFloatingComposer';
 import {atomicComposerEdit,composerTokenSpans,composerTokenText,removeComposerToken,snapComposerSelection,type ComposerAttachment} from './composerTokens';
 import './TerminalComposerSheet.css';
 
 const appleShortcut = () => /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
-/** Send needs visible content; paste-only keeps accepting any nonempty draft. */
-export function composerDraftReady(value: string, sendEnter: boolean) {
-  return sendEnter ? value.trim().length > 0 : value.length > 0;
+/** Send (with Enter) needs visible content; Insert (without Enter) accepts any nonempty draft. */
+export function composerDraftReady(value: string, enter: boolean) {
+  return enter ? value.trim().length > 0 : value.length > 0;
 }
 
 /**
@@ -29,14 +30,24 @@ function usePreviewUrl(blob:Blob|undefined) {
   return url;
 }
 
-export default function TerminalComposer({value,onChange,onSubmit,onClose,disabled,sendEnter,textareaRef,onAttach,attachments=[]}:{
-  value:string;onChange:(value:string)=>void;onSubmit:()=>void;onClose:()=>void;disabled:boolean;sendEnter:boolean;textareaRef?:Ref<HTMLTextAreaElement>;onAttach?:()=>void;
+export default function TerminalComposer({value,onChange,onSubmit,onClose,disabled,sendEnter,textareaRef,onAttach,floating=false,onCollapse,cursorBand,keyboard,attachments=[]}:{
+  /** `onSubmit(true)` is Send (text, then Enter); `onSubmit(false)` is Insert (text only). */
+  value:string;onChange:(value:string)=>void;onSubmit:(enter:boolean)=>void;onClose:()=>void;disabled:boolean;
+  /** Whether the Ctrl+Enter shortcut and the highlighted button send Enter; the other action stays one button or Shift away. */
+  sendEnter:boolean;textareaRef?:Ref<HTMLTextAreaElement>;onAttach?:()=>void;
+  /** A small movable panel over the terminal instead of a sheet that covers it; `onCollapse` runs once it folds into its handle. */
+  floating?:boolean;onCollapse?:()=>void;
+  /** The terminal's cursor row in viewport coordinates, so a first placement can keep clear of it. */
+  cursorBand?:()=>{top:number;bottom:number}|null;
+  /** The soft keyboard's real state and its toggle, on touch devices; a floating panel carries it in its header. */
+  keyboard?:{open:boolean;toggle:()=>void};
   /** Uploaded files the draft references through inline tokens. */
   attachments?:readonly ComposerAttachment[];
 }) {
   useUi();
   const editorId=useId(), hintId=useId(), previewId=useId();
   const sheet=useRef<HTMLDivElement>(null);
+  const frame=useFloatingComposer(floating,sheet,cursorBand);
   const editor=useRef<HTMLTextAreaElement|null>(null);
   const mirror=useRef<HTMLDivElement>(null);
   const composing=useRef(false);
@@ -81,28 +92,30 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
   // WebKit keeps the layout viewport under the soft keyboard; reserve the covered part.
   useEffect(()=>{
     const viewport=window.visualViewport;
-    if(!viewport)return;
-    let frame=0;
+    // A floating panel lifts itself, from its terminal area rather than from its own edge.
+    if(!viewport||floating)return;
+    let frameId=0;
     const update=()=>{
       const element=sheet.current;
       if(!element)return;
       const covered=Math.max(0,Math.round(element.getBoundingClientRect().bottom-(viewport.offsetTop+viewport.height)));
       element.style.setProperty('--terminal-composer-keyboard',`${covered}px`);
     };
-    const schedule=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(update);};
+    const schedule=()=>{cancelAnimationFrame(frameId);frameId=requestAnimationFrame(update);};
     update();
     viewport.addEventListener('resize',schedule);viewport.addEventListener('scroll',schedule);
-    return()=>{cancelAnimationFrame(frame);viewport.removeEventListener('resize',schedule);viewport.removeEventListener('scroll',schedule);};
-  },[]);
-  const ready=!disabled&&composerDraftReady(value,sendEnter);
+    return()=>{cancelAnimationFrame(frameId);viewport.removeEventListener('resize',schedule);viewport.removeEventListener('scroll',schedule);};
+  },[floating]);
+  const sendReady=!disabled&&composerDraftReady(value,true),insertReady=!disabled&&composerDraftReady(value,false);
   const characters=Array.from(value).length, lines=value?value.split('\n').length:0;
-  const keys=`${appleShortcut()?'⌘':'Ctrl'}+Enter`;
+  const keys=`${appleShortcut()?'⌘':'Ctrl'}+Enter`,otherKeys=`${appleShortcut()?'⌘':'Ctrl'}+Shift+Enter`;
   const keyDown=(event:KeyboardEvent<HTMLDivElement>)=>{
     if(event.nativeEvent.isComposing||event.keyCode===229)return;
     if(event.key==='Escape'){event.preventDefault();event.stopPropagation();onClose();}
-    else if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey&&event.target===editor.current){
+    else if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&event.target===editor.current){
       event.preventDefault();
-      if(ready)onSubmit();
+      const enter=sendEnter!==event.shiftKey;
+      if(enter?sendReady:insertReady)onSubmit(enter);
     }
   };
   const edit=(next:string)=>{
@@ -148,10 +161,22 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
     if(typeof textareaRef==='function')textareaRef(element);
     else if(textareaRef)textareaRef.current=element;
   };
-  return <div ref={sheet} className="terminal-compose terminal-draft-composer terminal-composer-sheet" onKeyDown={keyDown}>
+  const collapsed=floating&&frame.collapsed;
+  const fold=(folded:boolean)=>{
+    frame.setCollapsed(folded);
+    if(folded){editor.current?.blur();onCollapse?.();}
+    else requestAnimationFrame(()=>editor.current?.focus());
+  };
+  return <div ref={sheet} className={`terminal-compose terminal-draft-composer terminal-composer-sheet${floating?' terminal-composer-floating':''}`} data-collapsed={collapsed||undefined} onKeyDown={keyDown}>
+    {collapsed&&<button type="button" className="icon-button terminal-composer-expand" title={t('terminalComposerExpand')} aria-label={t('terminalComposerExpand')} aria-expanded={false} onClick={()=>fold(false)}><PenLine size={20} aria-hidden="true"/></button>}
     <div className="terminal-composer-head">
+      {floating&&<button type="button" className="icon-button terminal-composer-grip" title={t('terminalComposerMove')} aria-label={t('terminalComposerMove')} aria-describedby={`${hintId}-move`} {...frame.grip}><GripHorizontal size={20} aria-hidden="true"/></button>}
       <label htmlFor={editorId}>{t('terminalComposeText')}</label>
       <span className="terminal-composer-count">{t('terminalDraftCharacters',{count:characters})} · {t('terminalDraftLines',{count:lines})}</span>
+      {floating&&<><span id={`${hintId}-move`} className="sr-only">{t('terminalComposerMoveHint')}</span>
+        {keyboard&&<button type="button" className="icon-button" data-keyboard={keyboard.open?'open':'closed'} title={t(keyboard.open?'terminalHideKeyboard':'terminalShowKeyboard')} aria-label={t(keyboard.open?'terminalHideKeyboard':'terminalShowKeyboard')} onPointerDown={event=>event.preventDefault()} onClick={keyboard.toggle}>{keyboard.open?<KeyboardOff size={18} aria-hidden="true"/>:<Keyboard size={18} aria-hidden="true"/>}</button>}
+        <button type="button" className="icon-button terminal-composer-fold" title={t('terminalComposerCollapse')} aria-label={t('terminalComposerCollapse')} aria-expanded={true} onClick={()=>fold(true)}><Minimize2 size={18} aria-hidden="true"/></button>
+        <button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={onClose}><X size={18} aria-hidden="true"/></button></>}
     </div>
     {attachments.length>0&&<ul className="terminal-composer-attachments" aria-label={t('terminalComposerAttachments')}>
       {attachments.map(attachment=>{
@@ -174,7 +199,7 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
       {spans.length>0&&<div ref={mirror} className="terminal-composer-mirror" aria-hidden="true">
         {spans.map((span,index)=><Fragment key={span.start}>{value.slice(index?spans[index-1].end:0,span.start)}<mark data-kind={span.attachment.kind}>{value.slice(span.start,span.end)}</mark></Fragment>)}{value.slice(spans.at(-1)!.end)}{' '}
       </div>}
-      <textarea id={editorId} ref={setEditor} rows={6} maxLength={65536} value={value} aria-describedby={hintId}
+      <textarea id={editorId} ref={setEditor} rows={floating?3:6} maxLength={65536} value={value} aria-describedby={hintId}
         onChange={event=>edit(event.target.value)} onSelect={select} onClick={pointerSelect}
         onScroll={event=>{if(mirror.current)mirror.current.scrollTop=event.currentTarget.scrollTop;}}
         onCompositionStart={compositionStart} onCompositionEnd={event=>compositionEnd(event.currentTarget.value)}/>
@@ -182,14 +207,17 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
     <span className="sr-only" role="status">{announcement}</span>
     <div className="terminal-compose-actions terminal-draft-actions">
       <div className="terminal-composer-secondary">
-        <button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={onClose}><X size={20} aria-hidden="true"/></button>
+        {!floating&&<button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={onClose}><X size={20} aria-hidden="true"/></button>}
         <button type="button" className="icon-button" title={t('terminalClearDraft')} aria-label={t('terminalClearDraft')} disabled={!value} onClick={()=>{onChange('');editor.current?.focus();}}><Eraser size={20} aria-hidden="true"/></button>
         {onAttach&&<button type="button" className="icon-button" title={t('appAttach')} aria-label={t('appAttach')} onClick={onAttach}><Paperclip size={20} aria-hidden="true"/></button>}
       </div>
       <div className="terminal-composer-primary">
-        <span id={hintId} className="terminal-composer-hint">{t(sendEnter?'terminalComposerSendHint':'terminalComposerPasteHint',{keys})}</span>
-        <button type="button" className="terminal-draft-paste terminal-composer-send" aria-label={t(sendEnter?'terminalSendDraft':'terminalPasteDraft')} title={t(sendEnter?'terminalSendDraftDescription':'terminalPasteDraftDescription')} disabled={!ready} onClick={onSubmit}>
-          {sendEnter?<SendHorizontal size={18} aria-hidden="true"/>:<ClipboardPaste size={18} aria-hidden="true"/>}<span>{t(sendEnter?'terminalSendDraft':'terminalPasteDraft')}</span>
+        <span id={hintId} className="terminal-composer-hint">{t(sendEnter?'terminalComposerSendHint':'terminalComposerPasteHint',{keys})} · {t(sendEnter?'terminalComposerPasteHint':'terminalComposerSendHint',{keys:otherKeys})}</span>
+        <button type="button" className="terminal-draft-paste terminal-composer-send" data-primary={!sendEnter||undefined} aria-label={t('terminalPasteDraft')} title={t('terminalPasteDraftDescription')} disabled={!insertReady} onClick={()=>onSubmit(false)}>
+          <ClipboardPaste size={18} aria-hidden="true"/><span>{t('terminalPasteDraft')}</span>
+        </button>
+        <button type="button" className="terminal-composer-send" data-primary={sendEnter||undefined} aria-label={t('terminalSendDraft')} title={t('terminalSendDraftDescription')} disabled={!sendReady} onClick={()=>onSubmit(true)}>
+          <SendHorizontal size={18} aria-hidden="true"/><span>{t('terminalSendDraft')}</span>
         </button>
       </div>
     </div>

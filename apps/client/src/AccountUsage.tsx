@@ -1,15 +1,30 @@
+import {useEffect,useRef} from 'react';
 import {Activity,Download,RefreshCw} from 'lucide-react';
 import {t,useUi,formatDateTime} from './i18n/core';
 import {accountUsageHeadline,accountUsageMessages,accountUsagePercent,accountUsageSpendPercent,accountUsageStale} from './accountUsageReport';
 import type {AccountUsageModel} from './useAccountUsage';
 import './AccountUsage.css';
-export function AccountUsageBar({model,onOpen}:{model:AccountUsageModel;onOpen:()=>void}) {
+/** The status-bar chip: the account of the agent in the current pane (or the chosen one), with an honest label when that account is not reported. */
+export function AccountUsageBar({model,onOpen,onShown}:{model:AccountUsageModel;onOpen:()=>void;onShown?:(shown:boolean)=>void}) {
   useUi();
-  const {entry,response,refreshing}=model;
+  const chip=useRef<HTMLButtonElement>(null);
+  // Reports whether the chip has a box on screen: a short phone window or a closed menu hides it, and nothing then needs to follow the pane.
+  useEffect(()=>{
+    const node=chip.current;
+    if(!node||!onShown)return;
+    if(typeof ResizeObserver==='undefined'){onShown(true);return()=>onShown(false);}
+    const observer=new ResizeObserver(()=>onShown(node.getClientRects().length>0));
+    observer.observe(node);
+    return()=>{observer.disconnect();onShown(false);};
+  },[onShown]);
+  const {bar:entry,response,refreshing,target}=model;
   const headline=entry?accountUsageHeadline(entry):null;
   const stale=!!entry&&(accountUsageStale(entry)||response?.state!=='ready');
-  return <button type="button" className="account-usage-chip" onClick={onOpen} aria-label={t('accountUsageOpen')} title={entry?`${entry.name}: ${headline?.text}${stale?` · ${t('accountUsageStaleShort')}`:''}`:t('accountUsageTitle')}>
-    <Activity size={12} aria-hidden="true"/>{headline?.percent!==null&&headline?.percent!==undefined&&<meter min={0} max={100} value={Math.min(100,headline.percent)} aria-hidden="true"/>}<span>{entry?`${entry.shortName} ${headline?.text}`:t(refreshing?'accountUsageLoading':response?.state==='companion_required'?'accountUsageSetupShort':response?.state&&response.state!=='ready'?'accountUsageUnavailableShort':response?.report?.entries.length===0?'accountUsageEmptyShort':'accountUsageShort')}</span>{stale&&<span aria-label={t('accountUsageStaleLabel')}>· {t('accountUsageStaleShort')}</span>}
+  // A ready report without the account the pane's agent spends says so, rather than showing another account's quota.
+  const absent=!entry&&!!target&&!target.pending&&response?.state==='ready'&&!!response.report?.entries.length?t(target.providerId===null?'accountUsageAgentUnsupported':'accountUsageProviderMissing',{name:target.label}):null;
+  const text=entry?`${entry.name} ${headline?.text}`:absent??t(refreshing||target?.pending?'accountUsageLoading':response?.state==='companion_required'?'accountUsageSetupShort':response?.state&&response.state!=='ready'?'accountUsageUnavailableShort':response?.report?.entries.length===0?'accountUsageEmptyShort':'accountUsageShort');
+  return <button type="button" ref={chip} className="account-usage-chip" onClick={onOpen} aria-label={t('accountUsageOpen')} data-following={target?.agent?'':undefined} title={entry?`${entry.name}: ${headline?.text}${stale?` · ${t('accountUsageStaleShort')}`:''}`:absent??t('accountUsageTitle')}>
+    <Activity size={12} aria-hidden="true"/>{headline?.percent!==null&&headline?.percent!==undefined&&<meter min={0} max={100} value={Math.min(100,headline.percent)} aria-hidden="true"/>}<span>{text}</span>{stale&&<span aria-label={t('accountUsageStaleLabel')}>· {t('accountUsageStaleShort')}</span>}
   </button>;
 }
 export function AccountUsageDetails({model,onRestoreHostTools,onOpenCompanion}:{model:AccountUsageModel;onOpenCompanion?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void}) {

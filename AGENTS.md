@@ -7,11 +7,31 @@ Use trunk-based development.
 - Target `main` for every pull request and merge completed work into `main`.
 - If a change depends on another change, merge that prerequisite into `main` first, then start the dependent branch from updated `main`.
 - Keep branches short-lived. Track work with GitHub issues, the project board, and pull requests.
-- Never open draft pull requests. Open a PR only when its change is complete and locally verified, then drive it to merge. Keep at most 10 pull requests open at a time; finish, merge or close existing ones before opening more.
+- Never open draft pull requests. Open a PR only when its change is complete and locally verified, then drive it to merge. There is no limit on open pull requests: open each one as soon as it is complete and verified, and never hold finished work back waiting for a free slot.
 - Review changes, address findings, and run relevant checks. Once ready, merge autonomously; do not leave a ready pull request open awaiting user confirmation.
 - Every completed milestone must lead to a published version. Follow the release policy in `CONTRIBUTING.md`; version preparation or a merge alone is not delivery. Verify the public release and its assets before reporting the milestone released.
-- Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes, then verify the published GitHub release and its assets before reporting the issue released. Do not hold other ready PRs to keep releases separate; the next version PR ships whatever merged meanwhile.
+- Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes and the `main-verdict` run for its base commit (the `main` tip it was generated from) has completed green (a running verdict is not green; a red one means fix `main` first), then verify the published GitHub release and its assets before reporting the issue released. Do not hold other ready PRs to keep releases separate; the next version PR ships whatever merged meanwhile.
 - Create every Git worktree under `~/dev/.worktrees/`.
+
+# Continuous delivery without waiting
+
+Never idle on CI. A merged pull request is a finished checkpoint.
+
+- Open a pull request only when its slice is complete, tested and shippable on its own (tests, docs, CHANGELOG and changeset included). It is merged as soon as its required checks are green, so it must never carry half-wired code or work in progress.
+- After pushing a pull request, keep implementing the next slice while CI runs. Start the next branch from fresh `origin/main`, or locally on top of the pushed branch when it depends on it, but do not open stacked pull requests: open the dependent pull request after its prerequisite has merged. The 10-open-PR limit still applies; at the limit, keep developing locally and open the pull request when a slot frees.
+- Do not poll CI, sleep on checks or merge your own pull requests when the PR driver is running (`/tmp/lazysh-driver/driver.py`, status in `/tmp/lazysh-pr-status.json`). It squash-merges a pull request when its required checks are green, reruns failed jobs up to twice, approves and merges the Changesets version pull request under its safety conditions, and records `needs-owner` or `needs-rebase`. Read the status at natural breaks and fix those states immediately. A pull request that must not merge yet is listed in `/tmp/lazysh-pr-hold.txt`.
+- Without the driver, merge your own pull request when the required checks pass, as described above, and still continue with the next slice instead of waiting.
+
+# Issue tracking
+
+Map all work to GitHub issues before implementing it, and keep the issues current.
+
+- Every request, bug report and follow-up gets an issue first: search for an existing one and extend it, otherwise create it with the issue template (problem, current and expected behavior, scope, acceptance criteria, test strategy, dependencies). Link child issues to their epic as sub-issues and add them to the project board.
+- State the priority in the issue (P0 blocks use of the app, P1 core, P2 later) and order the work by it.
+- Every pull request references its issue. Use `Closes #N` in the PR body when the change satisfies all acceptance criteria, so the issue closes when the PR merges. Use `Refs #N` only when criteria remain open (for example a real-device check), and say which ones in a comment on the issue.
+- Track progress on the issue: comment when work starts, when a PR opens or merges, and when something blocks it. Keep checklists and sub-issues accurate.
+- After a PR merges, confirm that every issue it resolves is closed (close it with a comment naming the PR and the release if the automatic close did not happen). Do not close an issue without evidence that its acceptance criteria are met, and do not leave a satisfied issue open.
+- Work discovered while implementing becomes a new linked issue, not unrecorded scope.
 
 # Continuing implementation
 

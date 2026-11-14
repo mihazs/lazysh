@@ -1,5 +1,197 @@
 # @lazysh/credential-vault
 
+## 1.62.0
+
+No changes in this release.
+
+## 1.61.0
+
+No changes in this release.
+
+## 1.60.0
+
+No changes in this release.
+
+## 1.59.0
+
+No changes in this release.
+
+## 1.58.0
+
+No changes in this release.
+
+## 1.57.0
+
+No changes in this release.
+
+## 1.56.1
+
+No changes in this release.
+
+## 1.56.0
+
+No changes in this release.
+
+## 1.55.0
+
+No changes in this release.
+
+## 1.54.1
+
+No changes in this release.
+
+## 1.54.0
+
+No changes in this release.
+
+## 1.53.0
+
+No changes in this release.
+
+## 1.52.0
+
+No changes in this release.
+
+## 1.51.0
+
+No changes in this release.
+
+## 1.50.0
+
+No changes in this release.
+
+## 1.49.0
+
+No changes in this release.
+
+## 1.48.0
+
+No changes in this release.
+
+## 1.47.0
+
+No changes in this release.
+
+## 1.46.0
+
+No changes in this release.
+
+## 1.45.0
+
+No changes in this release.
+
+## 1.44.0
+
+No changes in this release.
+
+## 1.43.0
+
+No changes in this release.
+
+## 1.42.0
+
+No changes in this release.
+
+## 1.41.0
+
+No changes in this release.
+
+## 1.40.0
+
+No changes in this release.
+
+## 1.39.0
+
+No changes in this release.
+
+## 1.38.0
+
+No changes in this release.
+
+## 1.37.0
+
+No changes in this release.
+
+## 1.36.0
+
+No changes in this release.
+
+## 1.35.0
+
+No changes in this release.
+
+## 1.34.0
+
+No changes in this release.
+
+## 1.33.4
+
+No changes in this release.
+
+## 1.33.3
+
+No changes in this release.
+
+## 1.33.2
+
+No changes in this release.
+
+## 1.33.1
+
+No changes in this release.
+
+## 1.33.0
+
+No changes in this release.
+
+## 1.32.0
+
+No changes in this release.
+
+## 1.31.2
+
+No changes in this release.
+
+## 1.31.1
+
+No changes in this release.
+
+## 1.31.0
+
+No changes in this release.
+
+## 1.30.5
+
+No changes in this release.
+
+## 1.30.4
+
+No changes in this release.
+
+## 1.30.3
+
+No changes in this release.
+
+## 1.30.2
+
+No changes in this release.
+
+## 1.30.1
+
+No changes in this release.
+
+## 1.30.0
+
+No changes in this release.
+
+## 1.29.3
+
+No changes in this release.
+
+## 1.29.2
+
+No changes in this release.
+
 ## 1.29.1
 
 No changes in this release.

@@ -1,3 +1,4 @@
+use super::cancelled;
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::share::service::{valid_id as job_id, Enrollment};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
@@ -817,16 +818,6 @@ impl Drop for Work {
                 cancelled: true,
                 cleanup: Cleanup::Unconfirmed,
             }));
-        }
-    }
-}
-async fn cancelled(receiver: &mut watch::Receiver<bool>) {
-    loop {
-        if *receiver.borrow() {
-            return;
-        }
-        if receiver.changed().await.is_err() {
-            return;
         }
     }
 }

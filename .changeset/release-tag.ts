@@ -84,14 +84,23 @@ export function requireCleanSourceScan(data: any, versionCode: string) {
     'missing or failed candidate source scan');
 }
 
+// GitHub reports a refused write as a bare 403; keep only its message and request id, bounded and
+// free of tokens and control characters (a newline could otherwise forge a workflow command).
+export async function describeFailure(response: Response) {
+  const message = String(await response.clone().json().then((data: any) => data?.message, () => '') ?? '')
+    .replace(/(?:gh[a-z]_|github_pat_)\w+/g, '[redacted]').replace(/[^\x20-\x7e]/g, ' ').slice(0, 200);
+  const request = (response.headers.get('x-github-request-id') ?? '').replace(/[^\w:-]/g, '').slice(0, 64);
+  return `HTTP ${response.status}${message ? `: ${message}` : ''}${request ? `; request ${request}` : ''}${
+    response.status === 403 ? '; see docs/release-tag-gate.md, Ref writes and workflow files' : ''}`;
+}
+
+// The reservation branch lets this token write refs once main's workflow files have moved on
+// (docs/release-tag-gate.md, Ref writes and workflow files).
+export const reservationRef = (next: Candidate) => `heads/release-candidate/${next.sha}`;
+
 // Never update/delete refs: concurrent creation can only converge on this exact commit.
-export async function createStableTag(next: Candidate, policy: ReleasePolicy, buildResult: string,
-  request: (path: string, body?: unknown) => Promise<Response>,
-  admitMain: (sha: string) => Promise<void> = async sha => {
-    requireGate(sha === next.sha, 'main advanced or unavailable');
-  }) {
-  requireGate(releaseEnabled(policy), 'automatic tags disabled');
-  requireGate(buildResult === 'success', 'successful source build and scans required');
+async function createExactRef(next: Candidate, name: string, label: string,
+  request: (path: string, body?: unknown) => Promise<Response>, admitMain: (sha: string) => Promise<void>) {
   requireGate(/^[a-f0-9]{40}$/.test(next.sha) && next.tag === `v${next.version}`
     && next.versionCode === androidVersionCode(next.version), 'invalid tag candidate');
   const main = await request('git/ref/heads/main');
@@ -99,22 +108,36 @@ export async function createStableTag(next: Candidate, policy: ReleasePolicy, bu
   const current = (await main.json() as any).object?.sha;
   requireGate(typeof current === 'string' && /^[a-f0-9]{40}$/.exec(current)?.[0] === current, 'invalid main identity');
   await admitMain(current);
-  const path = `git/ref/tags/${next.tag}`;
+  const path = `git/ref/${name}`;
   const sameCommit = async (response: Response) => {
-    requireGate(response.ok, 'cannot read tag');
+    requireGate(response.ok, `cannot read ${label}`);
     const data = await response.json() as any;
-    requireGate(data.ref === `refs/tags/${next.tag}` && data.object?.type === 'commit'
-      && data.object.sha === next.sha, 'tag collision');
+    requireGate(data.ref === `refs/${name}` && data.object?.type === 'commit'
+      && data.object.sha === next.sha, `${label} collision`);
     return 'existing';
   };
   const existing = await request(path);
   if (existing.ok) return sameCommit(existing);
-  requireGate(existing.status === 404, 'cannot inspect tag');
-  const created = await request('git/refs', { ref: `refs/tags/${next.tag}`, sha: next.sha });
+  requireGate(existing.status === 404, `cannot inspect ${label} (${await describeFailure(existing)})`);
+  const created = await request('git/refs', { ref: `refs/${name}`, sha: next.sha });
   if (created.status === 422) return sameCommit(await request(path));
-  requireGate(created.status === 201, `tag creation failed (HTTP ${created.status})`);
+  requireGate(created.status === 201, `${label} creation failed (${await describeFailure(created)})`);
   await sameCommit(created);
   return 'created';
+}
+const mainAdmission = (next: Candidate) => async (sha: string) => {
+  requireGate(sha === next.sha, 'main advanced or unavailable');
+};
+export async function createStableTag(next: Candidate, policy: ReleasePolicy, buildResult: string,
+  request: (path: string, body?: unknown) => Promise<Response>, admitMain = mainAdmission(next)) {
+  requireGate(releaseEnabled(policy), 'automatic tags disabled');
+  requireGate(buildResult === 'success', 'successful source build and scans required');
+  return createExactRef(next, `tags/${next.tag}`, 'tag', request, admitMain);
+}
+export async function reserveCandidate(next: Candidate, policy: ReleasePolicy,
+  request: (path: string, body?: unknown) => Promise<Response>, admitMain = mainAdmission(next)) {
+  requireGate(releaseEnabled(policy), 'automatic tags disabled');
+  return createExactRef(next, reservationRef(next), 'reservation', request, admitMain);
 }
 
 // Main may advance to later versions while this exact verified candidate builds.
@@ -163,9 +186,10 @@ if (import.meta.main) {
     requireGate(process.env.GITHUB_OUTPUT, 'GitHub output required');
     await appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   };
+  const early = ['prepare', 'reserve'].includes(process.argv[2]);
   if (!releaseEnabled(policy)) {
-    requireGate(process.argv[2] === 'prepare', 'automatic tags disabled');
-    await output('enabled', 'false');
+    requireGate(early, 'automatic tags disabled');
+    if (process.argv[2] === 'prepare') await output('enabled', 'false');
     console.log('GitHub release publication disabled by policy.');
   } else if (process.argv[2] === 'scan') {
     requireCleanSourceScan(await Bun.file(process.argv[3]).json(), process.argv[4]);
@@ -175,9 +199,9 @@ if (import.meta.main) {
       'missing reviewed provisioning');
     console.log(data.Builds[0].sudo.join('\n'));
   } else {
-    const next = await currentCandidate(root, process.argv[2] === 'prepare');
+    const next = await currentCandidate(root, early);
     if (!next) {
-      await output('enabled', 'false');
+      if (process.argv[2] === 'prepare') await output('enabled', 'false');
       console.log('No version transition; no release build required.');
       process.exit(0);
     }
@@ -190,7 +214,7 @@ if (import.meta.main) {
       await output('enabled', 'true');
       await output('versionCode', String(next.versionCode));
     } else {
-      requireGate(process.argv[2] === 'tag' && process.env.GH_TOKEN, 'tag command requires authentication');
+      requireGate(['tag', 'reserve'].includes(process.argv[2]) && process.env.GH_TOKEN, 'tag command requires authentication');
       requireGate(process.env.GITHUB_REPOSITORY === 'mihazs/lazysh', 'unexpected repository');
       const request = (path: string, body?: unknown) => fetch(`https://api.github.com/repos/mihazs/lazysh/${path}`, {
         method: body ? 'POST' : 'GET', redirect: 'error',
@@ -198,8 +222,9 @@ if (import.meta.main) {
           'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       });
-      console.log(await createStableTag(next, policy, process.env.LAZYSH_RELEASE_BUILD_RESULT ?? '', request,
-        sha => requireCurrentRelease(root, next, sha)));
+      const admit = (sha: string) => requireCurrentRelease(root, next, sha);
+      console.log(process.argv[2] === 'reserve' ? await reserveCandidate(next, policy, request, admit)
+        : await createStableTag(next, policy, process.env.LAZYSH_RELEASE_BUILD_RESULT ?? '', request, admit));
     }
   }
 }

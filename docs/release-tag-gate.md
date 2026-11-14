@@ -69,7 +69,7 @@ container build path, not a claim of Vagrant `--server` execution or hermeticity
 
 ## Job graph and runner queue
 
-A release takes two runner-queue entries on its critical path and ten runner slots
+A release takes two runner-queue entries on its critical path and eleven runner slots
 (previously five entries and fourteen slots). Each GitHub-hosted job waits in the
 account-wide queue, so stages that run one after another add queue time.
 
@@ -78,13 +78,17 @@ account-wide queue, so stages that run one after another add queue time.
    admission. The platform builds in `release-artifacts.yml` start in the same queue
    entry. They bind the exact trusted main event SHA, hold contents-read tokens and
    produce private same-run artifacts only.
-2. `publish` needs both, and requires admission `enabled`, a successful source build
-   and successful platform builds. It aggregates and reverifies every downloaded
-   receipt, package digest, `release.json` and `SHA256SUMS`, then creates the tag and
+2. `reserve` runs beside them, takes no part in the critical path and starts the
+   candidate's branch reservation (see
+   [Ref writes and workflow files](#ref-writes-and-workflow-files)).
+3. `publish` needs all three, and requires admission `enabled`, a successful source build,
+   successful platform builds and a successful reservation. It aggregates and
+   reverifies every downloaded receipt, package digest, `release.json` and `SHA256SUMS`, then creates the tag and
    publishes. This replaces the separate aggregate, tag and publish jobs.
 
-Only `publish` has a contents-write token, and only its tag and publication steps
-receive it. They run after aggregation and verification. Every platform
+Only `reserve` and `publish` have a contents-write token, and only the reservation,
+tag and publication steps receive it; `reserve` runs nothing else, and the tag and
+publication steps run after aggregation and verification. Every platform
 installation build and the independent F-Droid source build must pass before
 tagging. Tagging and publication require the exact verified candidate
 within observed main’s bounded first-parent ancestry (at most 4097 commits).
@@ -93,7 +97,9 @@ substituted. Side ancestry or replaced main history is rejected. Existing lightw
 tags at the same commit are idempotent; different/annotated targets fail. A
 concurrent create can succeed only if its new ref resolves to that same commit.
 The workflow never updates/deletes/forces a tag and never ignores a failed
-build. Repository administrators can still change tags outside this workflow;
+build. The only ref it ever deletes is its own reservation branch, and only after
+publication succeeded and only while that branch still names the candidate commit.
+Repository administrators can still change tags outside this workflow;
 repository tag protection remains separate. The main-head check and reference
 creation are separate API requests, so main can advance between them; the tag
 always names the verified candidate rather than an inferred moving branch.
@@ -109,6 +115,41 @@ Every release includes the current native acceptance status from
 initial notes additionally include the root Unreleased changes. Missing status
 blocks note generation. Passing build gates does not claim full native parity.
 See [release-artifacts.md](release-artifacts.md) for signing and activation limits.
+
+## Ref writes and workflow files
+
+Version 1.30.0 and 1.30.2 were built and verified but never published: `publish`
+failed with `tag creation failed (HTTP 403)` and, once a tag existed, `cannot create
+draft release`, while 1.30.1 and 1.30.3 published through the same workflow, token
+and permissions. GitHub's answer was a bare `Resource not accessible by integration`
+with `x-accepted-github-permissions: contents=write; contents=write,workflows=write`.
+
+Cause, reproduced with throwaway refs: a `GITHUB_TOKEN` cannot hold the `workflows`
+permission, and GitHub refuses it any ref or release write for a commit whose
+`.github/workflows` tree is not identical to the tip of some existing **branch**
+(tags do not count). `git push` states the reason: `refusing to allow a GitHub App to
+create or update workflow ... without workflows permission`. The release commit
+is main's tip when the run starts, so the check passes then. The builds take 40 to
+90 minutes, and `.github/workflows` changes land on main often. Once one has, no branch
+carries the candidate's workflow files any more, except by chance (another open branch
+cut from the same main, which is the likely reason 1.30.1 and 1.30.3 passed), so the
+tag, and later the release, is refused. Creating a
+branch at an old commit whose workflows matched no other branch flipped every
+previously refused commit with those files to 201, and removing it restored the 403.
+
+`reserve` therefore creates `release-candidate/<candidate sha>` at the candidate while
+it is still main's tip. It is create-only and idempotent, like the tag: a branch that
+names another commit fails. `publish` removes it after the release is public. A failed
+run keeps its branch, so rerunning only the failed jobs can still publish; delete a
+`release-candidate/*` branch yourself once its candidate is abandoned. The reservation
+adds no trust: it names the verified commit, and every tag, digest and ancestry
+check above still decides. If `reserve` itself is refused, a workflow change landed
+on main before the job started: `publish` is skipped (the builds still run) and the
+next version carries that candidate's changes.
+
+Failures now carry GitHub's message (at most 200 printable characters, token-like
+strings redacted) and request id, never headers or other body fields, so the next
+unexplained refusal can be reported to GitHub support with its request id.
 
 `bun run test:release` runs the native Bun release tests. The tag tests use
 in-memory HTTP responses and do not create real refs, containers or builds.

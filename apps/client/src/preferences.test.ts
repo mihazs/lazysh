@@ -1,12 +1,27 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions, toolbarFromRows, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
+import { defaults, decodeClipboardRequest, edgeGestureSettings, keepDevicePreferences, parseChord, parseChordSteps, parsePreferences, parseTheme, syncablePreferences, terminalOptions, toolbarFromRows, toolbarKeyHeights, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
   it('keeps past-bottom keyboard dismissal opt-in for old, invalid and stored settings',()=>{
     for(const value of [undefined,null,false,1,'true',{}])expect(parsePreferences({...defaults,dismissKeyboardOnOverscroll:value}).dismissKeyboardOnOverscroll).toBe(false);
     expect(defaults.dismissKeyboardOnOverscroll).toBe(false);
     expect(parsePreferences(JSON.parse(JSON.stringify({...defaults,dismissKeyboardOnOverscroll:true}))).dismissKeyboardOnOverscroll).toBe(true);
+  });
+  it('follows the current agent by default and for every setting stored before the usage item had a choice',()=>{
+    expect(defaults.usageItem).toBeUndefined();expect(defaults.usageProvider).toBeUndefined();
+    // A pre-existing stored snapshot has neither key: it reads as "follow", the same as a fresh install.
+    const {usageItem:_item,usageProvider:_provider,...stored}=JSON.parse(JSON.stringify({...defaults,fontSize:18}));
+    const parsed=parsePreferences(stored);
+    expect(parsed.usageItem).toBeUndefined();expect(parsed.usageProvider).toBeUndefined();expect(parsed.fontSize).toBe(18);
+  });
+  it('keeps only known usage item modes and a bounded provider id',()=>{
+    for(const mode of ['fixed','hidden'] as const)expect(parsePreferences({...defaults,usageItem:mode}).usageItem).toBe(mode);
+    for(const value of ['follow','always',true,1,null,{}])expect(parsePreferences({...defaults,usageItem:value}).usageItem).toBeUndefined();
+    expect(parsePreferences({...defaults,usageItem:'fixed',usageProvider:'openai'}).usageProvider).toBe('openai');
+    expect(parsePreferences({...defaults,usageProvider:'custom:acme'}).usageProvider).toBe('custom:acme');
+    for(const value of ['',7,null,'x'.repeat(161),'a\nb'])expect(parsePreferences({...defaults,usageProvider:value}).usageProvider).toBeUndefined();
+    expect(syncablePreferences(parsePreferences({...defaults,usageItem:'hidden',usageProvider:'kimi'}))).toMatchObject({usageItem:'hidden',usageProvider:'kimi'});
   });
   it('preserves Shift+Enter as a modified key instead of ordinary submission',()=>{
     expect(parseChord('Shift+Enter')).toBe('\x1b[13;2u');
@@ -129,7 +144,8 @@ describe("OSC52 clipboard requests", () => {
 
  it("keeps flat toolbars as one row and validates stored row breaks", () => {
   expect(toolbarRows(parsePreferences({...defaults, toolbar: ["esc", "tab"]}).toolbar)).toEqual([["esc", "tab"]]);
-  expect(toolbarRows(defaults.toolbar)).toEqual([[...defaults.toolbar]]);
+  // The Arrows component is one entry; it draws Up between Home and End and Left, Down and Right under them (see toolbarLayout.test.ts).
+  expect(toolbarRows(defaults.toolbar)).toEqual([["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "arrows", "End"], ["shift", "ctrl", "meta", "c", "d", "enter"]]);
   const stored = parsePreferences(JSON.parse(JSON.stringify({...defaults, toolbar: toolbarFromRows([["esc", "ctrl"], [], ["left", "right"]])})));
   expect(toolbarRows(stored.toolbar)).toEqual([["esc", "ctrl"], [], ["left", "right"]]);
   // Duplicates across rows, unknown entries and breaks beyond the third row are dropped without losing keys.
@@ -137,13 +153,103 @@ describe("OSC52 clipboard requests", () => {
   expect(hostile.toolbar).toEqual(["esc", toolbarRowBreak, "tab", toolbarRowBreak, "c", "d"]);
   expect(toolbarRows(hostile.toolbar)).toEqual([["esc"], ["tab"], ["c", "d"]]);
  });
+ it("keeps the toolbar key height within its bounds and stores it only when it differs from the default", () => {
+  const stored = (toolbarKeyHeight: unknown) => parsePreferences({...defaults, toolbarKeyHeight}).toolbarKeyHeight;
+  expect(Object.hasOwn(parsePreferences({...defaults}), "toolbarKeyHeight")).toBe(false);
+  expect(Object.hasOwn(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarKeyHeight: toolbarKeyHeights.default}))), "toolbarKeyHeight")).toBe(false);
+  for (const height of [toolbarKeyHeights.min, 44, toolbarKeyHeights.max]) expect(stored(height)).toBe(height);
+  // Anything else (out of range, fractional, not a number) falls back to the default, which is not stored.
+  for (const height of [toolbarKeyHeights.min - 1, toolbarKeyHeights.max + 1, 0, -40, 40.5, NaN, "44", null, [], {}]) expect(stored(height)).toBeUndefined();
+  expect(stored(44)).toBe(parsePreferences(JSON.parse(JSON.stringify({...defaults, toolbarKeyHeight: 44}))).toolbarKeyHeight);
+ });
+ it("keeps the toolbar key height on this device when settings sync", () => {
+  const mine = parsePreferences({...defaults, toolbarKeyHeight: 44, snippets: [{label: "a", text: "b"}]});
+  // Uploading leaves the height out, so a peer that predates it still accepts the snapshot.
+  const uploaded = syncablePreferences(mine);
+  expect(Object.hasOwn(uploaded, "toolbarKeyHeight")).toBe(false);
+  expect(uploaded.snippets).toEqual(mine.snippets);
+  // A download from a device with another height, or none, keeps this device's.
+  expect(parsePreferences(keepDevicePreferences({...defaults, toolbarKeyHeight: 56, fontSize: 20}, mine))).toMatchObject({toolbarKeyHeight: 44, fontSize: 20});
+  expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, parsePreferences({...defaults}))).toolbarKeyHeight).toBeUndefined();
+  expect(keepDevicePreferences(null, mine)).toBeNull();
+ });
+ it("defaults the edge gestures on at 40 dp, stores only changes and ignores malformed values", () => {
+  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode: "auto"});
+  expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {leftMenu: true, zoneWidth: 40}}), "edgeGestures")).toBe(false);
+  const saved = parsePreferences(JSON.parse(JSON.stringify({...defaults, edgeGestures: {leftMenu: false, zoneWidth: 64}})));
+  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 64, mode: "auto"});
+  // The gesture style is stored only when it is not the automatic one, and an unknown value falls back to it.
+  expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {mode: "auto"}}), "edgeGestures")).toBe(false);
+  for (const mode of ["handles", "edges", "off"] as const) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {mode}})).mode).toBe(mode);
+  for (const mode of ["swipe", 1, null]) expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {mode}}), "edgeGestures")).toBe(false);
+  for (const zoneWidth of [0, 15, 97, 30.5, "30", null]) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {zoneWidth}})).zoneWidth).toBe(40);
+  // A zone is stored up to 96 dp, the widest band, and the old 24 dp default stays a choice.
+  for (const zoneWidth of [16, 24, 96]) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {zoneWidth}})).zoneWidth).toBe(zoneWidth);
+  expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {bottomMenu: "no", viewSwitch: 0}}))).toMatchObject({bottomMenu: true, viewSwitch: true});
+  // It syncs with the other preferences.
+  expect(syncablePreferences(saved).edgeGestures).toEqual(saved.edgeGestures);
+ });
+ it("stores the private keyboard choice only when it is on, and ignores anything but a real true", () => {
+  const stored = (privateKeyboard: unknown) => parsePreferences({...defaults, privateKeyboard});
+  expect(stored(true).privateKeyboard).toBe(true);
+  expect(Object.hasOwn(JSON.parse(JSON.stringify(stored(true))), "privateKeyboard")).toBe(true);
+  for (const value of [false, undefined, null, 1, "true", [], {}]) expect(Object.hasOwn(stored(value), "privateKeyboard")).toBe(false);
+  expect(Object.hasOwn(parsePreferences({...defaults}), "privateKeyboard")).toBe(false);
+ });
+ it("keeps the private keyboard choice on this device when settings sync", () => {
+  const mine = parsePreferences({...defaults, privateKeyboard: true, toolbarKeyHeight: 44, fontSize: 18});
+  // Uploading leaves the choice out: the other device may use another keyboard, and older peers reject unknown fields.
+  const uploaded = syncablePreferences(mine);
+  expect(Object.hasOwn(uploaded, "privateKeyboard")).toBe(false);
+  expect(uploaded.fontSize).toBe(18);
+  // A download from a device that has it on, or off, never changes this device's choice.
+  expect(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: false, fontSize: 20}, mine))).toMatchObject({privateKeyboard: true, fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: true}, parsePreferences({...defaults}))), "privateKeyboard")).toBe(false);
+ });
+ it("remembers a forced tab strip on this device only; Auto stores nothing", () => {
+  expect(Object.hasOwn(parsePreferences({...defaults}), "tabStrip")).toBe(false);
+  for (const mode of ["on", "off"]) expect(parsePreferences(JSON.parse(JSON.stringify(parsePreferences({...defaults, tabStrip: mode})))).tabStrip).toBe(mode);
+  for (const junk of ["auto", "yes", true, 1, null, []]) expect(Object.hasOwn(parsePreferences({...defaults, tabStrip: junk}), "tabStrip")).toBe(false);
+  const mine = parsePreferences({...defaults, tabStrip: "off"});
+  expect(Object.hasOwn(syncablePreferences(mine), "tabStrip")).toBe(false);
+  expect(parsePreferences(keepDevicePreferences({...defaults, tabStrip: "on", fontSize: 20}, mine))).toMatchObject({tabStrip: "off", fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, tabStrip: "on"}, parsePreferences({...defaults}))), "tabStrip")).toBe(false);
+});
+it("remembers a hidden or shown toolbar on this device only, and nothing until it was chosen", () => {
+  expect(Object.hasOwn(parsePreferences({...defaults}), "toolbarHidden")).toBe(false);
+  for (const hidden of [true, false]) expect(parsePreferences(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarHidden: hidden})))).toolbarHidden).toBe(hidden);
+  for (const junk of ["true", 1, null, [], {}]) expect(Object.hasOwn(parsePreferences({...defaults, toolbarHidden: junk}), "toolbarHidden")).toBe(false);
+  const mine = parsePreferences({...defaults, toolbarHidden: true});
+  expect(Object.hasOwn(syncablePreferences(mine), "toolbarHidden")).toBe(false);
+  expect(parsePreferences(keepDevicePreferences({...defaults, toolbarHidden: false, fontSize: 20}, mine))).toMatchObject({toolbarHidden: true, fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, toolbarHidden: true}, parsePreferences({...defaults}))), "toolbarHidden")).toBe(false);
+ });
+ it("stores the floating composer view only when chosen, and keeps it on this device when settings sync", () => {
+  expect(defaults.composerLayout).toBeUndefined();
+  expect(Object.hasOwn(parsePreferences({...defaults}), "composerLayout")).toBe(false);
+  for (const value of ["docked", "Floating", true, 1, null, {}]) expect(Object.hasOwn(parsePreferences({...defaults, composerLayout: value}), "composerLayout")).toBe(false);
+  const floating = parsePreferences(JSON.parse(JSON.stringify({...defaults, composerLayout: "floating"})));
+  expect(floating.composerLayout).toBe("floating");
+  // Neither uploaded, so an older peer accepts the snapshot, nor replaced by a download.
+  expect(Object.hasOwn(syncablePreferences(floating), "composerLayout")).toBe(false);
+  expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, floating))).toMatchObject({composerLayout: "floating", fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, composerLayout: "floating"}, parsePreferences({...defaults}))), "composerLayout")).toBe(false);
+ });
  it("lets a client without row support read the same keys from a multi-row toolbar", () => {
   const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);
   // The previous release's validator: keep known keys only, in order.
   const previous = [...new Set(multiRow.filter(item => (toolbarKeys as readonly string[]).includes(item)))];
   expect(previous).toEqual(["esc", "ctrl", "tab"]);
  });
- it("upgrades only the previous default toolbar and preserves explicit customization", () => {
+ it("upgrades only the previous default toolbars and preserves explicit customization", () => {
   expect(parsePreferences({...defaults, toolbar:["esc","ctrl","tab","c","d","paste","left","up","down","right"]}).toolbar).toEqual(defaults.toolbar);
+  // The one-row default of the previous release, as saved with any other preference change.
+  expect(parsePreferences({...defaults, toolbar:["esc","ctrl","meta","shift","tab","paste","attach","left","up","down","right","c","d"]}).toolbar).toEqual(defaults.toolbar);
+  // The compact default of 1.32 and 1.33, which had the More key in the cell that now holds Enter.
+  expect(parsePreferences({...defaults, toolbar:["keyboard","attach","esc","tab","paste","/","Home","up","End",toolbarRowBreak,"shift","ctrl","meta","c","d","left","down","right"]}).toolbar).toEqual(defaults.toolbar);
+  // The 1.33 default, which had separate arrow keys and an Enter key in place of the More key.
+  expect(parsePreferences({...defaults, toolbar:["keyboard","attach","esc","tab","paste","/","Home","up","End",toolbarRowBreak,"shift","ctrl","meta","c","d","enter","left","down","right"]}).toolbar).toEqual(defaults.toolbar);
+  // The same keys in another order, or with one removed, are the user's own layout and keep every key.
+  for (const toolbar of [["esc","ctrl","meta","shift","tab","paste","attach","left","up","down","right","d","c"], ["esc","ctrl","meta","shift","tab","paste","attach","left","up","down","right","c"]]) expect(parsePreferences({...defaults,toolbar}).toolbar).toEqual(toolbar);
   for (const toolbar of [[], ["meta","F12","attach","shift"]]) expect(parsePreferences({...defaults,toolbar}).toolbar).toEqual(toolbar);
  });

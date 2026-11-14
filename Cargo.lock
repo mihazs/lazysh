@@ -2690,6 +2690,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostty-vt"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "libc",
+ "png 0.17.16",
+ "tracing",
+]
+
+[[package]]
 name = "gif"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3267,7 +3277,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d75e94d66081e4d8dcd098bd8dc5254800fea14a26389b298410158d834de167"
 dependencies = [
  "byteorder",
- "png",
+ "png 0.18.1",
 ]
 
 [[package]]
@@ -3393,7 +3403,7 @@ dependencies = [
  "image-webp",
  "moxcms",
  "num-traits",
- "png",
+ "png 0.18.1",
  "zune-core",
  "zune-jpeg",
 ]
@@ -3792,7 +3802,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "age",
  "axum",
@@ -3807,10 +3817,12 @@ dependencies = [
  "lazysh-account-usage",
  "lazysh-agent",
  "lazysh-common",
+ "lazysh-companion-release",
  "lazysh-et-transport",
  "lazysh-mosh-transport",
  "lazysh-parakeet-runtime",
  "lazysh-share",
+ "lazysh-terminal-runtime",
  "libc",
  "portable-pty",
  "quircs",
@@ -3843,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-account-usage"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "ai-usagebar-core",
  "chrono",
@@ -3860,7 +3872,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-agent"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3872,6 +3884,7 @@ dependencies = [
  "image",
  "lazysh-account-usage",
  "lazysh-common",
+ "lazysh-companion-release",
  "lazysh-notification-client",
  "lazysh-notifications",
  "libc",
@@ -3891,7 +3904,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-common"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "axum",
  "hyper-util",
@@ -3903,8 +3916,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazysh-companion-release"
+version = "1.62.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http 1.5.0",
+ "hyper-util",
+ "lazysh-common",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "lazysh-et-transport"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "lazysh-common",
  "prost",
@@ -3916,7 +3949,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-mosh-transport"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "cc",
  "cmake",
@@ -3930,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-notification-client"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "lazysh-common",
  "rand 0.10.3",
@@ -3944,7 +3977,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-notifications"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3973,7 +4006,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-parakeet-runtime"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "bzip2",
  "cmake",
@@ -3987,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-share"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "axum",
  "clap",
@@ -4011,8 +4044,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazysh-terminal-runtime"
+version = "0.0.0"
+dependencies = [
+ "ghostty-vt",
+]
+
+[[package]]
 name = "lazysh-transcription"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "axum",
  "clap",
@@ -4328,7 +4368,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation",
  "once_cell",
- "png",
+ "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -5294,6 +5334,19 @@ dependencies = [
  "quick-xml",
  "serde",
  "time",
+]
+
+[[package]]
+name = "png"
+version = "0.17.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
+dependencies = [
+ "bitflags 1.3.2",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -7413,7 +7466,7 @@ dependencies = [
  "ico",
  "json-patch",
  "plist",
- "png",
+ "png 0.18.1",
  "proc-macro2",
  "quote",
  "semver",
@@ -7480,7 +7533,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-apple-speech"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "lazysh-common",
  "serde",
@@ -7491,7 +7544,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-apple-status"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "lazysh-common",
  "serde",
@@ -7503,7 +7556,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-display-idle"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "core-foundation-sys",
  "gio",
@@ -7517,7 +7570,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-push"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "serde",
  "tauri",
@@ -7526,7 +7579,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-vault"
-version = "1.29.1"
+version = "1.62.0"
 dependencies = [
  "block2",
  "core-foundation 0.10.1",
@@ -8085,7 +8138,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation",
  "once_cell",
- "png",
+ "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",

@@ -1,0 +1,6 @@
+language: rust
+layer: tool
+# Nested workspace on herdr-upstream's ghostty-vt (built with Zig): the vendor tag keeps the inherited
+# cargo tasks off it. Its tests run inside the herdr-native CI job, not through moon.
+tags: [vendor]
+dependsOn: [herdr-upstream]

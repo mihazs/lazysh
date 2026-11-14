@@ -1,0 +1,39 @@
+/* The bottom menu overlays the bottom of the screen; nothing here takes layout space, so the terminal never resizes. */
+.terminal-pane > .bottom-menu {
+  --bottom-menu-progress: 0;
+  position: fixed; inset: auto 0 0; z-index: 20; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 0 max(12px, env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  border: 1px solid var(--ui-hairline-strong, var(--theme-border, var(--border))); border-bottom: 0; border-radius: 20px 20px 0 0;
+  background: var(--theme-panel, var(--panel)); color: var(--theme-text, var(--text));
+  box-shadow: 0 -8px 28px rgb(0 0 0 / 38%);
+  /* The panel follows the finger: progress 0 is fully below the screen, 1 is fully shown. */
+  transform: translateY(calc((1 - var(--bottom-menu-progress)) * 100%));
+  transition: transform 180ms var(--ui-ease, ease-out), visibility 0s linear 180ms;
+  touch-action: none;
+}
+.terminal-pane > .bottom-menu[data-open="true"], .terminal-pane > .bottom-menu[data-dragging] { visibility: visible; transition-delay: 0s; }
+.terminal-pane > .bottom-menu:not([data-open="true"]):not([data-dragging]) { visibility: hidden; }
+.terminal-pane > .bottom-menu[data-dragging] { transition: none; }
+.bottom-menu-grip {
+  display: flex; align-items: center; justify-content: center; align-self: stretch; min-height: 28px; margin: 0; padding: 0;
+  border: 0; background: transparent;
+}
+.bottom-menu-grip > span {
+  display: block; width: 40px; height: 4px; border-radius: 2px;
+  background: color-mix(in srgb, var(--theme-text, var(--text)) 38%, transparent);
+}
+.bottom-menu-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.bottom-menu-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 68px; margin: 0; padding: 8px 6px;
+  border: 1px solid var(--ui-hairline, transparent); border-radius: 14px;
+  background: var(--theme-control, var(--panel)); color: inherit; font: inherit; font-size: 13px; line-height: 1.2; text-align: center;
+}
+.bottom-menu-item:disabled { opacity: .45; }
+.bottom-menu-item:focus-visible, .bottom-menu-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.terminal-pane > .bottom-menu-scrim {
+  position: fixed; inset: 0; z-index: 19; background: rgb(0 0 0 / calc(var(--bottom-menu-progress, 1) * 35%));
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-pane > .bottom-menu { transition: none; }
+}

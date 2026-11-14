@@ -50,6 +50,8 @@ export type Credentials = {
   passphrase?: string;
 };
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
+/** Discovery's per-host version gate: `missing` names capabilities this version lacks. */
+export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; support: 'full' | 'degraded'; missing: string[] };
 export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean};
 export type HerdrNavigationTarget =
   | {kind:'workspace';workspace:string}
@@ -61,6 +63,9 @@ export type TmuxJumpSnapshot = {
   sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string }[] }[];
 };
 
+export type HostFileAction = 'save' | 'open' | 'share';
+export type HostFileStat = {path: string; name: string; kind: 'file' | 'directory' | 'other'; size: number; link: string | null; actions: HostFileAction[]};
+export type HostFileProgress = {bytes: number; total: number | null};
 export const native = isTauri();
 function remoteInvoke<T>(command:string, args:{sessionId:string}&Record<string,unknown>):Promise<T> {
   if(args.sessionId.startsWith('local:')) return Promise.reject(new Error('This tool requires an SSH connection.'));
@@ -77,15 +82,19 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   if(args.sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   return createSession(command,args,onEvent);
 }
+function installCompanionVia(command:'install_companion'|'install_companion_from_device',sessionId:string,onProgress:(value:unknown)=>void) {
+  if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
+  const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
+  return remoteInvoke<unknown>(command,{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
+}
 export const api = {
   accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
   companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
   companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
-  installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
-    if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
-    const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
-    return remoteInvoke<unknown>('install_companion',{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
-  },
+  /** The host downloads and installs the companion; this device sends only a pin. */
+  installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion',sessionId,onProgress),
+  /** The labelled offline fallback: this device downloads the companion and uploads it to a host that cannot reach GitHub. */
+  installCompanionFromDevice: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion_from_device',sessionId,onProgress),
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
   clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
   clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),
@@ -141,9 +150,23 @@ export const api = {
   /** Asks each SSH connection behind these sessions to answer at once; a silent route closes as lost. */
   probeConnections: (sessionIds: string[]) => invoke<void>('probe_connections', { sessionIds }),
   listDirectory: (sessionId: string, path: string) =>
-    remoteInvoke<FileEntry[]>("list_directory", { sessionId, path }),
+    invoke<FileEntry[]>("list_directory", { sessionId, path }),
+  /** The host's absolute login directory: what `~` means for this session. */
+  hostHome: (sessionId: string) => invoke<string>("host_home", { sessionId }),
+  /** What a host path is (file, directory, symlink target) before anything is copied. */
+  hostFileStat: (sessionId: string, path: string) => invoke<HostFileStat>("host_file_stat", { sessionId, path }),
+  /** Streams a host file into a private staging copy on this device; progress arrives while it runs. */
+  hostFileDownload: (sessionId: string, path: string, transferId: string, confirmed: {followLink: boolean; allowLarge: boolean}, onProgress: (value: HostFileProgress) => void) => {
+    const progress = new Channel<HostFileProgress>(); progress.onmessage = guardAccessCallback(onProgress);
+    return invoke<{name: string; size: number}>("host_file_download", { sessionId, path, transferId, ...confirmed, progress }).finally(() => { progress.onmessage = () => {}; });
+  },
+  /** Stops a running download or discards a finished one. */
+  hostFileCancel: (sessionId: string, transferId: string) => invoke<void>("host_file_cancel", { sessionId, transferId }),
+  /** Saves, opens (system Open with) or shares the staged copy. The file is never executed. */
+  hostFileDeliver: (sessionId: string, transferId: string, action: HostFileAction) =>
+    invoke<{location: string | null}>("host_file_deliver", { sessionId, transferId, action }),
   readFile: (sessionId: string, path: string) =>
-    remoteInvoke<string>("read_file", { sessionId, path }),
+    invoke<string>("read_file", { sessionId, path }),
   hostClipboardCopy: (sessionId: string, uploadId: string) =>
     remoteInvoke<void>("host_clipboard_copy", {sessionId,uploadId}),
   reserveUpload: (sessionId: string, size: number) =>
@@ -154,7 +177,7 @@ export const api = {
   uploadFile: (sessionId: string, path: string, data: number[], uploadId: string, temporary = false) =>
     remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
   diff: (sessionId: string, path: string, staged = false) =>
-    remoteInvoke<string>("get_diff", { sessionId, path, staged }),
+    invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),

@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "mocha", "@wdio/globals/types", "expect-webdriverio", "@wdio/mocha-framework", "@wdio/appium-service", "@wdio/junit-reporter"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["./**/*.test.ts", ".appium", "reports"]
+}

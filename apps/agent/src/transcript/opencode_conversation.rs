@@ -1,4 +1,6 @@
 //! Read the selected OpenCode projection, never the model-context replay log.
+use super::session_info::Session;
+use super::window::{select, Window};
 use super::{
     block, database, interaction, open_transcript, Error, Result, SourceSnapshot, TranscriptAgent,
     TranscriptPage, MAX_PAGE,
@@ -10,7 +12,9 @@ use std::{
     path::Path,
 };
 
-const MAX_ROWS: usize = 10_000;
+const MAX_ROWS: usize = 100_000;
+/// A message carries several parts (text, tool calls, results); the 16 MiB input budget still bounds both.
+const MAX_PARTS: usize = 400_000;
 const MAX_INPUT: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -63,6 +67,15 @@ struct Row {
 }
 
 pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptPage> {
+    conversation_window(path, session, limit, &Window::Tail)
+}
+
+pub fn conversation_window(
+    path: &Path,
+    session: &str,
+    limit: u8,
+    window: &Window,
+) -> Result<TranscriptPage> {
     if session.is_empty()
         || session.len() > 256
         || session.chars().any(char::is_control)
@@ -97,7 +110,7 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         .transpose()?;
     let mut queued = HashSet::new();
     if kind == Schema::V2 {
-        let mut query = db.prepare("SELECT id FROM session_inbox WHERE session_id=?1 AND type='user' AND delivery='queue' LIMIT 10001")?;
+        let mut query = db.prepare("SELECT id FROM session_inbox WHERE session_id=?1 AND type='user' AND delivery='queue' LIMIT 100001")?;
         for id in query.query_map([session], |r| r.get::<_, String>(0))? {
             let id = id?;
             if id.len() > 256 || queued.len() == MAX_ROWS {
@@ -107,9 +120,9 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         }
     }
     let sql = if kind == Schema::V2 {
-        "SELECT id,type,data,time_created FROM session_message WHERE session_id=?1 ORDER BY seq LIMIT 10001"
+        "SELECT id,type,data,time_created FROM session_message WHERE session_id=?1 ORDER BY seq LIMIT 100001"
     } else {
-        "SELECT id,json_extract(data,'$.role'),data,time_created FROM message WHERE session_id=?1 ORDER BY time_created,id LIMIT 10001"
+        "SELECT id,json_extract(data,'$.role'),data,time_created FROM message WHERE session_id=?1 ORDER BY time_created,id LIMIT 100001"
     };
     let mut query = db.prepare(sql)?;
     let mut cursor = query.query([session])?;
@@ -137,28 +150,31 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         return Err(Error::InvalidEvent);
     }
     let sql = if kind == Schema::V2 {
-        "SELECT message_id,data FROM session_part WHERE session_id=?1 ORDER BY message_id,ordinal LIMIT 10001"
+        "SELECT message_id,data FROM session_part WHERE session_id=?1 ORDER BY message_id,ordinal LIMIT 400001"
     } else {
-        "SELECT message_id,data FROM part WHERE session_id=?1 ORDER BY message_id,id LIMIT 10001"
+        "SELECT message_id,data FROM part WHERE session_id=?1 ORDER BY message_id,id LIMIT 400001"
     };
-    let mut query = db.prepare(sql)?;
-    let mut cursor = query.query([session])?;
     let mut parts: HashMap<String, Vec<Value>> = HashMap::new();
-    let ids: HashSet<_> = rows.iter().map(|r| r.id.as_str()).collect();
-    let mut count = 0;
-    while let Some(row) = cursor.next()? {
-        count += 1;
-        if count > MAX_ROWS {
-            return Err(Error::InvalidEvent);
+    // OpenCode 2.2 keeps a message's parts inline in `session_message.data` and has no `session_part` table.
+    if kind == Schema::V1 || table(&db, "session_part")? {
+        let mut query = db.prepare(sql)?;
+        let mut cursor = query.query([session])?;
+        let ids: HashSet<_> = rows.iter().map(|r| r.id.as_str()).collect();
+        let mut count = 0;
+        while let Some(row) = cursor.next()? {
+            count += 1;
+            if count > MAX_PARTS {
+                return Err(Error::InvalidEvent);
+            }
+            let id: String = row.get(0)?;
+            if !ids.contains(id.as_str()) {
+                return Err(Error::InvalidEvent);
+            }
+            parts
+                .entry(id)
+                .or_default()
+                .push(decoded(&row.get::<_, String>(1)?, &mut bytes)?);
         }
-        let id: String = row.get(0)?;
-        if !ids.contains(id.as_str()) {
-            return Err(Error::InvalidEvent);
-        }
-        parts
-            .entry(id)
-            .or_default()
-            .push(decoded(&row.get::<_, String>(1)?, &mut bytes)?);
     }
     if kind == Schema::V1 {
         if let Some(boundary) = &boundary {
@@ -169,10 +185,9 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
             rows.truncate(index);
         }
     }
-    let mut messages = Vec::new();
-    let mut output = 0;
-    let mut truncated = false;
-    for row in rows.iter().rev() {
+    let mut all = Vec::new();
+    let mut tool_parts: Vec<&Value> = Vec::new();
+    for row in &rows {
         // V2 TUI applies lexical IDs before grouping; V1 was cut by ordered index.
         if queued.contains(&row.id)
             || (kind == Schema::V2 && boundary.as_ref().is_some_and(|id| &row.id >= id))
@@ -180,24 +195,43 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
             continue;
         }
         let overlay = parts.get(&row.id);
-        if let Some(message) = normalize(
+        match overlay {
+            Some(overlay) => tool_parts.extend(overlay),
+            None if kind == Schema::V2 => {
+                tool_parts.extend(row.data["content"].as_array().into_iter().flatten());
+                tool_parts.push(&row.data);
+            }
+            None => {}
+        }
+        all.extend(normalize(
             kind,
             &row.id,
             &row.role,
             &row.data,
             overlay.map(Vec::as_slice),
             row.time,
-        )? {
-            let size = super::message_size(&message)?;
-            if messages.len() == usize::from(limit) || output + size > MAX_PAGE {
-                truncated = true;
-                break;
-            }
-            output += size;
-            messages.push(message);
-        }
+        )?);
     }
-    messages.reverse();
+    let assistants: Vec<&Value> = rows
+        .iter()
+        .rev()
+        .filter(|r| r.role == "assistant" && !queued.contains(&r.id))
+        .filter(|r| !(kind == Schema::V2 && boundary.as_ref().is_some_and(|id| &r.id >= id)))
+        .map(|r| &r.data)
+        .collect();
+    // The V2 session row names its folder; a database or a test without the column simply has none.
+    let directory: Option<String> = (kind == Schema::V2)
+        .then(|| {
+            db.query_row(
+                "SELECT directory FROM session_v2 WHERE id=?1",
+                [session],
+                |r| r.get(0),
+            )
+            .ok()
+        })
+        .flatten();
+    let session_info = Session::opencode(&assistants, directory.as_deref()).into_value();
+    let selected = select(all, window, limit)?;
     let activity = if kind == Schema::V1 {
         activity(&rows, &parts)
     } else {
@@ -208,13 +242,17 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         schema_version: 1,
         view: "active_branch",
         agent: TranscriptAgent::Opencode,
-        messages,
+        messages: selected.messages,
         next_offset: 0,
         has_more: false,
         branch_id: Some(session.into()),
-        truncated,
+        truncated: selected.has_older,
         checkpoint: None,
+        has_newer: selected.has_newer,
         activity,
+        queued: Vec::new(),
+        work: super::opencode_work::tasks(tool_parts),
+        session: session_info,
     })
 }
 
@@ -579,7 +617,11 @@ pub(super) fn records(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
+        queued: Vec::new(),
+        work: None,
+        session: None,
     })
 }
 

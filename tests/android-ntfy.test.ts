@@ -32,7 +32,7 @@ test('ntfy CI retains FOSS native coverage and separately builds the real Google
   expect(build.run).toBe('bun run build:android:emulator');
   const runtime=job.steps.find((step:any)=>step.name==='Real ntfy encrypted native enrollment').with;
   expect([runtime['api-level'],runtime.target,runtime.arch,runtime['emulator-port']]).toEqual([36,'default','x86_64',5580]);
-  expect(runtime.script).toContain('LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy');
+  expect(runtime.script).toContain('LAZYSH_NTFY_ANDROID_VARIANT=google bun run test:android-ntfy');
   expect(runtime.script).toContain('bun run test:android-ntfy');
   expect(job.steps.find((step:any)=>step.name==='Retain finite ntfy acceptance receipts only').with.name).toBe('lazysh-ntfy-acceptance-${{ matrix.push-variant }}');
 });

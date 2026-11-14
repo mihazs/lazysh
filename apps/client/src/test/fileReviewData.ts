@@ -2,12 +2,14 @@ import {attachmentReceipt} from './attachmentData';
 /** Synthetic file/revision records shared by renderer and browser acceptance. */
 export const fileReviewSession = 'ssh:literal-file-review';
 export const fileReviewRoot = '/literal/repositório';
+export const fileReviewHome = '/home/literal usuário';
 export const fileReviewName = 'unchanged.ts';
 export const fileReviewSource = 'const literal = "<img src=secret onerror=alert(1)>";\n// unchanged user content: this deliberately long literal fixture line keeps horizontal keyboard scrolling observable across narrow phone and tablet reading surfaces.';
 export const fileReviewOid = 'b'.repeat(40);
 export const fileReviewPatch = '@@ -1 +1 @@\n-before literal\n+after literal';
 export function fileReviewReply(command: string): unknown {
   if (command === 'list_directory') return [{name:fileReviewName,isDir:false,size:12500}];
+  if (command === 'host_home') return fileReviewHome;
   if (command === 'read_file') return fileReviewSource;
   if (command === 'upload_reserve') return {uploadId:attachmentReceipt};
   if (command === 'upload_file') return {path:'/literal/new destination.txt'};

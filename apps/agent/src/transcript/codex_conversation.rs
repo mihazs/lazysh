@@ -1,7 +1,7 @@
 //! Recorded UI history, qualified against Codex 0.166.0. Not model context.
+use super::window::{select, Window};
 use super::{
     codex_lineage, interaction, message_size, Error, Result, TranscriptAgent, TranscriptPage,
-    MAX_PAGE,
 };
 use serde_json::{json, Value};
 use std::{
@@ -84,6 +84,25 @@ impl Projection {
 fn text(kind: &str, value: &str) -> Value {
     json!({"type":kind,"text":value})
 }
+/// The embedded `data:` URL of a user-attached image part; a path or a link is never followed.
+fn embedded_image(part: &Value) -> Option<Option<&Value>> {
+    matches!(
+        part["type"].as_str(),
+        Some("image" | "Image" | "input_image" | "inputImage")
+    )
+    .then(|| part.get("image_url").or_else(|| part.get("url")))
+}
+/// A placeholder for the attachment, with the bounded preview only when the bytes are an admissible PNG or JPEG.
+fn image_block(url: Option<&Value>) -> Value {
+    let mut block = json!({"type":"image","text":"Attachment: view in the host agent terminal"});
+    if let Some(preview) = url
+        .and_then(Value::as_str)
+        .and_then(super::inline_image::admit_data_url)
+    {
+        block["imagePreview"] = preview;
+    }
+    block
+}
 fn message(id: &str, role: &str, blocks: Vec<Value>, timestamp: &Value) -> Option<Value> {
     if blocks.is_empty() {
         return None;
@@ -119,7 +138,38 @@ fn output_text(value: &Value) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
+/// A Codex `FileChange` item as one patch the Agent view draws as a diff card: `*** Add File:`, `*** Update File:` and
+/// `*** Delete File:` blocks whose lines carry the `+`, `-` and context marks. Bounded, so a large new file is cut.
+fn file_change_patch(changes: &Value) -> Option<String> {
+    const MAX_PATCH: usize = 32 * 1024;
+    let mut patch = String::from("*** Begin Patch\n");
+    for (path, change) in changes.as_object()? {
+        let (verb, body, mark) = match change["type"].as_str()? {
+            "add" => ("Add", change["content"].as_str()?, "+"),
+            "delete" => ("Delete", change["content"].as_str()?, "-"),
+            "update" => ("Update", change["unified_diff"].as_str()?, ""),
+            _ => return None,
+        };
+        patch.push_str(&format!("*** {verb} File: {path}\n"));
+        for line in body.lines() {
+            patch.push_str(mark);
+            patch.push_str(line);
+            patch.push('\n');
+        }
+        if patch.len() > MAX_PATCH {
+            let mut cut = MAX_PATCH;
+            while !patch.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            patch.truncate(cut);
+            patch.push('\n');
+            break;
+        }
+    }
+    patch.push_str("*** End Patch");
+    Some(patch)
+}
+fn canonical(item: &Value, timestamp: &Value, images: bool) -> Result<Option<Value>> {
     let kind = required(item, "type")?;
     let id = required(item, "id")?;
     let (role, blocks) = match kind {
@@ -128,6 +178,11 @@ fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
             let blocks = parts
                 .iter()
                 .filter_map(|part| {
+                    if images && kind == "UserMessage" {
+                        if let Some(url) = embedded_image(part) {
+                            return Some(image_block(url));
+                        }
+                    }
                     matches!(part["type"].as_str(), Some("text" | "Text"))
                         .then(|| part["text"].as_str())
                         .flatten()
@@ -178,6 +233,22 @@ fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
             }
             ("assistant", blocks)
         }
+        "FileChange" => {
+            let patch = file_change_patch(&item["changes"]).ok_or(Error::InvalidEvent)?;
+            let mut blocks =
+                vec![json!({"type":"tool_use","id":id,"name":"apply_patch","text":patch})];
+            if let Some(status) = item["status"].as_str() {
+                let failed = matches!(status, "failed" | "declined");
+                let output = [item["stdout"].as_str(), item["stderr"].as_str()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                blocks.push(json!({"type":"tool_result","id":id,"text":output,"isError":failed}));
+            }
+            ("assistant", blocks)
+        }
         "FunctionCallOutput" => {
             let name = required(item, "name")?;
             if !item["output"].is_string() && !item["output"].is_array() {
@@ -219,7 +290,7 @@ fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
     };
     Ok(message(id, role, blocks, timestamp))
 }
-fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> {
+fn legacy(event: &Value, key: &str, timestamp: &Value, images: bool) -> Result<Option<Value>> {
     let kind = required(event, "type")?;
     let (role, blocks, id) = match kind {
         "user_message" | "agent_message" => (
@@ -230,7 +301,16 @@ fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> 
             },
             event["message"]
                 .as_str()
-                .map(|s| vec![text("text", s)])
+                .map(|s| {
+                    let mut blocks = vec![text("text", s)];
+                    if images && kind == "user_message" {
+                        // A local file is never read: it only says an image was attached.
+                        let attached = |key: &str| event[key].as_array().into_iter().flatten();
+                        blocks.extend(attached("images").map(|url| image_block(Some(url))));
+                        blocks.extend(attached("local_images").map(|_| image_block(None)));
+                    }
+                    blocks
+                })
                 .ok_or(Error::InvalidEvent)?,
             key.to_owned(),
         ),
@@ -265,13 +345,13 @@ fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> 
             let mut item = event.clone();
             item["type"] = json!("DynamicToolCall");
             item["id"] = json!(required(event, "call_id")?);
-            return canonical(&item, timestamp);
+            return canonical(&item, timestamp, images);
         }
         "mcp_tool_call_end" => {
             let item = json!({"type":"McpToolCall","id":required(event,"call_id")?,"tool":event["invocation"]["tool"],"arguments":event["invocation"]["arguments"],"result":event["result"]["Ok"],"error":event["result"]["Err"]});
-            return canonical(&item, timestamp);
+            return canonical(&item, timestamp, images);
         }
-        "item_completed" => return canonical(&event["item"], timestamp),
+        "item_completed" => return canonical(&event["item"], timestamp, images),
         _ => return Ok(None),
     };
     Ok(message(&id, role, blocks, timestamp))
@@ -297,11 +377,13 @@ fn pending_question(payload: &Value, asked: &mut HashSet<String>) {
     }
 }
 
-pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
-    if !(1..=100).contains(&limit) {
-        return Err(Error::InvalidArgument);
-    }
-    project(codex_lineage::read(path)?, limit)
+pub(super) fn conversation(
+    path: &Path,
+    limit: u8,
+    images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    project(codex_lineage::read(path)?, limit, images, window)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -310,31 +392,57 @@ pub(super) fn anchored(
     path: &Path,
     limit: u8,
     expected: &super::SourceSnapshot,
+    window: &Window,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    project(codex_lineage::read_anchored(root, path, expected)?, limit)
+    project(
+        codex_lineage::read_anchored(root, path, expected)?,
+        limit,
+        false,
+        window,
+    )
 }
 
-fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage> {
+fn project(
+    history: codex_lineage::History,
+    limit: u8,
+    images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
+    let mut session = super::session_info::Session::default();
+    let mut goal_seen: Option<(Option<&str>, Option<&str>)> = None;
+    let mut agents = super::work::CodexAgents::default();
     for record in &history.records {
         let value = &record.value;
+        session.codex(value);
         if value["type"] == "response_item" {
             // Turn state only: model-context items never become messages here.
             pending_question(&value["payload"], &mut asked);
+            if value["payload"]["type"] == "agent_message" {
+                agents.message(&value["payload"], value["timestamp"].as_str());
+            }
         }
         if value["type"] == "compacted" {
             projection.turn(None).compacted = true;
+            let id = format!("compacted-{}", record.key);
+            projection.put(
+                None,
+                super::events::codex_compacted(&id, &value["timestamp"]),
+            )?;
             continue;
         }
         if value["type"] != "event_msg" {
             continue;
         }
         let event = &value["payload"];
+        if event["type"] == "item_completed" && event["item"]["type"] == "SubAgentActivity" {
+            agents.observe(&event["item"], value["timestamp"].as_str());
+        }
         match required(event, "type")? {
             "task_started" | "turn_started" => {
                 activity = Some("working");
@@ -361,6 +469,20 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
                     continue;
                 }
                 projection.finish();
+                continue;
+            }
+            "thread_goal_updated" => {
+                // Updates repeat while the goal runs; only a new goal or a new status is an event.
+                let goal = &event["goal"];
+                let key = (goal["objective"].as_str(), goal["status"].as_str());
+                if goal_seen != Some(key) {
+                    goal_seen = Some(key);
+                    let id = format!("goal-{}", record.key);
+                    if let Some(message) = super::events::codex_goal(&id, goal, &value["timestamp"])
+                    {
+                        projection.put(event["turn_id"].as_str(), message)?;
+                    }
+                }
                 continue;
             }
             "thread_rolled_back" => {
@@ -395,7 +517,7 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             if required(event, "thread_id")? != record.thread {
                 return Err(Error::InvalidEvent);
             }
-            canonical(&event["item"], &value["timestamp"])?
+            canonical(&event["item"], &value["timestamp"], images)?
         } else {
             // Legacy compatibility events own display text; response_item is
             // model context and can contain reinjection/private compaction data.
@@ -407,7 +529,7 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             {
                 continue;
             }
-            legacy(event, &record.key, &value["timestamp"])?
+            legacy(event, &record.key, &value["timestamp"], images)?
         };
         if let Some(message) = projected {
             let turn = event["turn_id"].as_str().filter(|id| !id.is_empty());
@@ -420,35 +542,25 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
         .into_iter()
         .flat_map(|turn| turn.messages)
         .collect::<Vec<_>>();
-    let mut messages = Vec::new();
-    let mut bytes = 0;
-    for value in all.iter().rev() {
-        let size = message_size(value)?;
-        if size > MAX_PAGE {
-            return Err(Error::InvalidEvent);
-        }
-        if messages.len() == usize::from(limit) || bytes + size > MAX_PAGE {
-            break;
-        }
-        messages.push(value.clone());
-        bytes += size;
-    }
-    let truncated = messages.len() < all.len();
-    messages.reverse();
+    let selected = select(all, window, limit)?;
     history.verify()?;
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
         agent: TranscriptAgent::Codex,
-        messages,
+        messages: selected.messages,
         next_offset: history.offset,
         has_more: false,
         branch_id: Some(history.thread),
-        truncated,
+        truncated: selected.has_older,
+        has_newer: selected.has_newer,
         checkpoint: None,
         activity: match activity {
             Some("working") if !asked.is_empty() => Some("waiting"),
             other => other,
         },
+        queued: Vec::new(),
+        work: agents.into_work(),
+        session: session.into_value(),
     })
 }

@@ -1,11 +1,11 @@
-import {expect,type Page} from '@playwright/test';
+import {expect,type Page,type TestInfo} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[];simpleShortcutKeyboard?:(action:string)=>boolean|null;simpleShortcutFiles?:Record<string,string>;simpleShortcutHostCalls:string[]}}
 
 /** One synthetic local terminal: output is injected, input and opened links are recorded. No shell runs. */
 export async function installLocalTerminal(page:Page) {
   await page.addInitScript(()=>{
-    window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];
+    window.simpleShortcutWrites=[];window.simpleShortcutPrivateKeyboard=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];window.simpleShortcutHostCalls=[];
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
       if (command==='desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
@@ -14,6 +14,22 @@ export async function installLocalTerminal(page:Page) {
       if (command==='app_lock_ready' || command==='adopt_session') return;
       if (command==='list_hosts') return [];
       if (command==='clipboard_is_android') return false;
+      // Android's IME controller: a spec that installs `simpleShortcutKeyboard` plays the native side, otherwise there is none (null).
+      if (command==='soft_keyboard') return window.simpleShortcutKeyboard?.(args.action as string) ?? null;
+      // Host files: `simpleShortcutFiles` maps an absolute path to its text; any other path does not exist.
+      if (command==='host_home') return '/home/fixture';
+      if (command.startsWith('host_file_')||command==='read_file') {
+        window.simpleShortcutHostCalls.push(`${command} ${String(args.path??args.action??'')}`.trim());
+        const text=window.simpleShortcutFiles?.[args.path as string];
+        if (command==='host_file_stat') {
+          if (text===undefined) throw {kind:'not_found',message:'No such file'};
+          return {path:args.path,name:String(args.path).split('/').pop(),kind:'file',size:text.length,link:null,actions:['save','open']};
+        }
+        if (command==='read_file') return text;
+        if (command==='host_file_download') {(args.progress as {onmessage:(v:unknown)=>void}).onmessage({bytes:1,total:1});return {name:String(args.path).split('/').pop(),size:1};}
+        if (command==='host_file_deliver') return {location:'/downloads/saved'};
+        return;
+      }
       if (command==='open_web_url') {window.simpleShortcutOpened.push(args.url as string);return;}
       if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
@@ -29,6 +45,7 @@ export async function installLocalTerminal(page:Page) {
         if(window.simpleShortcutWriteFailure)throw {kind:window.simpleShortcutWriteFailure,message:'Owned queue failure'};
         return;
       }
+      if (command==='terminal_private_keyboard'){window.simpleShortcutPrivateKeyboard.push(args.active as boolean);return;}
       if (command==='local_resize'){window.simpleShortcutResizes.push({cols:args.cols as number,rows:args.rows as number});return;}
       if (['local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
@@ -37,14 +54,49 @@ export async function installLocalTerminal(page:Page) {
   });
 }
 
+/** Opens that terminal from the workspace, through the hosts drawer on a phone, once its output sink is ready. */
+export async function openLocalTerminal(page:Page,testInfo:TestInfo) {
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+}
+
 /** Opens that terminal with the browser's real clipboard, seeded with `BEFORE`. */
 export async function openClipboardTerminal(page:Page) {
   await installLocalTerminal(page);
   await page.goto('/');
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
   await page.evaluate(()=>navigator.clipboard.writeText('BEFORE'));
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectLocalTerminal(page);
+}
+
+/** Installs that terminal, opens the app and starts the local terminal (through the hosts drawer on a phone). */
+export async function startLocalTerminal(page:Page) {
+  await installLocalTerminal(page);
+  await page.goto('/');
+  await connectLocalTerminal(page);
+}
+
+/** From the start page, opens the synthetic local terminal and waits until it can take output. */
+export async function connectLocalTerminal(page:Page) {
+  const hosts=page.getByRole('button',{name:'Open hosts',exact:true});
+  if(await hosts.isVisible())await hosts.click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
   await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+}
+
+/** A local terminal whose stored settings are `preferences` (the default toolbar when it has none); returns the toolbar. Input bytes are recorded. */
+export async function openToolbarTerminal(page:Page,testInfo:TestInfo,preferences:Record<string,unknown>={}) {
+  await installLocalTerminal(page);
+  await page.addInitScript(preferences=>{
+    if(sessionStorage.getItem('toolbar-seeded'))return;
+    sessionStorage.setItem('toolbar-seeded','1');
+    localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,composerSendEnter:false,...preferences}));
+  },preferences);
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+  return page.getByLabel('Terminal keys',{exact:true});
 }

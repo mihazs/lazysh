@@ -1,5 +1,675 @@
 # @lazysh/client
 
+## 1.62.0
+
+### Minor Changes
+
+- 163c258: Stop a running background task from the Agent view by asking the agent to end it with its TaskStop tool.
+
+### Patch Changes
+
+- e0d72ec: Route the terminal pane's selection, search, paste, links, Herdr navigation, IME and Mosh resize handling through a terminal-engine adapter. xterm.js stays the only engine and the default; behaviour does not change. This is the groundwork for trying a second terminal engine behind an explicit opt-in.
+- @lazysh/account-usage@1.62.0
+  - @lazysh/common@1.62.0
+  - @lazysh/display-idle@1.62.0
+  - @lazysh/et-transport@1.62.0
+  - @lazysh/mosh-transport@1.62.0
+
+## 1.61.0
+
+### Minor Changes
+
+- d729225: Add a native tab strip above the terminal for Herdr, Zellij and tmux tabs, with a Herdr workspace switcher, agent state dots, a **+** for new tabs, long-press rename for Herdr tabs and workspaces and tmux windows, and a Show tab strip setting (Auto, Always, Never). On phones it is on by default for a multiplexer session with more than one tab.
+
+### Patch Changes
+
+- 8c374b7: Fix the Agent view prompt bubble covering the reply under it while the agent works, and show pasted text as a compact block instead of raw `pasted_content` tags.
+- @lazysh/account-usage@1.61.0
+  - @lazysh/common@1.61.0
+  - @lazysh/display-idle@1.61.0
+  - @lazysh/et-transport@1.61.0
+  - @lazysh/mosh-transport@1.61.0
+
+## 1.60.0
+
+### Minor Changes
+
+- 39bf577: Follow an OpenCode session in the Agent view on tmux and send to it: the pane's session is bound through OpenCode's database via the host companion and read like a Claude Code or Codex conversation, every prompt is written as one paste and Enter (OpenCode drops a short prompt written as a burst of keys), and Stop presses Escape twice with a short pause. The header shows the model, context in use and folder of the OpenCode session, read by the updated host companion.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.60.0
+  - @lazysh/common@1.60.0
+  - @lazysh/display-idle@1.60.0
+  - @lazysh/et-transport@1.60.0
+  - @lazysh/mosh-transport@1.60.0
+
+## 1.59.0
+
+### Minor Changes
+
+- 6d4fb75: Add a read-only **Session info** sheet to the Agent view options for Claude Code: the MCP servers and whether they connected, the skills, agent types and instruction files the session loaded, from a new `session.info` object of the conversation page.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.59.0
+  - @lazysh/common@1.59.0
+  - @lazysh/display-idle@1.59.0
+  - @lazysh/et-transport@1.59.0
+  - @lazysh/mosh-transport@1.59.0
+
+## 1.58.0
+
+### Minor Changes
+
+- 3939ff7: Answer Codex's approval prompt and its list dialogs (/model, /permissions, /review) from the Agent view with the keys a person presses, after reading the highlight back.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.58.0
+  - @lazysh/common@1.58.0
+  - @lazysh/display-idle@1.58.0
+  - @lazysh/et-transport@1.58.0
+  - @lazysh/mosh-transport@1.58.0
+
+## 1.57.0
+
+### Minor Changes
+
+- 5dfb34f: List OpenCode sub-agents in the Agent view's background-work panel, and read the OpenCode 2.2 conversation database that keeps parts inline.
+- 5dfb34f: Report Codex sub-agents as background work so the Agent view lists them.
+
+### Patch Changes
+
+- 31be2b1: Add the Appium and WebdriverIO device regression suite scaffold for the Android app: pinned runner and driver, a device lock that restores window size, density, navigation mode, IME, animations, rotation and permissions, WebView context helpers, failure artifacts and a first smoke spec that reaches the empty home.
+- @lazysh/account-usage@1.57.0
+  - @lazysh/common@1.57.0
+  - @lazysh/display-idle@1.57.0
+  - @lazysh/et-transport@1.57.0
+  - @lazysh/mosh-transport@1.57.0
+
+## 1.56.1
+
+### Patch Changes
+
+- bedb030: Open the Agent view faster: ask the host for its Unix identity once per connection instead of before every companion command, read independent things together (the host's reports and the pane; the Herdr pane check and the conversation), and check the bound report once after the first read instead of before and after it. For a hook-bound tmux conversation the first message needs 4 SSH execs in a row instead of 14.
+- @lazysh/account-usage@1.56.1
+  - @lazysh/common@1.56.1
+  - @lazysh/display-idle@1.56.1
+  - @lazysh/et-transport@1.56.1
+  - @lazysh/mosh-transport@1.56.1
+
+## 1.56.0
+
+### Minor Changes
+
+- 00c3e7d: Fold the thinking of each turn into one timed **Thought for N s** row in the Agent view.
+- 00c3e7d: Show Claude Code goal, plan-mode, recap and hook-failure records and Codex goal and compaction records as compact event lines in the Agent view.
+- 87bb9c3: Say in the Agent view when a Claude permission request was answered in the terminal first, and send nothing for a tap on a request the host no longer lists.
+- 87bb9c3: Offer the permission updates Claude Code suggests (allow and remember a rule, switch mode, add folders) in the approval card and the Agent view, each behind a confirmation that shows the exact rule and where it is kept, and let a denial carry a message the agent reads.
+
+### Patch Changes
+
+- 6650427: Fix Back leaving the app and the phone gestures losing the system gesture zones after Android recreates the app's window (a navigation-style switch, for example). The Back handler and the gesture plugin are rebound to the new window, and the launcher icon, keyboard, file and background-session plugins act on it too.
+- @lazysh/account-usage@1.56.0
+  - @lazysh/common@1.56.0
+  - @lazysh/display-idle@1.56.0
+  - @lazysh/et-transport@1.56.0
+  - @lazysh/mosh-transport@1.56.0
+
+## 1.55.0
+
+### Minor Changes
+
+- b4506f1: Add per-message and per-code-block copy, conversation search that opens folded tool rows, and a Conversation only choice to the Agent view.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.55.0
+  - @lazysh/common@1.55.0
+  - @lazysh/display-idle@1.55.0
+  - @lazysh/et-transport@1.55.0
+  - @lazysh/mosh-transport@1.55.0
+
+## 1.54.1
+
+### Patch Changes
+
+- cfdff22: Render the HTML that agents write and people paste in the Agent view through a strict sanitized allow-list instead of showing it as escaped text.
+- 2740b7b: Add the Agent view load benchmark: a seeded Claude Code transcript generator, pages recorded from the real companion, a production-bundle benchmark page with a modelled SSH host and CPU throttling, and `docs/reference/agent-view-performance.md` with the measured baseline. No behaviour of the app changes.
+- @lazysh/account-usage@1.54.1
+  - @lazysh/common@1.54.1
+  - @lazysh/display-idle@1.54.1
+  - @lazysh/et-transport@1.54.1
+  - @lazysh/mosh-transport@1.54.1
+
+## 1.54.0
+
+### Minor Changes
+
+- e74bd92: List the earlier Claude Code and Codex sessions of a folder in the Agent view and open one read-only, with a **Resume in the terminal** action that stages the agent's own resume command for review, through a new `lazysh-agent history` companion command and `agent_history` app command.
+- 95224be: Open a Claude Code sub-agent's own conversation from the Agent view, read from its files under the session directory.
+- 95224be: Show Claude Code dynamic workflows in the Agent view as a live progress tree: the companion reads each run's summary and journal files, the view draws its phases with each agent's state, tokens and tool calls, and opens any agent's own conversation.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.54.0
+  - @lazysh/common@1.54.0
+  - @lazysh/display-idle@1.54.0
+  - @lazysh/et-transport@1.54.0
+  - @lazysh/mosh-transport@1.54.0
+
+## 1.53.0
+
+### Minor Changes
+
+- 9d0da93: Answer the list dialogs Claude Code opens (`/model`, `/resume`, `/rewind`, the folder trust prompt, the plan decision) from the Agent view on a tmux session: the dialog is read from the pane's terminal screen, shown as a card, and a choice is sent as arrow keys, a read-back and Enter through a new bounded `pick` input of the confirmed terminal input.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.53.0
+  - @lazysh/common@1.53.0
+  - @lazysh/display-idle@1.53.0
+  - @lazysh/et-transport@1.53.0
+  - @lazysh/mosh-transport@1.53.0
+
+## 1.52.0
+
+### Minor Changes
+
+- fc4e7e8: Show each tool call of the Agent view as one card with its result and each file edit as a diff card.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.52.0
+  - @lazysh/common@1.52.0
+  - @lazysh/display-idle@1.52.0
+  - @lazysh/et-transport@1.52.0
+  - @lazysh/mosh-transport@1.52.0
+
+## 1.51.0
+
+### Minor Changes
+
+- 7374c3b: Fix the phone gestures colliding with Android and Samsung One UI navigation gestures. On Android gesture navigation each gesture now starts from a visible handle placed from the live system gesture zones instead of the screen edge, edge swipes remain as an optional Gesture style (and as the default with three-button navigation), and a Test gestures page shows the zones. A swipe also starts in a band just beyond the system's Back and Home zones (inset + 4 dp up to inset + the zone width), so it does not compete with the system's edge gestures. Changed defaults: handles and bands instead of edge swipes on gesture navigation, and the edge zone width defaults to 40 dp (was 24) with a 96 dp maximum (was 48).
+- 78ae7c6: Show the working state, elapsed time, turn tokens and running tool on one line above the Agent view composer.
+- 587b2c7: Send from the Agent view to an agent that runs in a Zellij pane. The updated companion reports the Zellij session and pane of an agent's hooks, the Agent view of a terminal attached to that session follows (or lists) the agents that name one of its panes, and Send and Stop write to that exact pane through Zellij's own commands, only while it still runs the agent. Needs Zellij 0.45.1 or newer.
+
+### Patch Changes
+
+- 03c8b6d: Changed default: the toolbar page indicator is hidden until you change page, then fades in as three dots for two seconds inside the toolbar's bottom padding.
+- @lazysh/account-usage@1.51.0
+  - @lazysh/common@1.51.0
+  - @lazysh/display-idle@1.51.0
+  - @lazysh/et-transport@1.51.0
+  - @lazysh/mosh-transport@1.51.0
+
+## 1.50.0
+
+### Minor Changes
+
+- 9d7fb30: Show a failed Claude Code API call (usage limit, unreachable API, refused request) as an error card that says what to do next, from the recorded `isApiErrorMessage` assistant record.
+
+### Patch Changes
+
+- 54776ce: On phones, the side menu is now the one full-screen navigation page (hosts, Workspaces, Agents) instead of a separate partial-width Menu drawer; its tabs read Agents, Workspaces, Connections and a connected remote session opens on Agents instead of Connections.
+- b7e63b5: Fix the client build after two merged Agent view changes both defined the permission-mode strings.
+- a594aa6: Keep **Load earlier messages** available in the Agent view when live updates push the oldest loaded messages out of its 400-message window, instead of showing a false **Start of the session** marker, and prove that loading an older page keeps the line being read in place while a live update arrives.
+- @lazysh/account-usage@1.50.0
+  - @lazysh/common@1.50.0
+  - @lazysh/display-idle@1.50.0
+  - @lazysh/et-transport@1.50.0
+  - @lazysh/mosh-transport@1.50.0
+
+## 1.49.0
+
+### Minor Changes
+
+- b2a9d62: Switch Claude Code's permission mode from the Agent view on tmux: a new button sends one guarded Shift+Tab per tap and names the mode the terminal's own status line showed afterwards.
+- deef2a8: Add a Floating composer view as a per-device option next to Docked: a small movable, collapsible panel over the terminal that keeps the terminal grid and toolbar in place and sits above the soft keyboard, with Send, Insert, attachments and the draft.
+- 4f882e7: Show the agent's model, permission mode, context left, git branch and worktree in the Agent view header, from a new additive `session` object of the Claude Code and Codex conversation pages and watch frames.
+- ecaf908: Open, view, download or copy a host file path printed in the terminal: absolute, `~/` and `./` paths (and relative ones once the shell reports its directory with OSC 7), with `:line:col`, become links only when the host confirms the file exists.
+
+### Patch Changes
+
+- b2a9d62: Allow the stock Herdr send command of the Agent view composer in the app capability, so a send on a stock Herdr host is no longer refused by the app before it reaches the host.
+- @lazysh/account-usage@1.49.0
+  - @lazysh/common@1.49.0
+  - @lazysh/display-idle@1.49.0
+  - @lazysh/et-transport@1.49.0
+  - @lazysh/mosh-transport@1.49.0
+
+## 1.48.0
+
+### Minor Changes
+
+- 16c4800: Read the Agent view's background work (sub-agents, background commands, monitors, workflows) from the host companion so the panel covers the whole conversation, shows a shell or monitor's output and flags launches with no recorded end as not confirmed.
+
+### Patch Changes
+
+- c191de9: Fix the Agent view composer on a stock Herdr host: Send now goes through Herdr's own agent prompt command to the followed agent's exact pane, and a failed send shows one compact notice that keeps the draft.
+- @lazysh/account-usage@1.48.0
+  - @lazysh/common@1.48.0
+  - @lazysh/display-idle@1.48.0
+  - @lazysh/et-transport@1.48.0
+  - @lazysh/mosh-transport@1.48.0
+
+## 1.47.0
+
+### Minor Changes
+
+- 4a816a8: Paste, drop or pick files in the Agent view composer as numbered `[Image #n]` / `[File #n]` tokens that expand to the uploaded host paths on send.
+- fb9d5b7: Pin the latest plan or todo list of the agent above the composer in the Agent view as one chip with progress and the current step, expanding to the full list.
+- 4a816a8: Send prompts of up to 64 KiB from the Agent view composer on tmux as one bounded, guarded paste.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.47.0
+  - @lazysh/common@1.47.0
+  - @lazysh/display-idle@1.47.0
+  - @lazysh/et-transport@1.47.0
+  - @lazysh/mosh-transport@1.47.0
+
+## 1.46.0
+
+### Minor Changes
+
+- f6e5dbb: Add a Show/Hide keyboard button for touch devices: one tap focuses the terminal input and asks Android for its keyboard, the next hides it without sending input, and the icon follows the real keyboard, including a system back dismissal. The toolbar keyboard key shares the same toggle.
+- 52592f7: On phones in a connected session the top bar and the hamburger are gone: a swipe from the left edge opens a side menu that holds everything the top bar offered, and the terminal gains the freed height.
+- 6ebb3d8: Show the PNG and JPEG images a user attached as a bounded preview control in the Agent view bubble, for Claude Code and (new in the companion) Codex conversations.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.46.0
+  - @lazysh/common@1.46.0
+  - @lazysh/display-idle@1.46.0
+  - @lazysh/et-transport@1.46.0
+  - @lazysh/mosh-transport@1.46.0
+
+## 1.45.0
+
+### Minor Changes
+
+- 268c2da: The status bar's usage item follows the agent in the current pane (Claude Code shows Claude, Codex shows Codex, and so on), falls back to the chosen default account when no agent is detected, and can be pinned to one account or hidden in Preferences. Changed default: it follows the agent instead of showing one fixed account.
+- e88a7d1: Show a compact background-work panel above the Agent view composer for Claude Code: counts of running shells, monitors, sub-agents and workflows, a list for each counter, and a tree of sub-agents and workflows with elapsed time and tokens.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.45.0
+  - @lazysh/common@1.45.0
+  - @lazysh/display-idle@1.45.0
+  - @lazysh/et-transport@1.45.0
+  - @lazysh/mosh-transport@1.45.0
+
+## 1.44.0
+
+### Minor Changes
+
+- b76c8c7: Open or download the selected file from Files: Open with, Download and (Android) Share, with SFTP streaming, progress and cancel, confirmation for symbolic links and files over 50 MiB, no silent overwrite, and no system open of programs or scripts.
+- cf8a0bf: Answer the open Claude Code question (single or multi-select, several questions, or typed text) from the Agent view on a tmux session, through a new bounded dialog-answer input of the confirmed terminal input.
+
+### Patch Changes
+
+- d770c55: Fix the agent job's moon base revision on pushes to main, which resolved to an empty ref and failed the job. Pull requests are unchanged.
+- @lazysh/account-usage@1.44.0
+  - @lazysh/common@1.44.0
+  - @lazysh/display-idle@1.44.0
+  - @lazysh/et-transport@1.44.0
+  - @lazysh/mosh-transport@1.44.0
+
+## 1.43.0
+
+### Minor Changes
+
+- e8d624f: Add the phone bottom menu opened by swiping up from the bottom edge, with composer and toolbar show/hide.
+- f94c597: Add `@` file and folder completion to the Agent view composer, listing only paths below the folder the agent works in.
+- 2eecf76: Switch between the terminal and the Agent view with a swipe on a phone in a connected session: swipe from the right edge toward the left to show the Agent view, and while it is shown swipe from the centre toward the right to return to the terminal. The two views slide as one page that follows the finger and settles on release; a short or interrupted swipe leaves the view unchanged. The swipe never starts while typing or editing text, nor inside horizontally scrollable content such as code blocks, diffs and tables. The Terminal | Agent buttons stay, and the choice is still remembered per saved host and multiplexer target.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.43.0
+  - @lazysh/common@1.43.0
+  - @lazysh/display-idle@1.43.0
+  - @lazysh/et-transport@1.43.0
+  - @lazysh/mosh-transport@1.43.0
+
+## 1.42.0
+
+### Minor Changes
+
+- d356489: Read the whole session in the Agent view: scroll up to load earlier messages without losing your place, Jump to start for the first message, read forward again from there, with at most 400 messages held at a time. Needs the new host companion; an older one keeps the latest messages and asks you to update.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.42.0
+  - @lazysh/common@1.42.0
+  - @lazysh/display-idle@1.42.0
+  - @lazysh/et-transport@1.42.0
+  - @lazysh/mosh-transport@1.42.0
+
+## 1.41.0
+
+### Minor Changes
+
+- 81297de: Add a slash-command palette, prompt-mode chips, prompt history, send receipts with Retry and a two-press Request stop to the Agent view composer.
+
+### Patch Changes
+
+- 739e91c: Run the workspace build, check, lint, test and acceptance tasks with moon instead of Turborepo. The `bun run` task names, the CI job names and the published artifacts are unchanged.
+- @lazysh/account-usage@1.41.0
+  - @lazysh/common@1.41.0
+  - @lazysh/display-idle@1.41.0
+  - @lazysh/et-transport@1.41.0
+  - @lazysh/mosh-transport@1.41.0
+
+## 1.40.0
+
+### Minor Changes
+
+- 65eaa38: Show the prompts typed while Claude Code works as read-only Queued cards in the Agent view, from a new bounded `queued` list in the companion's Claude conversation page and transcript-watch frames.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.40.0
+  - @lazysh/common@1.40.0
+  - @lazysh/display-idle@1.40.0
+  - @lazysh/et-transport@1.40.0
+  - @lazysh/mosh-transport@1.40.0
+
+## 1.39.0
+
+### Minor Changes
+
+- 68631cf: Add an Android-only Private keyboard in the terminal setting (off by default, saved on this device only) for keyboards that drop or change typed characters: while the terminal has focus, the keyboard is asked for private typing with no learning and no suggestions, so predictive text, autocorrect and swipe typing stop working there.
+
+### Patch Changes
+
+- e98336b: Fix the Herdr switch button disappearing while scrolling or with the keyboard open: Herdr sessions now show a switch button in the session header, outside the scrolling terminal, that opens Herdr Spaces.
+- @lazysh/account-usage@1.39.0
+  - @lazysh/common@1.39.0
+  - @lazysh/display-idle@1.39.0
+  - @lazysh/et-transport@1.39.0
+  - @lazysh/mosh-transport@1.39.0
+
+## 1.38.0
+
+### Minor Changes
+
+- 2a5bcf8: Bring the message box back to the Agent view as an always-present composer that binds itself to the terminal pane of the followed agent, so sending needs no Choose and Confirm steps.
+- 6f7cd9e: Answer Claude Code permission requests from the Agent view: the pane agent's pending request appears above the conversation and Allow or Deny sends the hash-bound approval decision after the pane is re-verified.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.38.0
+  - @lazysh/common@1.38.0
+  - @lazysh/display-idle@1.38.0
+  - @lazysh/et-transport@1.38.0
+  - @lazysh/mosh-transport@1.38.0
+
+## 1.37.0
+
+### Minor Changes
+
+- 20f02cc: Name what an agent waits for (approval, question, plan decision or unknown) and since when: the companion records it from hook payloads, and the Agent view shows it in its header and session list, lists waiting sessions first and opens from a needs-you notification.
+
+### Patch Changes
+
+- b628dd7: Fix terminal URLs that wrap over several rows: soft-wrapped and conservatively detected hard-wrapped URLs (including inside boxed TUIs) are tapped as one whole address, trailing punctuation and unbalanced closing brackets are trimmed, OSC 8 hyperlinks use the same Open in browser / Copy URL confirmation and win over detection.
+- @lazysh/account-usage@1.37.0
+  - @lazysh/common@1.37.0
+  - @lazysh/display-idle@1.37.0
+  - @lazysh/et-transport@1.37.0
+  - @lazysh/mosh-transport@1.37.0
+
+## 1.36.0
+
+### Minor Changes
+
+- 5f13c20: Add an Arrows toolbar component that draws the four arrow keys as one inverted-T cluster in the toolbar's two rows, placeable as one chip in the toolbar editor and included in the default layout, and send the unmodified cursor keys as application cursor keys (ESC O A) while a program has that mode on. Changed default: the default toolbar's four separate arrow keys are now the Arrows component; saved layouts keep their separate arrow keys.
+- e792eaa: Add an Insert button next to Send in the terminal composer: Send puts the draft on the input line and presses Enter, Insert puts it there without Enter (same bracketed-paste delivery), Ctrl+Enter sends and Ctrl+Shift+Enter inserts, and a failed write keeps the draft and the composer open.
+- 0148fc9: The Agent view follows the agent of the current pane: under Herdr it opens the focused pane's conversation by itself and re-links when focus or the agent changes, lists the live agents when the pane has none, and offers Start Claude Code, Start Codex and the Herdr launcher when nothing runs. Changed default: it opens the current pane's chat instead of the last pick.
+
+### Patch Changes
+
+- 848a370: Add a developer-only prototype of the host browser: a hidden companion command that starts a throwaway Chrome-family browser on the host and a viewer page that only the Vite development server serves, with a real-browser CI test and a protocol-client unit test. It is off by default, absent from release builds and changes no default.
+- f37cb2d: Fix moving between Herdr terminals opening the Android soft keyboard and shrinking the terminal: on touch screens no navigation focuses a terminal input any more, and a keyboard that is already open passes to the terminal you move to without closing.
+- @lazysh/account-usage@1.36.0
+  - @lazysh/common@1.36.0
+  - @lazysh/display-idle@1.36.0
+  - @lazysh/et-transport@1.36.0
+  - @lazysh/mosh-transport@1.36.0
+
+## 1.35.0
+
+### Minor Changes
+
+- 91e6abf: Add the edge-swipe gesture engine for phone sessions: swipes that start in a thin edge zone follow the finger and settle, and never run while you type, select text or scroll. The side menu, bottom menu and view-switch gestures build on it.
+
+### Patch Changes
+
+- 2870a04: Fix Backspace and word corrections from the phone keyboard (reported with SwiftKey) being skipped after a toolbar key or a mouse report: Backspace over typed text now always reaches the terminal, and wheel scrolling in a mouse-tracking program no longer ends the keyboard edit record.
+- @lazysh/account-usage@1.35.0
+  - @lazysh/common@1.35.0
+  - @lazysh/display-idle@1.35.0
+  - @lazysh/et-transport@1.35.0
+  - @lazysh/mosh-transport@1.35.0
+
+## 1.34.0
+
+### Minor Changes
+
+- d5a8ca9: Update the Agent view in real time. A bound Claude Code or Codex conversation now streams over one host companion channel (`lazysh-agent transcript-watch`) instead of a full page read every 2 seconds: new messages, a reply that grows and a tool result that lands on an older turn change their card in place, without a page replace or a jump of the reading position. The thread shows Agent is working or waiting from the recorded turn state, polls every 2 seconds with a note when the stream cannot open, marks the thread stale while it reconnects, and asks you to update an older host companion.
+
+### Patch Changes
+
+- d455f37: Restore sliding between the toolbar pages in the compact terminal toolbar without making it taller: swipe sideways, or use the page indicator, between the keys, a Tools page with Find and Copy, and a Snippets page with saved snippets and chords. Changed default: the More keys key is removed and the default toolbar's second row gains an enter key in its place; saved layouts keep every key.
+- @lazysh/account-usage@1.34.0
+  - @lazysh/common@1.34.0
+  - @lazysh/display-idle@1.34.0
+  - @lazysh/et-transport@1.34.0
+  - @lazysh/mosh-transport@1.34.0
+
+## 1.33.4
+
+### Patch Changes
+
+- a653d76: Fix the Files view not resolving paths that start with `~`: `~`, `~/x`, `$HOME/x` and `${HOME}/x` now expand to the SSH user's home as reported by the host's SFTP server, the resolved absolute path is shown, and `~otheruser` is refused with a clear message.
+- @lazysh/account-usage@1.33.4
+  - @lazysh/common@1.33.4
+  - @lazysh/display-idle@1.33.4
+  - @lazysh/et-transport@1.33.4
+  - @lazysh/mosh-transport@1.33.4
+
+## 1.33.3
+
+### Patch Changes
+
+- 7f16dce: Fix the Agent view header spending a third of a phone screen on chrome: the header, Back and Enter buttons and unverified notices are one compact row with an options button, token counters leave the message flow, harness-injected records such as task notifications show as compact event lines instead of raw tags in a user bubble, and the composer is one line with a visible Stage in terminal button.
+- @lazysh/account-usage@1.33.3
+  - @lazysh/common@1.33.3
+  - @lazysh/display-idle@1.33.3
+  - @lazysh/et-transport@1.33.3
+  - @lazysh/mosh-transport@1.33.3
+
+## 1.33.2
+
+### Patch Changes
+
+- f8c530b: Make the terminal fill all the free screen area: no margin above it, no side gutter, and one or two more columns of text on a phone, so it sits edge to edge like other mobile SSH clients.
+- @lazysh/account-usage@1.33.2
+  - @lazysh/common@1.33.2
+  - @lazysh/display-idle@1.33.2
+  - @lazysh/et-transport@1.33.2
+  - @lazysh/mosh-transport@1.33.2
+
+## 1.33.1
+
+### Patch Changes
+
+- 59b5cf0: Resize Mosh sessions for the soft keyboard so responsive programs can redraw their prompts above it.
+- @lazysh/account-usage@1.33.1
+  - @lazysh/common@1.33.1
+  - @lazysh/display-idle@1.33.1
+  - @lazysh/et-transport@1.33.1
+  - @lazysh/mosh-transport@1.33.1
+
+## 1.33.0
+
+### Minor Changes
+
+- d837a6b: Let you resize the terminal toolbar with a Toolbar key height slider (28 to 56 px, default 32 px) in Preferences, saved on this device and applied live.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.0
+  - @lazysh/common@1.33.0
+  - @lazysh/display-idle@1.33.0
+  - @lazysh/et-transport@1.33.0
+  - @lazysh/mosh-transport@1.33.0
+
+## 1.32.0
+
+### Minor Changes
+
+- fc027c4: Make the terminal toolbar a compact, fixed grid of equal-width keys like other mobile SSH clients: no sliding pages, 32 px keys, a status bar that yields its height on a short phone window, and a More keys list for Find, Copy and saved snippets and chords. Changed default: two rows of nine keys with the arrows in an inverted T; saved layouts keep every key.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.32.0
+  - @lazysh/common@1.32.0
+  - @lazysh/display-idle@1.32.0
+  - @lazysh/et-transport@1.32.0
+  - @lazysh/mosh-transport@1.32.0
+
+## 1.31.2
+
+### Patch Changes
+
+- 8be56c4: Make Android notification settings reachable after notification permission is denied, and ask for the permission after the first session opens instead of during its connection.
+- @lazysh/account-usage@1.31.2
+  - @lazysh/common@1.31.2
+  - @lazysh/display-idle@1.31.2
+  - @lazysh/et-transport@1.31.2
+  - @lazysh/mosh-transport@1.31.2
+
+## 1.31.1
+
+### Patch Changes
+
+- ad04578: Keep the verified stable tag and GitHub release writable when other workflow changes merge while a release builds.
+- @lazysh/account-usage@1.31.1
+  - @lazysh/common@1.31.1
+  - @lazysh/display-idle@1.31.1
+  - @lazysh/et-transport@1.31.1
+  - @lazysh/mosh-transport@1.31.1
+
+## 1.31.0
+
+### Minor Changes
+
+- 4a8f4b3: Browse this device's files and review its Git repositories from a local desktop session.
+
+### Patch Changes
+
+- 4c075b5: Fix finger scrolling in Herdr sessions whose host cannot serve guarded history, which showed Unavailable on every swipe.
+- 7a1168b: Fix Chat's View choice snapping back to Recorded messages in WebKit apps after switching Agent to Codex, and run the native Chat recorded-conversation and card cases on Linux and Android.
+- @lazysh/account-usage@1.31.0
+  - @lazysh/common@1.31.0
+  - @lazysh/display-idle@1.31.0
+  - @lazysh/et-transport@1.31.0
+  - @lazysh/mosh-transport@1.31.0
+
+## 1.30.5
+
+### Patch Changes
+
+- a738e6f: List only live Herdr agents in Agent view, open the selected agent's conversation as native chat, and say so when the host companion must be updated.
+- @lazysh/account-usage@1.30.5
+  - @lazysh/common@1.30.5
+  - @lazysh/display-idle@1.30.5
+  - @lazysh/et-transport@1.30.5
+  - @lazysh/mosh-transport@1.30.5
+
+## 1.30.4
+
+### Patch Changes
+
+- a0b0603: Dismiss a boot-time system error dialog on the Android CI emulator before native acceptance starts, so the app window keeps focus.
+- @lazysh/account-usage@1.30.4
+  - @lazysh/common@1.30.4
+  - @lazysh/display-idle@1.30.4
+  - @lazysh/et-transport@1.30.4
+  - @lazysh/mosh-transport@1.30.4
+
+## 1.30.3
+
+### Patch Changes
+
+- c2aa152: Print the failed case, its message and first app frame when Android CI instrumentation fails, and name the failing touch-receipt flags of the D-pad acceptance.
+- @lazysh/account-usage@1.30.3
+  - @lazysh/common@1.30.3
+  - @lazysh/display-idle@1.30.3
+  - @lazysh/et-transport@1.30.3
+  - @lazysh/mosh-transport@1.30.3
+
+## 1.30.2
+
+### Patch Changes
+
+- 933719e: Fix finger scrolling in Herdr sessions on hosts without the guarded Herdr build, which showed Unavailable on every swipe.
+- @lazysh/account-usage@1.30.2
+  - @lazysh/common@1.30.2
+  - @lazysh/display-idle@1.30.2
+  - @lazysh/et-transport@1.30.2
+  - @lazysh/mosh-transport@1.30.2
+
+## 1.30.1
+
+### Patch Changes
+
+- dc223b5: Show app language choices as a checked list.
+- @lazysh/account-usage@1.30.1
+  - @lazysh/common@1.30.1
+  - @lazysh/display-idle@1.30.1
+  - @lazysh/et-transport@1.30.1
+  - @lazysh/mosh-transport@1.30.1
+
+## 1.30.0
+
+### Minor Changes
+
+- f39e536: Show each detected multiplexer's version with a Supported or Limited badge, hide Jump To on tmux older than 3.4, import synced hosts whose default multiplexer kind is unknown, and report non-POSIX host shells explicitly.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.0
+  - @lazysh/common@1.30.0
+  - @lazysh/display-idle@1.30.0
+  - @lazysh/et-transport@1.30.0
+  - @lazysh/mosh-transport@1.30.0
+
+## 1.29.3
+
+### Patch Changes
+
+- 0e794d4: Use a segmented cursor-shape picker in terminal preferences.
+- @lazysh/account-usage@1.29.3
+  - @lazysh/common@1.29.3
+  - @lazysh/display-idle@1.29.3
+  - @lazysh/et-transport@1.29.3
+  - @lazysh/mosh-transport@1.29.3
+
+## 1.29.2
+
+### Patch Changes
+
+- 020ce44: Wait for a free SSH channel opening instead of failing extra preview connections, so discovery marks every HTTP listener and pages with many requests load through a forward.
+- @lazysh/account-usage@1.29.2
+  - @lazysh/common@1.29.2
+  - @lazysh/display-idle@1.29.2
+  - @lazysh/et-transport@1.29.2
+  - @lazysh/mosh-transport@1.29.2
+
 ## 1.29.1
 
 ### Patch Changes

@@ -1,5 +1,7 @@
+import {setKeyboard} from './fixtures/softKeyboard';
 import {workspaceControl,openPreferenceCategory,closePreferences,openToolsPageWith} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
+import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {readFileSync} from 'node:fs';
@@ -111,7 +113,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(({geometry,sessionNames})=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,offline:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       // Herdr display replies can be slowed to mimic a network round trip.
@@ -123,6 +125,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
       if(command==='connect'){const index=++state.connects;return {sessionId:index===1?'owned-navigation-ssh':index===2||!sessionNames?'other-navigation-ssh':`additional-navigation-ssh-${index}`};}
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
       if(command==='herdr_action'){await herdrReply();if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
+      if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[]};
       if(command==='multiplexer_sessions')return [{name:'default'}];
       if(command==='herdr_tree'){await herdrReply();const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle',agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'r'.repeat(256)}}]};if(state.agentCount>1){
         const pane=tree.panes[0],agent=tree.agents[0];
@@ -130,8 +133,10 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
       }if(state.visualStates){tree.agents=tree.agents.map((agent,index)=>({...agent,agent_status:index%3===0?'blocked':index%3===1?'working':'done'}));tree.panes=tree.panes.map((pane,index)=>({...pane,agent_status:tree.agents[index].agent_status}));}if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
-      if(command==='install_companion'){
+      if(command==='install_companion'||command==='install_companion_from_device'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
+        // A host with no route to GitHub fails the default route; only the labelled device route still installs.
+        if(state.offline&&command==='install_companion')throw {kind:'companion_host_network',detail:'dns',phase:'downloading',message:'Private remote text'};
         const status=state.installed?'reused':'installed';(args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'checkingInstalled'});state.installed=true;
         return {schemaVersion:1,status,version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
       }
@@ -183,6 +188,12 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
   await page.getByRole('button',{name:'Connect',exact:true}).click();
 }
 
+/** A live remote session opens the menu on Agents, so the host list is the Connections tab. */
+async function openHosts(page:Page){
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Connections',exact:true}).click();
+}
+
 async function openConnectedAgents(page:Page,phone:boolean){
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
@@ -219,6 +230,7 @@ function nativeHerdrNavigationReady(label:string,context?:string){
 // The soft keyboard follows the focused editable control.
 async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:boolean;drawer:boolean;replyDelay?:number}){
   await page.addInitScript(()=>localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['keyboard','esc']})));
+  await trackKeyboardRequests(page);
   await openClockedNavigation(page);
   const press=(target:Locator)=>touch?target.tap():target.click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
@@ -226,12 +238,15 @@ async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:
   const focused=()=>page.evaluate(()=>{const node=document.activeElement;return node?.matches('input,textarea,select,[contenteditable]')?node.getAttribute('aria-label')??node.tagName:null;});
   const openSpaces=async()=>{if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));await press(modes.getByRole('button',{name:'Workspaces',exact:true}));};
   const switchTo=async(label:string,expected:unknown[],input:string|null)=>{
+    await forgetKeyboardRequests(page);
     await press(page.locator(nativeHerdrNavigationRow(label)));
     // The switched display can mount and claim focus while Herdr replies are still pending.
     for(let elapsed=0;elapsed<=2*replyDelay+500;elapsed+=100){if(touch)expect(await focused()).toBeNull();await page.clock.runFor(100);}
     await expect.poll(navigations).toEqual(expected);
     await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
     expect(await focused()).toBe(input);
+    // Not even a passing focus: that alone raises the keyboard on a touch screen.
+    if(touch)expect(await keyboardRequests(page)).toEqual([]);
   };
   if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));
   await connectPasswordHost(page);
@@ -249,8 +264,11 @@ async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:
   if(!touch)return;
   await page.getByRole('button',{name:'Toggle keyboard',exact:true}).tap();
   await expect.poll(focused).toBe('Terminal input');
+  // The key follows the real keyboard: once it is up, the next tap hides it.
+  await setKeyboard(page,true);
   await page.getByRole('button',{name:'Toggle keyboard',exact:true}).tap();
   await expect.poll(focused).toBeNull();
+  await setKeyboard(page,false);
   await page.locator('.terminal-canvas:visible').tap();
   await expect.poll(focused).toBe('Terminal input');
 }
@@ -285,6 +303,28 @@ test('live group choice follows an adopted Herdr display',async({page},testInfo)
   await selectAgentSection(page,'live');
   await expect(idle).toHaveAttribute('aria-expanded','false');
   await expect(live.getByRole('button',{name:/^codex-builder/})).toHaveCount(0);
+});
+
+test('a soft keyboard that is already open stays open through a Herdr switch on a wide touch layout',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch screens raise a soft keyboard.');
+  await page.setViewportSize({width:844,height:390});
+  await page.addInitScript(()=>localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['keyboard','esc']})));
+  await openClockedNavigation(page);
+  await connectPasswordHost(page);
+  const terminalInput=()=>page.evaluate(()=>document.activeElement?.matches('.terminal-pane textarea')===true);
+  await expect.poll(async()=>{await page.clock.runFor(100);return page.locator('.terminal-canvas:visible').count();}).toBe(1);
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Workspaces',exact:true}).tap();
+  await expect(page.locator(nativeHerdrNavigationRow('codex-builder'))).toBeVisible();
+  // A tap in the terminal asks for the keyboard.
+  await page.locator('.terminal-canvas:visible').tap();
+  await expect.poll(terminalInput).toBe(true);
+  // The pane switch adopts a new Herdr display; the keyboard must not close for any frame in between.
+  await page.evaluate(()=>{const gaps:number[]=[];Object.assign(window,{keyboardGaps:gaps});const watch=()=>{if(!document.activeElement?.matches('.terminal-pane textarea'))gaps.push(performance.now());requestAnimationFrame(watch);};requestAnimationFrame(watch);});
+  await page.locator(nativeHerdrNavigationRow('codex-builder')).tap();
+  await expect.poll(async()=>{await page.clock.runFor(100);return page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations.length);}).toBe(1);
+  for(let elapsed=0;elapsed<500;elapsed+=100)await page.clock.runFor(100);
+  expect(await terminalInput()).toBe(true);
+  expect(await page.evaluate(()=>(window as unknown as {keyboardGaps:number[]}).keyboardGaps)).toEqual([]);
 });
 
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
@@ -503,6 +543,30 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect.poll(()=>page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(true);
 });
 
+test('a host that cannot reach GitHub offers the labelled device install and the default route never downloads on the device',async({page},testInfo)=>{
+  await openClockedNavigation(page);
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{offline:boolean}}).workspaceNavigationState.offline=true;});
+  await (await workspaceControl(page,'Agents')).click();
+  await selectAgentSection(page,'activity');
+  const board=page.getByRole('region',{name:'Agent activity',exact:true});
+  await page.clock.runFor(200);
+  const calls=(name:string)=>page.evaluate(command=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(call=>call===command).length,name);
+  await board.getByRole('button',{name:'Install companion',exact:true}).click();
+  await expect(board.locator('details.companion-install').getByRole('alert')).toHaveText('The host could not download the companion from GitHub. It needs outbound HTTPS access.');
+  expect(await calls('install_companion')).toBe(1);
+  expect(await calls('install_companion_from_device'),'the device route is only offered, never taken by itself').toBe(0);
+  const fallback=board.getByRole('button',{name:'Install through this device',exact:true});
+  await fallback.scrollIntoViewIfNeeded();await expect(fallback).toBeInViewport();
+  expect((await fallback.boundingBox())!.height).toBeGreaterThanOrEqual(testInfo.project.name==='phone'?32:20);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await fallback.click();
+  await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  await expect(fallback).toHaveCount(0);
+  expect([await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,1]);
+});
+
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{
   await installNativeBridge(page);
   await page.addInitScript(()=>{
@@ -522,7 +586,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   await page.goto('/');
   const phone=testInfo.project.name==='phone';
   async function connectHost(){
-    if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+    if(phone)await openHosts(page);
     await connectPasswordHost(page,'Focus workstation with a long host name');
   }
   const startup=page.locator('.workspace > .workspace-restore');
@@ -558,7 +622,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   if(phone){
     await page.getByRole('button',{name:'Open hosts',exact:true}).click();
     await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts,true))).toBe(true);
-    await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
     await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
   }
   const canvas=await page.locator('.terminal-canvas:visible').elementHandle();
@@ -567,6 +631,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   const tabs=page.locator('.session-tabs');
   const restore=page.locator('.workspace > .workspace-restore');
   const actions=header.locator('.terminal-actions');
+  // Compose and the toolbar toggle: the toolbar's own keyboard key is in reach, so the header adds no keyboard button.
   await expect(actions.getByRole('button')).toHaveCount(2);
   expect(await page.locator('.terminal-toolbar-toggle').count()).toBe(0);
   await actions.getByRole('button',{name:'Compose',exact:true}).click();
@@ -645,7 +710,7 @@ test('mobile terminal keeps one compact header and reaches every session control
     await more.getByRole('button',{name:'Attach',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Attach to this host',exact:true})).toBeVisible();
     await expect(strip).toBeHidden();await expect(tabs).toBeHidden();
-    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
+    await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Return to terminal',exact:true}).click();
     await expect(strip).toBeHidden();expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
     await page.screenshot({path:testInfo.outputPath('compact-terminal.png')});
   }else{
@@ -897,11 +962,11 @@ test('reopened phone hosts expose touchable host actions immediately and a close
   test.skip(testInfo.project.name!=='phone','Phone drawer geometry');
   await page.setViewportSize({width:412,height:915});
   await installWorkspaceNavigation(page);await page.goto('/');
-  for(const name of ['Navigation host','Other navigation host']){await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  for(const name of ['Navigation host','Other navigation host']){await openHosts(page);await connectPasswordHost(page,name);}
   await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(2);
   await (await workspaceControl(page,'End Other navigation host connection')).click();
   await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(1);
-  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await openHosts(page);
   // Sampled without waiting for motion.
   const labels=['Edit Navigation host','Edit Other navigation host','Delete Other navigation host'];
   expect(await hostActionTargets(page,labels)).toEqual(touchable(labels));
@@ -1077,7 +1142,7 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
   const original=await page.locator('.terminal-canvas:visible').elementHandle();
-  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  if(phone)await openHosts(page);
   await connectPasswordHost(page,'Other navigation host');
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
@@ -1247,7 +1312,7 @@ for(const width of [393,1200])test(`sidebar mode labels stay whole and reachable
       await page.screenshot({path:testInfo.outputPath(`appearance-${width}.png`)});
     }
     await openPreferenceCategory(page,'Language');
-    await page.locator('[data-settings-page="language"] select').selectOption(locale);
+    await page.locator(`[data-settings-page="language"] input[value="${locale}"]`).check();
     await closePreferences(page);
     if(width<=600) {
       await page.locator('.mobile-menu:visible').click();
@@ -1311,7 +1376,7 @@ test('Workspaces keeps three long app sessions compact while mobile pane choices
   const phone=testInfo.project.name==='phone';await page.setViewportSize({width:phone?393:1200,height:852});
   const names=['Desktop development with a long connection name','Desktop development with a long connection name / review','Desktop development with a long connection name / review / agents'];
   await installWorkspaceNavigation(page,true,names);await page.goto('/');
-  for(const name of names){if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  for(const name of names){if(phone)await openHosts(page);await connectPasswordHost(page,name);}
   const terminal=await page.locator('.terminal-canvas:visible').elementHandle();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});await modes.getByRole('button',{name:'Workspaces',exact:true}).click();

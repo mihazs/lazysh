@@ -1,6 +1,6 @@
 # lazysh implementation boundary
 
-The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/Turborepo**. Android/iOS and desktop share the client source. Native packaging, OS lifecycle behavior and platform extensions still require platform toolchains and acceptance tests.
+The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/moon**. Android/iOS and desktop share the client source. Native packaging, OS lifecycle behavior and platform extensions still require platform toolchains and acceptance tests.
 
 ## Components
 
@@ -11,10 +11,10 @@ The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/Turborepo**
 - `packages/mosh-transport` and `packages/et-transport`: authenticated persistent terminal transports bootstrapped through verified SSH. The SSH control connection remains available for files and companion operations. Forced transport selection never silently falls back. Mosh embeds the official core on Linux/macOS, Android and iOS (both mobile library runtime suites passed in simulators; app/physical-device acceptance remains separate); ET is Rust and preserves encrypted packet history across reconnects.
 - `packages/apple-speech`: optional iOS 26+ SpeechAnalyzer integration with explicit asset management and operation-scoped cancellation. Whisper remains available independently.
 - `packages/apple-status` and the client Apple targets: opt-in fresh status snapshots, Live Activities, Watch inbox/review navigation and complications. Native approval execution is not exposed on Watch.
-- `packages/push-registration`: explicit Android FCM enrollment/revocation with native token ownership. An unconfigured build remains unavailable; registration alone does not provide delivery.
+- `packages/push-registration`: explicit native registration for Android UnifiedPush (Google and FOSS builds, with private relay enrollment and separately consented event display), optional Android FCM with native token ownership, and iOS APNs. Everything is off by default and registration alone does not provide delivery.
 - `apps/share-service`: separately deployed optional HTTPS-facing upload service behind a loopback reverse proxy. The native client keeps management credentials in the OS vault; browser IPC uploads use bounded chunks. Expiring public links are created only after explicit user action.
 
-The Bun workspace has app- and package-owned tasks coordinated by Turbo; Cargo owns the native crates and one root lockfile. The client declares its vault package dependency in both graphs. The client owns TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass Turbo artifact/test caching. Frontend outputs use an explicit `dist/**` cache boundary. There is no custom test runner or `scripts/` directory.
+The Bun workspace has app- and package-owned tasks coordinated by [moon](reference/moon-tasks.md); Cargo owns the native crates and one root lockfile. The client declares its vault package dependency in both graphs. The client owns TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass moon artifact/test caching. Only the frontend `check`, `test` and `check-native-gui` tasks are cached. There is no custom test runner or `scripts/` directory.
 
 ```mermaid
 flowchart LR
@@ -35,6 +35,10 @@ Credentials stay in memory unless explicitly saved to the native vault. Android/
 One-hop bastions use independent credentials and pins for each handshake. A rejected destination key receives no destination credentials. Workspace restoration uses saved vault entries and exact tmux/Herdr names; Zellij remains an explicit attach. Closing a temporary parent shell preserves independently attached multiplexer PTYs.
 
 Browser previews bind only device loopback and connect through existing SSH. Their sandboxed remote origin has no Tauri command permissions. Limits apply per session, application and active socket; disconnect cancels listeners and connections. Other local applications can reach loopback forwards. Voice inference is local Whisper with bounded model imports, audio and execution, no automatic model download, and suppressed native speech logs. Platform microphone/preview behavior still needs real-device checks.
+
+## Planned terminal architecture
+
+The terminal is xterm.js in the WebView today. A proposal to introduce a `TerminalAdapter`, a shared Rust terminal runtime on the vendored libghostty-vt and, where measurements justify it, a native renderer is recorded in [terminal-performance-prd](architecture/terminal-performance-prd.md) and [ADR 0001](architecture/adr-0001-terminal-runtime.md). It is not implemented and no measurement has been taken.
 
 ## Acceptance and delivery
 

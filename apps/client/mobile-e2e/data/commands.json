@@ -1,0 +1,6 @@
+{
+  "echo": {
+    "command": "printf 'E2E_%s_END\\n' '{nonce}'",
+    "expected": "E2E_{nonce}_END"
+  }
+}

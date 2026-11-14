@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { Layers, RefreshCw } from 'lucide-react';
 import { errorMessage } from './SessionTools';
-import type { MultiplexerKind } from './bridge';
+import type { MultiplexerKind, MultiplexerTool } from './bridge';
 import HerdrPanel from './HerdrPanel';
 import ZellijPanel from './ZellijPanel';
 import MultiplexerShortcuts from './MultiplexerShortcuts';
@@ -16,7 +16,8 @@ import { parseSnapshot } from './AgentPanel';
 type Pane = { id: string; index: number; active: boolean; command: string; path: string };
 type Window = { id: string; index: number; name: string; active: boolean; panes: Pane[] };
 type Session = { id: string; name: string; windows: Window[] };
-type Tree = { tmuxAvailable: boolean; herdrAvailable: boolean; zellijAvailable: boolean; sessions: Session[] };
+type Tree = { tmuxAvailable: boolean; herdrAvailable: boolean; zellijAvailable: boolean; tools?: MultiplexerTool[]; sessions: Session[] };
+const limitedNotice = { tmux: 'muxLimitedTmux', zellij: 'muxLimitedZellij', herdr: 'muxLimitedHerdr' } as const;
 type Action =
   | { type: 'createSession'; name: string; directory: string }
   | { type: 'renameSession' | 'renameWindow'; target: string; name: string }
@@ -25,7 +26,7 @@ type Action =
   | { type: 'splitPane'; target: string; horizontal: boolean; directory: string };
 type Edit = { type: 'createSession' } | { type: 'createWindow' | 'renameSession' | 'renameWindow'; target: string };
 
-export function MuxPanel({ sessionId, onAttach, attached, requested }: { sessionId: string; onAttach: (name: string, kind?: MultiplexerKind, tmuxServer?: string) => Promise<void>; attached?: SessionAttachment; requested?:DesktopMuxRequest }) {
+export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: { sessionId: string; onAttach: (name: string, kind?: MultiplexerKind, tmuxServer?: string) => Promise<void>; attached?: SessionAttachment; requested?:DesktopMuxRequest; onTools?: (tools: MultiplexerTool[]) => void }) {
   useUi();
   const [lease]=useState(()=>requested?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
@@ -58,7 +59,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested }: { session
     return {tree,sessions};
   }
   function acceptWorkspaces(value:Awaited<ReturnType<typeof readWorkspaces>>) {
-    setTree(value.tree);setEdit(null);
+    setTree(value.tree);setEdit(null);if(value.tree.tools)onTools?.(value.tree.tools);
     if(value.sessions)setPersistent({herdr:value.sessions});
   }
   useEffect(() => {
@@ -112,6 +113,12 @@ export function MuxPanel({ sessionId, onAttach, attached, requested }: { session
     } catch (e) { if (currentOwner(current)) setError(errorMessage(e)); }
     finally { locked.current = false; if (currentOwner(current)) setBusy(false); }
   }
+  function toolStatus(kind: MultiplexerKind, available: boolean) {
+    const tool = tree?.tools?.find(item => item.kind === kind);
+    if (!available) return t('muxMissing');
+    if (!tool) return t(kind === 'tmux' ? 'muxAvailable' : 'muxDetected');
+    return `${tool.version ?? ''} (${t(tool.support === 'full' ? 'muxSupported' : 'muxLimited')})`.trim();
+  }
   function begin(value: Edit, initial = '') { setEdit(value); setName(initial); setError(''); }
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -129,19 +136,20 @@ export function MuxPanel({ sessionId, onAttach, attached, requested }: { session
     {!requested && <div className="tool-bar"><label>{t('muxLayout')}<select value={layout} onChange={e => setLayout(e.target.value)}><option value="list">{t('muxList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option></select></label><button className="subtle-button" disabled={busy} onClick={() => void loadProjects()}>{t('muxProjects')}</button></div>}
     {projects.length > 0 && <label>{t('muxRecentDirectory')}<select value={projects.includes(directory) ? directory : ''} onChange={e => setDirectory(e.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{projects.map(project => <option key={project} value={project}>{project}</option>)}</select></label>}
     {projectsLoaded && projects.length === 0 && <p>{t('muxNoProjects')}</p>}
-    {attached && attached.kind !== 'zellij' && <MultiplexerShortcuts key={`${sessionId}:${attached.kind}`} sessionId={sessionId} kind={attached.kind} />}
+    {attached && attached.kind !== 'zellij' && !(attached.kind==='herdr' && tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')) && <MultiplexerShortcuts key={`${sessionId}:${attached.kind}`} sessionId={sessionId} kind={attached.kind} />}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {busy && <p className="loading" role="status">{t('muxReading')}</p>}
     {requested && tree && !(requestedHerdr ? tree.herdrAvailable : tree.tmuxAvailable) && <p role="status">{t('desktopLaunchMuxUnavailable',{kind:requested.mux.kind})}</p>}
-    {!requested && tree && <p className="muted">tmux {tree.tmuxAvailable ? t('muxAvailable') : t('muxMissing')} · Herdr {tree.herdrAvailable ? t('muxDetected') : t('muxMissing')} · Zellij {tree.zellijAvailable ? t('muxDetected') : t('muxMissing')}</p>}
+    {!requested && tree && <p className="muted">tmux {toolStatus('tmux', tree.tmuxAvailable)} · Herdr {toolStatus('herdr', tree.herdrAvailable)} · Zellij {toolStatus('zellij', tree.zellijAvailable)}</p>}
+    {tree?.tools?.filter(tool => tool.support !== 'full' && (!requested || tool.kind===requested.mux.kind)).map(tool => <p key={tool.kind} className="security-note" role="note">{t(limitedNotice[tool.kind])}</p>)}
     {(requestedHerdr ? tree?.herdrAvailable : !requested && (tree?.herdrAvailable || tree?.zellijAvailable)) && <div>{!requested && <label>{t('muxPersistentName')}<input value={persistentName} onChange={e => setPersistentName(e.target.value)} maxLength={200} disabled={busy} /></label>}
       {(['herdr', 'zellij'] as const).filter(kind => (!requested || kind==='herdr') && (kind === 'herdr' ? tree!.herdrAvailable : tree!.zellijAvailable)).map(kind => <div key={kind}>
         {!requested && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void loadPersistent(kind)}>{t('muxListSessions',{kind})}</button>
-          <button className="subtle-button" disabled={busy || !persistentName.trim()} onClick={() => void run(undefined, persistentName, kind)}>{t('muxOpenSession',{kind})}</button></div>}
+          {(kind !== 'herdr' || tree!.tools?.some(tool=>tool.kind==='herdr' && !tool.missing.includes('create'))) && <button className="subtle-button" disabled={busy || !persistentName.trim()} onClick={() => void run(undefined, persistentName, kind)}>{t('muxOpenSession',{kind})}</button>}</div>}
         {persistent[kind]?.length === 0 && <p>{t('muxNoSessions',{kind})}</p>}
-        {persistent[kind]?.map(session => <div className="mux-row" key={session.name}><strong>{kind}: {session.name}</strong><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name, kind)}>{t('muxAttachKind',{kind,name:session.name})}</button>{!requested && (kind === 'herdr' ? <button className="subtle-button" disabled={busy} onClick={() => setHerdr(session.name)}>{t('muxBrowseHerdr',{name:session.name})}</button> : <button className="subtle-button" disabled={busy} onClick={() => setZellij(session.name)}>{t('muxControlZellij',{name:session.name})}</button>)}</div>)}
+        {persistent[kind]?.map(session => <div className="mux-row" key={session.name}><strong>{kind}: {session.name}</strong>{(kind !== 'herdr' || tree!.tools?.some(tool=>tool.kind==='herdr' && tool.support==='full')) && <button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name, kind)}>{t('muxAttachKind',{kind,name:session.name})}</button>}{!requested && (kind === 'herdr' ? <button className="subtle-button" disabled={busy} onClick={() => setHerdr(session.name)}>{t('muxBrowseHerdr',{name:session.name})}</button> : <button className="subtle-button" disabled={busy} onClick={() => setZellij(session.name)}>{t('muxControlZellij',{name:session.name})}</button>)}</div>)}
       </div>)}{!requested && <p>{t('muxPersistentHint')}</p>}</div>}
-    {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} />}
+    {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} navigationOnly={tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')} />}
     {zellij && <ZellijPanel key={`${sessionId}:${zellij}`} sessionId={sessionId} name={zellij} projectDirectory={directory} />}
     {edit && <form onSubmit={submit} aria-label={t('muxDetails')}><label>{t('appName')}<input autoFocus maxLength={200} value={name} onChange={e => setName(e.target.value)} required disabled={busy} /></label>
       {(edit.type === 'createSession' || edit.type === 'createWindow') && <label>{t('muxDirectory')}<input value={directory} onChange={e => setDirectory(e.target.value)} required disabled={busy} placeholder="/home/user/project" /></label>}

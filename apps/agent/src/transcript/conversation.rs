@@ -1,7 +1,6 @@
-use super::{
-    normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
-};
-use serde_json::Value;
+use super::window::{select, Window};
+use super::{normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage};
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -10,11 +9,27 @@ use std::{
 };
 
 pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<TranscriptPage> {
-    conversation_options(path, agent, limit, false)
+    conversation_options(path, agent, limit, false, &Window::Tail)
 }
 
 pub fn claude_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPage> {
-    conversation_options(path, TranscriptAgent::Claude, limit, true)
+    conversation_options(path, TranscriptAgent::Claude, limit, true, &Window::Tail)
+}
+
+/// The Codex conversation with bounded previews of the images the user attached.
+pub fn codex_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, TranscriptAgent::Codex, limit, true, &Window::Tail)
+}
+
+/// One page of the active branch at any position of the session, for reading it from the first message.
+pub fn conversation_window(
+    path: &Path,
+    agent: TranscriptAgent,
+    limit: u8,
+    inline_images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    conversation_options(path, agent, limit, inline_images, window)
 }
 
 fn conversation_options(
@@ -22,26 +37,45 @@ fn conversation_options(
     agent: TranscriptAgent,
     limit: u8,
     inline_images: bool,
+    window: &Window,
 ) -> Result<TranscriptPage> {
-    if matches!(agent, TranscriptAgent::Codex) {
-        return super::codex_conversation::conversation(path, limit);
-    }
-    if matches!(agent, TranscriptAgent::GrokAcp) {
-        return super::grok_conversation::conversation(path, limit);
-    }
-    if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
+    if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    project_claude(capture(path)?, limit, inline_images)
+    if matches!(agent, TranscriptAgent::Codex) {
+        return super::codex_conversation::conversation(path, limit, inline_images, window);
+    }
+    if matches!(agent, TranscriptAgent::GrokAcp) {
+        return super::grok_conversation::conversation(path, limit, window);
+    }
+    if !matches!(agent, TranscriptAgent::Claude) {
+        return Err(Error::InvalidArgument);
+    }
+    let mut page = project_claude(capture(path)?, limit, inline_images, window)?;
+    super::work::attach_children(&mut page, path);
+    Ok(page)
 }
 
 pub(super) fn project_claude(
     bytes: Vec<u8>,
     limit: u8,
     inline_images: bool,
+    window: &Window,
 ) -> Result<TranscriptPage> {
-    project_claude_bounded(bytes, limit, inline_images, super::MAX_LINE, 10_000, None)
+    project_claude_bounded(
+        bytes,
+        limit,
+        inline_images,
+        super::MAX_LINE,
+        MAX_RECORDS,
+        None,
+        window,
+    )
 }
+
+/// A 16 MiB snapshot holds at most this many records of any realistic size; the cap stops a file of
+/// tiny records from costing more memory than the snapshot budget implies.
+const MAX_RECORDS: usize = 100_000;
 
 pub(super) fn project_claude_bounded(
     bytes: Vec<u8>,
@@ -50,6 +84,7 @@ pub(super) fn project_claude_bounded(
     line_limit: u64,
     record_limit: usize,
     expected_session_id: Option<&str>,
+    window: &Window,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
@@ -58,7 +93,12 @@ pub(super) fn project_claude_bounded(
     let size = bytes.len() as u64;
     let mut reader = Cursor::new(&bytes);
     let mut records = Vec::new();
+    let mut queue = Queue::default();
     let mut session_seen = false;
+    let mut permission_mode = None;
+    let mut cost_usd = None;
+    let mut worktree = None;
+    let mut roster = super::session_roster::Roster::default();
     let mut offset = 0;
     while offset < size {
         let line = super::read_record_line_bounded(&mut reader, line_limit)?;
@@ -78,6 +118,18 @@ pub(super) fn project_claude_bounded(
                 }
                 session_seen = true;
             }
+            match record["type"].as_str() {
+                Some("queue-operation") => queue.apply(&record),
+                Some("attachment") => roster.apply(&record),
+                Some("permission-mode") => permission_mode = record.get("permissionMode").cloned(),
+                Some("cost-state") => cost_usd = record["totalCostUSD"].as_f64(),
+                Some("worktree-state") => {
+                    worktree = record["worktreeSession"]["worktreeName"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+                _ => {}
+            }
             if matches!(
                 record["type"].as_str(),
                 Some("user" | "assistant" | "progress" | "system" | "attachment")
@@ -95,15 +147,20 @@ pub(super) fn project_claude_bounded(
                                 "type"
                                     | "uuid"
                                     | "parentUuid"
+                                    | "logicalParentUuid"
                                     | "subtype"
                                     | "isSidechain"
                                     | "isMeta"
+                                    | "pendingBackgroundAgentCount"
                                     | "teamName"
                                     | "agentId"
                                     | "sourceToolAssistantUUID"
                                     | "timestamp"
+                                    | "attachment"
+                                    | "content"
                             )
                         });
+                    super::events::trim(&mut record);
                 }
                 records.push((offset, record));
                 if records.len() > record_limit {
@@ -117,6 +174,19 @@ pub(super) fn project_claude_bounded(
         return Err(Error::InvalidEvent);
     }
     drop(bytes);
+    // A sub-agent's own file records every message as a sidechain; read on its own, that is its main branch.
+    let own_file = {
+        let mut messages = records
+            .iter()
+            .filter(|(_, record)| matches!(record["type"].as_str(), Some("user" | "assistant")))
+            .peekable();
+        messages.peek().is_some() && messages.all(|(_, record)| record["isSidechain"] == true)
+    };
+    if own_file {
+        for (_, record) in &mut records {
+            record["isSidechain"] = Value::Bool(false);
+        }
+    }
     let latest: HashMap<String, usize> = records
         .iter()
         .enumerate()
@@ -132,41 +202,53 @@ pub(super) fn project_claude_bounded(
         .collect();
     let (chain, leaf) = active_chain(&records)?;
     let activity = leaf.and_then(|leaf| activity(&records, leaf));
+    let work = super::work::tasks(chain.iter().map(|index| &records[*index].1));
+    let session = super::session_info::Session::claude(
+        &chain
+            .iter()
+            .rev()
+            .map(|index| &records[*index].1)
+            .filter(|record| record["isSidechain"] != true)
+            .collect::<Vec<_>>(),
+        permission_mode.as_ref(),
+        cost_usd,
+        worktree.map(Value::from).as_ref(),
+    )
+    .with_info(roster.into_value())
+    .into_value();
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
-    let mut messages = Vec::new();
-    let mut output_bytes = 0;
-    let mut truncated = false;
-    for index in chain.into_iter().rev() {
-        let (position, record) = &records[index];
-        let message = if inline_images {
-            super::normalize_images(record, agent, *position)
-        } else {
-            normalize(record, agent, *position)
-        };
-        if let Some(message) = message {
-            let size = super::message_size(&message)?;
-            if messages.len() == usize::from(limit) || output_bytes + size > MAX_PAGE {
-                truncated = true;
-                break;
+    let all = chain
+        .into_iter()
+        .filter_map(|index| {
+            let (position, record) = &records[index];
+            if let Some(event) = super::events::claude(record) {
+                Some(event)
+            } else if inline_images {
+                super::normalize_images(record, agent, *position)
+            } else {
+                normalize(record, agent, *position)
             }
-            output_bytes += size;
-            messages.push(message);
-        }
-    }
-    messages.reverse();
+        })
+        .collect();
+    let selected = select(all, window, limit)?;
+    let queued = queue.pending();
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
         agent,
-        messages,
+        messages: selected.messages,
         next_offset: offset,
         has_more: false,
         branch_id,
-        truncated,
+        truncated: selected.has_older,
+        has_newer: selected.has_newer,
         checkpoint: None,
         activity,
+        queued,
+        work: (!work.is_empty()).then_some(work),
+        session,
     })
 }
 
@@ -273,6 +355,53 @@ fn candidate_results<'a>(
         Some(calls)
     }
 }
+/// The prompts typed while Claude Code works, replayed from its `queue-operation` records: `enqueue`
+/// appends, `dequeue` takes the oldest, `remove` drops the entry with that text and `popAll` empties
+/// the queue. Text the harness injects (`<task-notification>`, `<agent-message>`, ...) starts with
+/// `<` and is not something a person typed, so it is not shown.
+#[derive(Default)]
+struct Queue(Vec<(String, Option<String>)>);
+const MAX_QUEUED: usize = 20;
+const MAX_QUEUED_TEXT: usize = 4096;
+impl Queue {
+    fn apply(&mut self, record: &Value) {
+        let content = record["content"].as_str().unwrap_or_default();
+        match record["operation"].as_str() {
+            Some("enqueue") => self
+                .0
+                .push((content.to_owned(), string(record, "timestamp"))),
+            Some("dequeue") if !self.0.is_empty() => {
+                self.0.remove(0);
+            }
+            Some("remove") => {
+                if let Some(index) = self.0.iter().position(|(text, _)| text == content) {
+                    self.0.remove(index);
+                }
+            }
+            Some("popAll") => self.0.clear(),
+            _ => {}
+        }
+    }
+    fn pending(self) -> Vec<Value> {
+        self.0
+            .into_iter()
+            .filter(|(text, _)| !text.trim().is_empty() && !text.trim_start().starts_with('<'))
+            .take(MAX_QUEUED)
+            .map(|(text, timestamp)| {
+                let mut end = text.len().min(MAX_QUEUED_TEXT);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let mut value = json!({"text":&text[..end]});
+                if let Some(timestamp) = timestamp {
+                    value["timestamp"] = json!(timestamp);
+                }
+                value
+            })
+            .collect()
+    }
+}
+
 /// Turn state at the selected leaf. Claude Code records `system/turn_duration`
 /// after a turn ends; an unanswered question or plan approval waits for the
 /// user; an assistant `tool_use` stop or a user record means a turn is running.
@@ -296,7 +425,14 @@ fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
             && record["subtype"] == "turn_duration"
             && record["isSidechain"] != true
         {
-            return Some("idle");
+            // The turn ended, but a sub-agent it started is still recorded as running.
+            return Some(
+                if record["pendingBackgroundAgentCount"].as_u64() > Some(0) {
+                    "working"
+                } else {
+                    "idle"
+                },
+            );
         }
         if let Some(id) = record["uuid"].as_str() {
             pending.extend(children.get(id).into_iter().flatten());
@@ -340,7 +476,7 @@ fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)>
         if let Some(id) = record["uuid"].as_str() {
             by_id.insert(id, index);
         }
-        if let Some(parent) = record["parentUuid"].as_str() {
+        if let Some(parent) = parent(record) {
             parents.insert(parent);
         }
     }
@@ -365,9 +501,7 @@ fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)>
                 }
                 break;
             }
-            current = record["parentUuid"]
-                .as_str()
-                .and_then(|parent| by_id.get(parent).copied());
+            current = parent(record).and_then(|parent| by_id.get(parent).copied());
         }
     }
     let Some(leaf) = leaves.into_iter().max() else {
@@ -384,12 +518,21 @@ fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)>
             return Err(Error::InvalidEvent);
         }
         chain.push(index);
-        current = records[index].1["parentUuid"]
-            .as_str()
-            .and_then(|parent| by_id.get(parent).copied());
+        current = parent(&records[index].1).and_then(|parent| by_id.get(parent).copied());
     }
     chain.reverse();
     Ok((recover_parallel(records, &chain, &mut seen)?, Some(leaf)))
+}
+
+/// The record before this one in the session. A compaction restarts the chain with `parentUuid`
+/// null and keeps the earlier conversation behind `logicalParentUuid`, so reading across it shows
+/// the whole session from its first message.
+fn parent(record: &Value) -> Option<&str> {
+    record["parentUuid"].as_str().or_else(|| {
+        (record["subtype"] == "compact_boundary")
+            .then(|| record["logicalParentUuid"].as_str())
+            .flatten()
+    })
 }
 
 fn is_main(record: &Value) -> bool {

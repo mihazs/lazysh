@@ -1,0 +1,4 @@
+language: rust
+layer: tool
+stack: backend
+tags: [cargo, cargo-binary, companion]

@@ -1,16 +1,10 @@
 //! Exact Herdr-selected provider sessions; no path supplied by the caller.
+use super::window::Window;
 use super::{Error, Result, TranscriptAgent, TranscriptPage};
 use std::path::{Path, PathBuf};
 
-pub fn read_herdr_conversation(
-    agent: TranscriptAgent,
-    id: &str,
-    limit: u8,
-) -> Result<TranscriptPage> {
-    let parsed = uuid::Uuid::parse_str(id).map_err(|_| Error::InvalidArgument)?;
-    if parsed.to_string() != id || !(1..=100).contains(&limit) {
-        return Err(Error::InvalidArgument);
-    }
+/// The directory the agent keeps its own sessions in: its configured home, else the default one.
+pub(super) fn provider_root(agent: TranscriptAgent) -> Result<PathBuf> {
     let (variable, fallback, child) = match agent {
         TranscriptAgent::Claude => ("CLAUDE_CONFIG_DIR", ".claude", "projects"),
         TranscriptAgent::Codex => ("CODEX_HOME", ".codex", "sessions"),
@@ -20,16 +14,68 @@ pub fn read_herdr_conversation(
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|path| path.join(fallback)))
         .ok_or(Error::InvalidArgument)?;
-    read_in(&home.join(child), agent, id, limit)
+    Ok(home.join(child))
+}
+
+fn session_root(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
+    let parsed = uuid::Uuid::parse_str(id).map_err(|_| Error::InvalidArgument)?;
+    if parsed.to_string() != id {
+        return Err(Error::InvalidArgument);
+    }
+    provider_root(agent)
+}
+
+pub fn read_herdr_conversation(
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+) -> Result<TranscriptPage> {
+    read_herdr_conversation_window(agent, id, limit, &Window::Tail)
+}
+
+pub fn read_herdr_conversation_window(
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    let root = session_root(agent, id)?;
+    if !(1..=100).contains(&limit) {
+        return Err(Error::InvalidArgument);
+    }
+    read_in(&root, agent, id, limit, window)
+}
+
+/// The file `read_herdr_conversation` would read, for cheap change checks only.
+/// Content always comes from `read_herdr_conversation`, which re-validates the file.
+pub(super) fn locate(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
+    locate_in(&session_root(agent, id)?, agent, id)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn read_in(_: &Path, _: TranscriptAgent, _: &str, _: u8) -> Result<TranscriptPage> {
+fn read_in(_: &Path, _: TranscriptAgent, _: &str, _: u8, _: &Window) -> Result<TranscriptPage> {
+    Err(Error::InvalidArgument)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn locate_in(_: &Path, _: TranscriptAgent, _: &str) -> Result<PathBuf> {
     Err(Error::InvalidArgument)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<TranscriptPage> {
+fn locate_in(root: &Path, agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
+    find(&open_roots(root, agent)?.1, agent, id)
+}
+
+/// The provider home (Codex only) and the anchored directory holding the sessions.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_roots(
+    root: &Path,
+    agent: TranscriptAgent,
+) -> Result<(
+    Option<crate::managed_directory::Directory>,
+    crate::managed_directory::Directory,
+)> {
     use crate::managed_directory::Directory;
     let home = if matches!(agent, TranscriptAgent::Codex) {
         if root.file_name().is_none_or(|name| name != "sessions") {
@@ -46,6 +92,18 @@ fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<T
     } else {
         Directory::profile(root)?
     };
+    Ok((home, root))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_in(
+    root: &Path,
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    let (home, root) = open_roots(root, agent)?;
     let path = find(&root, agent, id)?;
     let relative = path
         .strip_prefix(&root.path)
@@ -72,6 +130,7 @@ fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<T
                 4 * 1024 * 1024,
                 20_000,
                 Some(id),
+                window,
             )?
         }
         TranscriptAgent::Codex => {
@@ -80,6 +139,7 @@ fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<T
                 &path,
                 limit,
                 &source,
+                window,
             )?;
             if page.branch_id.as_deref() != Some(id) {
                 return Err(Error::InvalidEvent);
@@ -203,7 +263,7 @@ mod tests {
     ) -> Result<TranscriptPage> {
         fs::rename(home, retired).unwrap();
         fs::rename(alternate, home).unwrap();
-        let result = super::super::anchored_codex(authority, selected, 50, expected);
+        let result = super::super::anchored_codex(authority, selected, 50, expected, &Window::Tail);
         fs::rename(home, alternate).unwrap();
         fs::rename(retired, home).unwrap();
         result
@@ -215,19 +275,19 @@ mod tests {
         let record =
             json!({"type":"user","uuid":"first","sessionId":ID,"message":{"content":"hello"}});
         fs::write(&file, format!("{record}\n{{")).unwrap();
-        let page = read_in(&root, TranscriptAgent::Claude, ID, 50).unwrap();
+        let page = read_in(&root, TranscriptAgent::Claude, ID, 50, &Window::Tail).unwrap();
         assert_eq!(page.view, "active_branch");
         assert_eq!(page.messages[0]["blocks"][0]["text"], "hello");
-        assert!(read_in(&root, TranscriptAgent::Claude, OTHER, 50).is_err());
+        assert!(read_in(&root, TranscriptAgent::Claude, OTHER, 50, &Window::Tail).is_err());
         let mut conflicting = record.clone();
         conflicting["sessionId"] = json!(OTHER);
         fs::write(&file, format!("{conflicting}\n")).unwrap();
-        assert!(read_in(&root, TranscriptAgent::Claude, ID, 50).is_err());
+        assert!(read_in(&root, TranscriptAgent::Claude, ID, 50, &Window::Tail).is_err());
         fs::write(&file, format!("{record}\n")).unwrap();
         let duplicate = root.join("two");
         fs::create_dir(&duplicate).unwrap();
         fs::write(duplicate.join(format!("{ID}.jsonl")), format!("{record}\n")).unwrap();
-        assert!(read_in(&root, TranscriptAgent::Claude, ID, 50).is_err());
+        assert!(read_in(&root, TranscriptAgent::Claude, ID, 50, &Window::Tail).is_err());
     }
 
     #[test]
@@ -241,14 +301,14 @@ mod tests {
         let meta = |id| json!({"type":"session_meta","payload":{"id":id,"history_mode":"legacy"}});
         let event = json!({"type":"event_msg","payload":{"type":"user_message","message":"hello"}});
         fs::write(&file, format!("{}\n{event}\n", meta(ID))).unwrap();
-        let page = read_in(&root, TranscriptAgent::Codex, ID, 50).unwrap();
+        let page = read_in(&root, TranscriptAgent::Codex, ID, 50, &Window::Tail).unwrap();
         assert_eq!(page.branch_id.as_deref(), Some(ID));
         fs::write(&file, format!("{}\n{event}\n", meta(OTHER))).unwrap();
-        assert!(read_in(&root, TranscriptAgent::Codex, ID, 50).is_err());
+        assert!(read_in(&root, TranscriptAgent::Codex, ID, 50, &Window::Tail).is_err());
         fs::remove_file(&file).unwrap();
         std::os::unix::fs::symlink(temp.path().canonicalize().unwrap().join("outside"), &file)
             .unwrap();
-        assert!(read_in(&root, TranscriptAgent::Codex, ID, 50).is_err());
+        assert!(read_in(&root, TranscriptAgent::Codex, ID, 50, &Window::Tail).is_err());
     }
 
     #[test]
@@ -273,7 +333,7 @@ mod tests {
         fs::write(&path, input).unwrap();
         assert!(super::super::conversation(&path, TranscriptAgent::Claude, 50).is_err());
         assert_eq!(
-            read_in(&claude, TranscriptAgent::Claude, ID, 50)
+            read_in(&claude, TranscriptAgent::Claude, ID, 50, &Window::Tail)
                 .unwrap()
                 .messages[0]["blocks"][0]["text"],
             "hello"
@@ -281,7 +341,7 @@ mod tests {
         let oversized =
             json!({"type":"api-request-shape","payload":"x".repeat(4*1024*1024),"sessionId":ID});
         fs::write(&path, format!("{oversized}\n")).unwrap();
-        assert!(read_in(&claude, TranscriptAgent::Claude, ID, 50).is_err());
+        assert!(read_in(&claude, TranscriptAgent::Claude, ID, 50, &Window::Tail).is_err());
         assert!(super::super::snapshot::read_bytes_bounded(
             &mut std::io::empty(),
             64 * 1024 * 1024 + 1,
@@ -298,7 +358,7 @@ mod tests {
         fs::write(&rollout, format!("{meta}\n{ignored}\n{event}\n")).unwrap();
         assert!(super::super::conversation(&rollout, TranscriptAgent::Codex, 50).is_err());
         assert_eq!(
-            read_in(&codex, TranscriptAgent::Codex, ID, 50)
+            read_in(&codex, TranscriptAgent::Codex, ID, 50, &Window::Tail)
                 .unwrap()
                 .messages[0]["blocks"][0]["text"],
             "hello"
@@ -316,7 +376,7 @@ mod tests {
             prefix.push('\n');
             fs::write(&file, &prefix).unwrap();
             let ordinary = super::super::conversation(&file, TranscriptAgent::Claude, 50).unwrap();
-            let selected = read_in(&root, TranscriptAgent::Claude, id, 50).unwrap();
+            let selected = read_in(&root, TranscriptAgent::Claude, id, 50, &Window::Tail).unwrap();
             assert_eq!(
                 serde_json::to_value(ordinary).unwrap(),
                 serde_json::to_value(selected).unwrap()
@@ -393,7 +453,8 @@ mod tests {
         )
         .unwrap();
         let before =
-            super::super::anchored_codex(&home_authority, &selected, 50, &expected).unwrap();
+            super::super::anchored_codex(&home_authority, &selected, 50, &expected, &Window::Tail)
+                .unwrap();
         assert_eq!(before.messages[0]["blocks"][0]["text"], "original");
         let result = read_during_swap(
             &home,
@@ -419,6 +480,6 @@ mod tests {
         for index in 0..10_000 {
             fs::write(root.join(format!("unrelated-{index}")), b"").unwrap();
         }
-        assert!(read_in(&root, TranscriptAgent::Claude, ID, 50).is_err());
+        assert!(read_in(&root, TranscriptAgent::Claude, ID, 50, &Window::Tail).is_err());
     }
 }

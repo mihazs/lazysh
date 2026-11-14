@@ -1,5 +1,455 @@
 # @lazysh/agent
 
+## 1.62.0
+
+### Minor Changes
+
+- a3ea715: Add `lazysh-agent update --check` and `--status`: the host companion asks GitHub's release metadata over HTTPS, verified against the release's own digests, whether a newer companion exists, with a JSON result and documented exit codes.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.62.0
+  - @lazysh/common@1.62.0
+  - @lazysh/companion-release@1.62.0
+  - @lazysh/notification-client@1.62.0
+
+## 1.61.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.61.0
+  - @lazysh/common@1.61.0
+  - @lazysh/notification-client@1.61.0
+
+## 1.60.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.60.0
+  - @lazysh/common@1.60.0
+  - @lazysh/notification-client@1.60.0
+
+## 1.59.0
+
+### Minor Changes
+
+- 6d4fb75: Add a read-only **Session info** sheet to the Agent view options for Claude Code: the MCP servers and whether they connected, the skills, agent types and instruction files the session loaded, from a new `session.info` object of the conversation page.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.59.0
+  - @lazysh/common@1.59.0
+  - @lazysh/notification-client@1.59.0
+
+## 1.58.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.58.0
+  - @lazysh/common@1.58.0
+  - @lazysh/notification-client@1.58.0
+
+## 1.57.0
+
+### Minor Changes
+
+- 5dfb34f: List OpenCode sub-agents in the Agent view's background-work panel, and read the OpenCode 2.2 conversation database that keeps parts inline.
+- 5dfb34f: Report Codex sub-agents as background work so the Agent view lists them.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.57.0
+  - @lazysh/common@1.57.0
+  - @lazysh/notification-client@1.57.0
+
+## 1.56.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.56.1
+  - @lazysh/common@1.56.1
+  - @lazysh/notification-client@1.56.1
+
+## 1.56.0
+
+### Minor Changes
+
+- 00c3e7d: Show Claude Code goal, plan-mode, recap and hook-failure records and Codex goal and compaction records as compact event lines in the Agent view.
+- 87bb9c3: Offer the permission updates Claude Code suggests (allow and remember a rule, switch mode, add folders) in the approval card and the Agent view, each behind a confirmation that shows the exact rule and where it is kept, and let a denial carry a message the agent reads.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.56.0
+  - @lazysh/common@1.56.0
+  - @lazysh/notification-client@1.56.0
+
+## 1.55.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.55.0
+  - @lazysh/common@1.55.0
+  - @lazysh/notification-client@1.55.0
+
+## 1.54.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.54.1
+  - @lazysh/common@1.54.1
+  - @lazysh/notification-client@1.54.1
+
+## 1.54.0
+
+### Minor Changes
+
+- e74bd92: List the earlier Claude Code and Codex sessions of a folder in the Agent view and open one read-only, with a **Resume in the terminal** action that stages the agent's own resume command for review, through a new `lazysh-agent history` companion command and `agent_history` app command.
+- 95224be: Open a Claude Code sub-agent's own conversation from the Agent view, read from its files under the session directory.
+- 95224be: Show Claude Code dynamic workflows in the Agent view as a live progress tree: the companion reads each run's summary and journal files, the view draws its phases with each agent's state, tokens and tool calls, and opens any agent's own conversation.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.54.0
+  - @lazysh/common@1.54.0
+  - @lazysh/notification-client@1.54.0
+
+## 1.53.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.53.0
+  - @lazysh/common@1.53.0
+  - @lazysh/notification-client@1.53.0
+
+## 1.52.0
+
+### Minor Changes
+
+- fc4e7e8: Report the files a Codex session changed as `apply_patch` calls with their outcome in the conversation view.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.52.0
+  - @lazysh/common@1.52.0
+  - @lazysh/notification-client@1.52.0
+
+## 1.51.0
+
+### Minor Changes
+
+- 587b2c7: Send from the Agent view to an agent that runs in a Zellij pane. The updated companion reports the Zellij session and pane of an agent's hooks, the Agent view of a terminal attached to that session follows (or lists) the agents that name one of its panes, and Send and Stop write to that exact pane through Zellij's own commands, only while it still runs the agent. Needs Zellij 0.45.1 or newer.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.51.0
+  - @lazysh/common@1.51.0
+  - @lazysh/notification-client@1.51.0
+
+## 1.50.0
+
+### Minor Changes
+
+- 9d7fb30: Show a failed Claude Code API call (usage limit, unreachable API, refused request) as an error card that says what to do next, from the recorded `isApiErrorMessage` assistant record.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.50.0
+  - @lazysh/common@1.50.0
+  - @lazysh/notification-client@1.50.0
+
+## 1.49.0
+
+### Minor Changes
+
+- 4f882e7: Show the agent's model, permission mode, context left, git branch and worktree in the Agent view header, from a new additive `session` object of the Claude Code and Codex conversation pages and watch frames.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.49.0
+  - @lazysh/common@1.49.0
+  - @lazysh/notification-client@1.49.0
+
+## 1.48.0
+
+### Minor Changes
+
+- 16c4800: Read the Agent view's background work (sub-agents, background commands, monitors, workflows) from the host companion so the panel covers the whole conversation, shows a shell or monitor's output and flags launches with no recorded end as not confirmed.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.48.0
+  - @lazysh/common@1.48.0
+  - @lazysh/notification-client@1.48.0
+
+## 1.47.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.47.0
+  - @lazysh/common@1.47.0
+  - @lazysh/notification-client@1.47.0
+
+## 1.46.0
+
+### Minor Changes
+
+- 6ebb3d8: Show the PNG and JPEG images a user attached as a bounded preview control in the Agent view bubble, for Claude Code and (new in the companion) Codex conversations.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.46.0
+  - @lazysh/common@1.46.0
+  - @lazysh/notification-client@1.46.0
+
+## 1.45.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.45.0
+  - @lazysh/common@1.45.0
+  - @lazysh/notification-client@1.45.0
+
+## 1.44.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.44.0
+  - @lazysh/common@1.44.0
+  - @lazysh/notification-client@1.44.0
+
+## 1.43.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.43.0
+  - @lazysh/common@1.43.0
+  - @lazysh/notification-client@1.43.0
+
+## 1.42.0
+
+### Minor Changes
+
+- d356489: Let `lazysh-agent transcript --view conversation` and `lazysh-agent herdr-conversation` read a session from its first message: `--before ID`, `--after ID` and `--from-start` cut the recorded branch at a message, pages report `hasNewer`, Claude Code conversations now continue across compactions, and sessions of more than 10,000 records are readable for Claude Code, Codex and OpenCode. Changed: a Claude Code conversation page now includes the messages before a compaction, above its summary.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.42.0
+  - @lazysh/common@1.42.0
+  - @lazysh/notification-client@1.42.0
+
+## 1.41.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.41.0
+  - @lazysh/common@1.41.0
+  - @lazysh/notification-client@1.41.0
+
+## 1.40.0
+
+### Minor Changes
+
+- 65eaa38: Show the prompts typed while Claude Code works as read-only Queued cards in the Agent view, from a new bounded `queued` list in the companion's Claude conversation page and transcript-watch frames.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.40.0
+  - @lazysh/common@1.40.0
+  - @lazysh/notification-client@1.40.0
+
+## 1.39.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.39.0
+  - @lazysh/common@1.39.0
+  - @lazysh/notification-client@1.39.0
+
+## 1.38.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.38.0
+  - @lazysh/common@1.38.0
+  - @lazysh/notification-client@1.38.0
+
+## 1.37.0
+
+### Minor Changes
+
+- 20f02cc: Name what an agent waits for (approval, question, plan decision or unknown) and since when: the companion records it from hook payloads, and the Agent view shows it in its header and session list, lists waiting sessions first and opens from a needs-you notification.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.37.0
+  - @lazysh/common@1.37.0
+  - @lazysh/notification-client@1.37.0
+
+## 1.36.0
+
+### Patch Changes
+
+- 848a370: Add a developer-only prototype of the host browser: a hidden companion command that starts a throwaway Chrome-family browser on the host and a viewer page that only the Vite development server serves, with a real-browser CI test and a protocol-client unit test. It is off by default, absent from release builds and changes no default.
+- @lazysh/account-usage@1.36.0
+  - @lazysh/common@1.36.0
+  - @lazysh/notification-client@1.36.0
+
+## 1.35.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.35.0
+  - @lazysh/common@1.35.0
+  - @lazysh/notification-client@1.35.0
+
+## 1.34.0
+
+### Minor Changes
+
+- 95968a2: Add the `lazysh-agent transcript-watch` companion command: one long-lived stream of upserts for a Claude Code or Codex conversation, checked every 250 ms on the host, for the Agent view's live updates.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.34.0
+  - @lazysh/common@1.34.0
+  - @lazysh/notification-client@1.34.0
+
+## 1.33.4
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.4
+  - @lazysh/common@1.33.4
+  - @lazysh/notification-client@1.33.4
+
+## 1.33.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.3
+  - @lazysh/common@1.33.3
+  - @lazysh/notification-client@1.33.3
+
+## 1.33.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.2
+  - @lazysh/common@1.33.2
+  - @lazysh/notification-client@1.33.2
+
+## 1.33.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.1
+  - @lazysh/common@1.33.1
+  - @lazysh/notification-client@1.33.1
+
+## 1.33.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.0
+  - @lazysh/common@1.33.0
+  - @lazysh/notification-client@1.33.0
+
+## 1.32.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.32.0
+  - @lazysh/common@1.32.0
+  - @lazysh/notification-client@1.32.0
+
+## 1.31.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.31.2
+  - @lazysh/common@1.31.2
+  - @lazysh/notification-client@1.31.2
+
+## 1.31.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.31.1
+  - @lazysh/common@1.31.1
+  - @lazysh/notification-client@1.31.1
+
+## 1.31.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.31.0
+  - @lazysh/common@1.31.0
+  - @lazysh/notification-client@1.31.0
+
+## 1.30.5
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.5
+  - @lazysh/common@1.30.5
+  - @lazysh/notification-client@1.30.5
+
+## 1.30.4
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.4
+  - @lazysh/common@1.30.4
+  - @lazysh/notification-client@1.30.4
+
+## 1.30.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.3
+  - @lazysh/common@1.30.3
+  - @lazysh/notification-client@1.30.3
+
+## 1.30.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.2
+  - @lazysh/common@1.30.2
+  - @lazysh/notification-client@1.30.2
+
+## 1.30.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.1
+  - @lazysh/common@1.30.1
+  - @lazysh/notification-client@1.30.1
+
+## 1.30.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.0
+  - @lazysh/common@1.30.0
+  - @lazysh/notification-client@1.30.0
+
+## 1.29.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.29.3
+  - @lazysh/common@1.29.3
+  - @lazysh/notification-client@1.29.3
+
+## 1.29.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.29.2
+  - @lazysh/common@1.29.2
+  - @lazysh/notification-client@1.29.2
+
 ## 1.29.1
 
 ### Patch Changes

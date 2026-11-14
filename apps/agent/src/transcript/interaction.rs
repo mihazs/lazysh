@@ -3,7 +3,8 @@
 //! Each agent's tool names and argument shapes come from recorded sessions and
 //! official schemas listed in `tests/fixtures/interaction-cards/README.md`. A
 //! shape that does not match exactly yields no card; the original tool card
-//! remains. Cards never carry answers or authority to answer.
+//! remains. Cards never carry answers or authority to answer. An error card marks the
+//! API-error message Claude Code writes as an assistant record.
 use super::TranscriptAgent;
 use serde_json::{json, Value};
 
@@ -136,5 +137,26 @@ pub(super) fn annotate(agent: TranscriptAgent, blocks: &mut [Value]) {
         if let Some(card) = card(agent, name, &input) {
             block["card"] = card;
         }
+    }
+}
+
+/// Causes of a recorded Claude Code API-error message (`isApiErrorMessage` with an `error` string). Only these have a
+/// synthetic fixture (`tests/fixtures/interaction-cards/README.md`); any other cause stays an ordinary assistant message.
+const API_ERRORS: [&str; 4] = ["rate_limit", "server_error", "invalid_request", "unknown"];
+
+/// Turns the text of a recorded API-error message into an error card; the text itself says what to do next
+/// (for a usage limit it carries the reset time).
+pub(super) fn error_card(agent: TranscriptAgent, record: &Value, blocks: &mut [Value]) {
+    if !matches!(agent, TranscriptAgent::Claude) || record["isApiErrorMessage"] != true {
+        return;
+    }
+    let Some(cause) = record["error"]
+        .as_str()
+        .filter(|cause| API_ERRORS.contains(cause))
+    else {
+        return;
+    };
+    if let Some(block) = blocks.iter_mut().find(|block| block["type"] == "text") {
+        block["card"] = json!({"kind":"error","cause":cause});
     }
 }

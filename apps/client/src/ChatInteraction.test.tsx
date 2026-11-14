@@ -98,3 +98,31 @@ it('rejects cards from agents whose transcripts do not carry them',async()=>{
   await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));});
   expect(screen.getByRole('alert').textContent).toBe('Invalid recorded plan or question.');
 });
+
+it('shows each recorded Claude API failure as an error card with the next step, and a mere mention as text',async()=>{
+  await open(pages.claudeErrors);
+  const cards=screen.getAllByRole('alert');
+  expect(cards).toHaveLength(4);
+  expect(cards.map(card=>within(card).getByRole('heading').textContent)).toEqual(Array(4).fill('The agent could not continue'));
+  // The record's own text (with the reset time) is the cause; the card adds what to do.
+  expect(within(cards[0]).getByText(/resets 7pm/)).toBeTruthy();
+  expect(within(cards[0]).getByText(/Wait for it to reset/)).toBeTruthy();
+  expect(within(cards[1]).getByText(/Check the host's network/)).toBeTruthy();
+  expect(within(cards[2]).getByText(/Shorten or change the prompt/)).toBeTruthy();
+  expect(within(cards[3]).getByText(/Check the terminal/)).toBeTruthy();
+  // An error value the reader has no fixture for, and a plain message that quotes an error, stay ordinary text.
+  expect(screen.getByText('API Error: 529 Synthetic overload')).toBeTruthy();
+  expect(screen.getByText('Prompt is too long is a message the API can return.')).toBeTruthy();
+});
+
+it('rejects an error card on another agent or on a tool block',async()=>{
+  const page=clone(pages.claudeErrors);
+  page.agent='codex';
+  vi.mocked(invoke).mockResolvedValue(page);
+  render(<ChatPanel sessionId="host"/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'codex'}});
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/source'}});
+  fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));});
+  expect(screen.queryByRole('heading',{name:'The agent could not continue'})).toBeNull();
+});

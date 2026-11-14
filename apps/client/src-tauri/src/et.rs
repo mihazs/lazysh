@@ -571,6 +571,7 @@ pub(crate) mod tests {
             crate::ssh::read_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 id.clone(),
                 file.to_string_lossy().into_owned()
             )

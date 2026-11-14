@@ -101,7 +101,52 @@ impl Controller {
     }
 }
 
-pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+#[cfg(target_os = "android")]
+struct NotificationSettings(tauri::plugin::PluginHandle<tauri::Wry>);
+
+async fn notification_command(
+    app: tauri::AppHandle,
+    command: &'static str,
+    failure: &'static str,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        app.state::<NotificationSettings>()
+            .0
+            .run_mobile_plugin_async(command, serde_json::json!({}))
+            .await
+            .map_err(|_| failure.into())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, command, failure);
+        Err("Notification settings are unavailable".into())
+    }
+}
+
+#[tauri::command]
+pub async fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
+    notification_command(
+        app,
+        "openNotificationSettings",
+        "Could not open notification settings",
+    )
+    .await
+}
+
+/// Asked by the renderer once a session is adopted, so the system prompt never covers a connect.
+#[tauri::command]
+pub async fn request_notification_permission(app: tauri::AppHandle) -> Result<(), String> {
+    notification_command(
+        app,
+        "requestNotificationPermission",
+        "Could not request notification permission",
+    )
+    .await
+}
+
+pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("lazysh-session-background")
         // This private plugin has no renderer command or renderer-owned connection count.
         .invoke_handler(|invoke| {
@@ -114,6 +159,7 @@ pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             let controller = {
                 let handle =
                     api.register_android_plugin("app.lazysh.client", "SessionBackgroundPlugin")?;
+                app.manage(NotificationSettings(handle.clone()));
                 // The count of live terminal workers is the notification's session count.
                 Controller::start(move |revision, sessions| {
                     let handle = handle.clone();

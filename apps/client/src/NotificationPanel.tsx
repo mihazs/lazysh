@@ -6,6 +6,7 @@ import './NotificationPanel.css';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { isAndroidApp } from './isAndroidApp';
 import { isPermissionGranted, onAction, registerActionTypes, requestPermission } from '@tauri-apps/plugin-notification';
 import { collectInbox, getInbox, openInboxEvent, updateInbox, useInbox, type InboxRow, type InboxSession } from './notificationStore';
 
@@ -135,6 +136,7 @@ export default function NotificationPanel({ sessions }: { sessions: InboxSession
       <div className="inbox-settings-actions">
         {state.notifications ? <button type="button" onClick={() => updateInbox({ notifications: false })}>{t("inboxPause")}</button> : <button type="button" disabled={busy || !isTauri()} onClick={() => void enable()}>{t("inboxEnable")}</button>}
         <button type="button" disabled={busy || !state.notifications || !isTauri()} onClick={() => void test()}>{t("inboxTest")}</button>
+        {isAndroidApp() && <button type="button" onClick={() => void invoke('open_notification_settings').catch(e => updateInbox({ error: errorMessage(e) }))}>{t("inboxAndroidSettings")}</button>}
       </div>
       <p>{t("inboxPrivacy")}</p>
       {!isTauri() && <p>{t("inboxNativeRequired")}</p>}

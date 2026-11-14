@@ -9,6 +9,15 @@ mod receiver {
         path::{Path, PathBuf},
     };
     const LIMIT: usize = 16 * 1024;
+    /// What the packaged IME fixture's transactions leave on the wire before the Shift+Enter keys: a
+    /// correction, an extension, an ASCII erase and a repeat, then a predictive word, a gesture word,
+    /// Backspace inside a composing word, an erase-and-commit autocorrect, Esc followed by a Backspace, and a
+    /// word typed as letter commits then rewritten through a composing region.
+    const IME_TRANSACTIONS: &str = concat!(
+        "there\x7f\x7fthe",
+        "owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f",
+        "web "
+    );
 
     struct RawMode {
         fd: i32,
@@ -91,9 +100,14 @@ mod receiver {
     ) -> io::Result<()> {
         let mut total = 0;
         let expected = nonce
-            .map(|nonce| format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
+            .map(|nonce| format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
+        // Private keyboard mode then types one more fixed text, after the two soft line breaks.
+        let private = nonce
+            .zip(expected.as_ref())
+            .map(|(nonce, expected)| format!("{expected}\r\x1b[13;2uowned-private-{nonce}"));
         let mut observed = Vec::new();
         let mut acknowledged = false;
+        let mut private_acknowledged = false;
         let mut announced = [0; 4];
         let mut bytes = [0; 512];
         loop {
@@ -137,6 +151,17 @@ mod receiver {
                         writeln!(terminal, "{tag}_{nonce}_DELIVERED\r")?;
                         terminal.flush()?;
                         acknowledged = true;
+                    }
+                    if !dpad
+                        && !private_acknowledged
+                        && private
+                            .as_ref()
+                            .is_some_and(|private| observed == private.as_bytes())
+                    {
+                        output.flush()?;
+                        writeln!(terminal, "IME_{nonce}_PRIVATE\r")?;
+                        terminal.flush()?;
+                        private_acknowledged = true;
                     }
                 }
             }
@@ -310,8 +335,8 @@ mod receiver {
         #[test]
         fn delivery_ack_requires_the_exact_written_wire_and_never_normalizes_extra_bytes() {
             let nonce = "0123456789abcdef0123456789abcdef";
-            let expected =
-                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}").into_bytes();
+            let expected = format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}")
+                .into_bytes();
             let ack = format!("IME_{nonce}_DELIVERED\r\n").into_bytes();
             let mut stored = Vec::new();
             let mut terminal = Vec::new();
@@ -329,8 +354,12 @@ mod receiver {
             for input in [
                 b"thethe".to_vec(),
                 [expected.as_slice(), b"extra"].concat(),
-                format!("there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
-                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-{nonce}owned-current-{nonce}").into_bytes(),
+                format!("{IME_TRANSACTIONS}\x1b[13;2u\r\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
+                format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-preedit-{nonce}owned-current-{nonce}").into_bytes(),
+                // A skipped Backspace after Esc, a lost autocorrect erase and the earlier wire without the new transactions.
+                format!("{}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}", IME_TRANSACTIONS.replace("\x1b\x7f", "\x1b")).into_bytes(),
+                format!("{}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}", IME_TRANSACTIONS.replace("\x7f\x7f\x7f\x7ftan", "\x7f\x7ftan")).into_bytes(),
+                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
             ] {
                 stored.clear();
                 terminal.clear();
@@ -359,6 +388,55 @@ mod receiver {
             .unwrap();
             assert_eq!(terminal, ack);
             assert_eq!(stored, [expected.as_slice(), b"extra"].concat());
+        }
+
+        #[test]
+        fn private_keyboard_text_is_acknowledged_only_after_the_exact_full_wire() {
+            let nonce = "0123456789abcdef0123456789abcdef";
+            let delivered =
+                format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
+            let lines = format!("{delivered}\r\x1b[13;2u").into_bytes();
+            let typed = format!("{delivered}\r\x1b[13;2uowned-private-{nonce}").into_bytes();
+            let run = |input: &[u8]| {
+                let (mut stored, mut terminal) = (Vec::new(), Vec::new());
+                copy_bounded(
+                    &mut Cursor::new(input),
+                    &mut stored,
+                    LIMIT,
+                    Some(nonce),
+                    false,
+                    &mut terminal,
+                )
+                .unwrap();
+                String::from_utf8(terminal).unwrap()
+            };
+            assert_eq!(run(&typed), format!("IME_{nonce}_PRIVATE\r\n"));
+            // Reads that split the wire still acknowledge each stage once, in order.
+            let (mut stored, mut terminal) = (Vec::new(), Vec::new());
+            copy_bounded(
+                &mut Cursor::new(&delivered)
+                    .chain(Cursor::new(b"\r\x1b[13;2u"))
+                    .chain(Cursor::new(format!("owned-private-{nonce}"))),
+                &mut stored,
+                LIMIT,
+                Some(nonce),
+                false,
+                &mut terminal,
+            )
+            .unwrap();
+            assert_eq!(stored, typed);
+            assert_eq!(
+                String::from_utf8(terminal).unwrap(),
+                format!("IME_{nonce}_DELIVERED\r\nIME_{nonce}_PRIVATE\r\n")
+            );
+            for input in [
+                lines.clone(),
+                [typed.as_slice(), b"extra"].concat(),
+                format!("{delivered}\r\x1b[13;2uowned-private-wrong").into_bytes(),
+                format!("{delivered}\r\x1b[13;2u\r\x1b[13;2uowned-private-{nonce}").into_bytes(),
+            ] {
+                assert!(!run(&input).contains("_PRIVATE"));
+            }
         }
 
         #[test]
@@ -442,7 +520,7 @@ mod receiver {
             }
             let nonce = "0123456789abcdef0123456789abcdef";
             let mut terminal = Vec::new();
-            let input = format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
+            let input = format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
             assert!(copy_bounded(
                 &mut Cursor::new(input),
                 &mut Unflushed,

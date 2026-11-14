@@ -1,0 +1,19 @@
+.agent-tool { margin-block: 6px; min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--theme-control, transparent); }
+.agent-tool > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 44px; padding: 6px 10px; cursor: pointer; }
+.agent-tool-summary { flex: 1 1 8ch; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono, monospace); font-size: 0.85rem; }
+.agent-tool-status { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 0.8rem; color: var(--muted); }
+.agent-tool[data-status="error"] .agent-tool-status { color: var(--danger, currentColor); }
+.agent-tool[data-status="running"] .agent-tool-status svg { animation: agent-tool-spin 1.2s linear infinite; }
+@keyframes agent-tool-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .agent-tool[data-status="running"] .agent-tool-status svg { animation: none; } }
+.agent-tool pre { margin: 0; padding: 8px 10px; max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.85rem; border-top: 1px solid var(--border); }
+.agent-tool-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 10px; }
+.agent-tool-actions > button, .agent-tool-copy { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; }
+.agent-diff-counts { display: inline-flex; gap: 6px; flex: none; font-variant-numeric: tabular-nums; }
+.agent-diff-counts [data-kind="+"], .agent-diff-lines [data-kind="+"] { color: var(--theme-success, #2e7d32); }
+.agent-diff-counts [data-kind="-"], .agent-diff-lines [data-kind="-"] { color: var(--danger, #c62828); }
+.agent-diff-file > h5 { margin: 0; padding: 6px 10px 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+.agent-diff-lines[data-wrap="false"] { white-space: pre; overflow-wrap: normal; }
+.agent-diff-lines > span { display: block; }
+.agent-diff-lines > [data-kind="+"] { background: color-mix(in srgb, var(--theme-success, #2e7d32) 14%, transparent); }
+.agent-diff-lines > [data-kind="-"] { background: color-mix(in srgb, var(--danger, #c62828) 14%, transparent); }

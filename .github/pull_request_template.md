@@ -14,7 +14,7 @@
 - [ ] `git diff --check` passes
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes
 - [ ] `cargo test --workspace --all-targets` passes
-- [ ] Relevant Bun/Turbo frontend, browser, and native platform checks pass
+- [ ] Relevant moon, Bun frontend, browser, and native platform checks pass
 - [ ] Manual test: <!-- describe what you ran and what you observed -->
 
 ## Commit attribution

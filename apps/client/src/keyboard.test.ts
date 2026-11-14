@@ -27,13 +27,13 @@ describe("hardware app shortcuts", () => {
     expect(appShortcut(event)).toBeUndefined();
   });
   it("allows session navigation from the actual terminal input without exempting regular textareas", () => {
-    document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><textarea class="xterm-helper-textarea"></textarea>';
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea data-terminal-editor=""></textarea></div><textarea data-terminal-editor=""></textarea>';
     const inputs = document.querySelectorAll("textarea");
     expect(shortcut("1", inputs[0])).toEqual({action: "session", index: 0});
     expect(shortcut("1", inputs[1])).toBeUndefined();
   });
   it("opens the palette with Ctrl/Cmd+Shift+P from the terminal input, but not from fields, dialogs or other chords", () => {
-    document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><input><div role="dialog"><button></button></div>';
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea data-terminal-editor=""></textarea></div><input><div role="dialog"><button></button></div>';
     const press = (target: Element, options: KeyboardEventInit) => {
       let result = false;
       target.addEventListener("keydown", e => {result = paletteShortcut(e as KeyboardEvent);}, {once: true});
@@ -49,7 +49,7 @@ describe("hardware app shortcuts", () => {
     expect(shortcut("P", document.body, {shiftKey: true})).toBeUndefined();
   });
   it("toggles Agents and Workspaces with Ctrl/Cmd+Shift+A and W from the terminal input, never from fields, dialogs or the shell's own chords", () => {
-    document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><input><div role="dialog"><button></button></div>';
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea data-terminal-editor=""></textarea></div><input><div role="dialog"><button></button></div>';
     const press = (key: string, target: Element, options: KeyboardEventInit) => {
       let result: ReturnType<typeof navigationShortcut>;
       target.addEventListener("keydown", e => {result = navigationShortcut(e as KeyboardEvent);}, {once: true});
@@ -68,7 +68,7 @@ describe("hardware app shortcuts", () => {
     expect(shortcut("w", terminal)).toEqual({action: "closeSession"});
   });
   it("matches the Agent view toggle from the terminal and Agent draft, but not other editable controls", () => {
-    document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><div class="agent-view"><div class="chat-draft"><textarea></textarea></div></div><input><div role="dialog"><button></button></div>';
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea data-terminal-editor=""></textarea></div><div class="agent-view"><div class="chat-draft"><textarea></textarea></div></div><input><div role="dialog"><button></button></div>';
     const press = (target: Element, options: KeyboardEventInit) => {
       let result = false;
       target.addEventListener('keydown', e => {result = agentViewShortcut(e as KeyboardEvent);}, {once: true});

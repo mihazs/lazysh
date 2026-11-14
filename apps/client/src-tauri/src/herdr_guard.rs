@@ -576,6 +576,21 @@ pub enum Action {
         receipt: String,
     },
 }
+/// The guard takes `send` and `request_stop` only.
+fn guarded_input(input: &Input) -> WireOutcome<()> {
+    // Herdr's guard has no paste buffer and no key profile: a long prompt, a dialog answer and a mode cycle stay in the terminal.
+    if matches!(
+        input,
+        Input::SendLong { .. }
+            | Input::Select { .. }
+            | Input::Submit { .. }
+            | Input::Pick { .. }
+            | Input::CycleMode {}
+    ) {
+        return Err(Fault::Invalid);
+    }
+    input.validate().map_err(|_| Fault::Invalid)
+}
 impl Action {
     fn validate(&self) -> WireOutcome<()> {
         let token = |value: &str| value.len() == 36 && uuid::Uuid::parse_str(value).is_ok();
@@ -613,7 +628,7 @@ impl Action {
                 input,
             } if token(receipt) && *operation > 0 && *operation < u32::MAX => {
                 source.validate().map_err(|_| Fault::Invalid)?;
-                input.validate().map_err(|_| Fault::Invalid)
+                guarded_input(input)
             }
             _ => Err(Fault::Invalid),
         }
@@ -939,7 +954,7 @@ impl Control {
                 let mut bound = self.bound.take().ok_or(Fault::Stale)?;
                 bound.owner.check().map_err(|_| Fault::Stale)?;
                 source.validate().map_err(|_| Fault::Invalid)?;
-                input.validate().map_err(|_| Fault::Invalid)?;
+                guarded_input(&input)?;
                 if !bound.confirmed || bound.source != source || bound.next != operation {
                     return Err(Fault::Stale);
                 }

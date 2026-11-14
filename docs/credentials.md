@@ -133,7 +133,7 @@ or data an authenticated user previously copied out.
 Verification uses native Rust authority/serialization/transport tests, Android
 native gate tests, UIKit/WKWebView XCTest cover tests, and browser tests for retained
 sessions, stale callbacks and reset acknowledgment. The iOS native task is
-`bunx turbo run test:resume --filter=@lazysh/credential-vault` after `bun run build:ios`
+`bunx moon run credential-vault:test-resume` after `bun run build:ios`
 with the existing isolated `APPLE_STATUS_SIMULATOR_ID`. Compile and synthetic tests
 do not establish successful physical biometrics, enrollment recovery, background
 execution guarantees, device energy behavior or signed-release eligibility. Those

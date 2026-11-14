@@ -38,6 +38,9 @@ impl Hook {
     }
 }
 fn start(directory: &Path, timeout: &str) -> Hook {
+    start_with(directory, timeout, &payload())
+}
+fn start_with(directory: &Path, timeout: &str, payload: &Value) -> Hook {
     let mut child = command(directory)
         .args([
             "approval-request",
@@ -55,7 +58,7 @@ fn start(directory: &Path, timeout: &str) -> Hook {
         .stdin
         .take()
         .unwrap()
-        .write_all(&serde_json::to_vec(&payload()).unwrap())
+        .write_all(&serde_json::to_vec(payload).unwrap())
         .unwrap();
     Hook(Some(child))
 }
@@ -83,23 +86,30 @@ fn pending(directory: &Path) -> Value {
     }
 }
 fn resolve(directory: &Path, request: &Value, decision: &str) -> Output {
-    run(
-        directory,
-        &[
-            "approval-resolve",
-            "--id",
-            request["id"].as_str().unwrap(),
-            "--expected-hash",
-            request["expectedHash"].as_str().unwrap(),
-            "--session-id",
-            request["sessionId"].as_str().unwrap(),
-            "--pane-id",
-            request["paneId"].as_str().unwrap(),
-            "--decision",
-            decision,
-        ],
-        b"",
-    )
+    resolve_with(directory, request, decision, &[])
+}
+fn resolve_with(directory: &Path, request: &Value, decision: &str, extra: &[&str]) -> Output {
+    let mut args = vec![
+        "approval-resolve",
+        "--id",
+        request["id"].as_str().unwrap(),
+        "--expected-hash",
+        request["expectedHash"].as_str().unwrap(),
+        "--session-id",
+        request["sessionId"].as_str().unwrap(),
+        "--pane-id",
+        request["paneId"].as_str().unwrap(),
+        "--decision",
+        decision,
+    ];
+    args.extend_from_slice(extra);
+    run(directory, &args, b"")
+}
+fn decision(hook: Hook) -> Value {
+    let output = hook.finish();
+    assert!(output.status.success());
+    serde_json::from_slice::<Value>(&output.stdout).unwrap()["hookSpecificOutput"]["decision"]
+        .clone()
 }
 
 #[test]
@@ -257,6 +267,7 @@ fn expired_tokens_are_rejected_even_while_the_originating_lease_is_held() {
             pane_id: Some("%7".into()),
             tool_name: "Bash".into(),
             tool_input: payload()["tool_input"].clone(),
+            options: vec![],
             created_at: created.to_rfc3339_opts(SecondsFormat::Millis, true),
             expires_at: expires.to_rfc3339_opts(SecondsFormat::Millis, true),
         };
@@ -344,4 +355,98 @@ fn lease_links_are_rejected_without_reading_or_removing_the_target() {
     assert!(output.stdout.is_empty());
     assert_eq!(fs::read(&outside).unwrap(), b"SECRET_FILE");
     drop(hook);
+}
+
+fn suggested() -> Value {
+    let mut request = payload();
+    request["permission_suggestions"] = json!([
+        {"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"echo PRIVATE_APPROVAL_TOOL_INPUT_MARKER","extra":1}],"behavior":"allow","destination":"localSettings","extra":true},
+        {"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"localSettings"},
+        {"type":"setMode","mode":"bypassPermissions","destination":"session"},
+        {"type":"setMode","mode":"acceptEdits","destination":"session"},
+        {"type":"replaceRules","rules":[{"toolName":"Bash"}],"behavior":"allow","destination":"userSettings"},
+        {"type":"addDirectories","directories":["/work/shared"],"destination":"projectSettings"},
+        {"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"allow","destination":"elsewhere"}
+    ]);
+    request
+}
+
+#[test]
+fn suggested_permission_updates_are_listed_and_an_allow_returns_exactly_the_chosen_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let hook = start_with(dir.path(), "10", &suggested());
+    let request = pending(dir.path());
+    // Only allow rules, a non-bypass mode and directories survive, rebuilt without unknown fields.
+    assert_eq!(
+        request["options"],
+        json!([
+            {"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"echo PRIVATE_APPROVAL_TOOL_INPUT_MARKER"}],"behavior":"allow","destination":"localSettings"},
+            {"type":"setMode","mode":"acceptEdits","destination":"session"},
+            {"type":"addDirectories","directories":["/work/shared"],"destination":"projectSettings"}
+        ])
+    );
+    // The index must exist, belongs to an allow, and a message belongs to a deny; each refusal leaves it pending.
+    for (decision, extra) in [
+        ("allow", vec!["--option", "3"]),
+        ("deny", vec!["--option", "0"]),
+        ("allow", vec!["--message", "no"]),
+        ("deny", vec!["--message", "bad\nline"]),
+        ("deny", vec!["--message", &"x".repeat(501)]),
+    ] {
+        let output = resolve_with(dir.path(), &request, decision, &extra);
+        assert!(!output.status.success(), "{decision} {extra:?}");
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(list(dir.path())["requests"].as_array().unwrap().len(), 1);
+    let output = resolve_with(dir.path(), &request, "allow", &["--option", "1"]);
+    assert!(output.status.success());
+    assert_eq!(
+        decision(hook),
+        json!({"behavior":"allow","updatedPermissions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}]})
+    );
+}
+
+#[test]
+fn a_plain_allow_adds_no_rule_and_a_deny_message_reaches_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let hook = start_with(dir.path(), "10", &suggested());
+    let request = pending(dir.path());
+    assert!(resolve(dir.path(), &request, "allow").status.success());
+    assert_eq!(decision(hook), json!({"behavior":"allow"}));
+    let hook = start(dir.path(), "10");
+    let request = pending(dir.path());
+    assert_eq!(request["options"], json!([]));
+    let output = resolve_with(
+        dir.path(),
+        &request,
+        "deny",
+        &["--message", "Use the staging database instead"],
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        decision(hook),
+        json!({"behavior":"deny","message":"Use the staging database instead"})
+    );
+}
+
+#[test]
+fn requests_stored_by_an_older_companion_still_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(list(dir.path())["requests"], json!([]));
+    let database = rusqlite::Connection::open(dir.path().join("approvals/events.sqlite3")).unwrap();
+    database
+        .execute_batch(
+            "ALTER TABLE approvals DROP COLUMN options; ALTER TABLE approvals DROP COLUMN option; ALTER TABLE approvals DROP COLUMN message;",
+        )
+        .unwrap();
+    drop(database);
+    let hook = start_with(dir.path(), "10", &suggested());
+    let request = pending(dir.path());
+    assert_eq!(request["options"].as_array().unwrap().len(), 3);
+    assert!(
+        resolve_with(dir.path(), &request, "allow", &["--option", "0"])
+            .status
+            .success()
+    );
+    assert_eq!(decision(hook)["updatedPermissions"][0]["type"], "addRules");
 }

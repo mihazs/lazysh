@@ -34,7 +34,7 @@ it('offers actual recent host projects in the workspace launcher', async () => {
   expect(screen.queryByRole('region', { name: /prefix shortcuts/ })).toBeNull();
 });
 it('attaches the selected named Herdr server through the generic terminal contract', async () => {
-  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? { ...tree, herdrAvailable: true } : [{ name: 'builds' }]);
+  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? { ...tree, herdrAvailable: true, tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}] } : [{ name: 'builds' }]);
   const attach = vi.fn().mockResolvedValue(undefined);
   render(<MuxPanel sessionId="ssh1" onAttach={attach} />);
   fireEvent.click(await screen.findByRole('button', { name: 'List herdr sessions' }));
@@ -104,7 +104,7 @@ it.each(['default',"世界 '$(touch NO);"])('keeps requested tmux server %s lite
   await waitFor(()=>expect(attach).toHaveBeenCalledWith(...(server==='default'?['work']:['work','tmux',server])));
 });
 it('auto-reads only requested Herdr sessions and keeps attachment explicit',async()=>{
-  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_tree'?{...tree,herdrAvailable:true,zellijAvailable:true}:[{name:'literal 世界'}]);
+  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_tree'?{...tree,herdrAvailable:true,zellijAvailable:true,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}]}:[{name:'literal 世界'}]);
   const attach=vi.fn().mockResolvedValue(undefined);
   render(<MuxPanel sessionId="ssh1" requested={request({kind:'herdr'})} onAttach={attach}/>);
   const row=await screen.findByRole('button',{name:'Attach herdr literal 世界'});
@@ -141,4 +141,44 @@ it.each(['success','failure'] as const)('drops requested-picker late %s on its s
 it('refuses a requested picker routed to a different source ID',async()=>{
   render(<MuxPanel sessionId="wrong-old-active" requested={request({kind:'herdr'})} onAttach={vi.fn()}/>);
   await act(async()=>{});fireEvent.click(screen.getByRole('button',{name:'Refresh'}));expect(invoke).not.toHaveBeenCalled();
+});
+it('lists discovered versions, explains each limited multiplexer and reports the record once read',async()=>{
+  const tools=[
+    {kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']},
+    {kind:'herdr',version:'0.8.2',support:'degraded',missing:['create']},
+    {kind:'zellij',version:null,support:'degraded',missing:['tree']},
+  ];
+  vi.mocked(invoke).mockResolvedValue({...tree,herdrAvailable:true,zellijAvailable:true,tools});const onTools=vi.fn();
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} onTools={onTools}/>);
+  expect(await screen.findByText('tmux 3.2a (Limited) · Herdr 0.8.2 (Limited) · Zellij (Limited)')).toBeTruthy();
+  expect(screen.getAllByRole('note').map(note=>note.textContent)).toEqual([
+    'Jump To and Chat input need tmux 3.4 or newer.',
+    'Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.',
+    'The workspace tree, close, resize and agent launch need Zellij 0.45.1.',
+  ]);
+  expect(onTools).toHaveBeenCalledExactlyOnceWith(tools);
+});
+
+it('hides Herdr shortcuts that mutate layout when discovery marks it limited', async () => {
+  vi.mocked(invoke).mockResolvedValue({...tree,herdrAvailable:true,tools:[{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create','rename']}]});
+  render(<MuxPanel sessionId="ssh1" attached={{kind:'herdr',name:'work'}} onAttach={vi.fn()} />);
+  await screen.findByText('Herdr 0.8.2 (Limited)', {exact:false});
+  expect(screen.queryByRole('region',{name:'herdr prefix shortcuts'})).toBeNull();
+});
+
+it('hides Herdr session creation for limited versions but keeps listed sessions', async () => {
+  const tools = [{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create','launch','rename','confirmedInput','restore']}];
+  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? {...tree,herdrAvailable:true,tools} : [{name:'work'}]);
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button',{name:'List herdr sessions'}));
+  expect(await screen.findByRole('button',{name:'Browse Herdr work'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Open/create herdr session'})).toBeNull();
+});
+
+it('explains why a requested limited Herdr session cannot be attached', async () => {
+  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_tree'?{...tree,herdrAvailable:true,tools:[{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create']}]}:[{name:'work'}]);
+  render(<MuxPanel sessionId="ssh1" requested={request({kind:'herdr'})} onAttach={vi.fn()}/>);
+  expect(await screen.findByText('Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
 });

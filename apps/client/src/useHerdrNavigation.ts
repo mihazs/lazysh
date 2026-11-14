@@ -60,7 +60,7 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 
 
 /** One visibility- and lease-owned reader for a terminal's selected Herdr server. */
-export function useHerdrNavigation({sessionId,herdrSession,visible,reports}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource}) {
+export function useHerdrNavigation({sessionId,herdrSession,visible,reports,intervalMs=5000}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;intervalMs?:number}) {
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [choice,setChoice]=useState<{host:string;name:string}|null>(null);
@@ -96,9 +96,9 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports}:{ses
     };
     refresh.current=read;
     if(visible)void read();
-    const timer=visible?window.setInterval(()=>void read(),5000):undefined;
+    const timer=visible?window.setInterval(()=>void read(),intervalMs):undefined;
     return()=>{current=false;window.clearInterval(timer);};
-  },[sessionId,selected,visible,invoke,lease]);
+  },[sessionId,selected,visible,invoke,lease,intervalMs]);
   const owned=result?.host===sessionId?result:null;
   const reportReadable=!!reports?.available && reports.lease.current();
   const data=useMemo(()=>owned && withReportedStatus(owned,reports,sessionId),[owned,reports?.rows,reports?.host,reportReadable,sessionId]);

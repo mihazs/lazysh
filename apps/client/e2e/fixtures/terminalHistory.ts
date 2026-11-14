@@ -1,7 +1,7 @@
 import {expect,type Page} from '@playwright/test';
 import {installNativeBridge} from './nativeBridge';
 import type {mountTerminalHistoryHarness} from './TerminalHistoryHarness';
-declare global {interface Window {ownedHistory:ReturnType<typeof mountTerminalHistoryHarness>;ownedHistoryInput?:(data:string)=>void}}
+declare global {interface Window {ownedHistory:ReturnType<typeof mountTerminalHistoryHarness>;ownedHistoryInput?:(data:string)=>void;edgeLog:string[]}}
 
 /** Loads the workspace with synthetic commands; the terminal harness mounts separately. */
 export async function openHistoryWorkspace(page:Page) {
@@ -16,12 +16,13 @@ export async function openHistoryWorkspace(page:Page) {
   await page.goto('/');
 }
 
-export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=false) {
+export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=false,edge?:{close?:boolean}) {
   if(load)await openHistoryWorkspace(page);
-  await page.evaluate(async({mosh,topAnchored})=>{
+  await page.evaluate(async({mosh,topAnchored,edge})=>{
     const fixture=await import('/e2e/fixtures/TerminalHistoryHarness.tsx');
-    window.ownedHistory=fixture.mountTerminalHistoryHarness({mosh,topAnchored,input:data=>window.ownedHistoryInput?.(data)});
-  },{mosh,topAnchored});
+    window.edgeLog=[];
+    window.ownedHistory=fixture.mountTerminalHistoryHarness({mosh,topAnchored,edgeLog:edge?window.edgeLog:undefined,edgeClose:edge?.close,input:data=>window.ownedHistoryInput?.(data)});
+  },{mosh,topAnchored,edge});
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
   // A Mosh terminal adopts its geometry only from the first authoritative frame.
   if(mosh)await expect.poll(()=>page.evaluate(()=>window.ownedHistory.resizes.length)).toBeGreaterThan(0);
@@ -77,4 +78,27 @@ export async function fingerDrag(page:Page,start:{x:number;y:number},height:numb
   for(let move=1;move*step<=rows;move++){await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+slant,y:y+move*step*height}]});await between();}
   await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await input.detach();await settle(page);
+}
+
+/** Centre of a visible terminal cell in viewport coordinates. */
+export function cell(page:Page,row:number,column:number) {
+  return page.evaluate(([row,column])=>{
+    const t=window.ownedHistory.terminal,r=t.element!.querySelector('.xterm-screen')!.getBoundingClientRect();
+    return {x:r.left+(column+.5)*r.width/t.cols,y:r.top+(row+.5)*r.height/t.rows};
+  },[row,column] as const);
+}
+/** A still finger held past the selection delay, then lifted. */
+export async function longPress(page:Page,point:{x:number;y:number}) {
+  const input=await page.context().newCDPSession(page);
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});
+  await page.waitForTimeout(650);
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await input.detach();
+}
+/** The on-screen keyboard holds a word in composition, as SwiftKey and Gboard do after typing. */
+export async function compose(page:Page,text:string) {
+  await page.evaluate(()=>window.ownedHistory.terminal.focus());
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});
+  await cdp.detach();
 }

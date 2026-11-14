@@ -12,6 +12,7 @@ export const ownedWorkspaces = {
   'packages/apple-speech': '@lazysh/apple-speech',
   'packages/apple-status': '@lazysh/apple-status',
   'packages/common': '@lazysh/common',
+  'packages/companion-release': '@lazysh/companion-release',
   'packages/credential-vault': '@lazysh/credential-vault',
   'packages/display-idle': '@lazysh/display-idle',
   'packages/et-transport': '@lazysh/et-transport',

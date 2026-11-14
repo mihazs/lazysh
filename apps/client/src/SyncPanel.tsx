@@ -6,7 +6,9 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   getPreferences,
+  keepDevicePreferences,
   parsePreferences,
+  syncablePreferences,
 } from "./preferences";
 
 type Scope = "settings" | "credentials";
@@ -192,7 +194,7 @@ export default function SyncPanel({
     if (result.preferences !== undefined) {
       const explicitLanguage=!!result.preferences && typeof result.preferences==='object' && Object.hasOwn(result.preferences,'uiLanguage');
       try {
-        await applyPreferenceIntent(result.preferences,explicitLanguage,()=>alive.current);
+        await applyPreferenceIntent(keepDevicePreferences(result.preferences,getPreferences()),explicitLanguage,()=>alive.current);
       } catch (error) {
         throw new LocalUiError(error instanceof PreferenceStorageError
           ? 'preferencesSettingsCouldNotBeSavedOnThisDevice' : 'nativeLocaleSaveFailed');
@@ -325,7 +327,7 @@ export default function SyncPanel({
                     await invoke("sync_push", {
                       scope,
                       ...(scope === "settings"
-                        ? { preferences: getPreferences() }
+                        ? { preferences: syncablePreferences(getPreferences()) }
                         : {}),
                     });
                     if (alive.current)

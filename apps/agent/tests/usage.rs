@@ -14,7 +14,11 @@ fn page(messages: Vec<Value>) -> TranscriptPage {
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
+        queued: Vec::new(),
+        work: None,
+        session: None,
     }
 }
 fn now() -> chrono::DateTime<Utc> {

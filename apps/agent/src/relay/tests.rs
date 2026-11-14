@@ -15,6 +15,7 @@ fn event(state: SessionState) -> Event {
         state,
         summary: "private-prompt-tool-transcript".into(),
         pane_id: Some("private-pane".into()),
+        waiting: None,
     }
 }
 fn enabled() -> (tempfile::TempDir, Store) {

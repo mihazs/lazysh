@@ -1,7 +1,7 @@
 import {expect,it} from 'vitest';
 import {NativeGui} from './fixture';
 import {SshFixture} from '../../../tests/support/sshFixture';
-import {openOwnedRememberedSsh,ownedSshGui} from './sshUi';
+import {openOwnedRememberedSsh,ownedSshGui,workspaceAction} from './sshUi';
 import {paneIdentity,probePane,tmuxClients} from './tmuxPane';
 
 const fixture=ownedSshGui();
@@ -47,6 +47,12 @@ it('restores the same durable tmux pane after the app is killed, only after expl
   await relaunched.waitUntil(async()=>paneIdentity(await restored.getText(),'BEFORE')===before,{timeout:20_000,timeoutMsg:'Restored display did not show the original pane output'});
   expect(await probePane(relaunched,restored,'AFTER','Restored pane identity was not observed')).toBe(before);
   expect(await clients()).toBe(1);
+
+  gui.stage='owned Sessions panel reports the host tmux version';
+  const version=(await ssh.tmux(['-V'])).trim().replace(/^tmux /,'');
+  await workspaceAction(gui,'Sessions');
+  const panel=await relaunched.$('[aria-label="Multiplexer workspaces"]');await panel.waitForDisplayed({timeout:20_000});
+  await relaunched.waitUntil(async()=>(await panel.getText()).includes(`tmux ${version} (`),{timeout:20_000,timeoutMsg:'Sessions panel did not show the real tmux version'});
   await gui.assertDisposableCredential('unchanged');
   expect(await gui.appOwner()).toEqual(owner);
   expect(gui.connections).toBe(0);

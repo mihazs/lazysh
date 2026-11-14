@@ -36,9 +36,12 @@ it('opens an explicitly selected owned Herdr agent session through the native re
   gui.stage='owned Herdr session selection';
   await (await browser.$('div[role="group"][aria-label="Session view"] button[aria-label="Agent"]')).click();
   const agentView=await browser.$('section.agent-view:not([hidden])');await agentView.waitForDisplayed({timeout:20_000});
-  const open=await agentView.$('button=Open conversation');await open.waitForDisplayed({timeout:20_000});await open.click();
+  const open=await agentView.$('button*=Open conversation');await open.waitForDisplayed({timeout:20_000});await open.click();
   try {await browser.waitUntil(async()=>(await agentView.getText()).includes('Owned resolver prompt'),{timeout:20_000});}
   catch {throw new Error('Owned Herdr conversation did not resolve: '+await agentView.getText());}
+  // The no-input caveat is not a standing paragraph; it waits behind the options button.
+  expect(await agentView.getText()).not.toContain('association with this pane is unverified');
+  await (await agentView.$('button[aria-label="Agent view options"]')).click();
   expect(await agentView.getText()).toContain('Herdr reports this session. Its association with this pane is unverified.');
   expect(await agentView.$('input[aria-label="Transcript path"]').isExisting()).toBe(false);
   expect(await agentView.$('[aria-label="Terminal input"]').isExisting()).toBe(false);

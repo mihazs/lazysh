@@ -20,11 +20,16 @@ this does not establish gesture behavior while those popups are open. Frontend
 tests check gesture routing, rejection and settings
 round-trips. Physical touch and mobile lifecycle acceptance remain open.
 
-This is the bounded Zellij tab/pane part of the reference client's documented
-hierarchy-aware gestures (source URL omitted). Tmux and Herdr
-navigation, workspace/session-level gestures and pane-zoom pinch bindings remain
-separate work. Current Zellij exposes `switch-session`, but lazysh does not yet
-use it or reconcile remembered attachment names after a host-side session switch.
+This is the Zellij-only part of the reference client's documented
+hierarchy-aware gestures (source URL omitted). The level-aware defaults and the
+**Next / previous multiplexer tab or window**, **Next / previous multiplexer
+pane** and **Zoom multiplexer pane** actions (the pane-zoom pinch) cover tmux and
+Herdr as well; see
+[Multiplexer gestures](shortcuts.md#multiplexer-gestures-header-pulls-and-long-press-keys).
+No gesture switches Herdr workspaces: use the [tab strip](#tab-strip) or the
+Workspaces screen. Current Zellij exposes `switch-session`, but lazysh does not
+yet use it or reconcile remembered attachment names after a host-side session
+switch.
 
 Open **Sessions** on an SSH connection. lazysh discovers tmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
 
@@ -91,6 +96,16 @@ tmux 3.2a lacks client loops and keeps ordinary terminal access without these
 advanced bindings. The client-loop capability was introduced in tmux 3.4; version
 strings alone never grant a binding.
 
+The Sessions panel shows each detected multiplexer's version with a **Supported**
+or **Limited** badge. Discovery reads `tmux -V`, `zellij --version` and
+`herdr --version`, none of which starts a server, and one table maps the version
+to what lazysh supports: tmux 3.4 or newer, Zellij 0.45.1 and Herdr 0.9.3 to
+0.9.5 are supported, and any other version is limited with a notice naming what
+it lacks. After a host reports tmux older than 3.4, Jump To is no longer offered
+for its tmux terminals. The badge is guidance; the client-loop check above still
+decides every binding. A host whose login shell is not POSIX `sh` (PowerShell or
+cmd on Windows OpenSSH) is reported as `unsupported_host_shell`.
+
 All application SSH session/direct-TCP channel openings retain ownership while awaiting SSH open
 confirmation, even if the caller locks or times out. Late confirmations are
 closed before PTY or command dispatch. At most four pending opens per verified
@@ -149,10 +164,25 @@ Finger swipes inside Herdr request retained pane history without sending wheel
 events or arrow keys to its program. This needs the optional guarded host's
 `lazysh.guard.observe` and `lazysh.guard.scroll_history` methods. Each request
 checks the original attached client, pane runtime and visible viewport. The
-first implementation supports its focused pane; other panes and older hosts
-report unavailable rather than changing an agent's selected option. Mouse wheels
+first implementation supports its focused pane; other panes of a guarded host
+report unavailable rather than changing an agent's selected option. A host
+that cannot serve guarded history at all, such as stock Herdr or an older
+guarded server that is still running, takes swipes as wheel input like before
+1.29.1 after the first swipe of a session: scrolling works with no error, but a
+swipe over an open agent question can still move its selected option. Mouse wheels
 keep their ordinary terminal behavior. Updating a host binary does not upgrade
 an already-running server; lazysh does not restart it automatically.
+
+The Agent view composer works on stock Herdr too. Where the guard is not
+available, Send runs `herdr --session NAME agent prompt PANE TEXT` over the
+host connection (Stop runs `agent send-keys PANE esc`). Herdr itself wraps the
+text in bracketed paste, presses Enter and refuses an agent that is waiting for
+an answer. lazysh first re-reads `herdr api snapshot` and sends only when exactly
+one live agent row carries the conversation's session id in the exact pane and
+terminal the conversation was opened from; no focus is involved and no companion
+is needed. The message is confirmed by the conversation showing it, and a failure
+after the command started is never resent. A guarded host keeps using the guarded
+input.
 
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.
@@ -231,6 +261,31 @@ device/runtime acceptance. Hiding/persisting this row remains separate work.
 
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
 
+## Tab strip
+
+An attached tmux, Herdr or Zellij terminal shows its tabs in one native row above the terminal (`MultiplexerTabStrip`). One backend-agnostic model feeds it (`multiplexerTabs.ts`: title, active, needs attention, agent state, and the guarded command a chip runs), read by `useMultiplexerStrip`:
+
+| Multiplexer | Reads | Leading chip | Chip tap runs |
+| --- | --- | --- | --- |
+| Herdr | `useHerdrNavigation` (`herdr_tree`, every 5 s while the terminal is shown) | The focused workspace; opens the list of workspaces, each with its agent state, and flags another workspace that needs attention | A fresh `herdr_tree`, then `herdr_action` `focusTab` / `focusWorkspace` only if the target still exists |
+| Zellij | `zellij_tabs` (`zellij action list-tabs --json`, Zellij 0.45 or newer; every 5 s) | The session name | `zellij_action` `goToTab` with the 1-based position |
+| tmux | The Jump To snapshot of the attached control stream (every 5 s) | The session name | `tmux_jump` with the snapshot's generation, so a stale list is refused |
+
+A selection is never typed into the terminal, never focuses an input (the soft keyboard stays as it was) and never resizes the terminal beyond the strip's own row. Chips are buttons in a labelled group, not `role="tab"`: session tabs are the workspace's only tabs. **Preferences > Keyboard and gestures > Show tab strip** (device-local): **Auto** shows the strip on phones when the session has more than one tab (Herdr: more than one tab or workspace) and the key toolbar is shown; **Always** shows it whenever the terminal is attached, on any screen; **Never** removes it and stops the reads. A multiplexer that cannot list its tabs (an older Zellij, a tmux terminal without the control stream) shows no strip. Not in this version: close, a Zellij rename (the command layer has neither) and the Herdr panes level.
+
+### New tab and rename
+
+The strip also changes tabs, only through the multiplexer's existing typed commands and only where the command layer has them:
+
+| Multiplexer | **+** (end of the row) runs | Long press, right click or the context-menu key runs |
+| --- | --- | --- |
+| Herdr | `herdr_action` `createTab` in the focused workspace, starting in the directory of that workspace's first reported pane (`.` when none is reported); the new tab is then focused | `renameTab` on a tab; `renameWorkspace` on a workspace of the leading chip's list |
+| Zellij | `zellij_action` `newTab` (Zellij focuses the new tab itself) | Nothing: there is no typed `rename-tab` |
+| tmux | `tmux_action` `createWindow` in the attached session, on the attached tmux server; the new window is then selected with `tmux_jump` | `renameWindow` |
+
+Either drops a small prompt over the terminal (it takes no layout space): a name, and for a new tab a directory (`.` is the shell's own start directory, as in the Spaces and tmux panels). The prompt is the one thing in the strip that opens the soft keyboard, on purpose, because the user is typing a name. A Herdr workspace or tab that has gone since the strip last read is refused, as a focus is, never renamed by guess. A failed command is reported and keeps the prompt open. A half-typed name ends only with Escape, Cancel or Save, so a stray tap on the terminal does not lose it. The long press is 0.5 s without moving more than 10 px; the tap that ends it does not also select the chip.
+
+
 ## Native checks
 
 With tmux, Herdr and Zellij installed on PATH:
@@ -244,7 +299,7 @@ The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run st
 The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
 
 ```sh
-bunx turbo run test:tmux --filter=@lazysh/client
+bunx moon run client-native:test-tmux
 ```
 
 `LAZYSH_TEST_TMUX` optionally selects a tmux binary. These native Cargo fixtures
@@ -314,7 +369,7 @@ runs compile it without executing it.
 
 The owned Cargo fixture
 `ssh::tmux_jump_fixture::real_tmux_jump_fresh_ssh_restores_same_durable_named_pane`
-is included in `bun run --cwd apps/client test:tmux`. It uses an isolated OpenSSH
+is included in `bunx moon run client-native:test-tmux`. It uses an isolated OpenSSH
 listener, ephemeral keys, private `TMUX_TMPDIR`, and two named servers with
 colliding session/window/pane IDs. It closes the original SSH transport, waits
 for native sessions and retained connection handles to retire, then uses a fresh

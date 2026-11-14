@@ -119,8 +119,8 @@ main-based worktree or let the release workflow run it. It deliberately fails
 when no fragments remain or initial versions disagree. If a later command
 fails, it does not publish or roll back files: inspect the failure and recreate
 the release worktree from main instead of repeatedly applying a partial plan.
-Version mutations run directly, outside Turbo's task cache. The installed Turbo
-documentation requires uncached treatment for tasks with external side effects.
+Version mutations run directly, outside moon's task cache, because a task with
+external side effects must stay uncached.
 
 ## GitHub prerequisites and review
 
@@ -132,6 +132,11 @@ App token is used when configured, otherwise the default GitHub token and its
 normal workflow-admission constraints apply. No registry token is needed. The
 generated PR body uses the repository's release review template and retains the
 pending publication gates.
+Before merging the version PR, confirm that the `main-verdict` workflow completed green for its
+base commit, the `main` tip the PR was generated from. Pull requests that each pass `checks` can
+still type-check or build badly once combined, and `checks` on `main` does not report for every
+commit, so the verdict (client `tsc -b` and build, companion compile check, release-tools tests) is
+the per-commit evidence; see [Main verdict](../CONTRIBUTING.md#main-verdict).
 Reviewers must record applicable checks and the highest consumed release impact.
 
 On 2026-10-26, the repository administrator enabled **Settings → Actions →

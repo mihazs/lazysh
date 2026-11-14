@@ -65,10 +65,10 @@ test('system and English persist, reset safely, and locale changes preserve the 
   const {screen,canvas}=await connectedTerminal(page);
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Language');
-  const language=page.getByRole('combobox',{name:'App language',exact:true});
+  const language=page.getByRole('group',{name:'App language',exact:true});
   await expect(language).toBeVisible();
-  expect(await language.locator('option').evaluateAll(options=>options.map(option=>(option as HTMLOptionElement).value))).toEqual(['system','en','pt-BR','es']);
-  await language.selectOption('en');await expect(page.locator('html')).toHaveAttribute('lang','en');
+  expect(await language.locator('input').evaluateAll(options=>options.map(option=>(option as HTMLInputElement).value))).toEqual(['system','en','pt-BR','es']);
+  await language.locator('input[value="en"]').check();await expect(page.locator('html')).toHaveAttribute('lang','en');
   expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
   expect(await page.evaluate(()=>window.localeFixture.calls.filter(name=>name==='local_connect'))).toHaveLength(1);
   expect(await page.evaluate(()=>window.localeFixture.calls.includes('local_disconnect'))).toBe(false);
@@ -76,7 +76,7 @@ test('system and English persist, reset safely, and locale changes preserve the 
   await page.reload();await expect(page.locator('html')).toHaveAttribute('lang','en');
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Language');
-  await expect(page.getByRole('combobox',{name:'App language',exact:true})).toHaveValue('en');
+  await expect(page.getByRole('group',{name:'App language',exact:true}).locator('input[value="en"]')).toBeChecked();
   await openPreferenceCategory(page,'Reset');
   await page.getByRole('button',{name:'Reset preferences',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
@@ -119,8 +119,8 @@ test('pseudo expansion preserves host drafts, native diagnostics, keyboard focus
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:pseudo.appCloseHosts,exact:true}).click();
   await (await workspaceControl(page,pseudo.appPreferences)).click();
   await openPreferenceCategory(page,'Language');
-  await expect(page.getByRole('combobox',{name:pseudo.language,exact:true})).toBeVisible();
-  expect(await page.getByRole('combobox',{name:pseudo.language,exact:true}).locator('option').evaluateAll(options=>options.map(option=>(option as HTMLOptionElement).value))).toEqual(['system','en','pt-BR','es']);
+  await expect(page.getByRole('group',{name:pseudo.language,exact:true})).toBeVisible();
+  expect(await page.getByRole('group',{name:pseudo.language,exact:true}).locator('input').evaluateAll(options=>options.map(option=>(option as HTMLInputElement).value))).toEqual(['system','en','pt-BR','es']);
   await openPreferenceCategory(page,'Input');
   await page.getByText(pseudo.preferencesTerminalTouchGestures,{exact:true}).click();
   await page.getByRole('combobox',{name:pseudo.gestureDoubleTap,exact:true}).selectOption('custom');
@@ -145,10 +145,10 @@ for(const locale of [
   const {screen,canvas:terminal}=await connectedTerminal(page);
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Language');
-  await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(locale.code);
+  await page.getByRole('group',{name:'App language',exact:true}).locator(`input[value="${locale.code}"]`).check();
   await expect(page.locator('html')).toHaveAttribute('lang',locale.code);
   await expect(page.getByRole('region',{name:locale.heading,exact:true})).toBeVisible();
-  await expect(page.getByRole('combobox',{name:locale.language,exact:true})).toHaveValue(locale.code);
+  await expect(page.getByRole('group',{name:locale.language,exact:true}).locator(`input[value="${locale.code}"]`)).toBeChecked();
   await openPreferenceCategory(page,'Appearance');
   const nativeStatus=page.getByRole('status').filter({hasText:nativeReason});
   await expect(nativeStatus).toBeVisible();
@@ -187,7 +187,7 @@ for(const locale of [
   await page.reload();await expect(page.locator('html')).toHaveAttribute('lang',locale.code);
   await (await workspaceControl(page,locale.preferences)).click();
   await openPreferenceCategory(page,'Language');
-  await expect(page.getByRole('combobox',{name:locale.language,exact:true})).toHaveValue(locale.code);
+  await expect(page.getByRole('group',{name:locale.language,exact:true}).locator(`input[value="${locale.code}"]`)).toBeChecked();
   await openPreferenceCategory(page,'Reset');
   await page.getByRole('button',{name:locale.reset,exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
@@ -202,8 +202,8 @@ for(const system of [
   await expect(page.locator('html')).toHaveAttribute('lang',system.locale);
   await (await workspaceControl(page,system.preferences)).click();
   await openPreferenceCategory(page,'Language');
-  await expect(page.getByRole('combobox',{name:system.language,exact:true})).toHaveValue('system');
-  await expect(page.getByRole('option',{name:system.system,exact:true})).toHaveAttribute('value','system');
+  await expect(page.getByRole('group',{name:system.language,exact:true}).locator('input[value="system"]')).toBeChecked();
+  await expect(page.getByRole('radio',{name:system.system,exact:true})).toHaveAttribute('value','system');
   expect(await page.evaluate(()=>localStorage.getItem('lazysh.preferences.v1'))).toBeNull();
 });
 

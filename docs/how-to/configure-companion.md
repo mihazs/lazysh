@@ -6,9 +6,13 @@ Add agent visibility to an existing verified SSH connection. You need an agent a
 
 1. Read [companion distribution and verification](../install-and-update.md#remote-companion-executables). Use a published release that actually contains the required executable and installation command; source support does not establish availability. Public v0.23.0 has no companion assets and is not backfilled.
 2. In the native app, connect to the host and open **Agents → Host companion installation → Install companion**. On an existing installation, expand that section and choose **Update companion**.
-3. Wait for installed-version and byte verification before treating installation as successful. An interrupted or unconfirmed attempt is not a rollback; retry verifies again. Temporary files may remain after a lost connection, and cleanup does not remove the managed installation.
+3. Wait for the host's result and the app's own check of the installed version before treating installation as successful. An interrupted or unconfirmed attempt is not a rollback; retry verifies again.
 
-The app verifies the current stable download, transfers it over the existing SSH connection and installs it in the user's managed location. Installation needs SFTP and supports Linux x64/ARM64 and macOS Intel/ARM64 hosts. Native Windows installation remains [issue #490](https://github.com/mihazs/lazysh/issues/490). The app prefers this managed executable but preserves existing PATH installations, including SSH hosts without SFTP. Installation does not modify PATH, hooks, settings or event data and requires no extra credentials or shell command. The managed binary is not thereby a global `lazysh-agent` command. Its user-data location follows the remote environment: on Linux an absolute `XDG_DATA_HOME` (otherwise `~/.local/share`), and on macOS `~/Library/Application Support`, followed by `lazysh/companion/lazysh-agent`. Do not assume that installation data and the separate event-state directory are the same location.
+**The host downloads the companion, not the phone.** The app fetches only the small release metadata and verifies it (the tag's commit, the release manifest and GitHub's digest for the asset), then sends the host a pin: the version, the exact size and the SHA-256. The host downloads that one file over HTTPS with its own `curl` or GNU `wget`, checks the exact size and digest before anything runs, runs the new executable once in a cleared environment (`--version` and a lifecycle event round trip), keeps the previous companion as `lazysh-agent.previous` and replaces the managed executable atomically. If the check after the replace fails, the previous companion is put back. A newer companion already on the host is never replaced, a file that is not the pinned one is discarded, and nothing uses `sudo`. The panel shows the host's download progress and each step. Companions without an `update` command (1.28.0 onwards) are updated this way; the app does not need SFTP for it.
+
+The host therefore needs outbound HTTPS to `github.com`, `curl` or GNU `wget` (BusyBox `wget` is refused because it may not check certificates) and `sha256sum` or `shasum`. If it cannot reach GitHub or lacks those tools, the panel shows a separate button, **Install through this device**. That is the previous behavior, kept only as an explicit offline fallback: this device downloads the 9 to 12 MB companion, verifies it and uploads it over SFTP, so it uses the device's data and needs SFTP. It is never used unless you press it. Failures from the host are named in the panel (for example a downloaded file that did not match the release, a companion that failed its self test, or another update already running) and none of them leaves a partial installation.
+
+The managed location supports Linux x64/ARM64 and macOS Intel/ARM64 hosts. Native Windows installation remains [issue #490](https://github.com/mihazs/lazysh/issues/490). The app prefers this managed executable but preserves existing PATH installations, including SSH hosts without SFTP. Installation does not modify PATH, hooks, settings or event data and requires no extra credentials or shell command. The managed binary is not thereby a global `lazysh-agent` command. Its user-data location follows the remote environment: on Linux an absolute `XDG_DATA_HOME` (otherwise `~/.local/share`), and on macOS `~/Library/Application Support`, followed by `lazysh/companion/lazysh-agent`. Do not assume that installation data and the separate event-state directory are the same location.
 
 For a source installation instead, run these commands **on the remote host from a trusted repository checkout**, with Rust stable installed:
 
@@ -18,6 +22,28 @@ lazysh-agent snapshot --limit 50
 ```
 
 For this source/PATH installation, make `lazysh-agent` available on the noninteractive SSH PATH. The shell commands below assume that PATH installation; with a managed-only installation, use the app controls or invoke its verified absolute executable path explicitly. A new store can return an empty session list; that confirms a snapshot read, not a running agent.
+
+## Update the companion on the host (planned)
+
+**Not released yet.** Epic [#1441](https://github.com/mihazs/lazysh/issues/1441) moves the update onto the host; [ADR 0003](../architecture/adr-0003-host-side-companion-update.md) fixes the design. Until it ships, **Update companion** downloads the executable on the device as described above.
+
+What will change, and what stays the same:
+
+- **No download on the phone.** The app fetches only the small release metadata (at most 344,064 bytes) and tells the host which version, size and SHA-256 to install. The host downloads the release over its own network, over HTTPS with certificate verification, checks the size and the pinned SHA-256 before it runs anything, tests the new executable, keeps the previous one and replaces the managed executable atomically. The host needs outbound HTTPS to GitHub, no `sudo` and no extra credentials. It only ever writes the user's managed `lazysh/companion` location, never a PATH copy.
+- **Old companions.** A companion without the new `update` command (for example 1.28.0) is updated by a short fixed script that the app runs over SSH: `sh` with `curl` or GNU `wget` on Linux and macOS, PowerShell on Windows. It needs `curl` or GNU `wget` and `sha256sum` or `shasum`.
+- **Host has no internet.** The app then offers a separate, clearly labelled **Install through this device** action, which keeps today's behavior (the device downloads about 9 to 12 MB and uploads it over SFTP). It is never used unless you choose it.
+- **From the host terminal**, with a PATH or managed executable that has the command:
+
+  ```sh
+  lazysh-agent update --check     # exit 0 up to date, 10 update available
+  lazysh-agent update --dry-run   # download, verify and test, change nothing
+  lazysh-agent update --yes       # install the latest stable release
+  lazysh-agent update --rollback --yes
+  lazysh-agent update --status --json
+  ```
+
+  Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
+- **Automatic updates.** A companion setting chooses `off`, `notify` (the host checks for a newer release at most once per interval, the app shows an update-available badge, nothing is replaced) or `install` (the planned default, on since 2026-11-13: replaces when a newer release is out or a newer lazysh app connects, only when no agent turn is active and that version has not already failed). `lazysh-agent auto-update enable` can add a user-level timer (systemd user timer, launchd agent or Scheduled Task); it never uses `sudo`. See [host settings](../companion-settings.md#companion-updates-planned).
 
 ## Enable reporting deliberately
 

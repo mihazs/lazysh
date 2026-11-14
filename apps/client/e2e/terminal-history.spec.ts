@@ -1,6 +1,7 @@
 import {expect,test,type Page} from '@playwright/test';
 import {closePreferences,openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import {historyLines,historyView,mountHistory,rowHeight,scrollHistory,settle} from './fixtures/terminalHistory';
+import {pressMore} from './fixtures/toolbarMore';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 const id=(text:string)=>Number(/HISTORY_(\d{4})/.exec(text)?.[1]);
@@ -90,11 +91,9 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
     const size=page.viewportSize()!;
     const sizes=[{width:size.width,height:size.height-300},size,{width:size.width-120,height:size.height},size,{width:size.width-120,height:size.height-300},size];
     for(const [step,next] of sizes.entries()) {
-      const geometry=await historyView(page),width=page.viewportSize()!.width;
+      const geometry=await historyView(page);
       await page.setViewportSize(next);
-      // On a phone, a height-only Mosh change is a soft keyboard: the remote screen keeps its rows.
-      if(mosh&&testInfo.project.name==='phone'&&next.width===width){await settle(page);expect(await historyView(page)).toMatchObject({rows:geometry.rows,cols:geometry.cols});}
-      else await expect.poll(async()=>{const view=await historyView(page);return view.rows!==geometry.rows||view.cols!==geometry.cols;}).toBe(true);
+      await expect.poll(async()=>{const view=await historyView(page);return view.rows!==geometry.rows||view.cols!==geometry.cols;}).toBe(true);
       // Output arriving right after the resize must not move the reader either.
       await output(page,historyLines(5,4000+step*5));await settle(page);
       const view=await historyView(page);
@@ -109,12 +108,9 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
     await mountHistory(page,mosh);
     await output(page,historyLines(300));await settle(page);
     const size=page.viewportSize()!,keyboard={width:size.width,height:size.height-300};
-    // A phone's soft keyboard leaves the remote Mosh rows unchanged.
-    const held=mosh&&testInfo.project.name==='phone';
     const resize=async(next:{width:number;height:number})=>{
       const rows=(await historyView(page)).rows;await page.setViewportSize(next);
-      if(held){await settle(page);expect((await historyView(page)).rows).toBe(rows);}
-      else {await expect.poll(async()=>(await historyView(page)).rows).not.toBe(rows);await settle(page);}
+      await expect.poll(async()=>(await historyView(page)).rows).not.toBe(rows);await settle(page);
     };
     await resize(keyboard);
     await scrollHistory(page,testInfo.project.name==='phone',5);
@@ -143,7 +139,7 @@ test('History lines bounds local scrollback, applies live and Find reports trimm
   // Find stays open: opening it later would shrink the rows and trim more history.
   const toolbar=page.getByRole('button',{name:'Show keys',exact:true});
   if(await toolbar.isVisible())await toolbar.click();
-  await page.getByRole('button',{name:'Find',exact:true}).click();
+  await pressMore(page,'Find');
   const search=page.locator('.terminal-search input'),status=page.locator('.terminal-search [role="status"]');
   await expect(search).toBeVisible();await settle(page);
   const rows=(await historyView(page)).rows;

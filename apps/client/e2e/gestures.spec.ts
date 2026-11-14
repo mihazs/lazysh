@@ -1,10 +1,10 @@
-import {expect,test,type CDPSession,type Page,type TestInfo} from '@playwright/test';
+import {expect,test,type Page} from '@playwright/test';
+import {touchscreen,type Point} from './fixtures/touchscreen';
 import {openHistoryWorkspace} from './fixtures/terminalHistory';
 import {closePreferences,openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import type {mountGestureHarness} from './fixtures/GestureHarness';
 import type {MultiplexerKind} from '../src/bridge';
 declare global {interface Window {gestures:ReturnType<typeof mountGestureHarness>}}
-type Point={x:number;y:number};
 
 test.afterEach(async({page})=>{await page.evaluate(()=>window.gestures?.dispose());});
 
@@ -18,19 +18,6 @@ async function mount(page:Page,kind?:MultiplexerKind) {
 const recorded=(page:Page)=>page.evaluate(()=>({steps:window.gestures.steps,zellij:window.gestures.zellij,sessions:window.gestures.sessions,errors:window.gestures.errors}));
 const fontSize=(page:Page)=>page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')??'{"fontSize":14}').fontSize as number);
 
-/** Real browser touch input; the desktop project emulates a touch screen for the same gestures. */
-async function touchscreen(page:Page,testInfo:TestInfo) {
-  const cdp=await page.context().newCDPSession(page);
-  if(testInfo.project.name==='desktop')await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5});
-  const send=(type:'touchStart'|'touchMove'|'touchEnd',points:Point[])=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:points.map((point,id)=>({...point,id}))});
-  /** Moves every finger from its start to its end in even steps, then lifts them all. */
-  const gesture=async(from:Point[],to:Point[],steps=8)=>{
-    await send('touchStart',from);
-    for(let step=1;step<=steps;step++)await send('touchMove',from.map((point,index)=>({x:point.x+(to[index].x-point.x)*step/steps,y:point.y+(to[index].y-point.y)*step/steps})));
-    await send('touchEnd',[]);
-  };
-  return {cdp,send,gesture};
-}
 async function canvasCenter(page:Page):Promise<Point> {
   const box=(await page.locator('.terminal-canvas').boundingBox())!;
   return {x:box.x+box.width/2,y:box.y+box.height/2};

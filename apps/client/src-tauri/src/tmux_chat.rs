@@ -148,7 +148,7 @@ impl Action {
             Self::Release { .. } => Ok(()),
             Self::Input { source, input, .. } => {
                 source.validate()?;
-                input.validate()
+                input.validate_for(source)
             }
         }
     }
@@ -156,14 +156,48 @@ impl Action {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
-    Send { text: String },
+    Send {
+        text: String,
+    },
     RequestStop,
+    /// One option of a numbered dialog: Claude Code's key for it is the digit alone, no Enter (verified on 2.1.318).
+    Select {
+        option: u8,
+        of: u8,
+    },
+    /// Confirms a multi-select list of `of` options: Claude Code puts its Submit row after "Type something".
+    Submit {
+        of: u8,
+    },
+    /// A prompt longer than `Send` takes: up to `LONG_MAX` bytes as one bracketed paste, then Enter.
+    SendLong {
+        text: String,
+    },
+    /// One Shift+Tab, Claude Code's permission-mode cycle (profile `claude-2.1`). The reply reads the mode back off the status line.
+    CycleMode {},
+    /// Moves the highlight of a list dialog by `rows` (negative is up) and, with `enter`, presses Enter: how a person chooses a row.
+    Pick {
+        rows: i8,
+        enter: bool,
+    },
 }
+/// What `Send` takes in one tmux command.
+const SEND_MAX: usize = 4096;
+/// What `SendLong` takes: bounded, never split into several messages. Only tmux has this kind.
+pub(crate) const LONG_MAX: usize = 64 * 1024;
+/// Payload bytes one tmux command carries while a long prompt is assembled in a private paste buffer.
+const CHUNK: usize = 4096;
+/// Rows one `pick` may move: far more than any dialog list shows at once.
+const PICK_ROWS: i8 = 30;
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Self::Send { text } = self {
-            if text.is_empty()
-                || text.len() > 4096
+        if let Self::Send { text } | Self::SendLong { text } = self {
+            let range = if matches!(self, Self::Send { .. }) {
+                1..=SEND_MAX
+            } else {
+                SEND_MAX + 1..=LONG_MAX
+            };
+            if !range.contains(&text.len())
                 || text.chars().any(|c| {
                     (c.is_control() && !matches!(c, '\n' | '\t'))
                         || matches!(c, '\u{2028}' | '\u{2029}')
@@ -172,11 +206,39 @@ impl Input {
                 return Err(invalid());
             }
         }
+        // Digits 1-9 are the only option keys; a dialog with more options stays in the terminal.
+        match self {
+            Self::Select { option, of } if !(1..=9).contains(of) || !(1..=*of).contains(option) => {
+                return Err(invalid())
+            }
+            Self::Submit { of } if !(1..=8).contains(of) => return Err(invalid()),
+            Self::Pick { rows, enter }
+                if !(-PICK_ROWS..=PICK_ROWS).contains(rows) || (*rows == 0 && !enter) =>
+            {
+                return Err(invalid())
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    /// A key profile belongs to one agent: its bytes are never sent to another program.
+    pub(crate) fn validate_for(&self, source: &Source) -> Result<()> {
+        self.validate()?;
+        if matches!(self, Self::CycleMode {}) && source.agent != Agent::Claude {
+            return Err(invalid());
+        }
         Ok(())
     }
     fn paste_text(&self) -> Option<&str> {
         match self {
             Self::Send { text } if text.contains(['\n', '\t']) => Some(text),
+            _ => None,
+        }
+    }
+    /// Only `SendLong` is assembled in chunks; it has no key form. `pasted` adds the prompts an agent takes only as a paste.
+    fn long_text(&self) -> Option<&str> {
+        match self {
+            Self::SendLong { text } => Some(text),
             _ => None,
         }
     }
@@ -196,11 +258,64 @@ impl Input {
                 format!("send-keys -t {pane} -H {bytes} 0d")
             }
             Self::RequestStop => format!("send-keys -t {pane} Escape"),
+            Self::Select { option, .. } => format!("send-keys -t {pane} -H {:02x}", b'0' + option),
+            Self::Submit { of } => format!(
+                "send-keys -t {pane} {}Enter",
+                "Down ".repeat(usize::from(*of) + 1)
+            ),
+            Self::SendLong { .. } => return Err(invalid()),
+            Self::CycleMode {} => format!("send-keys -t {pane} -H 1b 5b 5a"),
+            Self::Pick { rows, enter } => format!(
+                "send-keys -t {pane} {}{}",
+                if *rows < 0 { "Up " } else { "Down " }.repeat(usize::from(rows.unsigned_abs())),
+                if *enter { "Enter" } else { "" }
+            )
+            .trim_end()
+            .to_owned(),
         };
         Ok(command)
     }
 }
 
+/// The text written as one bracketed paste followed by Enter: a long prompt for every agent, and every prompt for OpenCode,
+/// whose prompt box drops a short prompt written as a burst of keys (checked on OpenCode 2.2.7; a paste arrives whole).
+fn pasted<'a>(agent: &Agent, input: &'a Input) -> Option<&'a str> {
+    match input {
+        Input::Send { text } if *agent == Agent::Opencode => Some(text),
+        _ => input.long_text(),
+    }
+}
+
+/// Every payload byte is decoded once by tmux from `\ooo`, never read as a shell/control-line token.
+fn octal(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("\\{b:03o}")).collect()
+}
+fn report(marker: &str, state: &str) -> String {
+    format!(
+        "display-message -p {}",
+        ssh::quote(&format!("{marker}:{state}"))
+    )
+}
+/// A tmux command line is bounded: whatever carries payload must fit and stay one ASCII line.
+fn bounded(command: String) -> Result<String> {
+    if command.len() + 1 > 32 * 1024 || !command.is_ascii() || command.contains(['\r', '\n']) {
+        return Err(invalid());
+    }
+    Ok(command)
+}
+/// Paste the named buffer, then Enter. Both buffer hooks can change context: recheck before paste AND before CR.
+fn paste_stage(guard: &str, pane: &str, buffer: &str, marker: &str) -> String {
+    let (guard, pane) = (ssh::quote(guard), ssh::quote(pane));
+    let submit = format!(
+        "if-shell -F {guard} {{ send-keys -t {pane} -H 0d; {} }} {{ {} }}",
+        report(marker, "ok"),
+        report(marker, "partial")
+    );
+    format!(
+        "if-shell -F {guard} {{ paste-buffer -p -r -d -b {buffer} -t {pane}; {submit} }} {{ delete-buffer -b {buffer}; {} }}",
+        report(marker, "gone")
+    )
+}
 fn paste_command(
     guard: &str,
     pane: &str,
@@ -208,38 +323,35 @@ fn paste_command(
     buffer: &str,
     marker: &str,
 ) -> Result<String> {
-    let octal = text
-        .as_bytes()
-        .iter()
-        .map(|b| format!("\\{b:03o}"))
-        .collect::<String>();
-    let guard = ssh::quote(guard);
-    let pane = ssh::quote(pane);
-    let report = |state| {
-        format!(
-            "display-message -p {}",
-            ssh::quote(&format!("{marker}:{state}"))
-        )
+    bounded(format!(
+        "if-shell -F {} {{ set-buffer -b {buffer} -- \"{}\"; {} }} {{ {} }}",
+        ssh::quote(guard),
+        octal(text.as_bytes()),
+        paste_stage(guard, pane, buffer, marker),
+        report(marker, "gone")
+    ))
+}
+/// One step of a long prompt: add a chunk to the private buffer while the context still matches. Once the buffer exists a
+/// changed context deletes it, so nothing of the prompt stays behind when the terminal is no longer the destination.
+fn append_command(
+    guard: &str,
+    buffer: &str,
+    chunk: &[u8],
+    marker: &str,
+    existing: bool,
+) -> Result<String> {
+    let gone = if existing {
+        format!("delete-buffer -b {buffer}; {}", report(marker, "gone"))
+    } else {
+        report(marker, "gone")
     };
-    // Every payload byte is decoded once by tmux, never a shell/control-line token.
-    // Both buffer hooks can change context: recheck before paste AND before CR.
-    let submit = format!(
-        "if-shell -F {guard} {{ send-keys -t {pane} -H 0d; {} }} {{ {} }}",
-        report("ok"),
-        report("partial")
-    );
-    let paste = format!(
-        "if-shell -F {guard} {{ paste-buffer -p -r -d -b {buffer} -t {pane}; {submit} }} {{ delete-buffer -b {buffer}; {} }}",
-        report("gone")
-    );
-    let command = format!(
-        "if-shell -F {guard} {{ set-buffer -b {buffer} -- \"{octal}\"; {paste} }} {{ {} }}",
-        report("gone")
-    );
-    if command.len() + 1 > 32 * 1024 || !command.is_ascii() || command.contains(['\r', '\n']) {
-        return Err(invalid());
-    }
-    Ok(command)
+    bounded(format!(
+        "if-shell -F {} {{ set-buffer {}-b {buffer} -- \"{}\"; {} }} {{ {gone} }}",
+        ssh::quote(guard),
+        if existing { "-a " } else { "" },
+        octal(chunk),
+        report(marker, "ok")
+    ))
 }
 #[derive(Serialize)]
 #[serde(
@@ -262,7 +374,51 @@ pub enum Reply {
     Released,
     Delivered {
         next_operation: u32,
+        /// Only for `cycle_mode`: the permission mode the status line showed afterwards.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<Mode>,
     },
+}
+/// Claude Code's permission modes as its status line names them; `Unconfirmed` is any screen the profile does not recognise.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    Default,
+    AcceptEdits,
+    Plan,
+    Auto,
+    BypassPermissions,
+    Unconfirmed,
+}
+/// Profile `claude-2.1` (verified on 2.1.318): the status line under the prompt box starts with a glyph, then the mode.
+const MODE_LABELS: [(&str, Mode); 5] = [
+    ("manual mode on", Mode::Default),
+    ("accept edits on", Mode::AcceptEdits),
+    ("plan mode on", Mode::Plan),
+    ("auto mode on", Mode::Auto),
+    ("bypass permissions on", Mode::BypassPermissions),
+];
+/// The mode shown on the last few lines of a pane. Text the agent printed higher up is never read, and two different
+/// modes on those lines are no answer at all.
+fn mode_on_screen(rows: &[String]) -> Mode {
+    let mut found = None;
+    for row in rows
+        .iter()
+        .rev()
+        .filter(|row| !row.trim().is_empty())
+        .take(6)
+    {
+        let label = row.trim_start_matches(|c: char| c == ' ' || !c.is_ascii());
+        for (text, mode) in MODE_LABELS {
+            if label.starts_with(text) && row.trim_start() != label {
+                if found.is_some_and(|seen| seen != mode) {
+                    return Mode::Unconfirmed;
+                }
+                found = Some(mode);
+            }
+        }
+    }
+    found.unwrap_or(Mode::Unconfirmed)
 }
 pub(super) struct Receipt {
     token: String,
@@ -388,6 +544,7 @@ impl Control {
     async fn chat_dispatch(
         &mut self,
         target: &Destination,
+        agent: &Agent,
         input: &Input,
         budget: &mut usize,
     ) -> Result<()> {
@@ -423,7 +580,9 @@ impl Control {
             format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}");
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
         input.validate()?;
-        let delivered = if let Some(text) = input.paste_text() {
+        let delivered = if let Some(text) = pasted(agent, input) {
+            self.paste_long(&guard, &target.pane_id, text, budget).await
+        } else if let Some(text) = input.paste_text() {
             let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
             let command = paste_command(&guard, &target.pane_id, text, &buffer, &marker)?;
             // Partial/error/cancelled streams still retire; never resync to clean a buffer.
@@ -433,6 +592,42 @@ impl Control {
                 .await
         };
         delivered?.then_some(()).ok_or_else(stale)
+    }
+    /// Fill a private buffer chunk by chunk, each step re-checking the destination, then paste it and press Enter once.
+    /// `false` means a step found the destination changed and nothing was pasted.
+    async fn paste_long(
+        &mut self,
+        guard: &str,
+        pane: &str,
+        text: &str,
+        budget: &mut usize,
+    ) -> Result<bool> {
+        let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
+        for (index, chunk) in text.as_bytes().chunks(CHUNK).enumerate() {
+            let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
+            let command = append_command(guard, &buffer, chunk, &marker, index > 0)?;
+            if !self.marked_dispatch(&command, &marker, budget).await? {
+                return Ok(false);
+            }
+        }
+        let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
+        let command = bounded(paste_stage(guard, pane, &buffer, &marker))?;
+        self.marked_dispatch(&command, &marker, budget).await
+    }
+    /// Read the permission mode back off the pane once the TUI had time to repaint.
+    async fn read_mode(&mut self, pane: &str, budget: &mut usize) -> Result<Mode> {
+        let mut mode = Mode::Unconfirmed;
+        for wait in [300, 500] {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+            let rows = self
+                .command(&format!("capture-pane -p -t {pane}"), budget)
+                .await?;
+            mode = mode_on_screen(&rows);
+            if mode != Mode::Unconfirmed {
+                break;
+            }
+        }
+        Ok(mode)
     }
     pub(super) async fn chat_action(
         &mut self,
@@ -499,7 +694,7 @@ impl Control {
                     return Err(stale());
                 }
                 bound.owner.check().map_err(|_| stale())?;
-                input.validate()?;
+                input.validate_for(&bound.source)?;
                 self.chat_ready(&bound.destination, budget).await?;
                 bound.owner.check().map_err(|_| stale())?;
                 lease.check()?;
@@ -513,12 +708,22 @@ impl Control {
                 }
                 // Dispatch cutoff: after this write begins, cancellation cannot
                 // recall bytes. A failed/partial response retires the actor.
-                self.chat_dispatch(&bound.destination, &input, budget)
+                self.chat_dispatch(&bound.destination, &bound.source.agent, &input, budget)
                     .await?;
+                // The key has no echo of its own: the status line is the only proof of where the cycle landed.
+                let mode = match input {
+                    Input::CycleMode {} => {
+                        Some(self.read_mode(&bound.destination.pane_id, budget).await?)
+                    }
+                    _ => None,
+                };
                 bound.owner.check()?;
                 let next_operation = bound.next;
                 self.chat = Some(bound);
-                Ok(Reply::Delivered { next_operation })
+                Ok(Reply::Delivered {
+                    next_operation,
+                    mode,
+                })
             }
         }
     }
@@ -679,6 +884,65 @@ mod tests {
         }
     }
     #[test]
+    fn the_mode_cycle_is_one_shift_tab_for_claude_only() {
+        assert_eq!(
+            Input::CycleMode {}.keys("%12").unwrap(),
+            "send-keys -t %12 -H 1b 5b 5a"
+        );
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"cycle_mode","times":3}"#).is_err());
+        let claude = ordinary_source();
+        let mut codex = ordinary_source();
+        codex.agent = Agent::Codex;
+        assert!(Input::CycleMode {}.validate_for(&claude).is_ok());
+        assert!(Input::CycleMode {}.validate_for(&codex).is_err());
+        assert!(Input::RequestStop.validate_for(&codex).is_ok());
+    }
+    #[test]
+    fn the_mode_is_read_from_the_status_line_and_nowhere_else() {
+        let screen = |rows: &[&str]| rows.iter().map(|row| row.to_string()).collect::<Vec<_>>();
+        let shows = |status: &str| {
+            mode_on_screen(&screen(&[
+                "answer text",
+                "─────────",
+                "❯ ",
+                "─────────",
+                status,
+                "",
+                "",
+            ]))
+        };
+        assert_eq!(shows("  ⏸ manual mode on · ? for shortcuts"), Mode::Default);
+        assert_eq!(
+            shows("  ⏵⏵ accept edits on (shift+tab to cycle)"),
+            Mode::AcceptEdits
+        );
+        assert_eq!(
+            shows("  ⏸ plan mode on (shift+tab to cycle)  ◐ medium"),
+            Mode::Plan
+        );
+        assert_eq!(
+            shows("  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"),
+            Mode::Auto
+        );
+        assert_eq!(
+            shows("  ⏵⏵ bypass permissions on (shift+tab to cycle)"),
+            Mode::BypassPermissions
+        );
+        // Unknown wording, or no status line at all, confirms nothing.
+        assert_eq!(shows("  ? for shortcuts"), Mode::Unconfirmed);
+        assert_eq!(mode_on_screen(&[]), Mode::Unconfirmed);
+        // Words the agent or the user wrote are not a status line: no glyph before them, or too far up the screen.
+        assert_eq!(shows("plan mode on"), Mode::Unconfirmed);
+        let mut old = screen(&["  ⏸ plan mode on"]);
+        old.extend((0..10).map(|n| format!("later line {n}")));
+        assert_eq!(mode_on_screen(&old), Mode::Unconfirmed);
+        // Two different modes on the last lines are ambiguous.
+        assert_eq!(
+            mode_on_screen(&screen(&["  ⏸ plan mode on", "  ⏵⏵ auto mode on"])),
+            Mode::Unconfirmed
+        );
+    }
+    #[test]
     fn single_line_input_is_literal_and_terminal_keys_are_fixed() {
         let input = Input::Send {
             text: "é; '$#{pane_id}\\ 界".into(),
@@ -713,11 +977,247 @@ mod tests {
         .keys("%12")
         .is_ok());
         assert!(serde_json::from_str::<Input>(r#"{"kind":"send","text":"\ud800"}"#).is_err());
+        assert_eq!(
+            Input::Select { option: 3, of: 4 }.keys("%12").unwrap(),
+            "send-keys -t %12 -H 33"
+        );
+        for (option, of) in [(0, 3), (4, 3), (1, 0), (10, 10), (1, 10)] {
+            assert!(
+                Input::Select { option, of }.keys("%12").is_err(),
+                "{option} of {of}"
+            );
+        }
+        assert_eq!(
+            Input::Submit { of: 3 }.keys("%12").unwrap(),
+            "send-keys -t %12 Down Down Down Down Enter"
+        );
+        for of in [0, 9] {
+            assert!(Input::Submit { of }.keys("%12").is_err(), "{of}");
+        }
+        for (rows, enter, keys) in [
+            (2, true, "send-keys -t %12 Down Down Enter"),
+            (-1, true, "send-keys -t %12 Up Enter"),
+            (0, true, "send-keys -t %12 Enter"),
+            (3, false, "send-keys -t %12 Down Down Down"),
+            (-2, false, "send-keys -t %12 Up Up"),
+        ] {
+            assert_eq!(Input::Pick { rows, enter }.keys("%12").unwrap(), keys);
+        }
+        // Nothing to send, or further than any list is long, is refused.
+        for (rows, enter) in [
+            (0, false),
+            (-31, true),
+            (31, false),
+            (i8::MIN, true),
+            (i8::MAX, true),
+        ] {
+            assert!(
+                Input::Pick { rows, enter }.keys("%12").is_err(),
+                "{rows} {enter}"
+            );
+        }
+        assert!(
+            serde_json::from_str::<Input>(r#"{"kind":"pick","rows":128,"enter":true}"#).is_err()
+        );
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"pick","rows":1}"#).is_err());
+        assert!(serde_json::from_str::<Input>(
+            r#"{"kind":"pick","rows":1,"enter":true,"keys":"x"}"#
+        )
+        .is_err());
+        assert!(
+            serde_json::from_str::<Input>(r#"{"kind":"select","option":1,"of":2,"keys":"x"}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"select","option":-1,"of":2}"#).is_err());
         assert!(
             serde_json::from_str::<Action>(r#"{"kind":"gate","before_dispatch":false}"#).is_err()
         );
     }
 
+    /// The bytes a program reading raw input in a real tmux pane receives when `input` is sent to it.
+    fn bytes_received_by_a_real_pane(input: Input, expected: usize) -> Option<String> {
+        use std::{
+            process::Command,
+            time::{Duration, Instant},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("tmux.sock");
+        let tmux = |args: &[&str]| {
+            Command::new("tmux")
+                .arg("-S")
+                .arg(&socket)
+                .args(args)
+                .output()
+        };
+        let (ready, output) = (dir.path().join("ready"), dir.path().join("keys.txt"));
+        let program = format!(
+            "stty raw -echo; touch {}; head -c {expected} | od -An -tx1 > {}; sleep 2",
+            ready.display(),
+            output.display()
+        );
+        match tmux(&[
+            "new-session",
+            "-d",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            "sh",
+            "-c",
+            &program,
+        ]) {
+            Ok(started) if started.status.success() => {}
+            _ => {
+                eprintln!("tmux is not available; skipped");
+                return None;
+            }
+        }
+        let wait = |path: &std::path::Path| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !path.exists()
+                || std::fs::read_to_string(path)
+                    .is_ok_and(|text| path == output && text.trim().is_empty())
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "{} never appeared",
+                    path.display()
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        wait(&ready);
+        let keys = input.keys("%0").unwrap();
+        let sent = tmux(&keys.split(' ').collect::<Vec<_>>()).unwrap();
+        assert!(
+            sent.status.success(),
+            "{}",
+            String::from_utf8_lossy(&sent.stderr)
+        );
+        wait(&output);
+        let received = std::fs::read_to_string(&output).unwrap();
+        let _ = tmux(&["kill-server"]);
+        Some(received.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    /// The generated command, run by a real tmux, gives a program reading the pane exactly one digit and no Enter.
+    #[test]
+    fn select_reaches_a_real_pane_as_one_digit_without_enter() {
+        if let Some(received) = bytes_received_by_a_real_pane(Input::Select { option: 2, of: 3 }, 1)
+        {
+            assert_eq!(received, "32", "the option digit and nothing else");
+        }
+    }
+
+    /// Arrows, then Enter only when asked, and nothing else: the keys a person presses to choose a row of a list dialog.
+    #[test]
+    fn pick_reaches_a_real_pane_as_arrows_then_enter() {
+        if let Some(received) = bytes_received_by_a_real_pane(
+            Input::Pick {
+                rows: 2,
+                enter: true,
+            },
+            7,
+        ) {
+            assert_eq!(received, "1b 5b 42 1b 5b 42 0d");
+        }
+        if let Some(received) = bytes_received_by_a_real_pane(
+            Input::Pick {
+                rows: -1,
+                enter: false,
+            },
+            3,
+        ) {
+            assert_eq!(received, "1b 5b 41");
+        }
+    }
+
+    #[test]
+    fn opencode_takes_every_prompt_as_a_paste_and_other_agents_only_the_long_ones() {
+        let short = Input::Send {
+            text: "hello".into(),
+        };
+        let long = Input::SendLong {
+            text: "x".repeat(5000),
+        };
+        for agent in [Agent::Claude, Agent::Codex, Agent::GrokAcp] {
+            assert_eq!(
+                pasted(&agent, &short),
+                None,
+                "{agent:?} types a short prompt"
+            );
+            assert_eq!(pasted(&agent, &long).map(str::len), Some(5000));
+        }
+        assert_eq!(pasted(&Agent::Opencode, &short), Some("hello"));
+        assert_eq!(pasted(&Agent::Opencode, &long).map(str::len), Some(5000));
+        // Keys other than prompts stay keys for every agent.
+        for input in [Input::RequestStop, Input::Select { option: 1, of: 2 }] {
+            assert_eq!(pasted(&Agent::Opencode, &input), None);
+        }
+    }
+
+    #[test]
+    fn a_long_prompt_is_bounded_chunked_and_has_no_key_form() {
+        let at = |len: usize| Input::SendLong {
+            text: "x".repeat(len),
+        };
+        for len in [4097, 4098, LONG_MAX] {
+            assert!(at(len).validate().is_ok(), "{len}");
+        }
+        // Up to 4096 bytes `send` is the kind; past the bound nothing is sent, never a part of it.
+        for len in [0, 1, 4096, LONG_MAX + 1] {
+            assert!(at(len).validate().is_err(), "{len}");
+        }
+        assert!(Input::Send {
+            text: "x".repeat(4097)
+        }
+        .validate()
+        .is_err());
+        for text in ["a\rb", "a\u{1b}b", "a\0b", "a\u{2028}b"] {
+            assert!(Input::SendLong {
+                text: format!("{}{text}", "x".repeat(5000))
+            }
+            .validate()
+            .is_err());
+        }
+        assert!(at(5000).keys("%12").is_err());
+        assert_eq!(at(5000).long_text().map(str::len), Some(5000));
+        assert!(Input::Send { text: "hi".into() }.long_text().is_none());
+        assert!(
+            serde_json::from_str::<Input>(r#"{"kind":"send_long","text":"a","chunk":9}"#).is_err()
+        );
+        // Every command that carries payload stays one ASCII line below the 32 KiB command bound, even with the
+        // longest guard the format condition can reach, and only the later chunks append.
+        let guard = "g".repeat(2000);
+        let hard = "\u{ff}".repeat(2048);
+        let first = append_command(
+            &guard,
+            "lazysh-owned",
+            &hard.as_bytes()[..CHUNK],
+            "OWNED_MARKER",
+            false,
+        )
+        .unwrap();
+        let next = append_command(
+            &guard,
+            "lazysh-owned",
+            &hard.as_bytes()[..CHUNK],
+            "OWNED_MARKER",
+            true,
+        )
+        .unwrap();
+        assert!(first.len() < 32 * 1024 && next.len() < 32 * 1024 && first.is_ascii());
+        assert!(first.contains("set-buffer -b lazysh-owned --") && !first.contains("-a"));
+        assert!(
+            next.contains("set-buffer -a -b lazysh-owned --")
+                && next.contains("delete-buffer -b lazysh-owned")
+        );
+        assert!(!first.contains("delete-buffer"));
+        assert_eq!(first.matches(&guard).count(), 1);
+        assert!(
+            append_command(&guard, "lazysh-owned", &[0xff; 9000], "OWNED_MARKER", true).is_err()
+        );
+    }
     #[test]
     fn multiline_paste_is_one_bounded_octal_line_with_three_context_guards() {
         let text = "é\n\t; '$#{pane_id}\\ 界";

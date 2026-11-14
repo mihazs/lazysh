@@ -1,20 +1,23 @@
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
-import {createTerminal,type LiveSession} from '../../src/terminal';
-import {installMoshResize} from '../../src/moshResize';
+import EdgeGestureHost from './EdgeGestureHost';
+import {createTerminal} from '../../src/xterm/terminal';
+import type {LiveSession} from '../../src/terminal';
+import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
+import {installMoshResize} from '../../src/xterm/moshResize';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import '../../src/styles.css';
 
 /** Synthetic remote screen only: no host, transport or private terminal content. */
-export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false}:{mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean}={}) {
+export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false,edgeLog,edgeClose}:{mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean;edgeLog?:string[];edgeClose?:boolean}={}) {
   applyAccessStatus({initialized:true,supported:true,reason:'Synthetic browser access fixture.',enabled:true,locked:false,
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'a'.repeat(64)});
   const host=document.createElement('section');
   Object.assign(host.style,{position:'fixed',inset:'0',zIndex:'100',display:'flex',flexDirection:'column',background:'#101010'});
   document.body.append(host);
   const terminal=createTerminal();
-  const session:LiveSession={id:mosh?'mosh-history-fixture':'ssh-history-fixture',hostId:'fixture',name:'History fixture',destination:'fixture',terminal,connected:true};
+  const session:LiveSession={id:mosh?'mosh-history-fixture':'ssh-history-fixture',hostId:'fixture',name:'History fixture',destination:'fixture',terminal,adapter:new XtermTerminalAdapter(terminal),connected:true};
   if(mosh)session.moshResize=installMoshResize(terminal);
   const errors:string[]=[],writes:string[]=[],opened:string[]=[],resizes:{cols:number;rows:number}[]=[];
   // The remote screen model repaints its last rows on each canonical Mosh frame.
@@ -47,7 +50,8 @@ export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false}
     return app(command,args,options);
   };
   const root=createRoot(host);
-  flushSync(()=>root.render(<TerminalPane session={session} active reportError={error=>errors.push(String(error))}/>));
+  const pane=<TerminalPane session={session} active reportError={error=>errors.push(String(error))}/>;
+  flushSync(()=>root.render(edgeLog?<EdgeGestureHost log={edgeLog} close={edgeClose}>{pane}</EdgeGestureHost>:pane));
   return {terminal,session,errors,writes,opened,resizes,
     /** Uncovers the workspace beneath while the terminal stays mounted. */
     hide(hidden:boolean){host.style.display=hidden?'none':'flex';},

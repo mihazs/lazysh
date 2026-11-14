@@ -202,6 +202,7 @@ mod tests {
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -245,6 +246,7 @@ mod tests {
     fn host(id: &str, jump: Option<&str>) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,

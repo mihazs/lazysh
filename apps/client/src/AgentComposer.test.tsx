@@ -1,0 +1,603 @@
+// @vitest-environment jsdom
+import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {act,cleanup,configure,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {invoke} from '@tauri-apps/api/core';
+import AgentComposer from './AgentComposer';
+import {bindProtectedInvoke,captureAccess} from './access';
+import {chatFollowAccess} from './test/chatFollowAccess';
+import {t} from './i18n/core';
+import {activeTextInteractions} from './textInteraction';
+import {tmuxChatBound,tmuxChatMode,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
+import {herdrChatReply,herdrTarget} from './test/herdrChat';
+import {attachmentFile,attachmentPngHeader} from './test/attachmentData';
+vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
+
+// The guarded input settles over several awaited native calls; a loaded CI machine needs more than the default second.
+configure({asyncUtilTimeout:5000});
+// Several cases chain whole send cycles through awaited native calls; a loaded CI machine needs more than five seconds for them.
+vi.setConfig({testTimeout:20000});
+const conversation={agent:'claude' as const,path:'/home/owner/.claude/projects/work/a.jsonl',report:{sessionId:'s1',agent:'Claude Code',paneId:'%3'}};
+const tmuxLabels={backend:'tmux' as const,hostLabel:'host',terminalLabel:'work'};
+const actions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_chat'||command==='herdr_chat').map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
+const inputs=()=>actions().filter(action=>action.kind==='input');
+function mount(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
+  const access=captureAccess();
+  const view=render(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={bindProtectedInvoke(access)} shown labels={tmuxLabels} proof={{kind:'tmux',paneId:'%3'}} stage {...props}/>);
+  return {view,access};
+}
+const box=()=>screen.getByRole('textbox',{name:t('chatDraftLabel')}) as HTMLTextAreaElement;
+const type=(value:string)=>fireEvent.change(box(),{target:{value}});
+const sendButton=()=>screen.getByRole('button',{name:t('agentComposerSend')}) as HTMLButtonElement;
+beforeEach(()=>{tmuxChatMode.landed='plan';chatFollowAccess();vi.mocked(invoke).mockReset().mockImplementation(tmuxChatReply);window.matchMedia=vi.fn(()=>({matches:false})) as never;});
+afterEach(()=>{cleanup();vi.restoreAllMocks();});
+
+it('binds to the proven pane without a confirmation step and delivers a message once, then clears the draft',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toEqual(['snapshot','bind']));
+  expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();expect(screen.queryByRole('button',{name:t('chatTerminalConfirm')})).toBeNull();
+  type('Add a test\nfor the parser');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(inputs()).toEqual([{kind:'input',receipt:tmuxChatReceipt,source:{agent:'claude',path:conversation.path,view:'conversation',inlineImages:false},operation:1,input:{kind:'send',text:'Add a test\nfor the parser'}}]);
+  // The receipt says Sending until the conversation holds the message, then Sent.
+  expect(screen.getByText(t('agentReceiptSending'))).toBeTruthy();
+});
+
+it('sends with Enter on a hardware keyboard, keeps Shift+Enter as a new line and ignores Enter while composing text',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
+  type('第一');fireEvent.compositionStart(box());fireEvent.keyDown(box(),{key:'Enter'});
+  fireEvent.keyDown(box(),{key:'Enter',shiftKey:true});
+  expect(inputs()).toHaveLength(0);
+  fireEvent.compositionEnd(box());
+  fireEvent.keyDown(box(),{key:'Enter',shiftKey:true});expect(inputs()).toHaveLength(0);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {text:string}).text).toBe('第一');
+});
+
+it('keeps Enter as a new line on a touch keyboard and sends with the button',async()=>{
+  window.matchMedia=vi.fn(()=>({matches:true})) as never;
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  type('line one');fireEvent.keyDown(box(),{key:'Enter'});expect(inputs()).toHaveLength(0);
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+});
+
+it('requests a stop only on the second press, once',async()=>{
+  mount();const stop=await screen.findByRole('button',{name:t('chatTerminalStop')});
+  fireEvent.click(stop);
+  expect(inputs()).toHaveLength(0);
+  fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0]).toMatchObject({operation:1,input:{kind:'request_stop'}});
+  expect(screen.queryByRole('button',{name:t('agentComposerStopConfirm')})).toBeNull();
+});
+
+it('refuses to send when the pane the agent runs in is not the terminal, and offers Stage with the reason',async()=>{
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged as EventListener);
+  mount({proof:{kind:'tmux',paneId:'%9'}});
+  expect(await screen.findByText(t('agentComposerWrongPane'))).toBeTruthy();
+  expect(actions().map(action=>action.kind)).toEqual(['snapshot']);
+  type('hello');fireEvent.click(within(await screen.findByRole('alert')).getByRole('button',{name:t('chatStage')}));
+  expect(inputs()).toHaveLength(0);expect(staged).toHaveBeenCalledTimes(1);
+  expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:'hello'});
+  window.removeEventListener('lazysh-prompt-draft',staged as EventListener);
+});
+
+it('keeps the explicit destination confirmation for a conversation no evidence ties to this terminal',async()=>{
+  mount({proof:undefined,stage:false});
+  expect(actions()).toEqual([]);
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));
+  fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalConfirm')}));
+  await screen.findByRole('button',{name:t('chatTerminalSend')});
+  expect(actions().map(action=>action.kind)).toEqual(['snapshot','bind']);
+  type('typed by hand');fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+});
+
+it('stages a draft when the session takes no confirmed input',async()=>{
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged as EventListener);
+  mount({labels:undefined,proof:undefined});
+  expect(screen.getByText(t('agentViewStageOnly'))).toBeTruthy();
+  type('stage me');fireEvent.keyDown(box(),{key:'Enter'});
+  expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:'stage me'});
+  expect(screen.getByText(t('chatDraftStaged'))).toBeTruthy();expect(invoke).not.toHaveBeenCalled();
+  window.removeEventListener('lazysh-prompt-draft',staged as EventListener);
+});
+
+it('renders nothing for a conversation that can neither take input nor be staged',()=>{
+  const {view}=mount({labels:undefined,proof:undefined,stage:false});expect(view.container.textContent).toBe('');
+});
+
+it('keeps an unsent draft for its conversation across the view being closed and opened again',async()=>{
+  const first=mount();type('keep me');first.view.unmount();
+  mount();expect(box().value).toBe('keep me');
+  cleanup();mount({conversation:{...conversation,path:'/other.jsonl',report:{sessionId:'s2',agent:'Claude Code',paneId:'%3'}}});expect(box().value).toBe('');
+});
+
+it('retains the draft and offers a reconnect, without resending, when delivery fails',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  vi.mocked(invoke).mockImplementation((command,args)=>(args as {action:{kind:string}}).action.kind==='input'?Promise.reject({kind:'tmux_chat_stale',message:'stale'}):tmuxChatReply(command,args));
+  type('important');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await screen.findByRole('alert');expect(box().value).toBe('important');
+  expect(inputs()).toHaveLength(1);
+  vi.mocked(invoke).mockImplementation(tmuxChatReply);
+  // Retry binds again and sends the draft once, without another click on Send.
+  await clickNoticeRetry();
+  await waitFor(()=>expect(box().value).toBe(''));expect(inputs()).toHaveLength(2);expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('binds a guarded Herdr terminal only when it is the pane of the proven agent',async()=>{
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  const herdr={kind:'herdr' as const,pane:herdrTarget.pane,terminal:herdrTarget.terminal};
+  const {view,access}=mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:herdr});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toEqual(['status','prepare','confirm']));
+  type('to herdr');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  view.unmount();vi.mocked(invoke).mockClear();
+  render(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={bindProtectedInvoke(access)} shown labels={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} proof={{...herdr,pane:'other'}} stage/>);
+  expect(await screen.findByText(t('agentComposerWrongPane'))).toBeTruthy();
+  expect(actions().map(action=>action.kind)).toEqual(['status','prepare']);
+});
+
+// Stock Herdr (0.9.3 to 0.9.5) has no `lazysh.guard` RPC: the guard status says unavailable and only Herdr's own agent commands exist.
+const stockLabels={backend:'herdr' as const,hostLabel:'host',terminalLabel:'work'};
+const stockHost={herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'};
+const stockConversation={agent:'claude' as const,path:'12345678-1234-4234-8234-123456789abc',herdr:stockHost};
+const stockProof={kind:'herdr' as const,pane:stockHost.paneId,terminal:stockHost.terminalId};
+const stockTarget={herdrSession:'owned',pane:'w2E:pF',terminal:'term-one',agent:'claude',agentSessionId:stockConversation.path};
+function stockHerdr(input:(args:unknown)=>unknown=()=>null) {
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='herdr_chat'){if((args as {action:{kind:string}}).action.kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
+    if(command==='herdr_agent_input')return input(args);
+    throw new Error(`unexpected ${command}`);
+  });
+}
+const agentInputs=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_agent_input').map(([,args])=>args);
+const mountStock=(props:Partial<Parameters<typeof AgentComposer>[0]>={})=>mount({conversation:stockConversation,labels:stockLabels,proof:stockProof,...props});
+async function sendTyped(text:string) {
+  type(text);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+}
+/** The notice shows Retry a render before the control behind it reports idle; a click on it while disabled is lost, so wait for it to be enabled. */
+async function clickNoticeRetry() {
+  const retry=()=>within(screen.getByRole('alert')).getByRole('button',{name:t('agentReceiptRetry')}) as HTMLButtonElement;
+  await screen.findByRole('alert');
+  await waitFor(()=>expect(retry().disabled).toBe(false));
+  fireEvent.click(retry());
+}
+
+it('sends on a stock Herdr host through its own agent input, with no guard and no error shown',async()=>{
+  stockHerdr();mountStock();
+  await sendTyped('Run the tests\nthen commit');
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(agentInputs()).toEqual([{sessionId:'ssh',target:stockTarget,input:{kind:'send',text:'Run the tests\nthen commit'}}]);
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_chat').map(([,args])=>(args as {action:{kind:string}}).action.kind)).toEqual(['status']);
+  expect(screen.queryByRole('alert')).toBeNull();expect(screen.queryByText(t('chatHerdrUnavailable'))).toBeNull();expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
+  fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalStop')}));fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await waitFor(()=>expect(agentInputs()).toHaveLength(2));
+  expect(agentInputs()[1]).toMatchObject({input:{kind:'request_stop'}});
+});
+
+it('never targets the stock pane when the conversation does not belong to the proven pane',async()=>{
+  stockHerdr();mountStock({proof:{...stockProof,terminal:'another-terminal'}});
+  expect(within(await screen.findByRole('alert')).getByText(t('agentNoticeGuard'))).toBeTruthy();
+  type('hello');expect(agentInputs()).toEqual([]);
+});
+
+// Keys of strings without parameters, so each reads the same through `t`.
+type Plain=Parameters<typeof t>[0] & ('agentNoticeNotSentTitle'|'agentNoticeOfflineTitle'|'agentNoticeUnconfirmedTitle'|'agentNoticeBlocked'|'agentNoticeChanged'|'agentNoticeOffline'|'agentNoticeRejected'|'agentNoticeUnconfirmed'|'chatOpenTerminal'|'chatStage'|'agentReceiptRetry');
+type NoticeCase=readonly [name:string,rejection:{kind:string;message:string},title:Plain,reason:Plain,offered:readonly Plain[],absent:readonly Plain[]];
+/** One failed send says one thing in one notice, keeps the draft, and offers exactly the actions that cannot send twice. */
+async function expectOneNotice([,,title,reason,offered,absent]:NoticeCase,sends:()=>unknown[]) {
+  await sendTyped('keep this');
+  const alert=await screen.findByRole('alert');
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(within(alert).getByText(t(title))).toBeTruthy();expect(within(alert).getByText(t(reason))).toBeTruthy();
+  expect(within(alert).getAllByRole('button').map(button=>button.textContent || button.getAttribute('aria-label'))).toEqual([...offered.map(key=>t(key)),t('appDismiss')]);
+  for(const key of absent)expect(within(alert).queryByRole('button',{name:t(key)})).toBeNull();
+  expect(box().value).toBe('keep this');expect(sends()).toHaveLength(1);
+  return alert;
+}
+it.each([
+  ['the agent waits for an answer',{kind:'herdr_chat_blocked',message:'blocked'},'agentNoticeNotSentTitle','agentNoticeBlocked',['chatOpenTerminal'],['agentReceiptRetry']],
+  ['the pane changed',{kind:'herdr_chat_stale',message:'changed'},'agentNoticeNotSentTitle','agentNoticeChanged',['agentReceiptRetry','chatOpenTerminal'],[]],
+  ['the host is not reachable',{kind:'disconnected',message:'Session closed'},'agentNoticeOfflineTitle','agentNoticeOffline',['agentReceiptRetry','chatStage'],[]],
+  ['Herdr refuses the message',{kind:'herdr_chat_rejected',message:'agent_prompt_failed: pty closed'},'agentNoticeNotSentTitle','agentNoticeRejected',['agentReceiptRetry','chatStage'],[]],
+  ['delivery cannot be confirmed',{kind:'herdr_chat_uncertain',message:'unknown'},'agentNoticeUnconfirmedTitle','agentNoticeUnconfirmed',['chatOpenTerminal','chatStage'],['agentReceiptRetry']],
+] as const satisfies readonly NoticeCase[])('says one thing in one notice when %s, keeps the draft and never offers a blind resend',async(...row)=>{
+  const [,rejection]=row;
+  stockHerdr(()=>{throw rejection;});const open=vi.fn();mountStock({onOpenTerminal:open});
+  const alert=await expectOneNotice(row,agentInputs);
+  // The two long paragraphs of the old error area are gone.
+  expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
+  if(rejection.kind==='herdr_chat_uncertain'){expect(alert.querySelector('details')?.textContent).toContain(t('chatTerminalUncertain'));fireEvent.click(within(alert).getByRole('button',{name:t('chatOpenTerminal')}));expect(open).toHaveBeenCalledTimes(1);}
+  if(rejection.kind==='herdr_chat_rejected'){
+    expect(within(alert).getByText(t('agentNoticeDetails'))).toBeTruthy();expect(within(alert).getByText(rejection.message)).toBeTruthy();
+  }
+});
+
+it('retries a refused stock send once on request, then clears the notice and the draft',async()=>{
+  let fail=true;stockHerdr(()=>{if(fail)throw {kind:'disconnected',message:'Session closed'};return null;});
+  mountStock();await sendTyped('second chance');
+  await screen.findByRole('alert');fail=false;
+  await clickNoticeRetry();
+  await waitFor(()=>expect(agentInputs()).toHaveLength(2));
+  await waitFor(()=>expect(box().value).toBe(''));expect(screen.queryByRole('alert')).toBeNull();
+  expect((agentInputs()[1] as {input:{text:string}}).input.text).toBe('second chance');
+});
+
+it('dismisses the notice without losing the draft, and the receipt line takes over',async()=>{
+  stockHerdr(()=>{throw {kind:'herdr_chat_blocked',message:'blocked'};});mountStock();
+  await sendTyped('still here');
+  fireEvent.click(within(await screen.findByRole('alert')).getByRole('button',{name:t('appDismiss')}));
+  expect(screen.queryByRole('alert')).toBeNull();expect(box().value).toBe('still here');
+  expect(screen.getByText(t('agentReceiptNotSent'))).toBeTruthy();
+});
+
+it('explains a terminal that takes no guarded input in one notice with Stage first',async()=>{
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{if((args as {action:{kind:string}}).action.kind==='status')return {kind:'status',available:false};throw new Error(command);});
+  const open=vi.fn();mountStock({conversation:{agent:'claude',path:stockConversation.path},onOpenTerminal:open});
+  const alert=await screen.findByRole('alert');
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(within(alert).getByText(t('agentNoticeGuard'))).toBeTruthy();
+  expect(within(alert).getAllByRole('button').map(button=>button.textContent)).toContain(t('chatOpenTerminal'));
+  expect(screen.queryByText(t('chatHerdrUnavailable'))).toBeNull();expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
+  expect(screen.queryByRole('button',{name:'Reconnect to the terminal'})).toBeNull();
+});
+
+// Zellij has no guard and no destination to confirm: the host writes to the pane the agent's report names.
+const zellijLabels={backend:'zellij' as const,hostLabel:'host',terminalLabel:'work'};
+const zellijProof={kind:'zellij' as const,session:'work',pane:7};
+const zellijTarget={zellijSession:'work',pane:7,agent:'claude'};
+const zellijInputs=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='zellij_agent_input').map(([,args])=>args);
+function zellij(input:(args:unknown)=>unknown=()=>null) {
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='zellij_agent_input')return input(args);throw new Error(`unexpected ${command}`);});
+}
+const mountZellij=(props:Partial<Parameters<typeof AgentComposer>[0]>={})=>mount({labels:zellijLabels,proof:zellijProof,...props});
+
+it('sends to a Zellij pane through its own agent input with nothing to confirm, and stops it the same way',async()=>{
+  zellij();mountZellij();
+  expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();
+  await sendTyped('Run the tests\nthen commit');
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(zellijInputs()).toEqual([{sessionId:'ssh',target:zellijTarget,input:{kind:'send',text:'Run the tests\nthen commit'}}]);
+  expect(vi.mocked(invoke).mock.calls.map(([command])=>command)).toEqual(['zellij_agent_input']);
+  expect(screen.queryByRole('alert')).toBeNull();
+  fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalStop')}));fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await waitFor(()=>expect(zellijInputs()).toHaveLength(2));
+  expect(zellijInputs()[1]).toMatchObject({target:zellijTarget,input:{kind:'request_stop'}});
+});
+
+it('keeps a Zellij pane at the 4 KiB its host can type and says so',async()=>{
+  zellij();mountZellij();
+  type('x'.repeat(4097));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'4,096'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);expect(zellijInputs()).toEqual([]);
+});
+
+it.each([
+  ['the pane no longer runs the agent',{kind:'zellij_chat_stale',message:'The Zellij pane no longer runs this agent'},'agentNoticeNotSentTitle','agentNoticeChanged',['agentReceiptRetry','chatOpenTerminal'],[]],
+  ['Zellij refuses the first write',{kind:'zellij_chat_rejected',message:'zellij: no such pane'},'agentNoticeNotSentTitle','agentNoticeRejected',['agentReceiptRetry','chatStage'],[]],
+  ['the host is not reachable',{kind:'disconnected',message:'Session closed'},'agentNoticeOfflineTitle','agentNoticeOffline',['agentReceiptRetry','chatStage'],[]],
+  ['Enter is not confirmed after the text was typed',{kind:'zellij_chat_uncertain',message:'unknown'},'agentNoticeUnconfirmedTitle','agentNoticeUnconfirmed',['chatOpenTerminal','chatStage'],['agentReceiptRetry']],
+] as const satisfies readonly NoticeCase[])('says one thing, keeps the draft and never resends blindly when %s on Zellij',async(...row)=>{
+  zellij(()=>{throw row[1];});mountZellij({onOpenTerminal:vi.fn()});
+  await expectOneNotice(row,zellijInputs);
+});
+
+it('offers no Zellij send without a proof of the pane, only Stage',async()=>{
+  zellij();mountZellij({proof:undefined});
+  type('hello');await waitFor(()=>expect(screen.getByRole('button',{name:t('chatStage')})).toBeTruthy());
+  expect(zellijInputs()).toEqual([]);
+});
+
+it('does not hold a binding while the view is hidden',async()=>{
+  const {view,access}=mount({shown:false});
+  expect(invoke).not.toHaveBeenCalled();
+  view.rerender(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={bindProtectedInvoke(access)} shown labels={tmuxLabels} proof={{kind:'tmux',paneId:tmuxChatTarget.paneId}} stage/>);
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toEqual(['snapshot','bind']));
+  expect(tmuxChatSnapshot.destination.paneId).toBe('%3');expect(tmuxChatBound.nextOperation).toBe(1);
+  await act(async()=>{view.rerender(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={bindProtectedInvoke(access)} shown={false} labels={tmuxLabels} proof={{kind:'tmux',paneId:'%3'}} stage/>);});
+  expect(actions().at(-1)).toEqual({kind:'release',receipt:tmuxChatReceipt});
+});
+
+async function bound(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
+  const view=mount(props);await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
+  return view;
+}
+const props=()=>({sessionId:'ssh',conversation,access:captureAccess(),invoke:bindProtectedInvoke(captureAccess()),shown:true,labels:tmuxLabels,proof:{kind:'tmux' as const,paneId:'%3'},stage:true});
+
+it('settles the receipt from the conversation: Sending, then Sent once the message appears, and an older identical prompt does not count',async()=>{
+  const {view,access}=await bound({prompts:['Run it']});
+  type('Run it');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(screen.getByText(t('agentReceiptSending'))).toBeTruthy();
+  const rerender=(prompts:string[])=>view.rerender(<AgentComposer {...props()} access={access} invoke={bindProtectedInvoke(access)} prompts={prompts}/>);
+  rerender(['Run it']);expect(screen.queryByText(t('agentReceiptSent'))).toBeNull();
+  rerender(['Run it','Run it']);expect(screen.getByText(t('agentReceiptSent'))).toBeTruthy();
+});
+
+it('stops claiming progress when the message never shows up',async()=>{
+  await bound();type('Lost?');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());await waitFor(()=>expect(inputs()).toHaveLength(1));
+  const start=Date.now();vi.spyOn(Date,'now').mockImplementation(()=>start+9000);
+  expect(await screen.findByText(t('agentReceiptUnconfirmed'),{},{timeout:3000})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:t('agentReceiptRetry')})).toBeNull();
+});
+
+it('shows Not sent with Retry when nothing was written, and Retry sends once; an uncertain delivery has no Retry',async()=>{
+  await bound();
+  vi.mocked(invoke).mockImplementation((command,args)=>(args as {action:{kind:string}}).action.kind==='input'?Promise.reject({kind:'tmux_chat_stale',message:'stale'}):tmuxChatReply(command,args));
+  type('Important');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  expect(within(await screen.findByRole('alert')).getByText(t('agentNoticeNotSentTitle'))).toBeTruthy();
+  // One notice speaks for the failed send; the receipt line stays out of its way until the notice is dismissed.
+  expect(screen.queryByText(t('agentReceiptNotSent'))).toBeNull();
+  vi.mocked(invoke).mockImplementation(tmuxChatReply);
+  await clickNoticeRetry();
+  await waitFor(()=>expect(inputs()).toHaveLength(2));
+  expect((inputs()[1].input as {text:string}).text).toBe('Important');
+  await waitFor(()=>expect(box().value).toBe(''));
+  cleanup();
+  await bound();
+  vi.mocked(invoke).mockImplementation((command,args)=>(args as {action:{kind:string}}).action.kind==='input'?Promise.reject({message:'connection lost'}):tmuxChatReply(command,args));
+  type('Maybe');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  expect(within(await screen.findByRole('alert')).getByText(t('agentNoticeUnconfirmedTitle'))).toBeTruthy();
+  expect(screen.queryByRole('button',{name:t('agentReceiptRetry')})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:t('appDismiss')}));
+  expect(screen.getByText(t('agentReceiptUncertain'))).toBeTruthy();expect(box().value).toBe('Maybe');
+// Two full send cycles in one case: a loaded CI machine needs more than the default five seconds.
+},20000);
+
+it('recalls earlier prompts with Up and Down only from an empty or untouched recalled draft',async()=>{
+  await bound();
+  for(const text of ['first prompt','second prompt']) {
+    type(text);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+    await waitFor(()=>expect(box().value).toBe(''));
+  }
+  fireEvent.keyDown(box(),{key:'ArrowUp'});expect(box().value).toBe('second prompt');
+  fireEvent.keyDown(box(),{key:'ArrowUp'});expect(box().value).toBe('first prompt');
+  fireEvent.keyDown(box(),{key:'ArrowDown'});expect(box().value).toBe('second prompt');
+  type('second prompt edited');fireEvent.keyDown(box(),{key:'ArrowUp'});expect(box().value).toBe('second prompt edited');
+});
+
+it('filters slash commands as you type, inserts the picked one without sending, and says when it opens a terminal dialog',async()=>{
+  await bound();
+  type('/mod');
+  const list=screen.getByRole('listbox',{name:t('agentComposerCommands')});
+  expect(within(list).getAllByRole('option').map(option=>option.textContent)).toEqual(['/model'+t('agentComposerOpensPicker')]);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  expect(box().value).toBe('/model ');
+  expect(inputs()).toHaveLength(0);
+  expect(screen.queryByRole('listbox')).toBeNull();
+  expect(screen.getByText(t('agentComposerPickerNote',{command:'/model'}))).toBeTruthy();
+  fireEvent.keyDown(box(),{key:'Enter'});
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {text:string}).text).toBe('/model ');
+});
+
+it('walks the palette with the arrows, closes it with Escape and picks with a tap',async()=>{
+  await bound();
+  type('/co');
+  fireEvent.keyDown(box(),{key:'ArrowDown'});
+  expect(screen.getAllByRole('option').filter(option=>option.getAttribute('aria-selected')==='true').map(option=>option.textContent)).toEqual(['/context']);
+  fireEvent.keyDown(box(),{key:'Escape'});expect(screen.queryByRole('listbox')).toBeNull();
+  type('/com');fireEvent.click(within(screen.getByRole('listbox')).getByRole('button',{name:/\/compact/}));
+  expect(box().value).toBe('/compact ');
+});
+
+it('names the prompt mode a leading ! or # selects and sends the text byte-exact',async()=>{
+  await bound();
+  type('!ls -la');expect(screen.getByText(t('agentModeBash'))).toBeTruthy();
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {text:string}).text).toBe('!ls -la');
+  type('#remember me');expect(screen.getByText(t('agentModeMemory'))).toBeTruthy();
+  type('plain');expect(screen.queryByText(t('agentModeMemory'))).toBeNull();
+});
+
+const listing=(entries:{name:string;isDir:boolean;size:number}[])=>{
+  const reply=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='list_directory'?Promise.resolve(entries):reply(command,args,options));
+};
+const listed=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='list_directory').map(([,args])=>(args as {path:string}).path);
+const entries=[{name:'src',isDir:true,size:0},{name:'README.md',isDir:false,size:10},{name:'.env',isDir:false,size:1}];
+
+it('completes @ mentions from the agent folder: lists it, filters as you type, inserts a file and goes one level into a folder',async()=>{
+  await bound({cwd:'/work/app'});listing(entries);
+  fireEvent.change(box(),{target:{value:'see @',selectionStart:5}});
+  const list=await screen.findByRole('listbox',{name:t('agentComposerFiles')});
+  expect(listed()).toEqual(['/work/app']);
+  expect(within(list).getAllByRole('option').map(option=>option.textContent)).toEqual(['src/','README.md']);
+  fireEvent.change(box(),{target:{value:'see @re',selectionStart:7}});
+  expect(within(screen.getByRole('listbox')).getAllByRole('option').map(option=>option.textContent)).toEqual(['README.md']);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  expect(box().value).toBe('see @README.md ');
+  expect(inputs()).toHaveLength(0);
+  fireEvent.change(box(),{target:{value:'@s',selectionStart:2}});
+  fireEvent.click(within(await screen.findByRole('listbox')).getByRole('button',{name:'src/'}));
+  expect(box().value).toBe('@src/');
+  await waitFor(()=>expect(listed()).toEqual(['/work/app','/work/app/src']));
+});
+
+it('never lists outside the agent folder and offers nothing without one or after a failed listing',async()=>{
+  await bound({cwd:'/work/app'});listing(entries);
+  for(const value of ['@../','@src/../','@/etc/'])fireEvent.change(box(),{target:{value,selectionStart:value.length}});
+  await new Promise(resolve=>setTimeout(resolve,250));
+  expect(listed()).toEqual([]);expect(screen.queryByRole('listbox')).toBeNull();
+  cleanup();vi.mocked(invoke).mockClear();
+  await bound();listing(entries);
+  fireEvent.change(box(),{target:{value:'@',selectionStart:1}});
+  await new Promise(resolve=>setTimeout(resolve,250));
+  expect(listed()).toEqual([]);expect(screen.queryByRole('listbox')).toBeNull();
+});
+
+it('offers nothing after a failed listing',async()=>{
+  await bound({cwd:'/work/app'});
+  const reply=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='list_directory'?Promise.reject(new Error('denied')):reply(command,args,options));
+  fireEvent.change(box(),{target:{value:'with @',selectionStart:6}});
+  await waitFor(()=>expect(listed()).toHaveLength(1));
+  expect(screen.queryByRole('listbox')).toBeNull();
+});
+
+const uploaded=(name:string)=>`/tmp/lazysh-9f2c/${name}`;
+/** Pasted and dropped files upload through the host's attachment path; this host stores each one under /tmp by its name. */
+function uploads(hold?:{release?:()=>void}) {
+  const reply=vi.mocked(invoke).getMockImplementation()!,sent:string[]=[];
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    const call=args as {path?:string};
+    if(command==='upload_reserve')return Promise.resolve({uploadId:'4d1c9ace-94cf-4588-8775-3888061a05bd'});
+    if(command==='upload_cancel')return Promise.resolve({outcome:'unknown_or_settled'});
+    if(command==='upload_file'){sent.push(call.path!);return hold?new Promise(resolve=>{hold.release=()=>resolve({path:uploaded(call.path!)});}):Promise.resolve({path:uploaded(call.path!)});}
+    return reply(command,args,options);
+  });
+  return sent;
+}
+const png=(name='shot.png')=>attachmentFile(attachmentPngHeader(),name,'image/png');
+/** Drafts outlive a remount by design, so each case follows its own conversation. */
+let followed=0;
+const own=()=>({conversation:{...conversation,path:`/home/owner/.claude/projects/work/own-${++followed}.jsonl`,report:{...conversation.report,sessionId:`own-${followed}`}}});
+const chips=()=>screen.queryAllByRole('listitem').map(item=>item.textContent);
+
+it('pastes an image into the draft as a numbered token and delivers the uploaded path once on send',async()=>{
+  await bound(own());const sent=uploads();
+  type('compare');
+  fireEvent.paste(box(),{clipboardData:{files:[png('before.png')]}});
+  await waitFor(()=>expect(box().value).toBe('compare [Image #1] '));
+  fireEvent.paste(box(),{clipboardData:{files:[attachmentFile(undefined,'notes.txt','text/plain')]}});
+  await waitFor(()=>expect(box().value).toBe('compare [Image #1] [File #2] '));
+  expect(sent).toEqual(['before.png','notes.txt']);
+  expect(chips().map(text=>text?.replace(/\s+/g,' '))).toEqual(['[Image #1] before.png','[File #2] notes.txt']);
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {text:string}).text).toBe(`compare '${uploaded('before.png')}' '${uploaded('notes.txt')}' `);
+  await waitFor(()=>expect(box().value).toBe(''));expect(chips()).toEqual([]);
+  // The next draft numbers its files from one again.
+  fireEvent.paste(box(),{clipboardData:{files:[png('again.png')]}});
+  await waitFor(()=>expect(box().value).toBe('[Image #1] '));
+});
+
+it('does not send while a file uploads, and a text paste stays an ordinary paste',async()=>{
+  await bound(own());const hold:{release?:()=>void}={};uploads(hold);
+  type('look');
+  expect(fireEvent.paste(box(),{clipboardData:{files:[]}})).toBe(true);
+  fireEvent.drop(screen.getByRole('region',{name:t('agentComposerTitle')}),{dataTransfer:{types:['Files'],files:[png('wait.png')]}});
+  expect(await screen.findByText(t('attachmentUploading'))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  act(()=>hold.release!());
+  await waitFor(()=>expect(box().value).toBe('look [Image #1] '));
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('attachmentUploading'))).toBeNull();
+});
+
+it('keeps a token whole under any edit and releases its file with the token',async()=>{
+  await bound(own());uploads();
+  fireEvent.paste(box(),{clipboardData:{files:[png('a.png')]}});await waitFor(()=>expect(box().value).toBe('[Image #1] '));
+  type('[Image #1 ');await waitFor(()=>expect(box().value).toBe(' '));
+  expect(chips()).toEqual([]);
+  fireEvent.paste(box(),{clipboardData:{files:[png('b.png')]}});await waitFor(()=>expect(chips()).toHaveLength(1));
+  fireEvent.click(screen.getByRole('button',{name:t('terminalComposerRemoveAttachment',{label:t('terminalComposerImage',{number:2})})}));
+  expect(box().value.trim()).toBe('');expect(chips()).toEqual([]);
+});
+
+it('refuses a file over the limit with its reason and uploads nothing',async()=>{
+  await bound(own());const sent=uploads();
+  const big=attachmentFile(new Uint8Array(4),'huge.bin');Object.defineProperty(big,'size',{value:11*1024*1024});
+  fireEvent.paste(box(),{clipboardData:{files:[big]}});
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(sent).toEqual([]);expect(box().value).toBe('');
+});
+
+it('sends a prompt whose paths push it past 4 KiB as one long send with the paths in place',async()=>{
+  await bound(own());uploads();
+  const name=`${'n'.repeat(200)}.png`;
+  fireEvent.paste(box(),{clipboardData:{files:[png(name)]}});
+  await waitFor(()=>expect(chips()).toHaveLength(1));
+  type(`${'x'.repeat(3950)} [Image #1] `);
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeNull();
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0].input).toEqual({kind:'send_long',text:`${'x'.repeat(3950)} '${uploaded(name)}' `});
+});
+
+it('sends a prompt over 4 KiB to tmux as one long send, intact, and still sends a 4 KiB one as an ordinary send',async()=>{
+  await bound();
+  const exactly=`${'a'.repeat(4095)}\n`,long=`${'世界 line\n'.repeat(2000)}end`;
+  type(exactly);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0].input).toEqual({kind:'send',text:exactly});
+  await waitFor(()=>expect(box().value).toBe(''));
+  type(long);await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeNull();
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(2));
+  expect(inputs()[1]).toMatchObject({operation:2,input:{kind:'send_long',text:long}});
+  await waitFor(()=>expect(box().value).toBe(''));
+});
+
+it('refuses a prompt past the bound with the limit, and sends nothing',async()=>{
+  await bound();
+  type('x'.repeat(65536)+'');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  type('é'.repeat(32769));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  expect(inputs()).toHaveLength(0);
+});
+
+it('keeps a Herdr pane at the 4 KiB it can take and says so',async()=>{
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toEqual(['status','prepare','confirm']));
+  type('y'.repeat(5000));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'4,096'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  type('y'.repeat(4096));await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {kind:string}).kind).toBe('send');
+});
+
+it('holds the edge gestures off while the message box has focus, so a swipe never fires under the keyboard',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  expect(activeTextInteractions()).not.toContain('field');
+  act(()=>box().focus());
+  expect(activeTextInteractions()).toContain('field');
+  act(()=>box().blur());
+  expect(activeTextInteractions()).not.toContain('field');
+});
+
+const modeButton=()=>screen.findByRole('button',{name:t('agentModeSwitch')});
+
+it('cycles the permission mode with one guarded Shift+Tab per tap and shows the mode the terminal read back',async()=>{
+  mount();
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeNow',{mode:t('agentModePlan')}))).toBeTruthy();
+  tmuxChatMode.landed='auto';
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeNow',{mode:t('agentModeAuto')}))).toBeTruthy();
+  expect(inputs().map(({operation,input})=>({operation,input}))).toEqual([{operation:1,input:{kind:'cycle_mode'}},{operation:2,input:{kind:'cycle_mode'}}]);
+});
+
+it('claims no mode when the status line was not recognised',async()=>{
+  tmuxChatMode.landed='unconfirmed';
+  mount();
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeUnconfirmed'))).toBeTruthy();
+  expect(screen.queryByText(/Permission mode:/)).toBeNull();
+});
+
+it('offers the mode button only for Claude Code on tmux',async()=>{
+  const {view}=mount({conversation:{...conversation,agent:'codex' as const,path:'/home/owner/.codex/sessions/a.jsonl'}});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
+  view.unmount();
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
+  await screen.findByRole('textbox',{name:t('chatDraftLabel')});
+  expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
+});

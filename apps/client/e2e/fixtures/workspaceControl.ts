@@ -32,7 +32,7 @@ export async function openToolsPageWith(page:Page,name:string) {
 }
 
 /** Reach the category through the real list/detail navigation, in the current locale. */
-export async function openPreferenceCategory(page: Page, category: 'Language'|'Appearance'|'Terminal'|'Input'|'Reset'|'Connections'|'Security'|'Notifications') {
+export async function openPreferenceCategory(page: Page, category: 'Language'|'Appearance'|'Terminal'|'Input'|'Reset'|'Connections'|'Security'|'Notifications'|'AccountUsage') {
   const label=await page.evaluate(async category=>{const {t}=await import('/src/i18n/core.ts');return t(`preferencesCategory${category}`);},category);
   const navigation=page.locator('.settings-navigation');
   const selected=navigation.locator('[data-settings-page]:visible');
@@ -60,4 +60,11 @@ export async function openAgentSetup(page: Page) {
   const label=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('agentsSetupAction');});
   const button=page.getByRole('button',{name:label,exact:true});
   if(await button.getAttribute('aria-expanded')!=='true')await button.click();
+}
+
+/** Opens Preferences → Input → Toolbar keys and order. */
+export async function openToolbarSettings(page:Page) {
+  await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Input');
+  await page.getByText('Toolbar keys and order',{exact:true}).click();
 }

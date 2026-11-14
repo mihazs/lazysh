@@ -10,6 +10,8 @@ use tauri::Manager;
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+#[path = "tmux_agent_session_fixture.rs"]
+mod agent_session;
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
 #[path = "tmux_retirement_fixture.rs"]
@@ -79,6 +81,15 @@ impl Fixture {
         mosh: bool,
         user_install: bool,
     ) -> Self {
+        Self::with_environment(herdr, mosh, user_install, Vec::new()).await
+    }
+    /// `extra` is added to the environment the owned sshd gives every remote command; a `PATH` entry is put in front.
+    async fn with_environment(
+        herdr: Option<&std::path::Path>,
+        mosh: bool,
+        user_install: bool,
+        extra: Vec<(&'static str, String)>,
+    ) -> Self {
         let dir = if user_install {
             tempfile::tempdir_in("/tmp").unwrap()
         } else {
@@ -131,6 +142,15 @@ impl Fixture {
         }
         if mosh {
             environment.push(("MOSH_SERVER_NETWORK_TMOUT", "20".into()));
+        }
+        for (key, value) in extra {
+            match environment
+                .iter_mut()
+                .find(|(name, _)| *name == key && key == "PATH")
+            {
+                Some(path) => path.1.insert_str(0, &format!("{value}:")),
+                None => environment.push((key, value)),
+            }
         }
         assert!(
             environment.iter().all(|(_, value)| !value
@@ -254,6 +274,7 @@ impl Fixture {
         .unwrap();
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -2369,6 +2390,119 @@ async fn chat_input_probe() {
         expected.extend_from_slice(format!("{literal}\r\u{1b}").as_bytes());
         chat_fixture_bytes(&outputs[0], &expected).await;
     }
+    // OpenCode drops a short prompt written as a burst of keys, so its prompt arrives as one bracketed paste and Enter;
+    // every other agent keeps getting the keys. The pane asks for bracketed paste the way an agent TUI does.
+    eprintln!("tmux chat stage: OpenCode prompt as a paste");
+    let paste_tty = servers.direct(
+        "chat-a",
+        &["display-message", "-p", "-t", "%0", "#{pane_tty}"],
+    );
+    std::fs::write(&paste_tty, "\x1b[?2004h").unwrap();
+    for (agent, text, arrives) in [
+        (
+            "opencode",
+            "hello opencode",
+            "\x1b[200~hello opencode\x1b[201~\r",
+        ),
+        ("claude", "hello claude", "hello claude\r"),
+    ] {
+        let mut context = json!({"agent":agent,"path":"/owned/shared.db","view":"conversation","inlineImages":false});
+        if agent == "opencode" {
+            context["transcriptSessionId"] = "literal-session-A".into();
+        }
+        let current = chat_fixture_bind(&app, &lease, &child, &context).await;
+        let delivered = chat_fixture_call(&app, &lease, &child, json!({"kind":"input","receipt":current["receipt"],"source":context,"operation":1,"input":{"kind":"send","text":text}})).await.unwrap();
+        assert_eq!(delivered, json!({"kind":"delivered","nextOperation":2}));
+        expected.extend_from_slice(arrives.as_bytes());
+        chat_fixture_bytes(&outputs[0], &expected).await;
+    }
+    std::fs::write(&paste_tty, "\x1b[?2004l").unwrap();
+    // A prompt past `send`'s 4 KiB arrives intact as one paste and one Enter, assembled over several tmux commands;
+    // one past the bound, or too short for this kind, reaches nothing.
+    eprintln!("tmux chat stage: long prompt");
+    let long = (0..700)
+        .map(|line| format!("line {line} 世界 '$x' #{{pane_id}} \\\n"))
+        .collect::<String>();
+    assert!(
+        (20 * 1024..=24 * 1024).contains(&long.len()),
+        "{}",
+        long.len()
+    );
+    let current = chat_fixture_bind(&app, &lease, &child, &source).await;
+    for text in ["x".repeat(4096), "x".repeat(64 * 1024 + 1)] {
+        chat_fixture_rejected(
+            &app,
+            &lease,
+            &child,
+            send(
+                &current["receipt"],
+                1,
+                json!({"kind":"send_long","text":text}),
+            ),
+            &outputs[0],
+            &expected,
+        )
+        .await;
+    }
+    let current = chat_fixture_bind(&app, &lease, &child, &source).await;
+    let delivered = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(
+            &current["receipt"],
+            1,
+            json!({"kind":"send_long","text":long}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(delivered, json!({"kind":"delivered","nextOperation":2}));
+    expected.extend_from_slice(format!("{long}\r").as_bytes());
+    chat_fixture_bytes(&outputs[0], &expected).await;
+    assert!(
+        servers.direct("chat-a", &["list-buffers"]).is_empty(),
+        "the private buffer is gone"
+    );
+    // The mode cycle is one Shift+Tab, and its reply carries the mode the status line shows afterwards. The workload
+    // draws nothing itself, so the screen is written to the pane's terminal; words above the status line count for nothing.
+    eprintln!("tmux chat stage: mode cycle and read-back");
+    let tty = servers.direct(
+        "chat-a",
+        &["display-message", "-p", "-t", "%0", "#{pane_tty}"],
+    );
+    let draw = |text: &str| std::fs::write(&tty, text).unwrap();
+    let current = chat_fixture_bind(&app, &lease, &child, &source).await;
+    draw("\x1b[2J\x1b[Hauto mode on\r\n\r\n  \u{23f5}\u{23f5} accept edits on (shift+tab to cycle)\r\n");
+    let cycled = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&current["receipt"], 1, json!({"kind":"cycle_mode"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        cycled,
+        json!({"kind":"delivered","nextOperation":2,"mode":"acceptEdits"})
+    );
+    expected.extend_from_slice(b"\x1b[Z");
+    chat_fixture_bytes(&outputs[0], &expected).await;
+    draw("\x1b[2J\x1b[H  ? for shortcuts\r\n");
+    let unknown = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&current["receipt"], 2, json!({"kind":"cycle_mode"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        unknown,
+        json!({"kind":"delivered","nextOperation":3,"mode":"unconfirmed"})
+    );
+    expected.extend_from_slice(b"\x1b[Z");
+    chat_fixture_bytes(&outputs[0], &expected).await;
     chat_fixture_workload_unchanged(&servers, &outputs[1..], &original_process).await;
     disconnect(app.state(), child).await.unwrap();
     // No automatic bind after retirement. Reattach here exercises a fresh
@@ -3631,4 +3765,59 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     .is_err());
     herdr_retired(&state, &source.session_id, &parent, false).await;
     servers.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH, LAZYSH_TEST_TMUX and LAZYSH_EXPECT_MUX_SUPPORT; optional LAZYSH_TEST_ZELLIJ and LAZYSH_TEST_HERDR_STOCK"]
+async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
+    use crate::multiplexer::multiplexer_tree;
+    // For example `tmux=full zellij=full herdr=full`; each named tool must be supplied.
+    let expected = std::env::var("LAZYSH_EXPECT_MUX_SUPPORT").unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let mut versions = std::collections::BTreeMap::new();
+    for pair in expected.split_whitespace() {
+        let (kind, _) = pair.split_once('=').unwrap();
+        let (variable, flag) = match kind {
+            "tmux" => ("LAZYSH_TEST_TMUX", "-V"),
+            "zellij" => ("LAZYSH_TEST_ZELLIJ", "--version"),
+            "herdr" => ("LAZYSH_TEST_HERDR_STOCK", "--version"),
+            _ => panic!("unknown multiplexer {kind}"),
+        };
+        let binary = std::env::var(variable).unwrap();
+        std::os::unix::fs::symlink(&binary, tools.path().join(kind)).unwrap();
+        let output = Command::new(&binary).arg(flag).output().unwrap();
+        let line = String::from_utf8(output.stdout).unwrap();
+        let version = line
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix(kind)
+            .unwrap()
+            .trim();
+        versions.insert(kind.to_owned(), version.to_owned());
+    }
+    // The fixture puts the Herdr directory first on the owned sshd's PATH.
+    let f = Fixture::with_herdr(Some(&tools.path().join("herdr"))).await;
+    let (_authority, lease) = unlocked_authority();
+    let (app, state) = herdr_native_app(&f);
+    let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let discovery = serde_json::to_value(discovery).unwrap();
+    eprintln!("owned discovery tools: {}", discovery["tools"]);
+    for pair in expected.split_whitespace() {
+        let (kind, support) = pair.split_once('=').unwrap();
+        let tool = discovery["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["kind"] == kind)
+            .unwrap_or_else(|| panic!("{kind} was not discovered"));
+        assert_eq!(tool["version"], versions[kind].as_str(), "{kind}");
+        assert_eq!(tool["support"], support, "{kind}");
+        assert_eq!(discovery[format!("{kind}Available")], true);
+    }
 }

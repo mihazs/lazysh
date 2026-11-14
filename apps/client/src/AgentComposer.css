@@ -1,0 +1,37 @@
+/* One compact row under the conversation: attach, the text field, Stop, Send. Notes and the terminal-input flow take the rows below. */
+.agent-composer { flex: 0 0 auto; display: grid; gap: 4px; margin: 6px 8px 8px; padding: 6px 8px; border: 1px solid var(--theme-border, var(--border)); border-radius: 12px; background: var(--theme-panel, var(--surface)); max-height: 60%; overflow: auto; min-width: 0; }
+.agent-composer-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.agent-composer-row > textarea { flex: 1 1 6rem; min-width: 0; min-height: 40px; max-height: 40vh; margin: 0; resize: none; }
+.agent-composer-row > .icon-button, .agent-composer-row > .agent-composer-send { flex: 0 0 auto; width: 40px; height: 40px; min-width: 40px; min-height: 40px; margin: 0; padding: 0; }
+.agent-composer-note { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.agent-composer > section { margin: 0; font-size: 12px; }
+.agent-composer > section > :is(p, div) { margin: 2px 0; }
+.agent-composer-attach { display: grid; gap: 6px; max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
+.agent-composer-attach > p { margin: 0; font-size: 12px; color: var(--muted); }
+/* The slash palette sits right above the field and scrolls inside itself, so the conversation keeps its height. */
+.agent-composer-palette { list-style: none; margin: 0; padding: 4px; max-height: 40vh; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--theme-border, var(--border)); border-radius: 10px; }
+.agent-composer-palette > li > button { display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 40px; padding: 4px 8px; background: transparent; border: 0; text-align: start; color: inherit; font: inherit; }
+.agent-composer-palette > li[aria-selected="true"] > button { background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-palette small { color: var(--muted); font-size: 12px; }
+.agent-composer-mode { justify-self: start; padding: 0 8px; border-radius: 10px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-receipt { margin: 0; font-size: 12px; color: var(--muted); }
+.agent-composer-receipt[data-state="notSent"] { color: var(--danger, inherit); }
+.agent-composer-receipt > button { min-height: 32px; }
+.agent-composer-row > .icon-button[data-armed] { outline: 2px solid var(--danger, currentColor); }
+.agent-composer-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-composer-chips > li { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 4px 0 8px; border-radius: 10px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-chips > li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-composer-chips > li > button { min-width: 32px; min-height: 32px; padding: 0; }
+/* One compact notice for a send that was refused or could not be confirmed; the draft stays in the field above it. */
+.agent-composer-notice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 8px; align-items: start; padding: 8px 8px 8px 10px; border: 1px solid var(--theme-border, var(--border)); border-radius: 10px; background: var(--theme-warning-bg, var(--surface)); color: var(--theme-text, inherit); font-size: 13px; min-width: 0; }
+.agent-composer-notice[data-tone="danger"] { background: var(--theme-danger-bg, var(--surface)); }
+.agent-composer-notice > svg { margin-top: 1px; color: var(--theme-warning, var(--accent)); }
+.agent-composer-notice[data-tone="danger"] > svg { color: var(--danger); }
+.agent-composer-notice-text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.agent-composer-notice-text > span { color: var(--theme-muted, var(--muted)); font-size: 12px; }
+.agent-composer-notice-close { grid-column: 3; grid-row: 1; width: 32px; height: 32px; min-width: 32px; min-height: 32px; margin: -4px 0 0; padding: 0; }
+.agent-composer-notice-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-composer-notice-actions > button { min-height: 40px; margin: 0; }
+.agent-composer-notice-details { grid-column: 2 / -1; font-size: 12px; color: var(--theme-muted, var(--muted)); }
+.agent-composer-notice-details > summary { min-height: 32px; display: flex; align-items: center; cursor: pointer; }
+.agent-composer-notice-details > p { margin: 2px 0; overflow-wrap: anywhere; white-space: pre-wrap; }

@@ -15,12 +15,17 @@
 .toolbar-preview-row[data-empty] { border: 1px dashed var(--theme-border, #303e27); border-radius: 5px; opacity: .5; }
 .toolbar-preview-row > span {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex-shrink: 0;
-  min-width: 32px; min-height: 30px; padding: 4px 7px; border-radius: 5px;
+  min-width: 32px; height: var(--terminal-key-height, 30px); padding: 0 7px; border-radius: 5px;
   border: 1px solid var(--ui-control-border); background: var(--ui-fill);
   color: var(--theme-text, #b2c3a4); font-family: monospace; font-size: 10px; white-space: nowrap;
 }
-.toolbar-preview-row > .toolbar-preview-fixed { border: 1px dashed var(--ui-border); color: var(--theme-muted, #8d9b84); }
+/* The cell the Arrows cluster leaves beside Up keeps its width so Down stays under Up. */
+.toolbar-preview-row > .toolbar-preview-gap { border: 0; background: none; }
 
+.toolbar-size { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 12px; }
+.toolbar-size > label { margin: 0; }
+.toolbar-size > input { grid-column: 1; min-width: 0; min-height: 44px; margin: 0; }
+.toolbar-size > button { grid-column: 2; }
 .toolbar-editor-rows { display: flex; flex-direction: column; gap: 8px; }
 .toolbar-editor-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 60px; padding: 7px;

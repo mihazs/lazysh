@@ -1,4 +1,4 @@
-use super::{begin, chunk, finish, Result, VoiceState, MAX_MODEL};
+use super::{begin, cancelled, chunk, finish, Result, VoiceState, MAX_MODEL};
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use reqwest::{Client, Url};
@@ -195,16 +195,6 @@ impl Drop for Download<'_> {
         }
     }
 }
-async fn cancellation(receiver: &mut watch::Receiver<bool>) {
-    loop {
-        if *receiver.borrow() {
-            return;
-        }
-        if receiver.changed().await.is_err() {
-            return;
-        }
-    }
-}
 fn publisher_url(url: &Url) -> bool {
     super::download::https_without_credentials(url)
         && url.host_str().is_some_and(|host| {
@@ -242,7 +232,7 @@ async fn download(
     job.import_id = Some(begin(state, model.file.into(), model.bytes)?);
     let mut response = tokio::select! {
         biased;
-        _ = cancellation(&mut job.cancel) => return Err("Model download cancelled".into()),
+        _ = cancelled(&mut job.cancel) => return Err("Model download cancelled".into()),
         response = client.get(url).header(reqwest::header::ACCEPT_ENCODING, "identity").send() => response.map_err(|_| "Model download connection failed or timed out")?,
     };
     if response.status() != reqwest::StatusCode::OK {
@@ -269,7 +259,7 @@ async fn download(
     loop {
         let bytes = tokio::select! {
             biased;
-            _ = cancellation(&mut job.cancel) => return Err("Model download cancelled".into()),
+            _ = cancelled(&mut job.cancel) => return Err("Model download cancelled".into()),
             next = response.chunk() => next.map_err(|_| "Model download interrupted or timed out")?,
         };
         let Some(bytes) = bytes else { break };

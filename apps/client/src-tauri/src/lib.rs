@@ -10,12 +10,16 @@ mod companion;
 mod companion_settings;
 mod desktop_launch;
 mod devices;
+mod edge_gestures;
 mod et;
+mod file_transfer;
 mod forward_agent;
 mod herdr;
 mod herdr_create;
 mod herdr_guard;
 mod herdr_path;
+mod herdr_stock_input;
+mod host;
 mod host_clipboard;
 mod identities;
 mod keep_awake;
@@ -25,23 +29,28 @@ mod mosh;
 mod multiplexer;
 mod notifications;
 mod previews;
+mod private_keyboard;
 mod push;
 mod repository;
 mod routing;
 mod session_background;
 mod sftp_stream;
 mod share;
+mod soft_keyboard;
 mod ssh;
 mod sync;
+mod terminal_core;
 mod terminal_input;
 mod theme_links;
 mod theme_qr;
 mod tmux_jump;
 mod tmux_server;
+mod transcript_watch;
 mod ui_locale;
 mod vault;
 mod voice;
 mod zellij;
+mod zellij_input;
 
 /// Exact internal collection worker mode runs before any desktop UI is initialized.
 #[cfg(desktop)]
@@ -77,6 +86,10 @@ pub fn run() {
         .plugin(clipboard::init())
         .plugin(session_background::init())
         .plugin(app_icons::init())
+        .plugin(edge_gestures::init())
+        .plugin(private_keyboard::init())
+        .plugin(file_transfer::init())
+        .plugin(soft_keyboard::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -92,6 +105,7 @@ pub fn run() {
         .manage(theme_qr::QrState::default())
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
+        .manage(transcript_watch::TranscriptWatches::default())
         .manage(share::ShareState::default())
         .manage(voice::cloud::CloudState::default())
         .manage(sync::SyncState::default())
@@ -107,6 +121,7 @@ pub fn run() {
                 .clone();
             app.manage(state);
             local::install_cleanup(app)?;
+            file_transfer::install(app)?;
             voice::cloud::install_cleanup(app)?;
             app.manage(voice::VoiceState::new(
                 app.path().app_data_dir()?.join("voice-models"),
@@ -135,6 +150,8 @@ pub fn run() {
                 ui_locale::ui_locale_set,
                 app_icons::app_icon_status,
                 app_icons::set_app_icon,
+                private_keyboard::terminal_private_keyboard,
+                soft_keyboard::soft_keyboard,
                 theme_links::theme_link_status,
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,
@@ -148,6 +165,9 @@ pub fn run() {
                 local::local_write,
                 local::local_resize,
                 local::local_ack,
+                terminal_core::terminal_core_open,
+                terminal_core::terminal_core_text,
+                terminal_core::terminal_core_close,
                 local::local_disconnect,
                 apple_status::apple_status_capability,
                 apple_status::apple_status_configure,
@@ -198,6 +218,10 @@ pub fn run() {
                 approvals::resolve_agent_approval,
                 notifications::notify_agent_attention,
                 notifications::notification_test,
+                edge_gestures::edge_gesture_exclusion,
+                edge_gestures::edge_gesture_insets,
+                session_background::open_notification_settings,
+                session_background::request_notification_permission,
                 voice::voice_models,
                 voice::catalog::voice_model_catalog,
                 voice::catalog::voice_download_model,
@@ -238,14 +262,19 @@ pub fn run() {
                 tmux_jump::tmux_jump,
                 tmux_jump::chat::tmux_chat,
                 herdr_guard::herdr_chat,
+                herdr_stock_input::herdr_agent_input,
+                zellij_input::zellij_agent_input,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,
+                transcript_watch::agent_watch_start,
+                transcript_watch::agent_watch_stop,
                 herdr::herdr_action,
                 herdr_create::herdr_workspace_plan,
                 herdr_create::herdr_workspace_create,
                 herdr_create::herdr_agent_kinds,
                 herdr_create::herdr_repository,
                 zellij::zellij_action,
+                zellij::zellij_tabs,
                 multiplexer::multiplexer_sessions,
                 multiplexer::tmux_action,
                 ssh::attach_multiplexer,
@@ -267,6 +296,11 @@ pub fn run() {
                 ssh::disconnect,
                 ssh::probe_connections,
                 ssh::list_directory,
+                ssh::host_home,
+                file_transfer::host_file_stat,
+                file_transfer::host_file_download,
+                file_transfer::host_file_cancel,
+                file_transfer::host_file_deliver,
                 ssh::read_file,
                 attachment_upload::upload_reserve,
                 attachment_upload::upload_cancel,
@@ -278,13 +312,15 @@ pub fn run() {
                 ssh::agent_snapshot,
                 ssh::agent_reported_history,
                 companion::install_companion,
+                companion::install_companion_from_device,
                 companion::hooks::companion_hooks,
                 companion::hooks::companion_hook_discovery,
                 companion_settings::get_companion_settings,
                 companion_settings::update_companion_settings,
                 ssh::agent_transcript,
                 ssh::agent_usage,
-                ssh::agent_transcripts
+                ssh::agent_transcripts,
+                ssh::agent_history
             ];
             handler(invoke)
         })

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { candidate, initialCandidate, candidateRecipe, createStableTag, releaseEnabled, requireCleanSourceScan,
-  requireCurrentRelease, type ReleasePolicy } from '../.changeset/release-tag';
+  requireCurrentRelease, reserveCandidate, type ReleasePolicy } from '../.changeset/release-tag';
 import { androidMetadataPath, androidVersionCode, ownedWorkspaces, synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
 
 const sha = 'a'.repeat(40);
@@ -37,7 +37,7 @@ test('GitHub publication is enabled independently of pending official F-Droid ac
   expect(api.calls).toEqual([]);
 });
 
-test('real disabled CLI only reports blocked admission and rejects the tag command', async () => {
+test('real disabled CLI only reports blocked admission, tolerates the early reservation and rejects the tag command', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-tag-disabled-'));
   try {
     await mkdir(join(directory, '.changeset'));
@@ -50,6 +50,8 @@ test('real disabled CLI only reports blocked admission and rejects the tag comma
     expect(run('prepare').exitCode).toBe(0);
     expect(await Bun.file(output).text()).toBe('enabled=false\n');
     expect(await Bun.file(join(directory, 'candidate/metadata/app.lazysh.client.yml')).exists()).toBe(false);
+    expect(run('reserve').exitCode).toBe(0);
+    expect(await Bun.file(output).text()).toBe('enabled=false\n');
     expect(run('tag').exitCode).not.toBe(0);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -123,15 +125,39 @@ test('create-only tag uses the exact validated source SHA', async () => {
     { path: 'git/refs', body: { ref: `refs/tags/${next.tag}`, sha } },
   ]);
 });
-test('tag creation failure retains only its closed HTTP status', async () => {
-  const refused = response({ message: 'PRIVATE_RESPONSE_BODY', token: 'PRIVATE_TOKEN' }, 403);
+test('a refused tag names GitHub\'s reason and request, bounded and without secrets or forged commands, and is not retried', async () => {
+  const refused = response({ message: `Resource not accessible by integration\n::error::forged ghs_PRIVATE123 ${'x'.repeat(500)}`,
+    token: 'PRIVATE_TOKEN' }, 403);
+  refused.headers.set('X-GitHub-Request-Id', '5411:E21BD:26359A3');
   refused.headers.set('X-Private', 'PRIVATE_RESPONSE_HEADER');
   const api = requests([main(), response({}, 404), refused]);
-  await expect(createStableTag(next, active, 'success', api.request)).rejects.toMatchObject({
-    message: 'Release gate: tag creation failed (HTTP 403)',
-  });
-  expect(refused.bodyUsed).toBe(false);
+  const failure = await createStableTag(next, active, 'success', api.request).then(() => 'unexpected success', error => error.message);
+  expect(failure).toStartWith('Release gate: tag creation failed (HTTP 403: Resource not accessible by integration');
+  expect(failure).toContain('request 5411:E21BD:26359A3');
+  for (const hidden of ['PRIVATE_TOKEN', 'PRIVATE_RESPONSE_HEADER', 'ghs_PRIVATE123', '\n']) expect(failure).not.toContain(hidden);
+  expect(failure.length).toBeLessThan(400);
   expect(api.calls).toHaveLength(3);
+});
+const reserved = `refs/heads/release-candidate/${sha}`;
+test('the reservation is a create-only branch at the exact candidate and needs no build result', async () => {
+  const api = requests([main(), response({}, 404), response({ ref: reserved, object: { sha, type: 'commit' } }, 201)]);
+  expect(await reserveCandidate(next, active, api.request)).toBe('created');
+  expect(api.calls).toEqual([
+    { path: 'git/ref/heads/main', body: undefined }, { path: `git/ref/${reserved.slice(5)}`, body: undefined },
+    { path: 'git/refs', body: { ref: reserved, sha } },
+  ]);
+});
+test('the reservation is idempotent for its commit and refuses a moved branch, an advanced main or a disabled release', async () => {
+  const same = requests([main(), response({ ref: reserved, object: { sha, type: 'commit' } })]);
+  expect(await reserveCandidate(next, active, same.request)).toBe('existing');
+  expect(same.calls.every(call => !call.body)).toBe(true);
+  const moved = requests([main(), response({ ref: reserved, object: { sha: 'b'.repeat(40), type: 'commit' } })]);
+  await expect(reserveCandidate(next, active, moved.request)).rejects.toThrow('reservation collision');
+  const advanced = requests([response({ object: { sha: 'b'.repeat(40) } })]);
+  await expect(reserveCandidate(next, active, advanced.request)).rejects.toThrow('main advanced');
+  const disabled = requests([]);
+  await expect(reserveCandidate(next, { ...policy, enabled: false }, disabled.request)).rejects.toThrow('disabled');
+  expect(disabled.calls).toEqual([]);
 });
 test.each([false, true])('same-commit retry is idempotent, including concurrent create: %s', async race => {
   const api = requests([main(), ...(race ? [response({}, 404), response({}, 422)] : []), response(ref())]);
@@ -195,6 +221,13 @@ test('current-main admission accepts same-version first-parent progress, rejects
         GITHUB_SHA: advanced, GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push', GITHUB_OUTPUT: output },
     });
     expect(prepare.exitCode, prepare.stderr.toString()).toBe(0);
+    expect(await Bun.file(output).text()).toBe('enabled=false\n');
+    // An unchanged version reserves nothing and needs no credentials: the job passes without calling GitHub.
+    const reserve = Bun.spawnSync(['bun', join(source, '.changeset/release-tag.ts'), 'reserve'], {
+      cwd: root, stdout: 'pipe', stderr: 'pipe', env: { ...process.env,
+        GITHUB_SHA: advanced, GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push', GITHUB_OUTPUT: output },
+    });
+    expect(reserve.exitCode, reserve.stderr.toString()).toBe(0);
     expect(await Bun.file(output).text()).toBe('enabled=false\n');
     await rm(output);
     await Bun.write(join(root, '.changeset/release-policy.json'), JSON.stringify({ ...policy,

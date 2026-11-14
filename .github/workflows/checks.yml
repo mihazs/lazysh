@@ -4,14 +4,25 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Nightly device run: native-changes.sh maps this event to the Appium jobs alone, and client and agent skip it.
+  schedule:
+    - cron: '41 3 * * *'
 
 permissions:
   contents: read
 
-# A newer pull request push supersedes its older checks; main runs always finish so every
-# merged commit gets a complete native verification (GitHub still keeps one pending run).
+env:
+  MOON_TOOLCHAIN_FORCE_GLOBALS: 'true'
+  # Shallow jobs have no base branch to diff, and `moon run` on a pull request would fail resolving it.
+  # Only the two `moon ci` steps need changed files; they override MOON_BASE with the pull request base.
+  MOON_BASE: HEAD
+  MOON_HEAD: HEAD
+
+# A newer pull request push supersedes its older checks. A running main run is never cancelled,
+# but GitHub keeps one pending run per group and cancels older pending ones, so a busy trunk does
+# not get a complete run per commit here: main-verdict.yml gives every main commit a verdict.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -33,6 +44,8 @@ jobs:
       android_runtime: ${{ steps.paths.outputs.android_runtime }}
       android_mosh: ${{ steps.paths.outputs.android_mosh }}
       android_herdr: ${{ steps.paths.outputs.android_herdr }}
+      android_appium: ${{ steps.paths.outputs.android_appium }}
+      android_appium_quarantine: ${{ steps.paths.outputs.android_appium_quarantine }}
       android_auxiliary: ${{ steps.paths.outputs.android_auxiliary }}
       android_ntfy: ${{ steps.paths.outputs.android_ntfy }}
       ios: ${{ steps.paths.outputs.ios }}
@@ -72,21 +85,39 @@ jobs:
     uses: ./.github/workflows/companion-artifacts.yml
 
   client:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     steps:
-      - &source-checkout
-        uses: actions/checkout@v4
+      # moon derives the pull request's affected tasks from the merge base, so it needs history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - &source-bun
         uses: ./.github/actions/setup-bun
-      - uses: actions/cache@v4
+      # Pull requests restore main's moon cache but never save their own, like the Rust caches.
+      - id: moon-cache
+        uses: actions/cache/restore@v4
         with:
-          path: .turbo
-          key: turbo-client-${{ runner.os }}-${{ github.sha }}
-          restore-keys: turbo-client-${{ runner.os }}-
+          path: |
+            .moon/cache/hashes
+            .moon/cache/outputs
+          key: moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-${{ github.sha }}
+          restore-keys: |
+            moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-
+            moon-client-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun run test:hooks
       - run: bun run test:ci
-      - run: bunx turbo run build check test --filter=@lazysh/client --concurrency=1
+      # Pull requests run only the tasks the diff can affect, followed through project relations
+      # (-g). Pushes to main always run everything: it is the full parity evidence.
+      - name: Build, type-check and test the client (affected tasks)
+        if: github.event_name == 'pull_request'
+        env:
+          MOON_BASE: origin/${{ github.base_ref }}
+        run: bunx moon ci client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -g -c 1
+      - name: Build, type-check and test the client
+        if: github.event_name != 'pull_request'
+        run: bunx moon run client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -c 1
       - name: Resolve the locked Playwright version
         id: playwright
         working-directory: apps/client
@@ -101,13 +132,24 @@ jobs:
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
-      - run: bun run test:e2e
+      - run: bunx moon run client:test-e2e
+      - name: Save the moon cache from main
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .moon/cache/hashes
+            .moon/cache/outputs
+          key: ${{ steps.moon-cache.outputs.cache-primary-key }}
 
   agent:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - *source-bun
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -124,7 +166,11 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
-        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/account-usage --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
+          MOON_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD' }}
+        run: |
+          # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g --downstream none'; else verb=run; fi
+          bunx moon $verb '#companion:build' '#companion:check-rust' '#companion:test-rust' '#companion:test-hooks' '#companion:lint' '#companion:format-check'
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
@@ -177,9 +223,13 @@ jobs:
           mkdir -p "$HERDR_CI_ROOT/common/src"
           cp -a packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           cp -a packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
+          cp -a packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
           cp packages/common/src/{hex_digest,guarded_target}.rs "$HERDR_CI_ROOT/common/src/"
+          # The core replays the Mosh frames the client's e2e suite also uses; one file, two readers.
+          cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
           diff --recursive --brief --no-dereference packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           diff --recursive --brief --no-dereference packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
+          diff --recursive --brief --no-dereference packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
           diff packages/common/src/hex_digest.rs "$HERDR_CI_ROOT/common/src/hex_digest.rs"
           diff packages/common/src/guarded_target.rs "$HERDR_CI_ROOT/common/src/guarded_target.rs"
       - name: Check the pinned official Rust release manifest
@@ -201,13 +251,27 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: herdr-cargo-downloads-${{ runner.os }}-${{ hashFiles('packages/herdr-upstream/Cargo.lock') }}
+      # Only Zig's compressed package tarballs (zig-global/p), never compiled objects. Zig checks
+      # every package against its pinned hash each time it unpacks one, so a changed entry fails
+      # the build, and an unreadable one is dropped here so Zig downloads it again.
+      - name: Restore Herdr's hash-addressed Zig package downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lazysh-herdr-native/zig-global/p
+          key: herdr-zig-packages-v1-${{ runner.os }}-zig0.16.0-${{ hashFiles('packages/herdr-upstream/vendor/libghostty-vt/build.zig.zon', 'packages/herdr-upstream/vendor/libghostty-vt/pkg/*/build.zig.zon') }}
+      - name: Drop unreadable cached Zig packages
+        id: zig-package-scrub
+        run: |
+          for package in "$ZIG_GLOBAL_CACHE_DIR"/p/*; do
+            if [ -e "$package" ] && ! gzip --test "$package" 2>/dev/null; then rm -f "$package"; fi
+          done
       # Restored files are reused only when they match their pin, and each step still checks it.
       - &pinned-download-cache
         name: Restore pinned fixture downloads
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lazysh-pinned-downloads
-          key: lazysh-pinned-downloads-${{ github.job }}-v1-zig70e49664-tmux551ab8de-mosh872e4b13-et3065d282-zellij40bcc2e0
+          key: lazysh-pinned-downloads-${{ github.job }}-v2-zig70e49664-tmux551ab8de-tmux38e79c699c-mosh872e4b13-et3065d282-zellij40bcc2e0-agent1280d8f0bab9-agent1334b37f2b67
       - name: Provision checksum-verified Zig 0.16.0 outside the checkout
         # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-linux].shasum
         run: |
@@ -269,7 +333,7 @@ jobs:
         run: bun test tests/herdr-source.test.ts
       - name: Build the real optional Herdr binary
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
-        run: cargo +1.96.1 build --locked
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked
       - name: Exercise guarded protocol, API ownership and runtime identity
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: |
@@ -295,6 +359,23 @@ jobs:
         run: |
           unset HERDR_UPDATE_API_SCHEMA
           cargo +1.96.1 test --locked --bin herdr api::schema::tests::generated_protocol_schema_artifact_is_current -- --exact
+
+      # Same herdr-upstream copy, Zig, admitted archives and Zig caches as above; only the Cargo build of the binding repeats.
+      - name: Test the shared terminal runtime against the same libghostty-vt build
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        env:
+          LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-herdr-native/mosh-resize-frames.json
+        run: |
+          cargo +1.96.1 fmt --check
+          cargo +1.96.1 clippy --locked --all-targets -- -D warnings
+          cargo +1.96.1 test --locked
+
+      # The shootout prototype has its own lock file and needs a GPU to run, so CI only keeps it compiling.
+      - name: Check that the wgpu renderer prototype still builds against the runtime
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime/prototypes/wgpu
+        run: |
+          cargo +1.96.1 fmt --check
+          cargo +1.96.1 clippy --locked --all-targets -- -D warnings
 
       - name: Retain the exact guarded binary for native SSH interoperability
         id: guarded-artifact
@@ -343,7 +424,7 @@ jobs:
           ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/lazysh-herdr-native/stock-target/zig-global
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/stock-source
         run: |
-          cargo +1.96.1 build --locked --bin herdr
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --bin herdr
           manifest="$GITHUB_WORKSPACE/packages/herdr-upstream/SOURCE-MANIFEST.sha256"
           printf '%s  %s\n' 'c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a' "$manifest" | sha256sum --check --strict
           test "$(wc -l < "$manifest")" -eq 1843
@@ -387,7 +468,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
+      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap python3-gi
       - name: Verify native GUI namespace prerequisites
         env:
           LAZYSH_NATIVE_NAMESPACE_NETWORK: private
@@ -446,7 +527,7 @@ jobs:
           prefix-key: v0-rust-ubuntu-22.04
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bun install --frozen-lockfile
-      - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      - run: bunx moon run client:build client-native:verify-native
       # A skipped or failed producer publishes no ID; fail before the download guesses one.
       - name: Validate producer artifact ID
         env:
@@ -471,6 +552,15 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
           printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
+      # The two published companions that real hosts still run. The owned SSH case updates a host that has each one.
+      - name: Fetch the pinned published 1.28.0 and 1.33.4 companions for the owned update hosts
+        run: |
+          old_companions=$(mktemp -d "$RUNNER_TEMP/lazysh-old-companions-XXXXXX")
+          sh .github/scripts/pinned-download.sh d8f0bab955d71e3d2f2d9731a2514c88f482b6809fe20593a9906737a977f1d0 "$old_companions/lazysh-1.28.0-linux-agent-x64.bin" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 11481648 https://github.com/mihazs/lazysh/releases/download/v1.28.0/lazysh-1.28.0-linux-agent-x64.bin
+          sh .github/scripts/pinned-download.sh b37f2b673732b99fc2e751cf8974393a9329fc979d8e1ef205cf6829cc8b6804 "$old_companions/lazysh-1.33.4-linux-agent-x64.bin" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 11514416 https://github.com/mihazs/lazysh/releases/download/v1.33.4/lazysh-1.33.4-linux-agent-x64.bin
+          (cd "$old_companions" && printf '%s  %s\n' d8f0bab955d71e3d2f2d9731a2514c88f482b6809fe20593a9906737a977f1d0 lazysh-1.28.0-linux-agent-x64.bin b37f2b673732b99fc2e751cf8974393a9329fc979d8e1ef205cf6829cc8b6804 lazysh-1.33.4-linux-agent-x64.bin | sha256sum --check --strict)
+          chmod 700 "$old_companions"/*.bin
+          echo "LAZYSH_TEST_OLD_COMPANIONS=$old_companions" >> "$GITHUB_ENV"
       - name: Exercise owned companion transfer and exact Mosh entry over SSH
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
@@ -482,9 +572,9 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
       - name: Check standalone Parakeet runtime and native ownership boundary
-        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
+        run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Check combined native voice startup and clean shutdown without models
-        run: bunx turbo run test:voice-interop:smoke --filter=@lazysh/client
+        run: bunx moon run client-native:test-voice-interop-smoke
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -499,7 +589,7 @@ jobs:
       - name: Prepare owned native GUI system tools
         run: |
           tools_dir=$(mktemp -d "$RUNNER_TEMP/lazysh-native-tools.XXXXXX")
-          for tool in WebKitWebDriver Xvfb gnome-keyring-daemon; do
+          for tool in WebKitWebDriver Xvfb gnome-keyring-daemon python3; do
             source=$(readlink -f "/usr/bin/$tool")
             install -m 0755 "$source" "$tools_dir/$tool"
             cmp "$source" "$tools_dir/$tool"
@@ -507,6 +597,7 @@ jobs:
           echo "LAZYSH_NATIVE_GUI_WEBKIT_DRIVER=$tools_dir/WebKitWebDriver" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_XVFB=$tools_dir/Xvfb" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_SECRET_SERVICE=$tools_dir/gnome-keyring-daemon" >> "$GITHUB_ENV"
+          echo "LAZYSH_NATIVE_GUI_PYTHON=$tools_dir/python3" >> "$GITHUB_ENV"
       - name: Exercise owned Linux native singleton GUI delivery
         id: native-gui
         env:
@@ -529,7 +620,7 @@ jobs:
           if-no-files-found: warn
       - run: bun run test:mosh
       - name: Exercise retained tmux display navigation and hostile control streams
-        run: bunx turbo run test:tmux --filter=@lazysh/client
+        run: bunx moon run client-native:test-tmux
       - name: Exercise original-display Chat input and retirement on supported tmux
         shell: bash
         run: |
@@ -537,7 +628,15 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
-      - name: Reject unsupported apt tmux loops without binding authority
+      - name: Run a scripted agent session from the guarded Agent view inputs on supported tmux
+        shell: bash
+        run: |
+          test "$(tmux -V)" = 'tmux 3.4'
+          test -x "$LAZYSH_TEST_AGENT_BIN"
+          case_name=ssh::tmux_jump_fixture::agent_session::real_tmux_agent_session_runs_from_the_guarded_agent_view_inputs_only
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      - name: Reject unsupported apt tmux loops without binding authority and report it degraded
         shell: bash
         env:
           LAZYSH_TEST_TMUX: /usr/bin/tmux
@@ -546,6 +645,10 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          # Product discovery over owned OpenSSH reports this tmux as degraded.
+          case_name=ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          LAZYSH_EXPECT_MUX_SUPPORT='tmux=degraded' cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact --nocapture
       # Last: the stock verification replaces LAZYSH_TEST_HERDR for any later step.
       - &pinned-zellij
         name: Install the pinned official Zellij 0.45.1 release outside the checkout
@@ -626,9 +729,9 @@ jobs:
           LAZYSH_TEST_WINDOWS_HASH: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
       - name: Exercise account quota collectors and process ownership
-        run: bunx turbo run test:rust --filter=@lazysh/account-usage
+        run: bunx moon run account-usage:test-rust
       - run: bun run build:native
-      - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - run: bunx moon run credential-vault:test-rust
       - name: Exercise the actual Windows Credential Manager round trip and chunked deletion
         if: runner.os == 'Windows'
         shell: bash
@@ -658,23 +761,25 @@ jobs:
         run: bun run test:storage
       - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
         if: runner.os == 'macOS'
-        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
+        run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Exercise native desktop launch parsing and original-lease admission
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
+      - name: Exercise multiplexer version gates, command building and tree parsing
+        run: "cargo test --locked -p lazysh --lib -- multiplexer:: zellij:: herdr:: herdr_create:: tmux_jump::"
       - name: Exercise the remote Herdr user-install admission script with Darwin stat
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
       - name: Exercise native local PTY and ConPTY lifecycle
-        run: bunx turbo run test:local --filter=@lazysh/client
+        run: bunx moon run client-native:test-local
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:
           LAZYSH_TEST_OWNED_MAC_CLIPBOARD: "1"
-        run: bunx turbo run test:host-clipboard --filter=@lazysh/client
+        run: bunx moon run client-native:test-host-clipboard
       - name: Exercise native display-idle ownership and platform API release
-        run: bunx turbo run test:rust --filter=@lazysh/display-idle
+        run: bunx moon run display-idle:test-rust
       - name: Exercise native resume policy persistence and cancellation
-        run: bunx turbo run test:resume-policy --filter=@lazysh/client
+        run: bunx moon run client-native:test-resume-policy
 
   native-android:
     needs: changes
@@ -705,7 +810,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:android
       - name: Inspect normal Android Google push graph and packaged classes
-        run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx turbo run test:android-push-artifact --filter=@lazysh/client
+        run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx moon run client:test-android-push-artifact
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
       - name: Exercise native Android ingress and compiled startup log policy
@@ -735,7 +840,8 @@ jobs:
       LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-runtime-results
       GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
     steps: &android-owned-runtime-steps
-      - *source-checkout
+      - &source-checkout
+        uses: actions/checkout@v4
       - *source-bun
       - *android-toolchains
       - &android-owned-rust
@@ -744,7 +850,7 @@ jobs:
           targets: x86_64-linux-android
       - &android-owned-host-dependencies
         name: Install native Mosh fixture dependencies
-        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
+        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap libnss-wrapper protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
       - &android-owned-namespace
         name: Verify native GUI namespace prerequisites
         env:
@@ -792,7 +898,7 @@ jobs:
           cargo test --locked -p lazysh-agent --example owned_terminal_receiver
           cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
-        if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux'
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'ssh-parity'
       - &android-owned-kvm
         name: Grant this runner access to KVM
         run: |
@@ -851,12 +957,15 @@ jobs:
             > "$diagnostic_dir/system-anr.txt" 2> "$diagnostic_dir/collector-errors.txt" &
             collector_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
+            sh .github/scripts/android-dismiss-error-dialogs.sh;
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
             tmux) bun run test:android-tmux; exit $? ;;
+            ssh-parity) bun run test:android-ssh-parity; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
             biometric) bun run test:android-biometric; exit $? ;;
+            appium) bun run test:mobile-e2e:ci; exit $? ;;
             auxiliary) ;;
             *) printf "%s\n" "Unknown Android runtime owner" >&2; exit 1 ;;
             esac;
@@ -931,6 +1040,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+  # Owned OpenSSH password, encrypted-key, rotated-key, bastion and agent-forwarding
+  # parity cases (#985) on the emulator; separate so their verdict is attributable.
+  native-android-ssh-parity:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: ssh-parity
+      LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-ssh-parity-results
+    steps: *android-owned-runtime-steps
+
   # Owned pinned tmux on the emulator; separate so its verdict is attributable.
   native-android-tmux:
     needs: changes
@@ -942,6 +1064,94 @@ jobs:
       LAZYSH_ANDROID_RUNTIME_OWNER: tmux
       LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-tmux-results
     steps: *android-owned-runtime-steps
+
+  # The Appium + WebdriverIO device suite (ADR 0002, #1412) on the same API 36 emulator, with owned SSH and stock Herdr hosts
+  # and the real companion. Report-only: not a required check until it has passed 20 consecutive runs of main and the
+  # maintainer adds it to the ruleset (docs/android-testing.md, "Appium suite in CI"). Pull requests run the smoke and
+  # regression tiers; main and the nightly run add journeys.
+  native-android-appium:
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.android_appium == 'true'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-22.04
+    # Below native-android-runtime's 40 minutes; a cancelled job retains no verdict.
+    timeout-minutes: 38
+    strategy:
+      fail-fast: *pull-request-fail-fast
+      matrix:
+        # One emulator serves one session, so each shard is its own job. Sharding is wired (wdio --shard) but off: list
+        # '1/2' and '2/2' here, and the job count in tests/native-changes.test.ts, once the wall time passes 25 minutes.
+        shard: ['1/1']
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: appium
+      LAZYSH_E2E_RUN: gating
+      LAZYSH_E2E_FLAKY: exclude
+      LAZYSH_E2E_SHARD: ${{ matrix.shard }}
+      LAZYSH_E2E_TIERS: ${{ github.event_name == 'pull_request' && 'smoke,regression' || 'smoke,regression,journeys' }}
+      LAZYSH_E2E_APK: ${{ github.workspace }}/apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+      # The upload step appends the shard's job index, so every shard keeps its own artifact.
+      MOBILE_E2E_ARTIFACT: lazysh-appium-gating-
+    steps: &android-appium-steps
+      - *source-checkout
+      - *source-bun
+      - run: bun install --frozen-lockfile
+      # Appium and WebdriverIO run on Node; the runner image's default is not pinned.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - *android-toolchains
+      - *android-owned-rust
+      # The same-run stock Herdr is verified before anything is built on top of it.
+      - *stock-herdr-guard
+      - *stock-herdr-download
+      - *stock-herdr-verify
+      - *android-owned-host-dependencies
+      - *android-owned-namespace
+      - *android-cache-identity
+      - *android-owned-cache
+      - *android-owned-companion
+      # Built before the emulator boots, so its minutes go to the suite. The Rust, Gradle and download caches are the ones
+      # the other emulator jobs share.
+      - name: Build the x86_64 debug APK
+        run: bun run build:android:emulator
+      - name: Install the pinned Appium UiAutomator2 driver
+        run: bun run --cwd apps/client mobile-e2e:setup
+      - *android-owned-kvm
+      - *android-runtime-emulator
+      # JUnit XML, failure screenshots, page sources, logcat and Appium logs, and the emulator's system diagnostics.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ env.MOBILE_E2E_ARTIFACT }}${{ strategy.job-index }}
+          path: |
+            apps/client/mobile-e2e/reports/
+            apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Quarantined (@flaky) Appium specs: only on main and the nightly, only while one carries the tag (native-changes.sh),
+  # and never a verdict (continue-on-error), so a flake under investigation cannot block anything.
+  native-android-appium-quarantine:
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.android_appium_quarantine == 'true'
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 38
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: appium
+      LAZYSH_E2E_RUN: quarantine
+      LAZYSH_E2E_FLAKY: only
+      LAZYSH_E2E_TIERS: smoke,regression,journeys
+      LAZYSH_E2E_APK: ${{ github.workspace }}/apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+      MOBILE_E2E_ARTIFACT: lazysh-appium-quarantine
+    steps: *android-appium-steps
 
   # Real-runtime suites outside native-linux, so one red suite cannot hide the others
   # and the GUI job is not lengthened. Every external fixture is pinned and verified.
@@ -959,8 +1169,8 @@ jobs:
       - *pinned-download-cache
       - uses: ./.github/actions/parakeet-onnxruntime
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install build, OpenSSH, nss_wrapper, tmux, login shell and official ET build dependencies
-        run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish
+      - name: Install build, OpenSSH, nss_wrapper, tmux, login shell, official ET and tmux build dependencies
+        run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish libncurses-dev libevent-dev bison
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
         # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
@@ -974,6 +1184,22 @@ jobs:
           cmake --build "$et_root/build" --parallel 4 --target etserver etterminal
           test "$("$et_root/build/etserver" --version)" = 'et version 7.0.0'
           printf '%s\n' "ET_SERVER_BIN=$et_root/build/etserver" "ET_TERMINAL_BIN=$et_root/build/etterminal" >> "$GITHUB_ENV"
+      - name: Build the newest pinned official tmux 3.8 outside the checkout
+        timeout-minutes: 10
+        # Release asset digest: https://api.github.com/repos/tmux/tmux/releases/tags/3.8
+        run: |
+          tmux_root=$(mktemp -d "$RUNNER_TEMP/lazysh-tmux-3.8-XXXXXX")
+          sh .github/scripts/pinned-download.sh e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e "$tmux_root/tmux-3.8.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 895926 https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz
+          test "$(stat -c%s "$tmux_root/tmux-3.8.tar.gz")" -eq 895926
+          printf '%s  %s\n' 'e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e' "$tmux_root/tmux-3.8.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$tmux_root/tmux-3.8.tar.gz" --directory "$tmux_root" --no-same-owner --no-same-permissions
+          cd "$tmux_root/tmux-3.8"
+          ./configure --prefix="$tmux_root/install"
+          make -j4
+          make install
+          test "$("$tmux_root/install/bin/tmux" -V)" = 'tmux 3.8'
+          # Kept off PATH: only the discovery step below runs it.
+          echo "LAZYSH_TMUX_NEWEST=$tmux_root/install/bin/tmux" >> "$GITHUB_ENV"
       - *pinned-zellij
       - *stock-herdr-guard
       - *stock-herdr-download
@@ -1022,6 +1248,23 @@ jobs:
           fixture jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e 352078
           fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 487211443
           printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
+      - name: Exercise local sessions, files and Git review through the host context
+        if: ${{ !cancelled() }}
+        run: |
+          # Verify the complete inventory so a renamed or missing case cannot silently pass.
+          actual=$(cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib host::tests::local:: -- --list | grep ': test$' | LC_ALL=C sort)
+          printf '%s\n' \
+            'host::tests::local::a_file_that_shrinks_during_a_local_download_fails_and_leaves_nothing: test' \
+            'host::tests::local::cancelling_a_local_download_stops_it_and_removes_the_partial_copy: test' \
+            'host::tests::local::local_downloads_refuse_directories_unconfirmed_links_and_unconfirmed_large_files: test' \
+            'host::tests::local::local_downloads_stage_exact_bytes_report_progress_and_never_run_or_overwrite: test' \
+            'host::tests::local::local_exec_checks_revoked_lease_and_closed_session_before_spawn: test' \
+            'host::tests::local::local_exec_is_cancelled_by_closing_the_session: test' \
+            'host::tests::local::local_exec_over_its_deadline_times_out_and_reaps_the_child: test' \
+            'host::tests::local::local_files_list_and_read_with_remote_bounds: test' \
+            'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' \
+            'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' | diff -u - <(printf '%s\n' "$actual")
+          bunx moon run client-native:test-local
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
         if: ${{ !cancelled() }}
@@ -1039,18 +1282,18 @@ jobs:
         run: |
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_loss_fixture::openssh_ -- --list --ignored | grep -c ': test$' | grep -Fx 1
-          bun run --cwd apps/client test:connection-loss
+          bunx moon run client-native:test-connection-loss
       - name: Exercise real tmux, Herdr and Zellij lifecycle actions
         if: ${{ !cancelled() }}
         # Exact Herdr pane focus runs the current-source companion.
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
-      - name: Exercise Herdr creation argv quoting under sh, bash, zsh and fish login shells
+      - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:
           LAZYSH_REQUIRE_FISH: '1'
-        run: "cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib herdr_create::tests::"
+        run: "cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- herdr_create::tests:: repository::tests::remote_diff_command_reads_equals_prefixed_paths_under_every_login_shell"
       - name: Exercise discovery, attach, tree and actions on a user-installed stock Herdr over real OpenSSH
         if: ${{ !cancelled() }}
         shell: bash
@@ -1058,6 +1301,27 @@ jobs:
           CASE_NAME: ssh::tmux_jump_fixture::real_ssh_user_installed_herdr_discovers_and_attaches_exact_default
           LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
         run: *exact-ignored-case
+      - name: Report tmux 3.4, Zellij 0.45.1 and stock Herdr versions as supported through product discovery over owned OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          LAZYSH_TEST_TMUX: /usr/bin/tmux
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+          LAZYSH_EXPECT_MUX_SUPPORT: tmux=full zellij=full herdr=full
+        run: |
+          test "$(/usr/bin/tmux -V)" = 'tmux 3.4'
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      - name: Report the newest pinned tmux as supported through product discovery over owned OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          LAZYSH_EXPECT_MUX_SUPPORT: tmux=full
+        run: |
+          test "$("$LAZYSH_TMUX_NEWEST" -V)" = 'tmux 3.8'
+          LAZYSH_TEST_TMUX="$LAZYSH_TMUX_NEWEST" cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
       - name: Exercise official ET 7.0.0 transport and SSH bootstrap
         if: ${{ !cancelled() }}
         run: bun run test:et
@@ -1067,7 +1331,7 @@ jobs:
       - name: Exercise the real Parakeet manager install, warm reuse and removal
         if: ${{ !cancelled() }}
         timeout-minutes: 20
-        run: bunx turbo run test:parakeet-product --filter=@lazysh/client
+        run: bunx moon run client-native:test-parakeet-product
       # Official caronc/apprise-api 2.0.2 image (Docker Hub caronc/apprise), pinned by its
       # multi-arch index digest. Host networking lets its json:// service reach the test's
       # loopback receiver; the relay reaches it only through the test's owned TLS proxy.
@@ -1081,6 +1345,24 @@ jobs:
         run: |
           docker run --detach --rm --name lazysh-apprise --network host "$APPRISE_IMAGE"
           trap 'docker logs lazysh-apprise 2>&1 | tail -n 40; docker rm --force lazysh-apprise >/dev/null' EXIT
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      # Official Gotify 3.1.1 Linux release; the archive is pinned by its release asset digest
+      # (https://api.github.com/repos/gotify/server/releases/tags/v3.1.1) and the case itself
+      # rechecks the extracted binary. It serves only the case's owned TLS loopback listener.
+      - name: Deliver relay events to the pinned official Gotify server over verified TLS
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          CASE_NAME: tests::gotify_server::real_gotify_server_stores_all_finite_relay_states_over_verified_tls
+        run: |
+          gotify_root=$(mktemp -d "$RUNNER_TEMP/lazysh-gotify-3.1.1-XXXXXX")
+          sh .github/scripts/pinned-download.sh d452faad071981d191d5c95f70d0f9520dc2ef2336b2b03055e12cfabfbae2d2 "$gotify_root/gotify.zip" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 15552390 https://github.com/gotify/server/releases/download/v3.1.1/gotify-linux-amd64.zip
+          printf '%s  %s\n' 'd452faad071981d191d5c95f70d0f9520dc2ef2336b2b03055e12cfabfbae2d2' "$gotify_root/gotify.zip" | sha256sum --check --strict
+          unzip -q "$gotify_root/gotify.zip" gotify-linux-amd64 -d "$gotify_root"
+          chmod 0500 "$gotify_root/gotify-linux-amd64"
+          export LAZYSH_GOTIFY_SERVER="$gotify_root/gotify-linux-amd64"
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
@@ -1175,7 +1457,7 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-ntfy-emulator.pid
           script: |
-            if [ '${{ matrix.push-variant }}' = 'google' ]; then LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy; else LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy; fi
+            if [ '${{ matrix.push-variant }}' = 'google' ]; then LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run test:android-ntfy; else LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy; fi
       - name: Retain finite ntfy acceptance receipts only
         uses: actions/upload-artifact@v4
         if: always()
@@ -1330,7 +1612,7 @@ jobs:
         run: cargo test -p lazysh-mosh-transport --target aarch64-apple-ios --lib --no-run --locked
       - name: Compile watchOS companion and complications
         timeout-minutes: 8
-        run: bunx turbo run build:watchos --filter=@lazysh/apple-status
+        run: bunx moon run apple-status:build-watchos
       - name: Create isolated status test simulator
         id: ios-simulator
         run: |
@@ -1338,13 +1620,13 @@ jobs:
           echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
       - name: Run native status lifecycle tests
         timeout-minutes: 8
-        run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
+        run: bunx moon run apple-status:test-apple-status
       - name: Run native APNs registration state tests
         timeout-minutes: 8
-        run: bunx turbo run test:apns --filter=@lazysh/push-registration
+        run: bunx moon run push-registration:test-apns
       - name: Run native resume cover and lifecycle tests
         timeout-minutes: 8
-        run: bunx turbo run test:resume --filter=@lazysh/credential-vault
+        run: bunx moon run credential-vault:test-resume
       - name: Upload native resume results
         if: always()
         uses: actions/upload-artifact@v4

@@ -28,11 +28,43 @@ include unverified testimonials. The maintainer preparing a release owns this ch
 
 ## Validation
 
-Run checks relevant to the change using the project's Cargo, Bun/Turbo, Vitest,
+Run checks relevant to the change using the project's Cargo, Bun, moon, Vitest,
 Playwright, Gradle/JUnit and XCTest tasks. See the [README](README.md#checks).
 Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
 Do not substitute a passing build for device or behavioral acceptance.
+
+### Task runner (moon)
+
+[moon](https://moonrepo.dev) orchestrates the Bun and Cargo workspaces as one project graph; the root
+`bun run` scripts are thin aliases for `moon run`. `bun install --frozen-lockfile` installs the pinned CLI.
+
+```sh
+bunx moon run client:check              # one task      bunx moon run :lint    # one task everywhere
+bunx moon task client:build --json      # what moon resolved: command, env, deps, options
+bunx moon query projects                # the project graph (tags, layers, dependsOn)
+bunx moon ci -g client:check            # only what the diff affects, plus dependents
+```
+
+Conventions:
+
+- Every `apps/*` and `packages/*` project has a `moon.yml` with `language`, `layer`, `stack` and `tags`.
+  Cargo workspace members carry the `cargo` tag and inherit `check-rust`, `test-rust`, `lint` and
+  `format-check` from `.moon/tasks/cargo.yml`; `companion` selects the crates the `agent` CI job verifies.
+- moon reads Cargo `[dependencies]` and `package.json` workspace dependencies. It does not read
+  `[target.'cfg(..)'.dependencies]` or `[patch]`, so declare those in `dependsOn`.
+  `tests/moon-graph.test.ts` fails when a Cargo path dependency is missing from the graph.
+- Task ids use `-` where script names used `:` (`test-android-ssh`). Do not set `runInCI: false` on a task a workflow runs: `moon run` skips such a task when `CI` is set.
+  Workflows always pass explicit targets to `moon ci`/`moon run`; never run `moon ci` unfiltered, since that selects the
+  device, simulator and browser tasks too.
+- moon does not filter the environment, so every task sees the whole process environment. A task `env` constant
+  loses to a conflicting process value unless the task sets `options.envOverride: true`; use it for flags such
+  as `LAZYSH_ANDROID_UI_QR=1`.
+- Most tasks are uncached; only `client:check`, `client:test` and `client:check-native-gui` are cached.
+  There is no remote cache.
+
+The tables are in the [moon task reference](docs/reference/moon-tasks.md) and the procedures in
+[Run tasks with moon](docs/how-to/run-tasks-with-moon.md).
 
 ### Which CI jobs a pull request runs
 
@@ -45,17 +77,55 @@ skip the gate and run every job with the full matrix, which is the parity eviden
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
 | Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |
-| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android tmux |
-| Agent: `apps/agent/**`, `packages/{common,account-usage,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
-| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google) |
+| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android tmux, Appium suite |
+| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
+| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
-| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime and Herdr navigation consumers |
+| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers |
+| Terminal runtime: `packages/terminal-runtime/**` | Herdr only: its tests run in that job against the same libghostty-vt build |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
+
+The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its
+`journeys` tier) and in a nightly `checks` run that starts only that job, and it is not a required check until it has passed 20
+consecutive concluded runs on `main` ([promotion rule](docs/android-testing.md#promotion-to-a-required-check)). A `@flaky` Appium spec runs in the
+separate, never-gating `native-android-appium-quarantine` job.
 
 Matrices fail fast on pull requests and keep every verdict on `main`. The script and
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
 new input, and map an uncertain path to more jobs, never fewer.
+
+### Main verdict
+
+Two pull requests can each pass `checks` and still break `main` together (the v1.49.0 release failed
+`source-build` when both added the same i18n keys). `checks` and `version` share one concurrency group
+per ref, and GitHub keeps one running and one pending run per group, so on a busy trunk the run of an
+older merge commit is cancelled while pending and never reports. The `main-verdict` workflow closes
+that gap: every push to `main` gets its own run (group `main-verdict-<sha>`, never cancelled) of three
+parallel jobs, `verdict-client` (`moon run client:build`, which is `tsc -b && vite build`),
+`verdict-agent` (`moon run '#companion:check-rust'`) and `verdict-release-tools` (`bun run test:release`).
+It completes within minutes, runs no native, emulator or end-to-end job, and its check names differ
+from the required `client`, `agent` and `release-tools` jobs on purpose: it is not a required status
+check, because it only runs after the merge. `tests/main-verdict.test.ts` pins this behavior.
+
+A red verdict means `main` is broken: fix forward with a PR that restores a green `tsc -b`, and do not
+merge the version PR until the verdict of the new tip is green. **Merge procedure for the version PR
+(`chore(release): version lazysh packages`):** besides its own `release-tools` check, the
+`main-verdict` run for its base commit must have completed with all three jobs green. The base commit
+is the `main` tip the PR was generated from, and it must still be the tip (the `version` workflow
+regenerates the PR after every push to `main`). Check it with
+`gh run list --workflow main-verdict.yml --commit "$(git rev-parse origin/main)"`. A running verdict
+is not green: wait for it.
+
+GitHub's merge queue was evaluated as the alternative and is not enabled. A queue tests every pull
+request on top of the queued commits, which closes the gap before the merge instead of after it, but
+it needs a ruleset change and a `merge_group` trigger on every required workflow, and it would run the
+full native matrix (Android emulators, macOS, Windows, iOS simulator on a few hosted runners) once per
+queue entry, serially. Merge latency would move from minutes to hours, and each known flake ejects an
+entry and requeues the ones behind it. "Require branches to be up to date" has the same cost per pull
+request. `main-verdict` detects the same class of break within minutes and gates the release, so the
+queue stays an option to revisit if post-merge breaks recur; it would then run only the fast verdict
+set on `merge_group`.
 
 ## Conventional Commits
 

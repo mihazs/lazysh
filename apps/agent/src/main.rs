@@ -11,10 +11,37 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
+/// Which part of a conversation to read; the newest messages when none is given.
+#[derive(clap::Args, Default)]
+struct WindowArgs {
+    /// The messages just before the one with this id.
+    #[arg(long, conflicts_with_all = ["after", "from_start"])]
+    before: Option<String>,
+    /// The messages just after the one with this id.
+    #[arg(long, conflicts_with = "from_start")]
+    after: Option<String>,
+    /// The first messages of the session.
+    #[arg(long)]
+    from_start: bool,
+}
+impl WindowArgs {
+    fn window(self) -> lazysh_agent::transcript::window::Window {
+        use lazysh_agent::transcript::window::Window;
+        match (self.before, self.after, self.from_start) {
+            (Some(id), _, _) => Window::Before(id),
+            (_, Some(id), _) => Window::After(id),
+            (_, _, true) => Window::Start,
+            _ => Window::Tail,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Print the exact retained third-party licenses and attribution notices.
     Licenses,
+    /// Check whether a newer verified companion release exists, or show the installed one.
+    Update(lazysh_agent::update::Args),
     /// Inspect or explicitly install this verified binary into its managed user namespace.
     Installation {
         #[command(subcommand)]
@@ -64,6 +91,8 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         offset: u64,
     },
+    /// List TCP listeners on loopback or a wildcard address, to confirm a sign-in callback.
+    Listeners(lazysh_agent::listeners::Options),
     /// Inspect and explicitly control host Android devices or iOS Simulators.
     Devices {
         #[command(subcommand)]
@@ -75,6 +104,24 @@ enum Command {
         agent: lazysh_agent::approvals::ApprovalAgent,
         #[arg(long, default_value_t=300, value_parser=clap::value_parser!(u16).range(1..=600))]
         timeout_seconds: u16,
+    },
+    /// Developer prototype: start a throwaway Chrome-family browser with a random loopback debug port
+    /// and stop it when stdin closes. Needs LAZYSH_DEV_HOST_BROWSER=1; see docs/host-browser.md.
+    #[command(hide = true)]
+    HostBrowser {
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+        /// Exact origin allowed to open the debug WebSocket; repeatable, never a wildcard.
+        #[arg(long)]
+        allow_origin: Vec<String>,
+        /// First page to open: http, https or about:blank.
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        headed: bool,
+        /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
+        #[arg(long)]
+        no_sandbox: bool,
     },
     /// Print live, bounded permission requests.
     ApprovalList {
@@ -93,6 +140,12 @@ enum Command {
         pane_id: Option<String>,
         #[arg(long, value_enum)]
         decision: lazysh_agent::approvals::Decision,
+        /// Allow with this suggested permission update of the listed request (its `options` index).
+        #[arg(long, value_parser=clap::value_parser!(u8).range(0..8))]
+        option: Option<u8>,
+        /// Deny with this message, which the agent reads.
+        #[arg(long)]
+        message: Option<String>,
     },
     /// Print an opt-in configuration fragment; never changes Claude settings.
     ApprovalConfig,
@@ -154,6 +207,17 @@ enum Command {
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
     },
+    /// List the earlier Claude Code or Codex sessions of one folder, newest first.
+    History {
+        #[arg(long, value_enum)]
+        agent: lazysh_agent::transcript::TranscriptAgent,
+        #[arg(long)]
+        folder: String,
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
+        #[arg(long, default_value_t=30, value_parser=clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+    },
     /// Read one uniquely identified provider session from its managed root.
     HerdrConversation {
         #[arg(long, value_enum)]
@@ -162,6 +226,8 @@ enum Command {
         session_id: String,
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
+        #[command(flatten)]
+        window: WindowArgs,
     },
     /// Read a bounded page of transcript records without starting an agent.
     Transcript {
@@ -185,6 +251,34 @@ enum Command {
         limit: u8,
         #[arg(long, value_enum, default_value_t = lazysh_agent::transcript::TranscriptView::Records)]
         view: lazysh_agent::transcript::TranscriptView,
+        /// Conversation view only: read before or after a message instead of the newest ones.
+        #[command(flatten)]
+        window: WindowArgs,
+    },
+    /// Stream upserts of one Claude Code or Codex conversation until stdin closes.
+    TranscriptWatch {
+        #[arg(long, value_enum)]
+        agent: lazysh_agent::transcript::TranscriptAgent,
+        /// A transcript file, as `transcript --view conversation` reads it.
+        #[arg(
+            long,
+            conflicts_with = "session_id",
+            required_unless_present = "session_id"
+        )]
+        path: Option<std::path::PathBuf>,
+        /// A provider session id resolved inside the agent's own data root.
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+        #[arg(long, default_value_t=250, value_parser=clap::value_parser!(u64).range(50..=5000))]
+        interval_ms: u64,
+        /// Frame vocabulary version; only 1 exists.
+        #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
+        protocol: u8,
+        /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path`.
+        #[arg(long, requires = "path")]
+        inline_images: bool,
     },
 }
 #[derive(Subcommand)]
@@ -203,7 +297,7 @@ enum SettingsCommand {
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     let operation = match &cli.command {
-        Command::Discover { .. } | Command::ReportedHistory { .. } => {
+        Command::Discover { .. } | Command::History { .. } | Command::ReportedHistory { .. } => {
             Some(lazysh_agent::settings::Operation::TranscriptDiscovery)
         }
         Command::Usage { .. } => Some(lazysh_agent::settings::Operation::RecordedUsage),
@@ -225,6 +319,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 {"id": "herdr-apache", "text": include_str!("../../../packages/account-usage/licenses/HERDR-APACHE-2.0.txt")},
             ],
         })),
+        Command::Update(_) => return Err(Error::InvalidArgument),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
         Command::Hooks { command } => Some(lazysh_agent::hook_setup::run(command)?),
@@ -289,6 +384,23 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 Some(lazysh_agent::devices::run(command)?)
             }
         }
+        Command::HostBrowser {
+            binary,
+            allow_origin,
+            url,
+            headed,
+            no_sandbox,
+        } => {
+            lazysh_agent::host_browser::run(&lazysh_agent::host_browser::Launch {
+                binary: binary.as_deref(),
+                allow_origins: &allow_origin,
+                url: url.as_deref(),
+                headed,
+                no_sandbox,
+            })?;
+            None
+        }
+        Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
         Command::ApprovalConfig => Some(lazysh_agent::approvals::config()),
         Command::ApprovalRequest {
             agent,
@@ -310,13 +422,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             session_id,
             pane_id,
             decision,
+            option,
+            message,
         } => Some(lazysh_agent::approvals::resolve(
             &lazysh_agent::state_directory()?,
             &id,
             &expected_hash,
             &session_id,
             pane_id.as_deref(),
-            decision,
+            lazysh_agent::approvals::Answer {
+                decision,
+                option,
+                message: message.as_deref(),
+            },
         )?),
         Command::ClaudeConfig { reported_history } => Some(if reported_history {
             lazysh_agent::reported_history::claude_config()
@@ -357,15 +475,28 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
+        Command::History {
+            agent,
+            folder,
+            root,
+            limit,
+        } => Some(lazysh_agent::transcript::history(
+            agent,
+            root.as_deref(),
+            &folder,
+            limit,
+        )?),
         Command::HerdrConversation {
             agent,
             session_id,
             limit,
+            window,
         } => Some(
-            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation(
+            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation_window(
                 agent,
                 &session_id,
                 limit,
+                &window.window(),
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
@@ -379,7 +510,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             offset,
             limit,
             view,
+            window,
         } => {
+            let window = window.window();
+            if window != lazysh_agent::transcript::window::Window::Tail
+                && !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation)
+            {
+                return Err(Error::InvalidArgument);
+            }
             if checkpointed
                 && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
                     || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
@@ -389,15 +527,17 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             if inline_images
                 && (session_id.is_some()
-                    || !(matches!(agent, lazysh_agent::transcript::TranscriptAgent::Claude)
-                        || (matches!(
-                            agent,
-                            lazysh_agent::transcript::TranscriptAgent::GrokAcp
-                                | lazysh_agent::transcript::TranscriptAgent::Codex
-                        ) && matches!(
-                            view,
-                            lazysh_agent::transcript::TranscriptView::Records
-                        ))))
+                    || !(matches!(
+                        agent,
+                        lazysh_agent::transcript::TranscriptAgent::Claude
+                            | lazysh_agent::transcript::TranscriptAgent::Codex
+                    ) || (matches!(
+                        agent,
+                        lazysh_agent::transcript::TranscriptAgent::GrokAcp
+                    ) && matches!(
+                        view,
+                        lazysh_agent::transcript::TranscriptView::Records
+                    ))))
             {
                 return Err(Error::InvalidArgument);
             }
@@ -454,26 +594,50 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                             return Err(Error::InvalidArgument);
                         }
                         if matches!(agent, lazysh_agent::transcript::TranscriptAgent::Opencode) {
-                            lazysh_agent::transcript::opencode_conversation(
+                            lazysh_agent::transcript::opencode_conversation_window(
                                 &path,
                                 session_id.as_deref().ok_or(Error::InvalidArgument)?,
                                 limit,
+                                &window,
                             )?
-                        } else if inline_images {
-                            lazysh_agent::transcript::claude_conversation_images(&path, limit)?
                         } else {
-                            lazysh_agent::transcript::conversation(&path, agent, limit)?
+                            lazysh_agent::transcript::conversation_window(
+                                &path,
+                                agent,
+                                limit,
+                                inline_images,
+                                &window,
+                            )?
                         }
                     }
                 })
                 .map_err(|_| Error::InvalidEvent)?,
             )
         }
+        Command::TranscriptWatch {
+            agent,
+            path,
+            session_id,
+            limit,
+            interval_ms,
+            protocol: _,
+            inline_images,
+        } => {
+            lazysh_agent::transcript::watch::run_stdio(lazysh_agent::transcript::watch::Options {
+                agent,
+                path,
+                session_id,
+                limit,
+                interval: std::time::Duration::from_millis(interval_ms),
+                inline_images,
+            })?;
+            None
+        }
         Command::Ingest {
             agent,
             reported_history,
         } => {
-            let pane = std::env::var("TMUX_PANE").ok();
+            let pane = lazysh_agent::pane_identity();
             if reported_history {
                 let (event, source) = lazysh_agent::reported_history::read_hook(
                     io::stdin().lock(),
@@ -515,7 +679,11 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_account_usage::worker_main() {
         return code;
     }
-    match execute(Cli::parse()) {
+    let cli = Cli::parse();
+    if let Command::Update(args) = cli.command {
+        return lazysh_agent::update::run(args);
+    }
+    match execute(cli) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             // SQLite messages may contain paths or user-controlled schema names.

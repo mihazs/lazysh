@@ -3,7 +3,7 @@ import {createReadStream} from 'node:fs';
 import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,readlink,realpath,rm,stat,writeFile} from 'node:fs/promises';
 import {createServer,type Socket} from 'node:net';
 import {userInfo} from 'node:os';
-import {dirname,join,resolve} from 'node:path';
+import {basename,dirname,join,resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {OwnedProcess,descendants,identity,type OwnedPid} from '../../../tests/support/ownedProcess';
@@ -51,6 +51,7 @@ export class NativeGui {
   private secretMembers:OwnedPid[]=[];
   private credentialItem?:string;
   private driver?:OwnedProcess;
+  private notifications?:OwnedProcess;
   private clientObserver?:ClientTargetObserver;
   private env:NodeJS.ProcessEnv;
   private busAddress:string;
@@ -326,6 +327,19 @@ export class NativeGui {
     if(JSON.stringify(current)!==JSON.stringify(original))throw new Error('Secondary CLI replaced the original GUI owner');
     if((await this.browser!.getWindowHandles()).length!==1)throw new Error('Secondary CLI created another native window');
   }
+  /** An owned Desktop Notifications server on this private bus; see ownedNotifications.py. */
+  async notificationServer() {
+    if(this.notifications)throw new Error('Owned notification server already started');
+    const interpreter=await realpath(process.env.LAZYSH_NATIVE_GUI_PYTHON??'/usr/bin/python3'),name=basename(interpreter);
+    if(!/^python3(?:\.[0-9]+)?$/.test(name))throw new Error('Owned notification server requires the system Python 3');
+    const server=this.notifications=new OwnedProcess(await executable(interpreter,'owned notification server interpreter',name),
+      ['-I',join(dirname(fileURLToPath(import.meta.url)),'ownedNotifications.py'),this.busAddress],this.directory,this.env);
+    await until('owned notification server',async()=>{
+      if(!await server.liveIdentity())throw new Error('Owned notification server stopped during startup');
+      return server.stdout.startsWith('{"event":"ready"}\n')?true:undefined;
+    },10_000);
+    return server;
+  }
   async screenshot() {
     await this.appOwner();
     const directory=resolve(ROOT,'apps/client/test-results/native-gui');await mkdir(directory,{recursive:true});
@@ -342,6 +356,7 @@ export class NativeGui {
         return live.some(Boolean)?undefined:true;
       },2000);},
       async()=>{await this.stopDisposableVault();},
+      async()=>{if(this.notifications)await this.notifications.stop();},
       async()=>{if(this.display)await this.display.stop();},
       async()=>{if(this.bus)await this.bus.stop();},
       async()=>{if(this.clientObserver){this.clientObserver.stop();console.info(`Owned test-worker observer: ${this.clientObserver.status()}; target connections=${this.clientObserver.targetConnections}`);}},

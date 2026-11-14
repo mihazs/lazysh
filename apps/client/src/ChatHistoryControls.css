@@ -1,0 +1,3 @@
+.chat-history-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 6px 0; }
+.chat-history-controls .subtle-button { min-height: 40px; }
+.chat-history-start { margin: 0; padding: 6px 0; text-align: center; color: var(--muted, inherit); font-size: 0.85rem; }

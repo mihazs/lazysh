@@ -54,10 +54,10 @@ The Agent view is built on these; it is not a parallel implementation.
 | --- | --- | --- |
 | Recorded conversation reader | `ChatPanel.tsx`, `ChatInteraction.tsx`, `ChatMarkdown`, `transcriptSources.ts` | A **chat** tool view. The user picks agent, transcript and Records/Conversation; follow polls every 2 s and replaces the page. |
 | Transcript adapters | `apps/agent/src/transcript.rs`, `transcript/*.rs` | `TranscriptPage` schema 1: typed blocks (text, thinking, tool_use, tool_result, image), cards (plan, proposed plan, question), recorded activity. Conversation views for Claude, Codex, OpenCode and Grok; other agents are records-only. |
-| Confirmed terminal input | `ChatTerminalInput.tsx`, `src-tauri/tmux_chat.rs`, `herdr_guard.rs`, [Confirmed terminal input](chat-terminal-input.md) | After an explicit bind: `send` (text plus CR, at most 4096 bytes) and `request_stop` (Escape). tmux and guarded Herdr on native builds only. |
+| Confirmed terminal input | `ChatTerminalInput.tsx`, `src-tauri/tmux_chat.rs`, `herdr_guard.rs`, [Confirmed terminal input](chat-terminal-input.md) | After an explicit bind: `send` (text plus CR, at most 4096 bytes), `send_long` (tmux only, 4097 to 65,536 bytes as one bounded paste plus CR) and `request_stop` (Escape). tmux and guarded Herdr on native builds only. |
 | Stage | `lazysh-prompt-draft` event, `TerminalComposer` | Puts a draft, with `[Image #n]`/`[File #n]` tokens, into the terminal composer sheet. |
 | Hooks and board | `apps/agent/src/hooks.rs`, `AgentPanel.tsx`, `AgentStatus.tsx`, `HerdrAgentsPanel` | Hook-reported state (needs attention, working, done) and Herdr live status (idle, working, blocked, done). |
-| Approvals | `ApprovalPanel.tsx`, `apps/agent/src/approvals.rs`, [Remote decisions](approvals.md) | Hash-bound allow/deny for Claude `PermissionRequest`. |
+| Approvals | `ApprovalPanel.tsx`, `apps/agent/src/approvals.rs`, [Remote decisions](approvals.md) | Hash-bound allow/deny for Claude `PermissionRequest`, plus the permission updates Claude suggests (each behind a confirmation showing the exact rule) and deny with a message. |
 | Mounting | `App.tsx` `View` union, `keptChat` | Every `TerminalPane` stays mounted; ChatPanel is kept alive behind other views. |
 
 ## Architecture
@@ -115,6 +115,8 @@ that lands on an older turn patches that card in place, without moving the reade
 scroll. The window is bounded (500 entries, as today). When the channel cannot be
 opened, the client falls back to the existing 2 s page polling.
 
+The first client slice (Claude Code and Codex, [#1124](https://github.com/mihazs/lazysh/issues/1124)) follows this design with the companion's `transcript-watch` command: see [Live conversation stream](companion.md#live-conversation-stream) for the frames. It patches cards in place, shows the delayed, stale and old-companion states, and leaves model, mode and context usage to [#1224](https://github.com/mihazs/lazysh/issues/1224) and the Codex daemon to a later slice.
+
 ### Data model
 
 `TranscriptPage` schema 2 adds, without changing schema 1 readers:
@@ -158,6 +160,97 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 - New dock buttons ignore taps for 400 ms after they appear.
 - Android back from the Agent view returns to the terminal view of the same session.
   The keyboard, IME composition and attachments follow the existing composer rules.
+- The composer is always under a followed conversation (`AgentComposer`). On tmux it
+  binds itself to the pane a hook report names: the destination returned by the guarded
+  `snapshot` must carry that exact pane ID before the guarded `bind` is sent, so no
+  Choose or Confirm step is shown. A mismatch is never confirmed; the composer says the
+  agent does not run in this pane and offers Stage. Under a guarded Herdr terminal the
+  same rule applies to the conversation Herdr links to the focused pane: the prepared
+  destination must carry that pane and terminal. A conversation picked by hand keeps
+  the explicit confirmation (tmux) or has no composer (Herdr). Enter sends on a hardware keyboard, Shift+Enter inserts a
+  line, a coarse-pointer keyboard keeps Enter as a line break and sends with the button,
+  and Enter is ignored during IME composition. Drafts are kept per conversation
+  (agent session) for the lifetime of the page.
+- The composer helps without adding a way to send anything the guarded input would refuse.
+  Typing `/` as the first word opens a palette of the agent's common slash commands
+  (`agentSlashCommands.ts`; the agent's own `/help` stays the authority). Choosing one
+  inserts its text and does not send it; a command that opens a dialog in the terminal UI
+  (for example `/model`) says so, and its dialog is answered in the dialog card above the
+  composer when the screen lift can read it exactly, otherwise in the terminal. A leading `!`
+  or `#` shows a **Shell command** or **Memory note** chip; the text is sent unchanged.
+  Up and Down recall the prompts sent from this conversation, only from an empty field or
+  while the text is still exactly the recalled prompt. Each sent message has a receipt
+  that settles from the conversation itself: **Sending**, **Sent** when the transcript
+  holds one more identical prompt than before the send, **Not in the conversation yet**
+  after 8 s, **Not sent** with **Retry** (bind again, send once) when nothing was written,
+  and **Delivery is unknown** with no Retry once writing began. **Request stop** needs a
+  second press within 4 s, because Escape interrupts a running turn.
+- `@` in the composer opens a picker of the files and folders of the folder the agent works
+  in (the project the hook report names, listed over the same SFTP read the Files explorer
+  uses, at most 150 ms after the last key, one listing per folder per conversation). A
+  mention may only name a path below that folder: an absolute path, `..`, `.`, a backslash or
+  a control character in it is refused before any listing is requested. Dot files appear only
+  when the typed name starts with a dot, and names with whitespace cannot be mentioned. Picking
+  a file inserts `@path ` and picking a folder goes one level deeper; nothing is sent by it.
+  A conversation without a known folder, or a listing that fails, offers no picker and the
+  text is still sent as typed.
+- Files join a message as the terminal composer does. The paperclip, a paste of a file or
+  image from the clipboard, or a drop on the composer uploads it through the existing
+  attachment path (a private copy under the host's `/tmp`, at most 10 MiB) and inserts a
+  numbered `[Image #n]` or `[File #n]` token at the caret, with one chip per file to remove
+  it. A token is never split: an edit that touches part of it removes the whole token and
+  the file, and numbering restarts with each draft. On send each token becomes the
+  shell-quoted host path the upload returned, so the agent reads the file by its path (typed
+  text, not an attachment drop: the agent decides whether to open it). The expanded text is
+  what must fit the send limit below; Send is disabled while an upload runs. Pasting
+  text is unchanged. On desktop builds the webview must deliver HTML drops: where the shell
+  swallows file drops, use the paperclip.
+- A message may be longer than a screen. Up to 4,096 bytes it is sent as before; on tmux a
+  longer one (up to 65,536 bytes) goes as one guarded paste and one Enter, so it is one
+  message and never several turns. Past the bound, or on a guarded Herdr pane (4,096
+  bytes), Send is disabled and the note names the limit; **Stage in terminal** remains.
+
+### HTML in messages
+
+Agent output and pasted text are Markdown that may carry HTML (`ChatRich.tsx`, `chatHtml.ts`).
+
+**Why HTML showed as text.** The reader used `react-markdown` alone. It parses an HTML tag
+in Markdown into a raw node and, with no HTML plugin, draws that node as escaped text, so
+`<table>` or `<details>` appeared as typed (an unlisted `<script>` was never run, which
+is why this was safe but unhelpful). Rendering it takes `rehype-raw` to parse the markup
+and `rehype-sanitize` to keep only what is safe.
+
+**What renders.** The pipeline is `literalTags` → `rehype-raw` → `rehype-sanitize` (own
+allow-list, not the GitHub default) → depth and count caps:
+
+- Elements: headings, `p`, `br`, `hr`, `div`, `span`, lists and definition lists,
+  `blockquote`, `pre`, `code`, emphasis (`em`, `strong`, `b`, `i`, `u`, `s`, `del`, `ins`,
+  `mark`, `small`, `sub`, `sup`, `kbd`, `samp`, `abbr`, `cite`, `q`), `details` and
+  `summary`, `figure`, tables, `a` and `img`.
+- Attributes: `href` and `title` on a link, `src`, `alt` and `title` on an image,
+  `colspan` and `rowspan`, `start`, `open`, and a `language-*` class on `code`. No `id`,
+  `class`, `style`, `srcset`, `target`, event handler or `data-*`, so a message cannot
+  restyle, overlay or script the app.
+- Never: `script`, `style`, `iframe`, `object`, `embed`, `form` and its controls, `meta`,
+  `link`, `base`, `svg`, `math`. A tag outside the list is shown as typed (`Vec<String>`,
+  `<file>`, a harness tag), not dropped.
+- Code fences and inline code are never interpreted. Text past 512,000 characters is
+  Markdown without HTML. Elements nest 32 deep and number 4,000 per message at most; what
+  exceeds that is kept as text.
+- Links: http(s) only, no credentials, no control characters. A tap asks first and then
+  opens the system browser (a new tab on the web) with `noopener`. Other links are text.
+- Images: an embedded PNG, JPEG, GIF or WebP up to 256 KiB shows. A remote image is never
+  requested (the request would tell its host when the message was read, and the app's
+  content security policy does not allow it): a placeholder with the alt text and an
+  **Open image in browser** button, which asks like a link. Everything else is a placeholder.
+- A table sits in a focusable scroll region, so a wide table scrolls inside the message.
+- A message that contains rendered HTML has **Show source** and **Show rendered**.
+- Harness records (`<system-reminder>`, `<task-notification>`, command echoes) are
+  classified by `chatInjected.ts` before a message reaches this pipeline, so they keep
+  their event rows and are not treated as the person's HTML.
+
+Markdown pipe tables are not rendered (no GFM plugin); Files and repository previews keep
+the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 ### Desktop
 
@@ -171,10 +264,14 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 
 | Situation | Agent view shows |
 | --- | --- |
-| No agent detected in the pane | "No agent conversation for this terminal", **Show terminal**, **Choose transcript**. |
+| No agent detected in the pane (tmux) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer; the last-reported list when other panes have agents. |
+| Herdr: the focused pane runs an agent with one reported conversation | That conversation, opened by itself and re-linked when focus or the agent changes. |
+| Herdr: the focused pane runs no agent, others do | The live agents of the server, with the reason; a pick is marked **Not this pane** and dropped when focus moves. |
+| Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher) and **Show terminal**. |
 | Agent detected, no adapter (records-only or hook-only) | Records or hook state, labelled as partial, with **Show terminal**. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
-| Session cannot accept confirmed input (Zellij, plain PTY, stock Herdr, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Zellij 0.45.1 or newer, the agent's pane named by its own hook report | One report of the attached session binds by itself; with several, the list asks which, and the pick takes input to its own pane. See [Zellij input](#zellij-input). |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
 
@@ -195,6 +292,22 @@ input path, using the agent's profile, with read-back verification.
 A capability ships for an agent only with the fixtures and runtime test listed under
 Test strategy. Until then the table cell falls back to **Show terminal**.
 
+### What is shipped per agent
+
+Status on 2026-11-14, `main` at `744e3bbb`. The table above is the target; this one says what a person gets today, and the
+evidence. [Agent view parity](reference/agent-view-parity.md) has the element-by-element status.
+
+| Agent | In the Agent view today | Falls back to the terminal for |
+| --- | --- | --- |
+| Claude Code | The whole table: timeline, live stream, hook state, questions, menus and approvals (docks), interrupt, header pills (model, mode, context, branch), work panel with sub-agents and workflows, send, queue, attachments, slash palette, copy, search and history ([#1293](https://github.com/mihazs/lazysh/pull/1293), [#1276](https://github.com/mihazs/lazysh/pull/1276), [#1351](https://github.com/mihazs/lazysh/pull/1351), [#1356](https://github.com/mihazs/lazysh/pull/1356), [#1377](https://github.com/mihazs/lazysh/pull/1377), [#1431](https://github.com/mihazs/lazysh/pull/1431)) | A dialog with a text field |
+| Codex | Timeline, live stream, hook state, header from the transcript, send and Stop, the approval prompt and list dialogs answered through keys read back from the screen ([#1490](https://github.com/mihazs/lazysh/pull/1490)), sub-agents in the work panel ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | `request_user_input`, Herdr and Zellij dialogs, the Codex app-server daemon |
+| OpenCode | Timeline from its database, header (model, context in use, cost), send and Stop on tmux ([#1491](https://github.com/mihazs/lazysh/pull/1491)), sub-agents ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | Every dialog: OpenCode marks the highlighted choice by colour only, which a read of the screen's text cannot see, so permission and question prompts wait for its own decision channel ([#1535](https://github.com/mihazs/lazysh/issues/1535)); Herdr and Zellij panes (Herdr's session reference is not a transcript the view can read) |
+| Grok Build, Gemini CLI | The agent's name and hook state, labelled partial, with **Show terminal** and no composer | Everything else |
+| Records-only adapters | The same partial state | Everything else |
+
+The companion reads Grok Build sessions for the Chat tool view; binding them to the Agent view needs a runtime case against a real Grok
+Build, which the development host does not have. A Gemini CLI reader is a separate change ([#1348](https://github.com/mihazs/lazysh/issues/1348)).
+
 ## Input and control mapping
 
 All input goes through one ordered path per session. The Agent view never writes to
@@ -207,8 +320,10 @@ the PTY directly.
 | Interrupt | Live protocol interrupt. Else guarded `request_stop`. Two taps on phone. |
 | Approval | Agent's own decision channel (Claude hook decision, Codex/OpenCode protocol reply). Else keys. |
 | Question or menu option | Live protocol answer. Else a new guarded `select` input that sends the profile's keys for that option. |
-| Slash command | Guarded `send` of the command text, picked from a palette built from the agent's documented commands. Commands that open TUI pickers leave the result in the terminal. |
+| Slash command | Guarded `send` of the command text, picked from a palette built from the agent's documented commands. A command that opens a TUI list dialog is answered through the dialog card (see **List dialogs** below). |
 | Attachment | Existing upload, then `[Image #n]`/`[File #n]` tokens in the sent text. |
+| Permission mode | Guarded `cycle_mode` (tmux, Claude Code only): one Shift+Tab, `1b 5b 5a`, then a read of the pane's last six lines for the status line (`⏸ manual mode on`, `⏵⏵ accept edits on`, `⏸ plan mode on`, `⏵⏵ auto mode on`, `⏵⏵ bypass permissions on`; profile `claude-2.1`, verified on 2.1.318). The reply names the mode or `unconfirmed`. The transcript records the mode only at the next prompt, so it cannot be the read-back. Herdr and every other agent refuse the kind. |
+| Model | No key profile: measured on Claude Code 2.1.318, `/model` (even `/model sonnet`) opens a "Switch model?" dialog on a session with history and saves the choice as the default for new sessions, so it is a picker flow. **Switch model (/model)** in the options (tmux, Claude Code, a conversation bound to this pane) sends the guarded `send` of `/model` and the agent's list opens as the dialog card of **List dialogs** below when the screen can be read exactly, else in the terminal. The view never picks a model itself: the card's tap is the same guarded `pick` as for any list dialog. |
 
 Per-agent keys (option selection, submit, queue, steer, interrupt, cancel) live in a
 versioned data profile per agent, not in code. Each send gets a receipt shown on the
@@ -220,6 +335,38 @@ Every answer carries the pending item's `id` and `revision`. A stale revision, a
 item answered in the terminal first, an expired approval or a closed dialog fails
 closed and shows a note ("Answered in the terminal", "Expired"). The terminal stays
 usable for the same answer at all times; the first answer wins.
+
+### List dialogs
+
+A TUI list dialog the agent opens (Claude Code's `/model`, `/resume`, `/rewind` lists, the folder trust prompt, the plan decision) is
+shown above the composer as a **dialog card**: its title, the text that explains it, each option and the footer that says what Enter does,
+with the highlighted option marked. It is read from the rows of the session's own terminal screen (`agentDialogLift.ts`), not from the
+transcript, so it works for dialogs no hook or transcript record describes.
+
+- **Fail closed.** The lift returns a dialog only for one whole, simple list that has a full-width rule above it, exactly one highlighted
+  row, a footer that says Enter takes the highlighted row and how to leave, and no check boxes, second list or tabs. Anything else (a tabbed
+  dialog, a multi-select, a text field, a dialog whose footer this profile does not know) shows **The agent is waiting for you in the
+  terminal** with **Show terminal**, and sends nothing. The view never switches by itself.
+- **Choosing is what a person presses.** The card reads the screen again, checks the bound pane is still the one the agent's report names,
+  then sends the guarded `pick` input: arrow keys that move the highlight to the chosen option. It reads the screen back and presses Enter
+  (a second `pick`) only once the dialog shows the chosen option highlighted. Nothing is sent when the screen no longer shows the dialog
+  that was tapped, and a dialog that does not move gets no Enter. **Cancel the dialog** sends Escape. On a desktop keyboard the digits 1 to 9 choose.
+- **Authority.** Terminal output never grants authority: `pick` has no key path other than Up, Down and Enter, at most 30 rows, tmux only
+  (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**). A dialog an approval or question card
+  already answers shows no second card (Claude's permission request and every agent's question); Codex has no approval hook here, so its
+  approval prompt is answered by this card.
+- **Profile and corpus.** Each agent reads its own screen, and no agent's dialog is guessed from another's layout. The Claude Code 2.1.x
+  footers and layout are data in `agentDialogLift.ts`, verified against screens captured from Claude Code 2.1.318 in a real tmux pane
+  (`apps/client/src/test/agentDialogs`). The Codex profile (`agentDialogLiftCodex.ts`) reads the dialogs Codex 0.167.0 draws inline: a
+  title, numbered options with `›` before the highlighted one, and one of the three footers captured (`enter select · esc back`,
+  `enter default · s session · esc back`, `Press enter to confirm or esc to cancel`). That covers `/model` and its reasoning page,
+  `/permissions`, `/review`, the rate-limit prompt and **the approval prompt** (Yes, proceed; Yes and don't ask again; No and tell Codex),
+  checked live with Down, Up and Enter on a real Codex in tmux. Codex's `/resume` table, a question with notes and any other footer fall
+  back to the banner. OpenCode, Grok and Gemini have no captured corpus yet and fall back to the banner. An option that keeps a permission
+  rule (Codex's **Yes, and don't ask again for commands that start with …**) is never one tap: the card first shows the option's exact text
+  and what it keeps, and **Back** sends nothing.
+- **Not covered.** `/rewind`'s confirmation page has no footer line, so it is not provable as a list dialog: after the choice that opens it
+  the card says **The agent is waiting for you in the terminal**. Dialogs that read text (login codes, the "Tell Claude what to change" field) stay in the terminal.
 
 ## Security and privacy
 
@@ -250,10 +397,31 @@ Tests assert behaviour, not source text.
   pending items; watch-stream ordering, upserts and `gen` rebuilds; path containment.
 - **Client Vitest**: model reducers (upserts, folding, source ranking, receipts,
   stale revisions) and rendering of every part and card.
+  `AgentParity.test.tsx` is the card checklist: every kind of the `Card` schema needs a
+  row, a card in the companion-generated fixtures and a component that draws it with its
+  title, so a new kind fails the type check and then the tests until all three exist.
 - **Playwright, phone (390×844) and desktop (1280×800)**: switch, remember, Both
   layout, timeline, dock, composer and fallbacks against a mocked companion.
 - **Native Linux** (`native-e2e`, real OpenSSH, tmux and guarded Herdr): a fixture
   agent that draws a TUI in a real pane and writes a real transcript.
+  `ssh::tmux_jump_fixture::agent_session` (CI step "Run a scripted agent session",
+  tmux 3.4) is the first part: a bash stand-in TUI
+  (`apps/client/src-tauri/src/tmux_agent_session_agent.sh`) runs in a real tmux pane
+  behind an owned OpenSSH server and writes Claude Code format records. The test
+  sends only the guarded inputs the Agent view sends (`send`, `select`, `cycle_mode`,
+  `send_long`, `request_stop`) and asserts that the pane's process received each
+  exactly once and in order (a replayed operation reaches the pane nowhere), that the
+  mode read-back names the mode the pane drew, and that the real `lazysh-agent
+  transcript` reads the same records back as messages, a question card and a
+  background command that goes from `running` to `done`. The agent also runs its
+  real `PermissionRequest` hook through `lazysh-agent approval-request`; the client lists
+  the request over the same SSH session, a decision naming another pane is refused, the
+  exact one releases the agent once and a second decision fails. A background sub-agent and a
+  dynamic workflow are written the way Claude Code 2.1 does (`subagents/agent-*.jsonl` with its meta
+  file, `workflows/wf_*.json` and its journal): the companion lists each as running with the child
+  file or the agent tree, the child opens as a conversation of its own, and both end by
+  themselves. Still to add: guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
+  `tauri-driver`) and the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.
 - **Co-existence cases, required in every slice**:
@@ -274,7 +442,7 @@ Tests assert behaviour, not source text.
 - Launching agents in headless, SDK, stream-json or ACP mode to drive the Agent
   view. These run a separate process and would break the co-existence contract.
 - Claude Code channels and peer-message sockets as an input path.
-- Rewind, fork and resume-into-a-new-session.
+- Rewind, fork and resume-into-a-new-session logic of lazysh. The agent's own `/rewind` and `/resume` lists are shown and answered as list dialogs; lazysh adds no fork or resume of its own.
 - Line-comment review of diffs sent back as prompts.
 - Pixel-level re-rendering of arbitrary TUI screens. Anything the model cannot
   represent stays in the terminal.
@@ -282,7 +450,34 @@ Tests assert behaviour, not source text.
 
 ## References
 
+[Agent view parity](reference/agent-view-parity.md) lists every screen element of Claude Code and
+Codex against the reference apps and the open gaps.
+
 Interaction patterns were studied from public projects and documentation (Collie,
 Warp, herdr-app, Orca, and the Claude Code, Codex, OpenCode and Agent Client Protocol
 docs). lazysh re-implements behaviour only; it copies no code, assets, names or UI
 copy from them.
+
+## Zellij input
+
+Zellij has no guard on the host and no "destination of this terminal" to confirm, so the Agent view does
+not bind to what the terminal shows. The evidence is the agent's own hook report: with the updated
+companion, a hook that runs in a Zellij pane reports `zellij:<session>:<pane>` (from `ZELLIJ_SESSION_NAME`
+and `ZELLIJ_PANE_ID`; `TMUX_PANE` still wins when both exist). The Agent view of a terminal attached to
+that Zellij session follows the one report that names one of its panes, or lists them when several do, and
+a conversation another report also claims, or one of another session, gets no input.
+
+Send and Stop go through `zellij_agent_input`, one host call each, with the pane and the agent as typed
+fields (no key path and no free text besides the prompt). The host lists the session's panes as JSON and
+refuses (`stale`, nothing sent) unless the pane is a live terminal pane whose foreground command is the
+agent, so a prompt is never typed at a shell. A line is typed with `write-chars --pane-id terminal_N` and
+Enter is the byte 13; text with a line break or tab goes in as one bracketed `paste`; Stop is the byte 27.
+The first write failing is a plain refusal; a failure after it, or a lost connection, reads as unconfirmed
+and is never resent. The listing and the write are separate host calls, so a pane replaced between them is
+the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
+
+Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
+key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
+stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
+refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
+agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.

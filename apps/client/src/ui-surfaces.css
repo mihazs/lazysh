@@ -113,7 +113,7 @@ input[type="search"] {
 .navigation-connections > .search-button:hover:not(:disabled) { background: var(--theme-hover); }
 .navigation-connections > .search-button kbd { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--theme-hover); color: var(--theme-muted); }
 .navigation-connections > .search-button:disabled { background: transparent; min-height: 36px; padding-inline: 16px; font-size: 12px; opacity: .7; }
-.navigation-connections > .sidebar-heading { margin: 14px 4px 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
+.navigation-connections > .sidebar-heading, .workspace-navigation-content > .sidebar-heading { margin: 14px 4px 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
 .navigation-connections > .sidebar-heading .icon-button { width: 36px; height: 36px; color: var(--accent); }
 /* One shrinkable track: a long unbreakable host name ellipsises instead of widening the row past its clipped list. */
 .host-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; border-radius: var(--ui-radius); background: var(--ui-row); overflow: hidden auto; }
@@ -389,12 +389,12 @@ input[type="search"] {
   border: 1px solid transparent; border-radius: var(--ui-radius); background: var(--theme-control); font-size: 12.5px; font-weight: 600; text-align: center;
 }
 .workspace-tools-content .mobile-session-views button svg { color: var(--accent); }
-.workspace-tools-content .workspace-tools-group { gap: 0; border-radius: var(--ui-radius); background: var(--theme-control); padding: 4px; }
-.workspace-tools-content .workspace-tools-group > button {
+.workspace-tools-content .workspace-tools-group, .sidebar .workspace-tools-group { gap: 0; border-radius: var(--ui-radius); background: var(--theme-control); padding: 4px; }
+.workspace-tools-content .workspace-tools-group > button, .sidebar .workspace-tools-group > button {
   justify-content: flex-start; min-height: 48px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--ui-radius-sm);
   background: transparent; text-align: left; font-weight: 500;
 }
-.workspace-tools-content .workspace-tools-group > button:hover:not(:disabled) { background: var(--theme-hover); }
+.workspace-tools-content .workspace-tools-group > button:hover:not(:disabled), .sidebar .workspace-tools-group > button:hover:not(:disabled) { background: var(--theme-hover); }
 .workspace-tools-danger { border-top: 0; padding-top: 0; }
 .workspace-tools-content .workspace-tools-end { justify-content: center; min-height: 52px; border-radius: var(--ui-radius); }
 @media (max-width: 600px) {
@@ -575,4 +575,41 @@ input[type="search"] {
   :root .terminal-selection-tools { background: var(--theme-panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
   :root .dialog-backdrop > .dialog { background: var(--theme-panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
   :root .dialog:has(.settings-navigation), :root .dialog:has(.settings-navigation) .settings-detail-header { background: var(--theme-bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+.preferences-content [data-settings-page] .cursor-picker > div { display: flex; gap: 4px; }
+.preferences-content [data-settings-page] .cursor-picker label { flex: 1; min-width: 0; cursor: pointer; }
+.preferences-content [data-settings-page] .cursor-picker input { position: absolute; opacity: 0; }
+.preferences-content [data-settings-page] .cursor-picker span { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 4px; border-radius: 999px; text-align: center; overflow-wrap: anywhere; background: var(--theme-control); border: 1px solid transparent; }
+.preferences-content [data-settings-page] .cursor-picker input:checked + span { background: var(--theme-hover); border-color: var(--accent); }
+.preferences-content [data-settings-page] .cursor-picker input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (forced-colors: active) {
+  .preferences-content [data-settings-page] .cursor-picker input:checked + span { border: 3px solid Highlight; }
+  .preferences-content [data-settings-page] .cursor-picker input:focus-visible + span { outline-color: Highlight; }
+}
+.preferences-content [data-settings-page] .language-picker label { display: flex; align-items: center; gap: 12px; min-height: 45px; cursor: pointer; }
+.preferences-content [data-settings-page] .language-picker label + label { border-top: 1px solid var(--theme-border); }
+.preferences-content [data-settings-page] .language-picker input { accent-color: var(--accent); }
+
+/* ---------- Phone side menu ----------
+ * The side menu is the navigation page itself. Without a top bar its session strip carries the
+ * status, the Terminal | Agent switch and the terminal controls, and the tabs carry the tools. */
+.workspace-side-menu { padding-top: env(safe-area-inset-top); }
+.sidebar-session { display: grid; gap: 8px; margin-bottom: 8px; min-width: 0; }
+.sidebar-session .host-item { margin: 0; border-radius: var(--ui-radius); background: var(--ui-row); }
+.sidebar-session .host-connect { min-height: 56px; padding-right: 14px; }
+.sidebar-session .host-connect .status-dot { margin-left: auto; }
+.sidebar-session-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sidebar-session-choices > .workspace-terminal-controls:empty { display: none; }
+.sidebar-session .terminal-actions { gap: 4px; }
+.sidebar[data-side-menu] .navigation-connections { overflow-y: auto; }
+.sidebar[data-side-menu] .host-list { flex: none; overflow: visible; }
+.sidebar[data-side-menu] .navigation-connections > .workspace-tools-group, .sidebar[data-side-menu] .navigation-connections > .workspace-tools-danger { flex: none; margin-bottom: 8px; }
+@media (max-width: 600px) {
+  /* A left-edge swipe drags the page open and the opposite swipe drags it shut: the finger sets the position, then the page slides to its end state. */
+  .app-shell > .sidebar[data-dragging] { transform: translateX(calc((var(--side-menu-progress) - 1) * 100%)); transition: none; animation: none; pointer-events: auto; }
+  .app-shell > .sidebar[data-dragging][data-settling] { transition: transform 180ms ease; }
+}
+@media (max-width: 600px) and (prefers-reduced-motion: reduce) {
+  .app-shell > .sidebar[data-dragging][data-settling] { transition: none; }
 }

@@ -2,26 +2,36 @@ import {LocalUiError} from './i18n/localError';
 import {isUiLanguage, t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
-import type { ITheme, ITerminalOptions } from "@xterm/xterm";
+import { xtermOptions } from "./xtermOptions";
+import type { TerminalPreferences, TerminalTheme } from "./terminalAdapter";
 import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
+import type { UsageBarMode } from "./usageAgentProvider";
 
 export const themes = {
   forest: { background: "#101311", foreground: "#d9e0d6", cursor: "#c4eb89", selectionBackground: "#40543a", black: "#1d231f", red: "#f48781", green: "#b9df83", yellow: "#e4ce8b", blue: "#8caee4", magenta: "#c4a1dd", cyan: "#8ccfc1", white: "#d9e0d6", brightBlack: "#788478", brightRed: "#ffb0a6", brightGreen: "#d0f0a6", brightYellow: "#f3e0ac", brightBlue: "#b1caf0", brightMagenta: "#dfc3ef", brightCyan: "#b0e8de", brightWhite: "#f3f5ee" },
   midnight: { background: "#101622", foreground: "#dee6f3", cursor: "#9fc6ff", selectionBackground: "#354763" },
   paper: { background: "#faf8f2", foreground: "#242822", cursor: "#375c29", selectionBackground: "#cbdac0" },
-} satisfies Record<string, ITheme>;
-export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "agents", "workspaces", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
+} satisfies Record<string, TerminalTheme>;
+export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "agents", "workspaces", "arrows", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
 export function toolbarKeyLabel(key: ToolbarKey): string {
-  return key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key === "agents" ? t("appAgents") : key === "workspaces" ? t("navigationWorkspaces") : key;
+  return key === "arrows" ? t("terminalArrowsKey") : key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key === "agents" ? t("appAgents") : key === "workspaces" ? t("navigationWorkspaces") : key;
 }
 /** Toolbar keys that open a navigation view instead of typing. */
 export const toolbarNavigationActions = {agents: "openAgents", workspaces: "openWorkspaces"} as const satisfies Partial<Record<ToolbarKey, GestureAction>>;
-const legacyToolbar = ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"];
 /** Row separator stored inside `toolbar`. Older clients drop unknown entries, so they read the same keys as one row. */
 export const toolbarRowBreak = "row-break";
 export type ToolbarEntry = ToolbarKey | typeof toolbarRowBreak;
+/** Earlier default toolbars; a stored copy was never customized, so it moves to the current default. */
+const legacyToolbars: readonly (readonly string[])[] = [
+  ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"],
+  ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"],
+  ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "left", "down", "right"],
+  ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "enter", "left", "down", "right"],
+];
 export const maxToolbarRows = 3;
+/** Terminal toolbar key height in CSS pixels: below the minimum a key is too small to hit, above the maximum two rows crowd a phone's screen. */
+export const toolbarKeyHeights = {min: 28, max: 56, step: 2, default: 32} as const;
 /** Rows of the stored toolbar, including empty rows; at most `maxToolbarRows`. */
 export function toolbarRows(toolbar: readonly ToolbarEntry[]): ToolbarKey[][] {
   const rows: ToolbarKey[][] = [[]];
@@ -36,7 +46,7 @@ export function toolbarFromRows(rows: readonly (readonly ToolbarKey[])[]): Toolb
 }
 function parseToolbar(value: unknown): ToolbarEntry[] {
   if (!Array.isArray(value)) return [...defaults.toolbar];
-  if (value.length === legacyToolbar.length && value.every((item, index) => item === legacyToolbar[index])) return [...defaults.toolbar];
+  if (legacyToolbars.some(legacy => value.length === legacy.length && value.every((item, index) => item === legacy[index]))) return [...defaults.toolbar];
   const seen = new Set<ToolbarKey>();
   let breaks = 0;
   return value.filter((item): item is ToolbarEntry => {
@@ -50,7 +60,7 @@ function parseToolbar(value: unknown): ToolbarEntry[] {
     return true;
   });
 }
-export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "openAgents", "openWorkspaces", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
+export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "openAgents", "openWorkspaces", "bottomMenu", "agentView", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
 /** Actions that need a slot-specific meaning: level-aware defaults and pinch text sizing. */
 const slotOnlyActions: readonly GestureAction[] = ["auto", "fontSize"];
 /** Actions any discrete gesture, D-pad corner or toolbar long-press can run. */
@@ -64,10 +74,33 @@ export const levelGestureSlots = ["pinch", "pullShallow", "pullDeep"] as const;
 export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight", ...levelGestureSlots] as const;
 export type GestureSlot = typeof gestureSlots[number];
 export type ToolbarAlternate = {action: GestureAction; keys?: string};
-/** Modifier keys keep their tap and lock cycle; every other key can carry a long-press action. */
-export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr"; }
-export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
+/** Modifier keys keep their tap and lock cycle and Arrows is four keys; every other key can carry a long-press action. */
+export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr" && key !== "arrows"; }
+export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","bottomMenu":"gestureBottomMenu","agentView":"gestureAgentView","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
+export const edgeGestureIds = ["leftMenu", "bottomMenu", "viewSwitch"] as const;
+export type EdgeGestureId = typeof edgeGestureIds[number];
+/** How deep a swipe's starting band reaches, in dp: from the screen edge, or from just past the system's own gesture zone on gesture navigation. */
+export const edgeGestureZone = {min: 16, max: 96, step: 2, default: 40} as const;
+/** How the gestures start: `auto` is handles (and swipes beside them) on Android gesture navigation and true edge swipes everywhere else. */
+export const gestureModes = ["auto", "handles", "edges", "off"] as const;
+export type GestureModePreference = typeof gestureModes[number];
+export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number; mode: GestureModePreference};
+/** The saved form: `mode` is absent until the user picks one. */
+export type StoredEdgeGestures = Omit<EdgeGestureSettings, "mode"> & {mode?: GestureModePreference};
+const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default, mode: "auto"};
+/** The saved edge gesture settings with the defaults filled in. */
+export function edgeGestureSettings(p: Pick<Preferences, "edgeGestures">): EdgeGestureSettings { return {...edgeGestureDefaults, ...p.edgeGestures}; }
+function parseEdgeGestures(value: unknown): StoredEdgeGestures | undefined {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const zone = source.zoneWidth;
+  const parsed: EdgeGestureSettings = {
+    ...Object.fromEntries(edgeGestureIds.map(id => [id, source[id] !== false])) as Record<EdgeGestureId, boolean>,
+    zoneWidth: typeof zone === "number" && Number.isInteger(zone) && zone >= edgeGestureZone.min && zone <= edgeGestureZone.max ? zone : edgeGestureZone.default,
+    mode: gestureModes.find(mode => mode === source.mode) ?? edgeGestureDefaults.mode,
+  };
+  return (Object.keys(parsed) as (keyof EdgeGestureSettings)[]).every(name => parsed[name] === edgeGestureDefaults[name]) ? undefined : parsed;
+}
 export type Preferences = {
   version: 1;
   theme: keyof typeof themes | "custom";
@@ -94,11 +127,27 @@ export type Preferences = {
   gestureChords: Partial<Record<GestureSlot, string>>;
   /** Long-press actions per toolbar key; omitted when empty so older sync peers accept the snapshot. */
   toolbarAlternates?: Partial<Record<ToolbarKey, ToolbarAlternate>>;
+  /** Toolbar key height in CSS pixels; omitted at the default so older sync peers accept the snapshot. */
+  toolbarKeyHeight?: number;
+  /** Edge-swipe gestures and their zone width in dp; synced, and omitted at the defaults so older sync peers accept the snapshot. */
+  edgeGestures?: StoredEdgeGestures;
+  /** Android only: ask the soft keyboard to act as a plain key source in the terminal (private mode); omitted when off, and kept on this device. */
+  privateKeyboard?: boolean;
+  /** The key rows were hidden or shown on purpose on this device; omitted until then so the automatic desktop behaviour still applies. */
+  toolbarHidden?: boolean;
+  /** How the terminal composer shows: the default full-height sheet, or a movable panel that leaves the terminal as it is. Device-local, like the toolbar key height. */
+  composerLayout?: "floating";
+  /** The multiplexer tab strip on this device: omitted for Auto (phones, when the session has more than one tab), else forced on or off. */
+  tabStrip?: "on" | "off";
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
   composerSendEnter: boolean;
   dismissKeyboardOnOverscroll: boolean;
+  /** What the status bar's usage item shows; absent means it follows the agent in the current pane. Omitted at the default so older sync peers accept the snapshot. */
+  usageItem?: UsageBarMode;
+  /** Report entry id of the account shown when the item is fixed, or when no agent is detected; absent means the host's default account. */
+  usageProvider?: string;
 };
 export const defaults: Preferences = {
   version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
@@ -106,7 +155,8 @@ export const defaults: Preferences = {
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
-  toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
+  // Two full rows of nine: the Arrows component draws an inverted T, Up between Home and End with Left, Down and Right under them. Find, Copy and the saved snippets are on the pages after the keys.
+  toolbar: ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "arrows", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "enter"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "auto", right: "auto", up: "auto", down: "auto"}, autoHideToolbar: false, composerSendEnter: true,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none", pinch: "auto", pullShallow: "auto", pullDeep: "auto"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };
@@ -148,6 +198,10 @@ export function parsePreferences(value: unknown): Preferences {
   }
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
+  const edgeGestures = parseEdgeGestures(p.edgeGestures);
+  const usageItem = p.usageItem === "fixed" || p.usageItem === "hidden" ? p.usageItem : undefined;
+  const usageProvider = typeof p.usageProvider === "string" && p.usageProvider.length >= 1 && p.usageProvider.length <= 160 && !/[\x00-\x1f\x7f]/.test(p.usageProvider) ? p.usageProvider : undefined;
+  const toolbarKeyHeight = number("toolbarKeyHeight", toolbarKeyHeights.min, toolbarKeyHeights.max, toolbarKeyHeights.default);
   return {
     version: 1,
     uiLanguage: isUiLanguage(p.uiLanguage) ? p.uiLanguage : "system",
@@ -174,6 +228,14 @@ export function parsePreferences(value: unknown): Preferences {
     ]) as Preferences["bodyGestures"],
     gestureChords,
     ...(Object.keys(toolbarAlternates).length ? {toolbarAlternates} : {}),
+    ...(toolbarKeyHeight !== toolbarKeyHeights.default ? {toolbarKeyHeight} : {}),
+    ...(edgeGestures ? {edgeGestures} : {}),
+    ...(p.privateKeyboard === true ? {privateKeyboard: true} : {}),
+    ...(typeof p.toolbarHidden === "boolean" ? {toolbarHidden: p.toolbarHidden} : {}),
+    ...(usageItem ? {usageItem} : {}),
+    ...(usageProvider ? {usageProvider} : {}),
+    ...(p.composerLayout === "floating" ? {composerLayout: "floating" as const} : {}),
+    ...(p.tabStrip === "on" || p.tabStrip === "off" ? {tabStrip: p.tabStrip} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
@@ -183,6 +245,14 @@ export function parsePreferences(value: unknown): Preferences {
     toolbar: parseToolbar(p.toolbar),
     snippets: Array.isArray(p.snippets) ? p.snippets.filter((s): s is {label: string; text: string} => !!s && typeof s === "object" && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 32 && typeof s.text === "string" && s.text.length > 0 && s.text.length <= 2048 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(s.text)).map(({label, text}) => ({label, text})) : [],
   };
+}
+/** Settings that describe this device's screen stay on it: sync neither uploads them nor lets a download replace them. */
+export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard" | "toolbarHidden" | "composerLayout" | "tabStrip"> {
+  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, toolbarHidden: _hidden, composerLayout: _layout, tabStrip: _strip, ...shared} = value;
+  return shared;
+}
+export function keepDevicePreferences(imported: unknown, local: Preferences): unknown {
+  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard, toolbarHidden: local.toolbarHidden, composerLayout: local.composerLayout, tabStrip: local.tabStrip} : imported;
 }
 let cached: Preferences | undefined;
 let nativeUiLanguage: UiLanguage | undefined;
@@ -214,13 +284,18 @@ function subscribe(listener: () => void) {
   return () => { window.removeEventListener(event, listener); window.removeEventListener("storage", stored); };
 }
 export function usePreferences() { return useSyncExternalStore(subscribe, getPreferences, () => defaults); }
-export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
+/** Backend-neutral terminal preferences for the stored preferences. */
+export function terminalPreferences(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): TerminalPreferences {
   const colors: ThemeColors | undefined = p.theme === 'custom' ? p.customTheme : themes[p.theme];
   const {bold, ...theme} = colors ?? {};
   const light = p.theme === 'paper' || (p.theme === 'custom' && p.customThemeInfo?.mode === 'light');
   // Bundled and pre-metadata palettes retain their existing bright-bold default.
   const legacy = p.theme !== 'custom' || !p.customThemeInfo;
-  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, drawBoldTextInBrightColors: bold !== undefined || legacy, theme: {...theme, ...(light ? {extendedAnsi: lightExtendedAnsi()} : {})} };
+  const boldColor = terminalBoldColor(p);
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollbackLines: p.scrollback, optionAsMeta: p.optionAsMeta, screenReader: p.screenReader, brightBold: bold !== undefined || legacy, ...(boldColor ? {boldColor} : {}), theme: {...theme, ...(light ? {extendedAnsi: lightExtendedAnsi()} : {})} };
+}
+export function terminalOptions(p: Preferences, fontFamily?: string) {
+  return xtermOptions(terminalPreferences(p, fontFamily));
 }
 export function terminalBoldColor(p: Preferences): string | undefined {
   const bold = p.theme === 'custom' ? p.customTheme?.bold : undefined;

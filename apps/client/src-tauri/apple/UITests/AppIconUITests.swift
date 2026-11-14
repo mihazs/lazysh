@@ -241,8 +241,10 @@ final class AppIconUITests: XCTestCase {
       }
       return timing.measure(.app, .readback, { current.exists }, result: { $0 })
     }, object: nil)
-    var result = XCTWaiter.wait(for: [completed], timeout: 20)
-    if result == .completed && dismissed {
+    // A single SpringBoard query blocked for 11-18 s on loaded hosted runners (runs 42685520705, 42220275640), so 20 s is not a usable window.
+    var result = XCTWaiter.wait(for: [completed], timeout: 45)
+    // A tap issued in the final poll already dismissed the alert even when the waiter reports the deadline first.
+    if dismissed {
       let readback = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
         timing.measure(.app, .readback, { current.exists }, result: { $0 })
       }, object: nil)

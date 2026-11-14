@@ -3,6 +3,8 @@ import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi, useProtectedInvoke } from './access';
 import {uploadDirectory} from './attachment';
 import {useHostUpload} from './useHostUpload';
+import {resolveHostPath} from './hostPath';
+import HostFileActions from './HostFileActions';
 import FilePreview, {type FileContent} from './FilePreview';
 import {IMAGE_PREVIEW_LIMIT, imageUrl, previewKind} from './mediaPreview';
 import { useEffect, useRef, useState } from "react";
@@ -34,6 +36,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   const [draft, setDraft] = useState(".");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [content, setContent] = useState<FileContent | null>(null);
+  const [selected, setSelected] = useState("");
   const [error, setError] = useState<FileErrorState>("");
   const [loading, setBusy] = useState(false);
   const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
@@ -48,7 +51,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     setBusy(true);
     setError("");
     try {
-      const result = await api.listDirectory(sessionId, next);
+      const resolved = await resolveHostPath(api, sessionId, next);
+      const result = await api.listDirectory(sessionId, resolved);
       if (current !== request.current) return;
       setEntries(
         result.sort(
@@ -56,9 +60,10 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name),
         ),
       );
-      setPath(next);
-      setDraft(next);
+      setPath(resolved);
+      setDraft(resolved);
       setContent(null);
+      setSelected("");
     } catch (e) {
       if (current === request.current) setError(captureUiError(e));
     } finally {
@@ -82,6 +87,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     const current = ++request.current;
     setBusy(true);
     setError("");
+    setSelected(next);
     try {
       if (previewKind(entry.name) === 'image') {
         if (entry.size > IMAGE_PREVIEW_LIMIT) throw new LocalUiError('filesImageTooLarge');
@@ -102,7 +108,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   async function sendFile() {
     if (!upload || !destination.trim() || busy) return;
     setError("");
-    await uploadJob.start(async()=>({path:destination,bytes:new Uint8Array(await upload.arrayBuffer())}),uploadedPath=>{
+    await uploadJob.start(async()=>({path:await resolveHostPath(api,sessionId,destination),bytes:new Uint8Array(await upload.arrayBuffer())}),uploadedPath=>{
       setUpload(null);
       void load(uploadDirectory(uploadedPath));
     });
@@ -147,6 +153,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
         >
           <RefreshCw size={16} />
         </button>
+        {/* Local sessions read this device's files; uploads stay an SSH host tool for now. */}
+        {!sessionId.startsWith('local:') && <>
         <button
           type="button"
           className="subtle-button"
@@ -172,6 +180,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             setDestination(join(path, file.name));
           }}
         />
+        </>}
       </form>
       {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
       {error && (
@@ -236,12 +245,9 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           ))}
         </div>
         <div className="file-preview">
-          {content ? (
-            <>
-              <div className="preview-heading">{content.path}</div>
-              <FilePreview key={content.path} content={content}/>
-            </>
-          ) : (
+          {selected && <div className="preview-heading">{selected}</div>}
+          {selected && <HostFileActions key={selected} sessionId={sessionId} path={selected}/>}
+          {content ? <FilePreview key={content.path} content={content}/> : !selected && (
             <div className="panel-empty">
               <File size={28} />
               <h3>{t('filesReadSource')}</h3>
