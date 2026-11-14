@@ -270,7 +270,7 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 | Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher) and **Show terminal**. |
 | Agent detected, no adapter (records-only or hook-only) | Records or hook state, labelled as partial, with **Show terminal**. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
-| Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux until #1675, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
 | Zellij 0.45.1 or newer, the agent's pane named by its own hook report | One report of the attached session binds by itself; with several, the list asks which, and the pick takes input to its own pane. See [Zellij input](#zellij-input). |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
@@ -479,5 +479,5 @@ the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
 Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
 key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
-refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
+refuses. rmux (Limited until its confirmed input is verified, #1675) and plain PTY or local sessions (no proof that the
 agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.
