@@ -114,4 +114,4 @@ The contract lives in `apps/client/src/terminalAdapter.ts`, the xterm backend in
 
 - Whether `sendInput` should return a promise to surface the `backpressure` error that `write_stdin` can raise today (`TerminalPane.tsx:186-200`; related #661).
 - Whether the IME bridge on a native surface is a hidden DOM editor or a native input connection ([native rendering](native-rendering.md#input-and-ime)).
-- The shape of accessibility on a native surface ([platform integration](platform-integration.md#accessibility)).
+- Whether a screen reader reads the hidden row mirror of a native surface well on each platform; the shape is decided ([native rendering](native-rendering.md#accessibility)), the device evidence is not.

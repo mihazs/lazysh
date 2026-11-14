@@ -102,7 +102,14 @@ The highest-risk area. Today input depends on xterm's hidden textarea and the pi
 
 ## Accessibility
 
-xterm.js offers `screenReaderMode` (wired to `preferences.screenReader`). A GPU surface has no DOM. Options to evaluate: a virtual accessibility tree built from `readRows`, or a hidden DOM live region. If neither reaches parity on a platform, capability detection must refuse the native backend while a screen reader is active, and that fallback is tested. Tracked in [#1329](https://github.com/mihazs/lazysh/issues/1329) and [#1335](https://github.com/mihazs/lazysh/issues/1335).
+xterm.js offers `screenReaderMode` (wired to `preferences.screenReader`). A GPU surface has no DOM, so a native backend that wants a screen reader to reach its content mirrors rows into a hidden DOM region. The decision (the hidden live region over a virtual accessibility tree, because the WebView above or beside the surface already hands the DOM to TalkBack, VoiceOver, Narrator, NVDA and Orca) and its limits:
+
+- `terminalScreenReader.ts` builds the mirror from `readRows` of the visible viewport only, never from cells. It is a visually hidden `role="list"` of the visible rows (the cursor row is `aria-current="location"`) and a polite `role="log"` of announcements.
+- Cost is bounded: output events inside a 150 ms window cost one read of the viewport; announcements are at least 1 s apart, at most 8 lines (more than that is one "N lines changed" line, which is also what a full-screen redraw becomes), the log keeps the last 20, and a selection is spoken cut at 200 characters.
+- What is spoken is the diff of rows, not the screen: lines that scrolled in, the characters appended to an edited row, the row under the cursor when only the cursor moved (a menu), and a selection. Nothing is spoken while the reader looks at history. A new row identical to one still on screen counts as unchanged (the text cannot tell them apart); per-row change flags from the core would remove that limit.
+- A backend declares the `accessibility` capability only when it mounts this mirror and the mirror passed its test on the platform. Backend selection requires `accessibility` while the screen-reader preference is on (`screenReaderRequirements`), so a native backend without it is refused, xterm.js is used and the registry records `lacks accessibility`.
+
+Not verified: TalkBack, VoiceOver, Narrator, NVDA or Orca reading the mirror. The unit tests prove the DOM and the announcement bounds, not what a screen reader says. Tracked in [#1329](https://github.com/mihazs/lazysh/issues/1329) and [#1335](https://github.com/mihazs/lazysh/issues/1335).
 
 ## Rejected or deferred alternatives
 

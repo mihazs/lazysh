@@ -1,4 +1,5 @@
 import type {TerminalAdapter} from './terminalAdapter';
+import {getPreferences} from './preferences';
 import {createBackendRegistry, type BackendPreference, type SelectOptions} from './terminalBackendRegistry';
 import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
@@ -22,7 +23,10 @@ export function developerBackendOverride(): BackendPreference | undefined {
   } catch { return undefined; }
 }
 
+/** A session read with a screen reader needs a backend whose content that reader can reach. */
+export const screenReaderRequirements = (screenReader: boolean): NonNullable<SelectOptions['requires']> => screenReader ? ['accessibility'] : [];
+
 /** The terminal of one new session, from the backend selection rules. */
-export function createTerminalAdapter(options: SelectOptions = {}) {
-  return registry.create({override: developerBackendOverride(), ...options});
+export function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {
+  return backends.create({override: developerBackendOverride(), ...options, requires: [...(options.requires ?? []), ...screenReaderRequirements(getPreferences().screenReader)]});
 }
