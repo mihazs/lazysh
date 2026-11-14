@@ -465,15 +465,21 @@ what an unchanged official CLI was observed to do, with a private HOME and a
 loopback-only endpoint, and what no run has established yet. Every claim is bound
 to the CLI version named; the run receipts are issue comments on
 [#603](https://github.com/mihazs/lazysh/issues/603),
-[#704](https://github.com/mihazs/lazysh/issues/704) and
-[#624](https://github.com/mihazs/lazysh/issues/624). Where a vendor login is
-required, the case is documented as blocked and is not simulated. Remaining work
-is tracked in [#1527](https://github.com/mihazs/lazysh/issues/1527).
+[#704](https://github.com/mihazs/lazysh/issues/704),
+[#624](https://github.com/mihazs/lazysh/issues/624) and
+[#1527](https://github.com/mihazs/lazysh/issues/1527). Where a vendor login is
+required, the case is documented as blocked and is not simulated. The
+Claude Code and Codex interactive runs used a private tmux server, a private HOME
+and state directory and a loopback endpoint that answered with scripted tool
+calls; no network namespace was used, so traffic to other hosts was neither
+blocked nor measured (the endpoint saw no request it did not expect). The
+companion was a release build of this repository's `lazysh-agent` 1.62.0.
+Remaining work is tracked in [#1527](https://github.com/mihazs/lazysh/issues/1527).
 
 | Agent | Observed natively | Not established | Blocked on |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done` | Tool, permission and child events in a normal interactive session | Nothing account-bound: a loopback provider is enough, the case is not yet run |
-| Codex | 0.166.0, normal TUI with ordinary hook review: nothing delivered before review, `working` then `done` after it, nothing when disabled or after a changed definition, one parent with one child that kept the parent `working` until its own `Stop` | A permission wait in an interactive session | Nothing account-bound |
+| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done`. 2.1.322, private HOME, loopback mock, managed profile, `--permission-mode default`: a print turn with a `Read` and a background `Agent` child kept one session row and shared it with the child's own `Read` hooks, which arrived before the parent's `Stop` in one of two runs and after it in the other (the row went `done`, then `working` again); the child's completion then resumed the parent turn, `working` then `done`. In the normal TUI (folder trusted through the ordinary dialog) a `Write` that needs permission gave `needs_attention` with an approval wait, and after approval `working` then `done`. Rejecting the dialog (No or Esc) sent no hook, so the row stayed `needs_attention` until `SessionEnd` ([#1795](https://github.com/mihazs/lazysh/issues/1795)) | Which events carry a child identity (the run read the store, not the hook payloads), plan and auto permission modes, an elicitation question | Nothing account-bound |
+| Codex | 0.166.0, normal TUI with ordinary hook review: nothing delivered before review, `working` then `done` after it, nothing when disabled or after a changed definition, one parent with one child that kept the parent `working` until its own `Stop`. 0.167.0 (`--no-daemon -a on-request -s read-only`, hooks trusted through the review screen): a command that needs approval gave `working`, then `needs_attention` with an approval wait, then `working` and `done` after approval and the command ran; Esc on the dialog delivered `Interrupt` and the row became `done` ("Turn interrupted") | Child events on 0.167.0, other approval kinds (patches, network, permission profiles) | Nothing account-bound |
 | OpenCode | 1.19.5 and 2.2 loaders, root and child session deletion, and an attributed attention report | A full provider turn and an authenticated session | A provider account for the authenticated session |
 | Gemini CLI | 0.66.0, headless with a loopback endpoint: `working` then `done`; nothing when hooks are disabled or the folder is untrusted | Interactive readiness (the owned terminal stalled at theme selection), root and child attribution, authenticated Google behaviour | A Google account for the authenticated part |
 | Cursor CLI | Nothing: fixture and documented-contract coverage only | Authenticated execution and neutral-output acceptance | A Cursor account |
