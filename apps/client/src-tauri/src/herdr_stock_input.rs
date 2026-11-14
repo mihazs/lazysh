@@ -65,7 +65,7 @@ fn command(target: &StockTarget, input: &Input) -> Option<String> {
 const SCREEN_ROWS: usize = 200;
 const SCREEN_COLUMNS: usize = 400;
 /// The visible screen as rows of text with control characters blanked, bounded.
-fn screen_rows(output: &str) -> Vec<String> {
+pub(crate) fn screen_rows(output: &str) -> Vec<String> {
     output
         .lines()
         .take(SCREEN_ROWS)
@@ -231,21 +231,35 @@ agent_input_command!(
     deliver
 );
 
-/// Reads the visible screen of the followed agent's pane, as rows of text.
-#[tauri::command]
-pub async fn herdr_agent_screen(
-    state: tauri::State<'_, ssh::AppState>,
-    session_id: String,
-    target: StockTarget,
-    access: AccessLease,
-) -> ssh::AccessResult<Vec<String>> {
-    access
-        .run(async {
-            let session = state.session(&session_id).await?;
-            screen(&session, &access, &target).await
-        })
-        .await
+/// Declares the read-only command that reads the visible screen of the followed agent's pane as rows of text, from `$read` with the
+/// command's own target.
+macro_rules! agent_screen_command {
+    ($(#[$doc:meta])* $name:ident, $target:ty, $read:path) => {
+        $(#[$doc])*
+        #[tauri::command]
+        pub async fn $name(
+            state: tauri::State<'_, ssh::AppState>,
+            session_id: String,
+            target: $target,
+            access: AccessLease,
+        ) -> ssh::AccessResult<Vec<String>> {
+            access
+                .run(async {
+                    let session = state.session(&session_id).await?;
+                    $read(&session, &access, &target).await
+                })
+                .await
+        }
+    };
 }
+pub(crate) use agent_screen_command;
+
+agent_screen_command!(
+    /// Reads the visible screen of the followed agent's pane, as rows of text.
+    herdr_agent_screen,
+    StockTarget,
+    screen
+);
 
 #[cfg(test)]
 mod tests {

@@ -1,23 +1,18 @@
 // @vitest-environment jsdom
 import AgentView from './AgentView';
-import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import {herdrNavigationTree} from './test/herdrNavigation';
 import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react';
-import {chatFollowAccess as access} from './test/chatFollowAccess';
+import {advance,ask,calls,color,typeOwnAnswer,useAgentViewHarness} from './test/agentViewHarness';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 import {dialogScreen,modelScreen,onTmux} from './test/agentDialogScreens';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const SESSION='00000001-0000-4000-8000-000000000000';
-const calls=(name:string)=>vi.mocked(invoke).mock.calls.filter(([command])=>command===name).map(([,args])=>args);
-const advance=async(ms:number)=>{await act(async()=>{await vi.advanceTimersByTimeAsync(ms);});};
-beforeEach(()=>{localStorage.clear();vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
-afterEach(()=>{cleanup();vi.useRealTimers();});
+useAgentViewHarness();
 
 const request=(id:string,sessionId=SESSION)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
-const ask=(questions:object[])=>[{id:'p',role:'user',blocks:[{type:'text',text:'Ask me'}]},{id:'a',role:'assistant',blocks:[{type:'tool_use',id:'q1',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions}}]}];
-const color={question:'Pick a color',multiple:false,options:[{label:'Red'},{label:'Blue'}]};
 type Host={pane:string;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];agent:'claude'|'codex';status:string;screen:string[];summary?:string;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
 /** The focused Herdr pane runs Claude Code `SESSION`; `pane` is where Herdr says that session runs now, `waiting` what the companion's report of it says. */
 function herdr(host:Partial<Host>={}) {
@@ -89,8 +84,7 @@ describe('the open question of the agent followed in a Herdr pane',()=>{
   it('picks the free-text row and types the line as one literal write, which Herdr\'s prompt would refuse for a waiting agent',async()=>{
     herdr({messages:ask([color])});
     await mount();await advance(400);
-    fireEvent.change(within(card()).getByLabelText('Or type your own answer'),{target:{value:'Green'}});
-    await click('Send typed answer');
+    await typeOwnAnswer(card(),'Green',click);
     expect(keys()).toEqual([{kind:'select',option:3,of:3},{kind:'type',text:'Green'}]);
     expect(keys().some(key=>(key as {kind:string}).kind==='send')).toBe(false);
   });

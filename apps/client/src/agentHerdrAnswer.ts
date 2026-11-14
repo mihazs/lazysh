@@ -28,9 +28,9 @@ export async function herdrStillWaits(invoke: Invoke, sessionId: string, target:
 /** The visible rows of the followed agent's pane, as the host read them (`herdr_agent_screen`); anything else is no screen. */
 export const screenRows = (value: unknown): readonly string[] => Array.isArray(value) && value.length <= 200 && value.every(row => typeof row === 'string' && row.length <= 400) ? value : [];
 
-/** What the dialog card reads on a Herdr pane, whose own terminal shows Herdr's screen rather than the agent's: the agent pane's visible rows, read from the
+/** What the dialog card reads on a Herdr or Zellij pane, whose own terminal shows the multiplexer's screen rather than the agent's: the agent pane's visible rows, read from the
  * host every `interval` ms while something listens and whenever a caller asks (`readAgain`, before the card decides from the screen). A failed read is a blank screen. */
-export function herdrScreen(read: () => Promise<readonly string[]>, interval = 3000): ScreenSource & {readAgain: () => Promise<void>} {
+export function hostScreen(read: () => Promise<readonly string[]>, interval = 3000): ScreenSource & {readAgain: () => Promise<void>} {
   let lines: readonly string[] = [];
   const listeners = new Set<() => void>();
   let timer: ReturnType<typeof setInterval> | undefined, flight: Promise<void> | undefined;
