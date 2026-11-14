@@ -185,13 +185,14 @@ the body.
 | 1 | both | A UTF-8 JSON object. |
 | 2 | relay to client | A frame: `sequence:u32be width:u16be height:u16be scrollY:f32be timestampMs:u64be`, then the JPEG bytes as they are. `width` and `height` are the page's viewport in CSS pixels, the space a tap is mapped into. |
 
-Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome", headed?, viewport: {width,
-height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
+Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome" | "firefox", headed?, viewport:
+{width, height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
 scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause` and `resume`. Anything else,
 including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
 than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
 browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
-111 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
+111 or newer, or, for Firefox, from `session.new` and must be Firefox 159 or newer, otherwise the session ends with
+`BrowserVersionUnsupported` and `detail` names the version),
 `page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (sent at
 count 1, 2, 4, 8 and so on), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
 `BrowserExited`, `PageCrashed`, `ProtocolViolation`, or the class of a failure before the stream started
@@ -230,6 +231,64 @@ The relay ([#1254](https://github.com/mihazs/lazysh/issues/1254)) sets the downl
 intercepts the file chooser (the browser reports it, no file is supplied) when it starts a browser, which is how
 those two are "denied and reported once", and it sends every command through the list; the hidden developer
 launcher applies the address rule to its first page.
+
+### The Firefox adapter
+
+Slice 1 of [#1257](https://github.com/mihazs/lazysh/issues/1257): the view of a Firefox, with the same relay, wire
+format and client messages as Chrome (`apps/agent/src/host_browser/firefox.rs`, `bidi.rs`). It is view-only for
+now: the capability record says `control`, `navigation` and `tabs` are false, because their client messages are
+the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
+[#1256](https://github.com/mihazs/lazysh/issues/1256) and
+[#1259](https://github.com/mihazs/lazysh/issues/1259), and the Firefox adapter follows each of them.
+
+- **Start.** `open {"browser": "firefox"}` runs `firefox --headless --no-remote --profile <private>
+  --remote-debugging-port 0 <url>` (`firefox` or `firefox-esr` on `PATH`, or `--binary`; `--headless` is left out
+  for a headed session). The profile is the private, ephemeral one of every managed browser. The environment
+  loses `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS`, so a page's script can never reach the browser itself, and
+  `--remote-allow-origins` and `--remote-allow-hosts` are never passed. Firefox's output is discarded.
+- **Endpoint.** Firefox writes its port to `WebDriverBiDiServer.json` in the profile. The relay uses it only when
+  the host is `127.0.0.1` (otherwise `BrowserEndpointInvalid`) and connects to `/session` with a WebSocket client of
+  its own, because Firefox refuses a `Host` that lacks the port and any `Origin`, which no library or web view
+  guarantees. A relay that cannot connect ends with `BrowserEndpointUnreachable`. The connection is never offered
+  to the phone.
+- **Version.** The product and version come from `session.new` (`Firefox/160.0`); Firefox 159 is the oldest the
+  measurements used, and an older one is named and refused. A browser that is not Firefox is refused the same way.
+- **One session, always ended.** Firefox allows one BiDi session and keeps one that was never ended until it
+  exits. The relay creates its session with `unhandledPromptBehavior: dismiss` (a page's dialog cannot hang it
+  until the dialog slice answers it) and ends it on every way out: the channel closing, a signal, the page or the
+  browser going away, an error. A Firefox that already holds a session cannot serve the relay and cannot be told
+  to let go, so the relay stops it, removes its profile and starts a new one, once; if that one is busy too the
+  session ends with `BrowserSessionBusy`. A second client that connects to the port while the relay's session is
+  open is refused by Firefox (`session not created`); that is a property of Firefox, tested on the host's own.
+- **Frames.** `browsingContext.captureScreenshot` of the viewport as JPEG quality 0.6, two requests in flight, one
+  every 50 ms at most (20 a second), and one every 250 ms once eight in a row matched the last frame. A frame
+  equal to the last one is not sent, and the outbox keeps the newest one for the device exactly as for Chrome.
+  `pause` stops every request and `resume` sends a frame even if the page did not change. The pacing is fixed and
+  chosen from the [measurements](reference/host-browser-feasibility.md#firefox-host-cost); the adaptive ladder of
+  [#1259](https://github.com/mihazs/lazysh/issues/1259) replaces it. The frame header's scroll offset is 0:
+  the capture is the viewport, and a pointer is mapped into the viewport.
+- **Title and address.** Once a second, `browsingContext.getTree` gives the address and one `script.evaluate` of
+  `document.title`, in a sandbox realm of the relay's own (`lazysh`) that the page's script cannot see or replace,
+  gives the title. That evaluation is the only script the relay ever runs, and the allow-list refuses it with any
+  other expression.
+- **What the phone cannot reach.** Every command passes `allow::bidi` before it is written: only
+  `session.new`, `session.end`, `browsingContext.getTree`, `setViewport` and `captureScreenshot`, and the title
+  evaluation. Refused by class: `storage.*` and `network.*` (cookies and interception), the rest of `script.*`
+  and `webExtension.*`, `input.setFiles` and `browsingContext.startScreencast` (which writes a video file to the
+  host and returns no frames), `permissions.*` and geolocation overrides; anything else is `OperationRefused`.
+- **Profile preferences.** The relay writes `user.js` in the private profile. A download goes nowhere: the profile
+  asks where to save, a headless Firefox has no dialog to answer and saves nothing, where by default a page's
+  download was written to the host user's `~/Downloads` (both checked on Firefox 160). A headed session shows
+  that dialog on the host's screen, to whoever is there, and offers a folder inside the profile. The camera,
+  microphone, location, notification and XR permissions are blocked, and telemetry, update and default-browser
+  checks are off; these were set, and their effect on the network was not observed. Firefox keeps its crash
+  reports and a few cache files in the host user's own directories (`~/.config/mozilla`, `~/.cache/mozilla`),
+  outside the profile; the crash reporter is turned off for the relay's Firefox.
+- **Not yet.** Input (taps, scrolling, text), tabs, navigation, history, dialogs, the file chooser report and the
+  quality ladder for Firefox, a reconnect after the WebSocket drops (a Firefox whose connection dropped holds a
+  leaked session, so the relay ends the session instead), a Firefox older than 159, Firefox from a snap or a
+  Flatpak (its profile and port may sit behind the sandbox), Windows and macOS hosts, and a headed Firefox were not
+  tried.
 
 ### Adapters and capabilities
 

@@ -166,6 +166,9 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
+          # The hosted image's Firefox (160 at the time of writing) is the one the host browser tests drive; without
+          # this a missing or too old Firefox would skip those tests instead of failing them.
+          LAZYSH_REQUIRE_FIREFOX: "1"
           MOON_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD' }}
         run: |
           # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.

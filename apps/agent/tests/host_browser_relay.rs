@@ -105,7 +105,10 @@ impl Relay {
         self.send_bytes(&bytes);
     }
     fn open(&mut self, url: &str) {
-        self.send(json!({"type": "open", "viewport": {"width": 412, "height": 915}, "url": url}));
+        self.open_as("chrome", url);
+    }
+    fn open_as(&mut self, browser: &str, url: &str) {
+        self.send(json!({"type": "open", "browser": browser, "viewport": {"width": 412, "height": 915}, "url": url}));
     }
 
     fn within(&self, wait: Duration) -> Option<Message> {
@@ -170,13 +173,17 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_fake(FAKE)
+    }
+    /// A fixture whose stand-in browser is the script `fake`.
+    fn with_fake(fake: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let fake = directory.path().join("fake-browser");
-        fs::write(&fake, FAKE).unwrap();
-        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = directory.path().join("fake-browser");
+        fs::write(&path, fake).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         Self {
             state: directory.path().join("state"),
-            fake,
+            fake: path,
             directory,
         }
     }
@@ -252,14 +259,43 @@ fn a_switch_that_is_off_or_unreadable_starts_nothing() {
     let fixture = Fixture::new();
     let root = fixture.directory.path();
     for (state, reason) in refusing_states(root, &fixture.state) {
-        let envs = [("FAKE_BROWSER_DIR", root)];
-        let mut relay = Relay::start(&state, &envs, &["--binary", fixture.fake.to_str().unwrap()]);
-        relay.open("about:blank");
-        assert_eq!(closed(&relay)["reason"], reason);
-        assert!(!relay.exit().success());
-        assert_nothing_started(root, &state);
+        for browser in ["chrome", "firefox"] {
+            let envs = [("FAKE_BROWSER_DIR", root)];
+            let mut relay =
+                Relay::start(&state, &envs, &["--binary", fixture.fake.to_str().unwrap()]);
+            relay.open_as(browser, "about:blank");
+            assert_eq!(closed(&relay)["reason"], reason, "{browser}");
+            assert!(!relay.exit().success());
+            assert_nothing_started(root, &state);
+        }
     }
     assert!(!fixture.state.exists(), "the gate created state");
+}
+
+/// Two frames `first` and `second` are out; a third waits for the device to acknowledge the first.
+fn frames_wait_for_acknowledgements(relay: &mut Relay, first: u32, second: u32) {
+    assert!(second > first);
+    assert!(relay.quiet(QUIET), "a third frame went out unacknowledged");
+    relay.send(json!({"type": "ack", "sequence": first, "decodeMs": 3}));
+    let (third, _) = relay.next_frame();
+    assert!(third > second, "{third} after {second}");
+}
+
+/// Everything the stand-in browser received was on the allow-list `allowed`, so the phone reached nothing else.
+fn assert_every_command_is_allowed(
+    fixture: &Fixture,
+    allowed: impl Fn(&str, &Value) -> Result<(), allow::Refusal>,
+) {
+    let commands = fixture.commands();
+    assert!(!commands.is_empty());
+    for command in &commands {
+        let method = command["method"].as_str().unwrap();
+        assert_eq!(
+            allowed(method, &command["params"]),
+            Ok(()),
+            "{method} is not on the allow-list"
+        );
+    }
 }
 
 #[test]
@@ -295,11 +331,7 @@ fn frames_flow_two_at_a_time_until_the_device_acknowledges() {
         Message::Json(_) => unreachable!(),
     };
     let (second, _) = relay.next_frame();
-    assert!(second > first);
-    assert!(relay.quiet(QUIET), "a third frame went out unacknowledged");
-    relay.send(json!({"type": "ack", "sequence": first, "decodeMs": 3}));
-    let (third, _) = relay.next_frame();
-    assert!(third > second, "{third} after {second}");
+    frames_wait_for_acknowledgements(&mut relay, first, second);
 
     // The browser was started as specified: a pipe, no socket, no origin widening, the page as an argument.
     let args = fixture.recorded("args").unwrap();
@@ -352,13 +384,9 @@ fn a_hidden_view_pauses_the_stream_at_the_browser_and_resuming_restarts_it() {
     relay.stop();
 }
 
-#[test]
-fn the_browser_only_ever_receives_allow_listed_commands() {
-    let fixture = Fixture::enabled();
-    let mut relay = fixture.serve("", "Chrome/120.0.0.0");
-    relay.open("about:blank");
-    relay.next("frame");
-    // Each of these names a protocol method, a script or a control the closed message set does not have.
+/// Each of these names a protocol method, a script or a control the closed message set does not have: counted
+/// and told to the client at 1, 2 and 4, never forwarded.
+fn refuse_what_the_closed_set_lacks(relay: &mut Relay) {
     for refused in [
         json!({"type": "cdp", "method": "Network.getCookies"}),
         json!({"type": "evaluate", "expression": "document.cookie"}),
@@ -372,18 +400,19 @@ fn the_browser_only_ever_receives_allow_listed_commands() {
         .map(|_| relay.next_json("refused")["count"].as_u64().unwrap())
         .collect();
     assert_eq!(counts, [1, 2, 4]);
+}
+
+#[test]
+fn the_browser_only_ever_receives_allow_listed_commands() {
+    let fixture = Fixture::enabled();
+    let mut relay = fixture.serve("", "Chrome/120.0.0.0");
+    relay.open("about:blank");
+    relay.next("frame");
+    refuse_what_the_closed_set_lacks(&mut relay);
     relay.stop();
 
+    assert_every_command_is_allowed(&fixture, allow::command);
     let commands = fixture.commands();
-    assert!(!commands.is_empty());
-    for command in &commands {
-        let method = command["method"].as_str().unwrap();
-        assert_eq!(
-            allow::command(method, &command["params"]),
-            Ok(()),
-            "{method} is not on the allow-list"
-        );
-    }
     let text = fixture.recorded("commands").unwrap();
     assert!(
         !text.contains("Network.")
@@ -504,7 +533,7 @@ fn a_bad_first_message_starts_nothing() {
             "ViewportInvalid",
         ),
         (
-            json!({"type": "open", "browser": "firefox", "viewport": {"width": 412, "height": 915}}),
+            json!({"type": "open", "browser": "safari", "viewport": {"width": 412, "height": 915}}),
             "BrowserUnsupported",
         ),
         (json!({"type": "pause"}), "OpenExpected"),
@@ -540,13 +569,13 @@ fn broken_framing_closes_the_session_and_the_browser() {
     }
 }
 
-/// A page on loopback that is one solid color, served to a real browser.
-fn fixture_page() -> (u16, std::thread::JoinHandle<()>) {
+/// A server on loopback for a real browser: `respond` gets the request line and returns the whole response.
+fn fixture_server(
+    respond: impl Fn(&str) -> String + Send + 'static,
+) -> (u16, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
-        let body =
-            "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
         // The browser asks for the page and a favicon; stop when the test drops its relay and connections stop.
         listener.set_nonblocking(true).unwrap();
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -556,39 +585,36 @@ fn fixture_page() -> (u16, std::thread::JoinHandle<()>) {
                 continue;
             };
             let mut request = [0u8; 2048];
-            let _ = std::io::Read::read(&mut stream, &mut request);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
+            let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]);
+            let _ =
+                stream.write_all(respond(request.lines().next().unwrap_or_default()).as_bytes());
         }
     });
     (port, server)
 }
 
-/// The real browser: its pixels, not a fake's, reach the client, and nothing is left behind.
-#[test]
-fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
-    let Some(binary) = chrome() else {
-        eprintln!("skipped: no Chrome or Chromium on PATH");
-        return;
-    };
-    let (port, _server) = fixture_page();
-    let fixture = Fixture::enabled();
-    let mut relay = Relay::start(
-        &fixture.state,
-        &[],
-        &["--binary", binary.to_str().unwrap(), "--no-sandbox"],
-    );
-    relay.open(&format!("http://127.0.0.1:{port}/"));
-    let state = relay.next_json("state");
-    assert_eq!(state["state"], "running");
-    let version = state["browser"].as_str().unwrap();
-    assert!(version.contains("Chrom"), "{version}");
-    let profile = fixture.profiles().remove(0);
-    // Early frames can show the blank page, so read until the fixture's color has arrived, and until the page's
-    // own title and address have, as text. A blank canvas never satisfies either.
+/// An HTTP response that closes the connection after `body`.
+fn http_response(headers: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A page on loopback that is one solid color, served to a real browser.
+fn fixture_page() -> (u16, std::thread::JoinHandle<()>) {
+    fixture_server(|_| {
+        http_response(
+            "Content-Type: text/html\r\n",
+            "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">",
+        )
+    })
+}
+
+/// Read until the fixture's color has reached the client as pixels, and its own title and address as text. Early
+/// frames can show the blank page, and a blank canvas never satisfies either.
+fn wait_for_fixture(relay: &mut Relay, port: u16) {
     let deadline = Instant::now() + WAIT * 2;
     let (mut center, mut page) = (None, None);
     while center.is_none() || page.is_none() {
@@ -615,28 +641,51 @@ fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
     }
     assert!((center.unwrap()[1] as i32 - 200).abs() < 40, "{center:?}");
     assert_eq!(page.unwrap()["url"], format!("http://127.0.0.1:{port}/"));
+}
 
-    relay.stop();
+/// After the relay stopped: no process still runs with `profile` on its command line, and the profile is gone.
+fn assert_real_browser_is_gone(profile: &Path) {
     let pattern = profile.to_str().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline
-        && Command::new("pgrep")
+    let running = || {
+        Command::new("pgrep")
             .args(["-f", pattern])
             .output()
             .unwrap()
             .status
             .success()
-    {
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && running() {
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert!(
-        !Command::new("pgrep")
-            .args(["-f", pattern])
-            .output()
-            .unwrap()
-            .status
-            .success(),
-        "the browser survived the relay"
-    );
+    assert!(!running(), "the browser survived the relay");
     assert!(!profile.exists(), "the profile outlived the relay");
 }
+
+/// The real browser: its pixels, not a fake's, reach the client, and nothing is left behind.
+#[test]
+fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
+    let Some(binary) = chrome() else {
+        eprintln!("skipped: no Chrome or Chromium on PATH");
+        return;
+    };
+    let (port, _server) = fixture_page();
+    let fixture = Fixture::enabled();
+    let mut relay = Relay::start(
+        &fixture.state,
+        &[],
+        &["--binary", binary.to_str().unwrap(), "--no-sandbox"],
+    );
+    relay.open(&format!("http://127.0.0.1:{port}/"));
+    let state = relay.next_json("state");
+    assert_eq!(state["state"], "running");
+    let version = state["browser"].as_str().unwrap();
+    assert!(version.contains("Chrom"), "{version}");
+    let profile = fixture.profiles().remove(0);
+    wait_for_fixture(&mut relay, port);
+    relay.stop();
+    assert_real_browser_is_gone(&profile);
+}
+
+#[path = "host_browser_relay/firefox.rs"]
+mod firefox;

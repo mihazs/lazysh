@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod bidi;
+pub mod firefox;
 pub mod outbox;
 pub mod profile;
 pub mod relay;
@@ -20,6 +22,7 @@ pub mod settings;
 pub mod wire;
 
 pub const ENABLE_VARIABLE: &str = "LAZYSH_DEV_HOST_BROWSER";
+const FIREFOX_CANDIDATES: [&str; 2] = ["firefox", "firefox-esr"];
 const CANDIDATES: [&str; 5] = [
     "google-chrome-stable",
     "google-chrome",
@@ -58,6 +61,11 @@ fn valid_origin(origin: &str) -> bool {
 }
 
 fn find_binary(explicit: Option<&Path>) -> Result<PathBuf> {
+    find_in(explicit, &CANDIDATES)
+}
+
+/// The explicit binary, or the first of `candidates` found on `PATH`.
+fn find_in(explicit: Option<&Path>, candidates: &[&str]) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return path
             .is_file()
@@ -66,7 +74,7 @@ fn find_binary(explicit: Option<&Path>) -> Result<PathBuf> {
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
-        .flat_map(|dir| CANDIDATES.map(|name| dir.join(name)))
+        .flat_map(|dir| candidates.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
         .ok_or(Error::Browser("BrowserNotFound"))
 }

@@ -9,7 +9,7 @@
 //! The browser, its helpers and its profile end with the channel: standard input closing, SIGINT, SIGTERM or
 //! SIGHUP, or the browser exiting. Nothing about a page is logged or written to disk.
 use super::{
-    allow, browser_command, find_binary,
+    allow, browser_command, find_binary, firefox,
     outbox::Outbox,
     profile, settings, terminate,
     wire::{self, Client, Viewport},
@@ -34,8 +34,8 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 const CALL_TIMEOUT: Duration = Duration::from_secs(90);
 /// A screencast frame is base64 of a JPEG of at most [`wire::MAX_JPEG`], inside a JSON object.
 const MAX_BROWSER_MESSAGE: u64 = 8 << 20;
-const MAX_TITLE: usize = 512;
-const MAX_URL: usize = 2048;
+pub(super) const MAX_TITLE: usize = 512;
+pub(super) const MAX_URL: usize = 2048;
 const QUALITY: u8 = 60;
 const TITLE_POLL: Duration = Duration::from_secs(1);
 
@@ -47,7 +47,7 @@ pub struct Serve<'a> {
     pub no_sandbox: bool,
 }
 
-enum Event {
+pub(super) enum Event {
     Client(Vec<u8>),
     ClientGone,
     /// The client broke the framing: an unknown tag, an oversize or zero length.
@@ -85,10 +85,10 @@ pub fn serve(options: &Serve) -> Result<()> {
     result.map(|_| ())
 }
 
-const CLIENT_CLOSED: &str = "ClientClosed";
+pub(super) const CLIENT_CLOSED: &str = "ClientClosed";
 
 /// Ends the browser (its whole process group) when it goes out of scope, on every path.
-struct Running(Child);
+pub(super) struct Running(pub(super) Child);
 impl Drop for Running {
     fn drop(&mut self) {
         terminate(&mut self.0);
@@ -120,13 +120,22 @@ fn session(
         return Err(Error::Browser("OpenExpected"));
     };
     let url = url.as_deref().unwrap_or("about:blank");
-    if browser != "chrome" {
+    if !matches!(browser.as_str(), "chrome" | "firefox") {
         return Err(Error::Browser("BrowserUnsupported"));
     }
     if !viewport.valid() {
         return Err(Error::Browser("ViewportInvalid"));
     }
     allow::address(url).map_err(|refusal| Error::Browser(refusal.reason()))?;
+    if browser == "firefox" {
+        let open = firefox::Open {
+            options,
+            headed,
+            viewport,
+            url,
+        };
+        return firefox::session(&open, outbox, detail, &events, &inbox);
+    }
     let binary = find_binary(options.binary)?;
 
     // Declared before the browser, so it is removed after the browser has ended.
@@ -222,13 +231,11 @@ fn session(
         polled: Instant::now(),
     };
     relay.start_screencast()?;
-    outbox.control(json!({
-        "type": "state",
-        "state": "running",
-        "browser": product,
-        "viewport": {"width": viewport.width, "height": viewport.height, "scale": viewport.scale},
-        "capabilities": {"view": true, "control": false, "navigation": false, "tabs": false},
-    }));
+    outbox.control(running_state(
+        &product,
+        viewport,
+        json!({"view": true, "control": false, "navigation": false, "tabs": false}),
+    ));
     relay.run()
 }
 
@@ -344,12 +351,31 @@ fn spawn_piped(_: &mut Command) -> Result<(Child, Box<dyn Write + Send>, Box<dyn
     Err(Error::Browser("HostBrowserUnsupported"))
 }
 
-/// "HeadlessChrome/120.0.6099.109" and "Chrome/120.0.6099.109" are version 120.
-fn major(product: &str) -> Option<u32> {
+/// What the client is told once the page streams: the browser, the page size and what the adapter can do.
+pub(super) fn running_state(browser: &str, viewport: Viewport, capabilities: Value) -> Value {
+    json!({
+        "type": "state",
+        "state": "running",
+        "browser": browser,
+        "viewport": {"width": viewport.width, "height": viewport.height, "scale": viewport.scale},
+        "capabilities": capabilities,
+    })
+}
+
+/// What to tell the client about its `count`th refused message: the first and every doubling after it, so that a
+/// flood stays small.
+pub(super) fn refusal_notice(count: u64) -> Option<Value> {
+    count.is_power_of_two().then(
+        || json!({"type": "refused", "reason": allow::Refusal::Unlisted.reason(), "count": count}),
+    )
+}
+
+/// "HeadlessChrome/120.0.6099.109", "Chrome/120.0.6099.109" and "Firefox/160.0" are versions 120 and 160.
+pub(super) fn major(product: &str) -> Option<u32> {
     product.split_once('/')?.1.split('.').next()?.parse().ok()
 }
 
-fn bounded(text: &str, max: usize) -> String {
+pub(super) fn bounded(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
@@ -387,23 +413,33 @@ struct Link {
 impl Link {
     fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value> {
         let id = self.cdp.send(method, params, session)?;
-        let deadline = Instant::now() + CALL_TIMEOUT;
-        loop {
-            let wait = deadline.saturating_duration_since(Instant::now());
-            match self.inbox.recv_timeout(wait) {
-                Ok(Event::Browser(mut message)) if message["id"] == id => {
-                    return if message.get("error").is_some() {
-                        Err(Error::Browser("BrowserProtocolError"))
-                    } else {
-                        Ok(message["result"].take())
-                    };
-                }
-                Ok(Event::Stop | Event::ClientGone) => return Err(Error::Browser(CLIENT_CLOSED)),
-                Ok(Event::BrowserGone) => return Err(Error::Browser("BrowserExited")),
-                Ok(Event::Violation) => return Err(Error::Browser("ProtocolViolation")),
-                Ok(other) => self.backlog.push_back(other),
-                Err(_) => return Err(Error::Browser("BrowserStartTimeout")),
-            }
+        let mut reply = await_reply(&self.inbox, &mut self.backlog, id)?;
+        if reply.get("error").is_some() {
+            Err(Error::Browser("BrowserProtocolError"))
+        } else {
+            Ok(reply["result"].take())
+        }
+    }
+}
+
+/// The browser's reply to call `id`, whatever it says. Everything else that arrives meanwhile is kept in
+/// `backlog`, in order, for the loop that handles events; a client that leaves, a broken framing or a browser that
+/// exits ends the wait.
+pub(super) fn await_reply(
+    inbox: &mpsc::Receiver<Event>,
+    backlog: &mut VecDeque<Event>,
+    id: u64,
+) -> Result<Value> {
+    let deadline = Instant::now() + CALL_TIMEOUT;
+    loop {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        match inbox.recv_timeout(wait) {
+            Ok(Event::Browser(message)) if message["id"] == id => return Ok(message),
+            Ok(Event::Stop | Event::ClientGone) => return Err(Error::Browser(CLIENT_CLOSED)),
+            Ok(Event::BrowserGone) => return Err(Error::Browser("BrowserExited")),
+            Ok(Event::Violation) => return Err(Error::Browser("ProtocolViolation")),
+            Ok(other) => backlog.push_back(other),
+            Err(_) => return Err(Error::Browser("BrowserStartTimeout")),
         }
     }
 }
@@ -464,16 +500,8 @@ impl Relay {
                     Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(CLIENT_CLOSED),
                 },
             };
-            match event {
-                Event::Stop | Event::ClientGone => return Ok(CLIENT_CLOSED),
-                Event::Violation => return Err(Error::Browser("ProtocolViolation")),
-                Event::BrowserGone => return Err(Error::Browser("BrowserExited")),
-                Event::Client(body) => self.client(&body)?,
-                Event::Browser(message) => {
-                    if let Some(reason) = self.browser(&message)? {
-                        return Ok(reason);
-                    }
-                }
+            if let Some(reason) = self.handle(event)? {
+                return Ok(reason);
             }
         }
     }
@@ -504,15 +532,10 @@ impl Relay {
         Ok(())
     }
 
-    /// Tell the client about the first refusal and every doubling after it, so a flood stays small.
     fn refuse(&mut self) {
         self.refused += 1;
-        if self.refused.is_power_of_two() {
-            self.outbox.control(json!({
-                "type": "refused",
-                "reason": allow::Refusal::Unlisted.reason(),
-                "count": self.refused,
-            }));
+        if let Some(notice) = refusal_notice(self.refused) {
+            self.outbox.control(notice);
         }
     }
 
@@ -587,14 +610,52 @@ impl Relay {
 
     /// The title and address are untrusted text: bounded here, shown as text only by the client.
     fn page(&mut self, info: &Value) {
-        let page = (
-            bounded(info["title"].as_str().unwrap_or_default(), MAX_TITLE),
-            bounded(info["url"].as_str().unwrap_or_default(), MAX_URL),
+        let (title, url) = (
+            info["title"].as_str().unwrap_or_default(),
+            info["url"].as_str().unwrap_or_default(),
         );
-        if page != self.page {
-            self.outbox.page(&page.0, &page.1);
-            self.page = page;
+        announce_page(&self.outbox, &mut self.page, title, url);
+    }
+}
+
+/// Tell the client the page's title and address when they changed since `announced`, bounded: they are untrusted
+/// text, shown as text only.
+pub(super) fn announce_page(
+    outbox: &Outbox,
+    announced: &mut (String, String),
+    title: &str,
+    url: &str,
+) {
+    let page = (bounded(title, MAX_TITLE), bounded(url, MAX_URL));
+    if page != *announced {
+        outbox.page(&page.0, &page.1);
+        *announced = page;
+    }
+}
+
+/// What an adapter's loop does with the events that reach it; the meaning of the ones that end the session, and
+/// of a client that leaves, is the same for every browser.
+pub(super) trait Handler {
+    fn client(&mut self, body: &[u8]) -> Result<()>;
+    /// A message from the browser; `Some(reason)` ends the session.
+    fn browser(&mut self, message: &Value) -> Result<Option<&'static str>>;
+
+    fn handle(&mut self, event: Event) -> Result<Option<&'static str>> {
+        match event {
+            Event::Stop | Event::ClientGone => Ok(Some(CLIENT_CLOSED)),
+            Event::Violation => Err(Error::Browser("ProtocolViolation")),
+            Event::BrowserGone => Err(Error::Browser("BrowserExited")),
+            Event::Client(body) => self.client(&body).map(|()| None),
+            Event::Browser(message) => self.browser(&message),
         }
+    }
+}
+impl Handler for Relay {
+    fn client(&mut self, body: &[u8]) -> Result<()> {
+        Relay::client(self, body)
+    }
+    fn browser(&mut self, message: &Value) -> Result<Option<&'static str>> {
+        Relay::browser(self, message)
     }
 }
 

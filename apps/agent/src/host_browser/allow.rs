@@ -68,6 +68,20 @@ const ALLOWED: [&str; 27] = [
     "Page.setInterceptFileChooserDialog",
 ];
 
+/// The only WebDriver BiDi commands the Firefox adapter sends (docs/host-browser.md, "Adapters and
+/// capabilities"). The same closed-list rule as [`ALLOWED`]: a command that a later Firefox adds is not reachable.
+const BIDI_ALLOWED: [&str; 6] = [
+    "browsingContext.captureScreenshot",
+    "browsingContext.getTree",
+    "browsingContext.setViewport",
+    "script.evaluate",
+    "session.end",
+    "session.new",
+];
+
+/// The one script the relay ever runs in a page: it reads the title, because `browsingContext.getTree` has none.
+pub const TITLE_EXPRESSION: &str = "document.title";
+
 /// Editing commands that read or write the host's clipboard; a key event may carry them.
 const CLIPBOARD_COMMANDS: [&str; 4] = ["copy", "cut", "paste", "pasteandmatchstyle"];
 
@@ -96,6 +110,18 @@ fn class(method: &str) -> Refusal {
         "Browser" if name.contains("ermission") => Refusal::Permission,
         "Emulation" if name.contains("eolocation") => Refusal::Permission,
         "Target" if name.starts_with("expose") || name.starts_with("send") => Refusal::Script,
+        _ => Refusal::Unlisted,
+    }
+}
+
+fn bidi_class(method: &str) -> Refusal {
+    let domain = method.split_once('.').map_or(method, |(domain, _)| domain);
+    match (domain, method) {
+        ("storage" | "network", _) => Refusal::Session,
+        ("script" | "webExtension", _) => Refusal::Script,
+        ("permissions", _) | (_, "emulation.setGeolocationOverride") => Refusal::Permission,
+        // `startScreencast` writes a video file on the host and delivers no frames (measured).
+        (_, "input.setFiles" | "browsingContext.startScreencast") => Refusal::Files,
         _ => Refusal::Unlisted,
     }
 }
@@ -132,6 +158,24 @@ pub fn command(method: &str, params: &Value) -> Result<(), Refusal> {
             } else {
                 Ok(())
             }
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Whether the relay may send the WebDriver BiDi `method` with `params` to Firefox. Fails closed.
+pub fn bidi(method: &str, params: &Value) -> Result<(), Refusal> {
+    if !BIDI_ALLOWED.contains(&method) {
+        return Err(bidi_class(method));
+    }
+    match method {
+        // Script runs only to read the title, in a sandbox realm the page's own script cannot see or replace.
+        "script.evaluate"
+            if text(params, "expression") != TITLE_EXPRESSION
+                || params.get("awaitPromise") != Some(&Value::Bool(false))
+                || params["target"]["sandbox"].as_str().is_none() =>
+        {
+            Err(Refusal::Script)
         }
         _ => Ok(()),
     }
@@ -391,5 +435,95 @@ mod tests {
         assert!(!format!("{refused:?} {}", refused.reason()).contains("s3cr3t"));
         let refused = command("Page.navigate", &json!({"url":"file:///s3cr3t"})).unwrap_err();
         assert_eq!(refused.reason(), "AddressRefused");
+    }
+    #[test]
+    fn every_denied_bidi_class_is_refused_with_its_reason() {
+        let none = json!({});
+        for (method, params, refusal) in [
+            ("storage.getCookies", none.clone(), Refusal::Session),
+            ("storage.deleteCookies", none.clone(), Refusal::Session),
+            ("network.addIntercept", none.clone(), Refusal::Session),
+            ("network.setExtraHeaders", none.clone(), Refusal::Session),
+            ("script.callFunction", none.clone(), Refusal::Script),
+            ("script.addPreloadScript", none.clone(), Refusal::Script),
+            ("webExtension.install", none.clone(), Refusal::Script),
+            ("input.setFiles", none.clone(), Refusal::Files),
+            (
+                "browsingContext.startScreencast",
+                none.clone(),
+                Refusal::Files,
+            ),
+            (
+                "permissions.setPermission",
+                none.clone(),
+                Refusal::Permission,
+            ),
+            (
+                "emulation.setGeolocationOverride",
+                none.clone(),
+                Refusal::Permission,
+            ),
+            ("browser.close", none.clone(), Refusal::Unlisted),
+            ("browser.removeUserContext", none.clone(), Refusal::Unlisted),
+            ("browsingContext.print", none.clone(), Refusal::Unlisted),
+            ("session.subscribe", none.clone(), Refusal::Unlisted),
+            ("Madeup.method", none.clone(), Refusal::Unlisted),
+            // Script that is not the title, or that the page could intercept or wait on.
+            (
+                "script.evaluate",
+                json!({"expression":"document.cookie","awaitPromise":false,"target":{"context":"c","sandbox":"s"}}),
+                Refusal::Script,
+            ),
+            (
+                "script.evaluate",
+                json!({"expression":"document.title","awaitPromise":false,"target":{"context":"c"}}),
+                Refusal::Script,
+            ),
+            (
+                "script.evaluate",
+                json!({"expression":"document.title","awaitPromise":true,"target":{"context":"c","sandbox":"s"}}),
+                Refusal::Script,
+            ),
+            (
+                "script.evaluate",
+                json!({"expression":"document.title;1","awaitPromise":false,"target":{"context":"c","sandbox":"s"}}),
+                Refusal::Script,
+            ),
+            ("script.evaluate", none.clone(), Refusal::Script),
+        ] {
+            assert_eq!(bidi(method, &params), Err(refusal), "{method} {params}");
+        }
+    }
+
+    #[test]
+    fn the_bidi_commands_the_firefox_adapter_needs_are_allowed() {
+        let target = json!({"context":"c","sandbox":"lazysh"});
+        for (method, params) in [
+            ("session.new", json!({"capabilities":{}})),
+            ("session.end", json!({})),
+            ("browsingContext.getTree", json!({})),
+            (
+                "browsingContext.setViewport",
+                json!({"context":"c","viewport":{"width":412,"height":915}}),
+            ),
+            (
+                "browsingContext.captureScreenshot",
+                json!({"context":"c","origin":"viewport","format":{"type":"image/jpeg","quality":0.6}}),
+            ),
+            (
+                "script.evaluate",
+                json!({"expression":TITLE_EXPRESSION,"awaitPromise":false,"target":target}),
+            ),
+        ] {
+            assert_eq!(bidi(method, &params), Ok(()), "{method} {params}");
+        }
+    }
+
+    #[test]
+    fn the_bidi_list_names_no_denied_class() {
+        // Script is on the list only to read the title: `bidi` checks the expression.
+        for method in BIDI_ALLOWED.into_iter().filter(|m| *m != "script.evaluate") {
+            assert_eq!(bidi_class(method), Refusal::Unlisted, "{method}");
+        }
     }
 }

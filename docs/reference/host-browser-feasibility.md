@@ -271,6 +271,12 @@ it, because a hosted runner's speed is not a requirement.
   same 60 fps and is not a headed run.
 - macOS and Windows hosts, and other Chromium builds (Google Chrome stable, Edge, Brave).
 - Pinch in headed Firefox, and Firefox on Android.
+- The Firefox relay ([#1257](https://github.com/mihazs/lazysh/issues/1257), slice 1) was exercised on Firefox 160
+  on Linux, headless, against a loopback fixture. Not tried: Firefox older than 159 (the relay refuses it),
+  Firefox from a snap or a Flatpak, headed Firefox, macOS and Windows hosts, a real phone and a real network. The
+  fixed pacing (20 screenshot requests a second at most, one every 250 ms for a page that stopped changing) was
+  not measured for host cost or latency with the relay: the numbers above are the sequential and polled ones from
+  the probe. Permission, telemetry and update preferences are set in the profile; their effect was not observed.
 - The user's normal profile, in either browser, and the Chrome 144 approval mode.
 - Whether a sign-in flow that rejects automated browsers can be completed.
 - A statistical confidence interval for any figure. They are single short runs.
