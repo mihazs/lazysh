@@ -80,8 +80,7 @@ impl Cache {
     }
     fn open_archive(&self) -> Result<File> {
         let path = self.archive();
-        let file =
-            platform::open_archive(&path).map_err(|_| "Download the Parakeet model first")?;
+        let file = open_archive(&path).map_err(|_| "Download the Parakeet model first")?;
         let metadata = file.metadata().map_err(|_| CACHE_ERROR)?;
         platform::private(&path, &metadata, false)?;
         if metadata.len() != ARCHIVE_BYTES {
