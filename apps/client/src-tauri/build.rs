@@ -152,6 +152,7 @@ fn main() {
         "stop_preview",
         "list_previews",
         "discover_preview_ports",
+        "check_auth_listener",
         "list_hosts",
         "save_host",
         "delete_host",
