@@ -136,6 +136,9 @@ pub enum Target {
     Directory {
         label: String,
         directory: String,
+        /// Create a missing folder (`mkdir -p`) instead of requiring it to exist.
+        #[serde(default)]
+        create: bool,
     },
     Worktree {
         repository: String,
@@ -221,17 +224,23 @@ fn literal_format(value: &str) -> String {
 struct Validated<'a> {
     label: &'a str,
     directory: &'a str,
+    /// Create the directory (`mkdir -p`) before anything starts in it.
+    create: bool,
     worktree: Option<[&'a str; 4]>,
     agent: Option<(&'static str, &'static str, &'a str, Option<&'a str>)>,
 }
 /// `multiline` lets a prompt hold line breaks and tabs: only an argv word of a
 /// tmux or Zellij launch carries them verbatim; Herdr's `agent start` takes one line.
 fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
-    let (label, directory, worktree) = match &request.target {
-        Target::Directory { label, directory } => {
+    let (label, directory, create, worktree) = match &request.target {
+        Target::Directory {
+            label,
+            directory,
+            create,
+        } => {
             text(label, 200, "Enter a workspace label")?;
             absolute_path(directory)?;
-            (label.as_str(), directory.as_str(), None)
+            (label.as_str(), directory.as_str(), *create, None)
         }
         Target::Worktree {
             repository,
@@ -246,6 +255,7 @@ fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
             (
                 name.as_str(),
                 path.as_str(),
+                false,
                 Some([
                     repository.as_str(),
                     name.as_str(),
@@ -287,6 +297,7 @@ fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
     Ok(Validated {
         label,
         directory,
+        create,
         worktree,
         agent,
     })
@@ -314,6 +325,16 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             args(&["command", "-v", "--", executable]),
         ));
     }
+    if valid.create {
+        steps.push(step(
+            "folder",
+            args(&["mkdir", "-p", "--", valid.directory]),
+        ));
+    } else if valid.worktree.is_none() && !matches!(host, Host::Herdr(_)) {
+        // tmux and Zellij fall back to another directory for a start directory that does not exist.
+        // The path is absolute, so `test` cannot read it as an operator (it takes no `--`).
+        steps.push(step("folderCheck", args(&["test", "-d", valid.directory])));
+    }
     if let Some([repository, branch, path, base]) = valid.worktree {
         steps.push(step(
             "worktree",
@@ -328,7 +349,6 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             let mut argv = server.argv();
             argv.extend(args(&[
                 "new-window",
-                "-d",
                 "-P",
                 "-F",
                 "#{pane_id}",
@@ -497,6 +517,8 @@ pub struct Failure {
 #[serde(rename_all = "camelCase")]
 pub struct Outcome {
     #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace_id: Option<String>,
@@ -562,7 +584,9 @@ pub(crate) async fn execute(
         }
     };
     for index in 0..steps.len() {
-        let first = outcome.worktree.is_none() && outcome.workspace_id.is_none();
+        let first = outcome.folder.is_none()
+            && outcome.worktree.is_none()
+            && outcome.workspace_id.is_none();
         let stage = steps[index].stage;
         let timeout = match stage {
             "worktree" => Duration::from_secs(120),
@@ -576,6 +600,14 @@ pub(crate) async fn execute(
             Err(error) => return Err(error),
         };
         match stage {
+            "folder" if output.status == 0 => {
+                outcome.folder = Some(steps[index].argv[3].clone());
+            }
+            "folderCheck" if output.status == 0 => {}
+            "folderCheck" => {
+                let message = format!("{} is not a folder on the host", steps[index].argv[2]);
+                return fail(stage, message, outcome, first);
+            }
             "worktree" if output.status == 0 => {
                 outcome.worktree = Some(steps[index].argv[8].clone());
             }
@@ -631,9 +663,11 @@ pub struct AgentKind {
     label: &'static str,
     executable: &'static str,
     prompt: bool,
+    /// Its canonical executable `command -v` resolves to an executable file on the host.
+    installed: bool,
 }
-/// Lists supported agents whose canonical executable `command -v` resolves to an
-/// executable file (dash's `command -v` also reports non-executable files).
+/// Lists every supported agent and whether its canonical executable `command -v`
+/// resolves to an executable file (dash's `command -v` also reports non-executable files).
 pub(crate) async fn agent_kinds(remote: &mut impl Remote) -> Result<Vec<AgentKind>> {
     // Executable names are positional parameters, so the probe has no quotes.
     let mut argv = args(&[
@@ -650,12 +684,12 @@ pub(crate) async fn agent_kinds(remote: &mut impl Remote) -> Result<Vec<AgentKin
     let found: Vec<&str> = output.text.lines().collect();
     Ok(AGENTS
         .iter()
-        .filter(|row| found.contains(&row.1))
         .map(|&(kind, executable, label, prompt)| AgentKind {
             kind,
             label,
             executable,
             prompt,
+            installed: found.contains(&executable),
         })
         .collect())
 }

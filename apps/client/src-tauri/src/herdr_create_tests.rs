@@ -438,7 +438,7 @@ fn reports_partial_success_without_rolling_back() {
 
 #[cfg(unix)]
 #[test]
-fn agent_detection_lists_only_executables_found_by_command_v() {
+fn agent_detection_marks_only_executables_found_by_command_v_as_installed() {
     let dir = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink("/bin/sh", dir.path().join("sh")).unwrap();
     for name in ["codex", "cursor-agent"] {
@@ -460,6 +460,7 @@ fn agent_detection_lists_only_executables_found_by_command_v() {
         let kinds = now(agent_kinds(&mut local)).unwrap();
         let found: Vec<_> = kinds
             .iter()
+            .filter(|k| k.installed)
             .map(|k| (k.kind, k.executable, k.prompt))
             .collect();
         assert_eq!(
@@ -467,6 +468,9 @@ fn agent_detection_lists_only_executables_found_by_command_v() {
             [("codex", "codex", true), ("cursor", "cursor-agent", false)],
             "{login:?}"
         );
+        // Every supported agent is listed, so the launcher can show the missing ones as unavailable.
+        assert_eq!(kinds.len(), AGENTS.len(), "{login:?}");
+        assert!(kinds.iter().any(|k| k.kind == "claude" && !k.installed));
     }
 }
 
@@ -505,6 +509,7 @@ fn tmux_and_zellij_plans_run_the_agent_argv_with_every_hostile_literal_intact() 
         tmux,
         [
             ("agentCheck", args(&["command", "-v", "--", "claude"])),
+            ("folderCheck", args(&["test", "-d", "/srv/it's #{y};"])),
             (
                 "window",
                 args(&[
@@ -513,7 +518,6 @@ fn tmux_and_zellij_plans_run_the_agent_argv_with_every_hostile_literal_intact() 
                     "-L",
                     "srv",
                     "new-window",
-                    "-d",
                     "-P",
                     "-F",
                     "#{pane_id}",
@@ -536,7 +540,7 @@ fn tmux_and_zellij_plans_run_the_agent_argv_with_every_hostile_literal_intact() 
     )
     .unwrap();
     assert_eq!(
-        zellij.steps[1].argv,
+        zellij.steps[2].argv,
         args(&[
             "zellij",
             "--session=s 'q;",
@@ -550,7 +554,7 @@ fn tmux_and_zellij_plans_run_the_agent_argv_with_every_hostile_literal_intact() 
     );
     // The plan shows the argv exactly as it is sent.
     assert_eq!(
-        zellij.steps[1].command,
+        zellij.steps[2].command,
         "'zellij' '--session=s '\\''q;' 'run' '--cwd=/srv/it'\\''s #{y};' '--name=a#{x};' '--' 'claude' 'say '\\''hi'\\''\n$(id);'"
     );
     // The default tmux server is named, never implied.
@@ -559,7 +563,7 @@ fn tmux_and_zellij_plans_run_the_agent_argv_with_every_hostile_literal_intact() 
         hostile_launch(),
     )
     .unwrap();
-    assert_eq!(default[1].1[..4], args(&["tmux", "-u", "-L", "default"]));
+    assert_eq!(default[2].1[..4], args(&["tmux", "-u", "-L", "default"]));
 }
 
 #[test]
@@ -646,6 +650,107 @@ fn a_launch_needs_an_agent_an_existing_session_and_a_valid_prompt() {
         "agent":{"kind":"codex","name":"agent-1","prompt":"two\nlines"},
     }));
     assert!(herdr_workspace_plan("default".into(), multiline).is_err());
+}
+
+/// A directory launch with `create` set or not, for the folder-step tests.
+fn folder_launch(create: bool) -> CreateRequest {
+    request(serde_json::json!({
+        "target":{"type":"directory","label":"x","directory":"/srv/new 'dir","create":create},
+        "agent":{"kind":"codex","name":"codex-a1"},
+    }))
+}
+
+#[test]
+fn a_new_folder_is_created_and_an_existing_one_is_checked_before_anything_starts() {
+    let stages = |multiplexer: &serde_json::Value, create| {
+        let plan = plan_of(multiplexer.clone(), folder_launch(create)).unwrap();
+        plan.iter().map(|(stage, _)| *stage).collect::<Vec<_>>()
+    };
+    for (kind, last) in [("tmux", "window"), ("zellij", "pane")] {
+        let multiplexer = serde_json::json!({"kind":kind,"name":"w"});
+        // mkdir -p replaces the check: a folder that is about to be created needs none.
+        assert_eq!(
+            stages(&multiplexer, true),
+            ["agentCheck", "folder", last],
+            "{kind}"
+        );
+        assert_eq!(
+            stages(&multiplexer, false),
+            ["agentCheck", "folderCheck", last],
+            "{kind}"
+        );
+        let plan = plan_of(multiplexer, folder_launch(true)).unwrap();
+        assert_eq!(plan[1].1, args(&["mkdir", "-p", "--", "/srv/new 'dir"]));
+    }
+    // Herdr's plan keeps its shape unless a folder is created, and a worktree creates its own path.
+    let herdr = |create| -> Vec<&'static str> {
+        herdr_workspace_plan("default".into(), folder_launch(create))
+            .unwrap()
+            .steps
+            .iter()
+            .map(|s| s.stage)
+            .collect()
+    };
+    assert_eq!(herdr(false), ["agentCheck", "workspace", "agent"]);
+    assert_eq!(herdr(true), ["agentCheck", "folder", "workspace", "agent"]);
+    let worktree = plan_of(
+        serde_json::json!({"kind":"tmux","name":"w"}),
+        worktree_request(serde_json::json!({"kind":"codex","name":"codex-a1"})),
+    )
+    .unwrap();
+    assert_eq!(
+        worktree.iter().map(|s| s.0).collect::<Vec<_>>(),
+        ["agentCheck", "worktree", "window"]
+    );
+    // A relative or traversing path is refused whether it is created or not.
+    for directory in ["relative", "/srv/../etc", "/srv/./x"] {
+        let bad = request(serde_json::json!({
+            "target":{"type":"directory","label":"x","directory":directory,"create":true},
+            "agent":{"kind":"codex","name":"codex-a1"},
+        }));
+        assert!(
+            plan_of(serde_json::json!({"kind":"tmux","name":"w"}), bad).is_err(),
+            "{directory}"
+        );
+    }
+}
+
+#[test]
+fn a_missing_existing_folder_stops_a_launch_and_a_created_folder_is_kept_when_the_pane_fails() {
+    for host in [Host::Tmux("w", TmuxServer::default()), Host::Zellij("w")] {
+        // `test -d` fails: nothing was created, and tmux would otherwise start in another directory.
+        let mut remote = Scripted {
+            replies: [(0, "/usr/bin/codex\n".into()), (1, String::new())].into(),
+            ..Default::default()
+        };
+        let error = now(execute(&mut remote, &host, &folder_launch(false))).unwrap_err();
+        assert_eq!(error.message(), "/srv/new 'dir is not a folder on the host");
+        assert_eq!(remote.calls.len(), 2);
+        // The folder was created and the window or pane failed: reported with what exists.
+        let mut remote = Scripted {
+            replies: [
+                (0, "/usr/bin/codex\n".into()),
+                (0, String::new()),
+                (1, "no space left\n".into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let outcome = now(execute(&mut remote, &host, &folder_launch(true))).unwrap();
+        assert_eq!(outcome.folder.as_deref(), Some("/srv/new 'dir"));
+        assert_eq!(outcome.pane_id, None);
+        assert_eq!(
+            outcome.failure.map(|f| (f.stage, f.message)),
+            Some((
+                if matches!(host, Host::Tmux(..)) {
+                    "window"
+                } else {
+                    "pane"
+                },
+                "no space left".to_owned()
+            ))
+        );
+    }
 }
 
 #[test]
@@ -758,6 +863,7 @@ fn a_launch_reports_the_new_pane_and_keeps_what_it_created_when_the_pane_fails()
         let mut remote = Scripted {
             replies: [
                 (0, "/usr/bin/codex\n".into()),
+                (0, String::new()),
                 (1, "can't find session: w\n".into()),
             ]
             .into(),
@@ -952,6 +1058,18 @@ fn real_herdr_worktree_workspace_and_agent() {
     ))
     .unwrap();
     assert!(plain.agent.is_none() && plain.failure.is_none() && plain.worktree.is_none());
+    // A new folder is created, with its parents, before the workspace opens in it.
+    let fresh = format!("{repo_text}-new/it's $(touch pwned3)/leaf");
+    let folder = now(execute(
+        &mut remote,
+        &Host::Herdr("default"),
+        &request(serde_json::json!({"target":{"type":"directory","label":"fresh","directory":fresh,"create":true}})),
+    ))
+    .unwrap();
+    assert!(folder.failure.is_none() && folder.workspace_id.is_some());
+    assert_eq!(folder.folder.as_deref(), Some(fresh.as_str()));
+    assert!(std::path::Path::new(&fresh).is_dir());
+    assert!(!root.join("pwned3").exists());
     let count = |remote: &mut Local<_>| {
         snapshot(remote)["result"]["snapshot"]["workspaces"]
             .as_array()
@@ -1116,13 +1234,15 @@ fn run_ok(remote: &mut impl Remote, argv: &[&str]) -> String {
 
 /// A directory launch and a worktree launch with hostile names start the stub in the
 /// right directory with the prompt byte for byte; a missing agent or session creates nothing.
-/// `panes` lists every `(pane id, directory)` of the session under test.
+/// `panes` lists every `(pane id, directory)` of the session under test; `current`, when
+/// the multiplexer follows a launch, the pane the session shows now.
 #[cfg(unix)]
 fn assert_agent_launches<R: Remote>(
     root: &AgentRoot,
     remote: &mut R,
     (host, gone): (&Host<'_>, &Host<'_>),
     panes: impl Fn(&mut R) -> Vec<(String, String)>,
+    current: Option<&dyn Fn(&mut R) -> String>,
 ) {
     let repo = root.path().join("repo").to_str().unwrap().to_owned();
     run_ok(
@@ -1147,10 +1267,39 @@ fn assert_agent_launches<R: Remote>(
     assert_eq!(root.recorded(&directory), [prompt]);
     let after = panes(remote);
     assert_eq!(after.len(), started.len() + 1, "{after:?}");
+    let pane = outcome.pane_id.unwrap();
     assert!(
-        after.contains(&(outcome.pane_id.unwrap(), directory.clone())),
+        after.contains(&(pane.clone(), directory.clone())),
         "{after:?}"
     );
+    if let Some(current) = current {
+        assert_eq!(current(remote), pane);
+    }
+
+    // A new folder, with the parents it needs, is created and the agent starts in it.
+    let fresh = root.path().join("fresh $(touch NO2)/it's #{n};/leaf");
+    let fresh = fresh.to_str().unwrap().to_owned();
+    let created = |create| {
+        request(serde_json::json!({
+            "target":{"type":"directory","label":"new folder","directory":fresh,"create":create},
+            "agent":{"kind":"codex","name":"codex-lazysh4","prompt":"hello"},
+        }))
+    };
+    // Without `create` a missing folder stops the launch: tmux would start in another directory.
+    let count = panes(remote).len();
+    let missing = now(execute(remote, host, &created(false))).unwrap_err();
+    assert_eq!(
+        missing.message(),
+        format!("{fresh} is not a folder on the host")
+    );
+    assert!(!std::path::Path::new(&fresh).exists());
+    assert_eq!(panes(remote).len(), count);
+    let outcome = now(execute(remote, host, &created(true))).unwrap();
+    assert_eq!(outcome.failure, None, "{outcome:?}");
+    assert_eq!(outcome.folder.as_deref(), Some(fresh.as_str()));
+    assert!(std::path::Path::new(&fresh).is_dir());
+    assert_eq!(root.recorded(&fresh), ["hello"]);
+    assert!(panes(remote).contains(&(outcome.pane_id.unwrap(), fresh.clone())));
 
     let branch = "feat/$(touch${IFS}pwned)'q";
     let worktree = format!("{repo}-worktrees/feat-$(touch${{IFS}}pwned)'q");
@@ -1179,10 +1328,14 @@ fn assert_agent_launches<R: Remote>(
     );
     assert!(root.recorded(&worktree).is_empty());
     let after = panes(remote);
+    let pane = outcome.pane_id.unwrap();
     assert!(
-        after.contains(&(outcome.pane_id.unwrap(), worktree.clone())),
+        after.contains(&(pane.clone(), worktree.clone())),
         "{after:?}"
     );
+    if let Some(current) = current {
+        assert_eq!(current(remote), pane);
+    }
 
     // A missing agent or session refuses the launch before a worktree, branch or pane exists.
     let count = after.len();
@@ -1209,7 +1362,7 @@ fn assert_agent_launches<R: Remote>(
     .unwrap_err();
     assert_eq!(gone.kind(), "remote_command_failed");
     assert_eq!(panes(remote).len(), count);
-    for name in ["pwned", "NO"] {
+    for name in ["pwned", "NO", "NO2"] {
         assert!(
             !root.path().join(name).exists()
                 && !std::path::Path::new(&directory).join(name).exists()
@@ -1272,6 +1425,25 @@ fn real_tmux_agent_window() {
                 .map(|(pane, path)| (pane.to_owned(), path.to_owned()))
                 .collect()
         },
+        // A tmux launch makes the new window the session's current one, so an attached client follows it.
+        Some(&|remote| {
+            run_ok(
+                remote,
+                &[
+                    "tmux",
+                    "-u",
+                    "-L",
+                    &label,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    &format!("={session}:"),
+                    "#{pane_id}",
+                ],
+            )
+            .trim()
+            .to_owned()
+        }),
     );
 }
 
@@ -1344,5 +1516,6 @@ fn real_zellij_agent_pane() {
         &mut remote,
         (&Host::Zellij(&session), &Host::Zellij("lz-gone")),
         |remote| panes(remote, &session),
+        None,
     );
 }

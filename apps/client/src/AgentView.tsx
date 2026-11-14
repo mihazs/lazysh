@@ -3,7 +3,7 @@ import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
-import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
+import {AgentLaunch,HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
 import AgentStartFolder from './AgentStartFolder';
 import {knownDirectories} from './herdrCreate';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
@@ -51,8 +51,8 @@ type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: Agent
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; shown: boolean; tmux: boolean; /** The tmux session the terminal is attached to: the New agent flow opens its windows there. */tmuxSession?: string; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
@@ -234,7 +234,11 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   };
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;
   const focusCreated=(workspace:string)=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined);
-  const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={knownDirectories(navigation.data?.snapshot,sessions.map(session=>session.project))} disabled={!shown} onStaged={onShowTerminal}/>;
+  const known=knownDirectories(navigation.data?.snapshot,sessions.map(session=>session.project));
+  const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={known} disabled={!shown} onStaged={onShowTerminal}/>;
+  // The session's own multiplexer starts the agent; without one (or a Herdr that predates the launcher) only the staged command is left.
+  const multiplexer=tmux && tmuxSession ? {kind:'tmux' as const,name:tmuxSession} : zellijSession ? {kind:'zellij' as const,name:zellijSession} : herdrSession && herdrLaunch ? {kind:'herdr' as const,name:navigation.data?.server ?? herdrSession} : undefined;
+  const newAgent=(compact:boolean)=>multiplexer && <AgentLaunch sessionId={sessionId} lease={access} multiplexer={multiplexer} tree={navigation.data?.snapshot} projects={known} disabled={!shown} label={t('agentViewNewAgent')} compact={compact} onCreated={id=>{if(multiplexer.kind==='herdr')focusCreated(id);}}/>;
   // One compact row: what the chat belongs to and its state. Everything else waits behind the options button.
   const enter=selected?.enter && onEnterHerdr;
   const unlinked=!!herdrSession && !!selected && !selected.linked && !selected.history;
@@ -250,6 +254,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       {state && <span title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && row && <> · <time dateTime={row.waitingSince ?? row.updatedAt}>{formatRelativeTime(row.waitingSince ?? row.updatedAt, now)}</time></>}</span>}
       {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
       {reader && <AgentHeaderPills session={info}/>}
+      {newAgent(true)}
       {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
@@ -285,7 +290,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
-        {binding.kind === 'none' && <><StartButtons sessionId={sessionId}/>{startFolder}</>}
+        {binding.kind === 'none' && <><StartButtons sessionId={sessionId}/>{multiplexer ? newAgent(false) : startFolder}</>}
       </div>
     </div>}
     {!selected && !herdrSession && (!reader || choosing) && access.current() && sessions.length>0 && <section className="agent-view-picker" aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>

@@ -14,3 +14,4 @@
 .herdr-create .herdr-create-agent label:has(> input[type="radio"]) { flex-direction: row; align-items: center; gap: 10px; min-height: 44px; }
 .herdr-create-review ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
 .herdr-create-output { margin: 6px 0 0; padding: 8px 10px; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; border-radius: 6px; background: var(--theme-background, #0b1208); }
+.herdr-create-form textarea { width: 100%; min-height: 72px; max-height: 40vh; resize: vertical; font-weight: 400; }

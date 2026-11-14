@@ -264,7 +264,7 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 | Situation | Agent view shows |
 | --- | --- |
-| No agent detected in the pane (tmux, Zellij or a plain shell) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer, and **Start in a folder** (see [Starting an agent from the empty state](#starting-an-agent-from-the-empty-state)); the last-reported list when other panes have agents. |
+| No agent detected in the pane (tmux, Zellij or a plain shell) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer, and **New agent** under tmux or Zellij (see [New agent](#new-agent)) or **Start in a folder** in a plain shell (see [Starting an agent from the empty state](#starting-an-agent-from-the-empty-state)); the last-reported list when other panes have agents. |
 | Herdr: the focused pane runs an agent with one reported conversation | That conversation, opened by itself and re-linked when focus or the agent changes. |
 | Herdr: the focused pane runs no agent, others do | The live agents of the server, with the reason; a pick is marked **Not this pane** and dropped when focus moves. |
 | Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher), **Start in a new worktree** and **Show terminal**. Without the launcher (a host companion that predates it), **Start in a folder** replaces the last two launcher buttons. |
@@ -283,12 +283,53 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
   yes. It shows the exact commands for review before anything runs; once created, the Agent view
   focuses the new workspace and links to its agent as soon as Herdr reports the session. See
   [Herdr spaces](multiplexers.md#create-workspaces-worktrees-and-agents) for the dialog's branch, base and path rules.
-- **Start in a folder** (tmux, Zellij, plain shells, and Herdr without the launcher): choose Claude
+- **Start in a folder** (plain shells, and Herdr without the launcher; tmux and Zellij offer [New agent](#new-agent) instead): choose Claude
   Code or Codex and a host folder (typed, a known folder, or browsed over SFTP). The review step shows
   the exact command, `cd '<folder>' && claude` or `… && codex` with the folder shell-quoted, and
   **Stage in the terminal** puts it in the terminal composer and shows the terminal. Nothing runs
   until you send it there; no multiplexer window or pane is created, so this starts the agent in the
   pane you are in.
+
+### New agent
+
+**New agent** starts a coding agent without typing a command. It is the plus button in the Agent
+view's header (always there when the session's multiplexer can launch) and a button in the empty
+states, on phone and desktop. It opens a dialog that follows the session's multiplexer:
+
+| Session | Under the hood |
+| --- | --- |
+| tmux | a new window of the attached session, running the agent (`tmux new-window -c <folder> -- <agent> [<prompt>]`), which becomes the session's current window |
+| Zellij | a new pane of the attached session, running the agent (`zellij run --cwd <folder> -- <agent> [<prompt>]`) |
+| Herdr (host companion with the launcher) | a new workspace plus `herdr agent start`, as in [Herdr spaces](multiplexers.md#create-workspaces-worktrees-and-agents), then the Agent view focuses the new workspace |
+| No multiplexer | not offered yet: **Start in a folder** stages `cd <folder> && <agent>` for review |
+
+The dialog asks for, in this order:
+
+1. **Agent.** Every supported agent is listed, with the ones whose executable `command -v` finds on the
+   host selectable and the others marked "not installed". An optional initial prompt appears for
+   Claude Code and Codex, the agents that take one; under tmux and Zellij it may span lines.
+2. **Where it runs.** **An existing folder** (typed, a known folder, or browsed over SFTP; a folder that
+   does not exist stops the launch before anything starts), **A new folder** (created with its
+   parents by `mkdir -p`; the path must be absolute without `.` or `..`) or **A new Git worktree**
+   (a folder inside the repository, read with **Read the repository**; the branch, base revision
+   and worktree path are suggested the way the Herdr dialog suggests them and stay editable).
+3. **Label (optional)** for a folder: the window, pane or workspace name; the folder's name by default.
+
+**Review commands** then shows the exact commands, in order, as the host will run them, and nothing
+runs until **Create and start agent** is confirmed. Every path, label and prompt reaches the host as
+one literal argument, never through a shell, and the prompt is never run as a command. A failure
+before anything was created is reported as such; a later one says what was kept (the folder,
+worktree or workspace) and that nothing was removed.
+
+After a launch the Agent view stays where it is and follows the new agent as soon as it reports
+(under tmux and Zellij through its hook report for the new pane, within the view's polling
+interval; under Herdr the new workspace is focused and linked). The terminal keeps running and is
+one tap away; the launcher never types into an existing pane.
+
+Not covered yet: opening a plain terminal session in the folder when no multiplexer runs, resuming
+an earlier session through the launcher ([#1545](https://github.com/mihazs/lazysh/issues/1545)),
+rmux ([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions
+([#1133](https://github.com/mihazs/lazysh/issues/1133)) and an Android runtime case.
 
 ## Per-agent capabilities
 
