@@ -36,6 +36,21 @@ Closing these gaps, without relaxing source integrity checks, is [#1312](https:/
 - Hardware keyboards, Shift+Enter (#805), toolbar Enter (#1043), modifier toolbar behaviour (`TerminalPane.tsx` `modifiedTerminalText` path) must be identical on both backends.
 - Desktop and iOS parity (keyboard, IME, mouse, touch, selection, clipboard) is [#1334](https://github.com/mihazs/lazysh/issues/1334); desktop IME composition and CJK alignment verification is #982.
 
+### Platform parity checklist ([#1334](https://github.com/mihazs/lazysh/issues/1334))
+
+A platform stays on xterm.js until every row below is verified for it, with evidence in the pull request that ticks it. "Modelled" means the behaviour is checked on one host with the platform's rules emulated, which is not the platform: no native surface exists on any platform yet (#1327, #1330 to #1333), so nothing is verified on a device or a real OS.
+
+| Area | Android | iOS | Linux | Windows | macOS |
+| --- | --- | --- | --- | --- | --- |
+| Keyboard: typed characters, Alt and Meta chords | not started (#1328) | not started | modelled | modelled | modelled |
+| IME composition | not started (#1328) | not started | not started (#982) | not started | not started |
+| Mouse reporting and wheel | not started | not started | not started | not started | not started |
+| Touch and gestures | not started (#1328) | not started | n/a | n/a | n/a |
+| Selection and clipboard | not started | not started | not started | not started | not started |
+| Accessibility (#1329, #1335) | mirror built, no screen reader run | not started | not started | not started | not started |
+
+Keyboard, as modelled. The events a platform's keyboard fires are not what the core should be sent. Option on macOS and AltGr on Windows and Linux type a character with Alt (and Ctrl) still set, and the core answers such an event with an Alt chord: measured on the core, AltGr+Q on a German layout (Windows) sends ESC NUL instead of `@`, AltGr+E sends ESC and Ctrl+E instead of the euro sign, and Option+L on macOS sends ESC and `¬` instead of `¬`. xterm.js applies a "third level shift" rule for these and a few more; `terminalPlatformKeys.ts` applies the same rules before an event reaches the core: the character is sent without Alt and Ctrl, Option as Meta sends the plain key under Alt, and Option+Left and Option+Right become ESC b and ESC f on macOS. The cases are in `apps/client/src/xterm/platformKeys.*.test.ts`, which load xterm.js 5.5.0 as each platform and hold it to the bytes recorded in `apps/client/e2e/fixtures/platform-keys/`; `packages/terminal-runtime/tests/platform_keys.rs` holds the core to the same fixtures. Differences kept on purpose, each listed with its reason in the fixtures: xterm.js turns Alt+arrow into Ctrl+arrow (the core sends the standard Alt form), and sends nothing for a Windows Ctrl+Alt chord that types no character (the core sends the chord). Not covered: iOS hardware keyboards (xterm.js treats iOS as neither macOS nor Windows, and its behaviour there has not been recorded), non-US layouts for punctuation under Option as Meta, dead keys, and the keys the app handles itself (copy, paste, search).
+
 ## Accessibility
 
 | Platform | Service | Status |
