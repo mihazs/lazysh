@@ -1,5 +1,5 @@
 import {Keyboard,KeyboardOff,PanelBottomClose,PanelBottomOpen,PenOff,SquarePen,type LucideIcon} from 'lucide-react';
-import {useEffect,useId,useRef,useState,type CSSProperties,type ReactNode,type RefObject} from 'react';
+import {useEffect,useId,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {useEdgeGestureMode,useEdgeGestures,useSwipeToClose} from './edgeGestures';
 import GestureHandle from './GestureHandle';
 import {t,useUi} from './i18n/core';

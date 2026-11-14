@@ -10,7 +10,6 @@ export type {EdgeGestureId};
 
 export type Edge = 'left' | 'right' | 'bottom';
 export type CloseDirection = 'left' | 'right' | 'down';
-export const edgeGestureEdges: Record<EdgeGestureId, Edge> = {leftMenu: 'left', viewSwitch: 'right', bottomMenu: 'bottom'};
 const gestureOfEdge: Record<Edge, EdgeGestureId> = {left: 'leftMenu', right: 'viewSwitch', bottom: 'bottomMenu'};
 
 export type TouchStart = {target: EventTarget | null; x: number; y: number; edge?: Edge};
