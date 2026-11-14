@@ -125,7 +125,8 @@ export async function trustOwnedCa(adb: Adb, webdav: Pick<OwnedWebdav, 'ca' | 'c
   const {external, shared} = locations();
   const encoded = Buffer.from(webdav.ca).toString('base64');
   const attempts = {
-    'run-as': () => adb('shell', `run-as ${APP_PACKAGE} sh -c 'mkdir -p ${APP_PACKAGE} && echo ${encoded} | base64 -d > ${APP_PACKAGE}/${ROOT_FILE}'`),
+    // run-as starts in the app's data directory, which is what Tauri reports as the app config directory on Android.
+    'run-as': () => adb('shell', `run-as ${APP_PACKAGE} sh -c 'echo ${encoded} | base64 -d > ${ROOT_FILE}'`),
     'external files': async () => { await adb('shell', 'mkdir', '-p', external); await adb('push', webdav.caFile, `${external}/${ROOT_FILE}`); },
     'local tmp': async () => { await adb('push', webdav.caFile, shared); await adb('shell', 'chmod', '644', shared); },
   };
