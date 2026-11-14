@@ -26,6 +26,8 @@ export type AgentSession = {
   updatedAt: string;
   summary: string;
   paneId: string | null;
+  /** The tmux or rmux server `paneId` belongs to, as `tmux:<label>` or `rmux:<label>`; from a companion that records it. */
+  paneServer?: string;
   eventCount: number;
   /** What a needs-attention report waits for, and since when; from a companion that records it. */
   waiting?: 'approval' | 'question' | 'plan' | 'menu' | 'unknown';
@@ -55,7 +57,8 @@ export function parseSnapshot(value: unknown): AgentSession[] {
     if (!states.includes(row.state as AgentState) || !Number.isFinite(Date.parse(row.updatedAt as string)) || !Number.isSafeInteger(row.eventCount) || Number(row.eventCount) < 1 || (row.paneId !== null && typeof row.paneId !== 'string')) {
       throw new LocalUiError('agentsInvalidSession');
     }
-    if ((row.waiting !== undefined && !['approval', 'question', 'plan', 'menu', 'unknown'].includes(row.waiting as string))
+    if ((row.paneServer !== undefined && (typeof row.paneServer !== 'string' || row.paneServer.length > 256))
+      || (row.waiting !== undefined && !['approval', 'question', 'plan', 'menu', 'unknown'].includes(row.waiting as string))
       || (row.waitingSince !== undefined && (typeof row.waitingSince !== 'string' || !Number.isFinite(Date.parse(row.waitingSince))))) throw new LocalUiError('agentsInvalidSession');
     return row as AgentSession;
   });
@@ -258,7 +261,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
         <div className="tool-bar"><button type="button" className="subtle-button agent-report-back" onClick={closeReport}><ArrowLeft size={16} aria-hidden="true"/>{t('navigationBack')}</button><h4>{t('agentsSelectedReport')}</h4><button className="subtle-button agent-report-clear" onClick={closeReport}>{t('agentsClearSelection')}</button></div>
         <strong>{selected.agent}</strong><p>{selected.summary}</p>
         <dl><dt>{t('agentsReportProject')}</dt><dd><code>{selected.project}</code></dd><dt>{t('agentsFilterStatus')}</dt><dd>{t(names[selected.state])}</dd></dl>
-        <details><summary>{t('agentsReportTechnicalDetails')}</summary><dl><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}</dl></details>
+        <details><summary>{t('agentsReportTechnicalDetails')}</summary><dl><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}{selected.paneServer && <><dt>{t('agentsReportPaneServer')}</dt><dd><code>{selected.paneServer}</code></dd></>}</dl></details>
         <p><time dateTime={selected.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(selected.updatedAt))})}</time></p><p className="agent-report-hint">{t('agentsReportContext')}</p>
         <button type="button" className="subtle-button agent-report-archive" onClick={()=>archive(selected)}><Archive size={15} aria-hidden="true"/>{t('agentsArchive')}</button>
         {mobile && selected.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button agent-report-history" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(selected)}>{t('agentsHistoryUse')}</button>}

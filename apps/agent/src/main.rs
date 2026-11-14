@@ -638,12 +638,21 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             reported_history,
         } => {
             let pane = lazysh_agent::pane_identity();
+            // The environment's server belongs to the environment's pane, not to a pane a generic payload names itself.
+            let named = |mut event: lazysh_agent::Event| {
+                if let Some(server) = lazysh_agent::pane_server().filter(|_| event.pane_id == pane)
+                {
+                    event.pane_server = Some(server);
+                }
+                event
+            };
             if reported_history {
                 let (event, source) = lazysh_agent::reported_history::read_hook(
                     io::stdin().lock(),
                     agent,
                     pane.as_deref(),
                 )?;
+                let event = event.map(named);
                 if event.is_some() || source.is_some() {
                     Store::open(&lazysh_agent::state_directory()?)?.ingest_with_reported_history(
                         event.as_ref(),
@@ -652,7 +661,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     )?;
                 }
             } else if let Some(event) =
-                lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?
+                lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?.map(named)
             {
                 Store::open(&lazysh_agent::state_directory()?)?
                     .ingest(&event, chrono::Utc::now())?;

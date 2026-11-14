@@ -280,6 +280,7 @@ export const english = {
   agentsReportSession: "Reported session ID",
   agentsReportEvents: "Reported events",
   agentsReportPane: "Reported pane ID",
+  agentsReportPaneServer: "Reported multiplexer server",
   agentsReportContext: "Latest report from this host. Check the terminal for its current state.",
   agentsNoMatches: "No matching reported agents",
   agentsNoMatchesHint: "Change the search or reported-status filter to see other reports.",

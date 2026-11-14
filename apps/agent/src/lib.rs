@@ -12,6 +12,8 @@ pub mod installation;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
+mod pane_server;
+pub use pane_server::pane_server;
 mod private_json;
 pub mod relay;
 pub mod reported_history;
@@ -196,6 +198,10 @@ pub struct Event {
     pub state: SessionState,
     pub summary: String,
     pub pane_id: Option<String>,
+    /// The tmux or rmux server `pane_id` belongs to (`tmux:work`): a pane id is unique only within one server.
+    /// Absent from a companion that predates it, and for a pane no `-L` label names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_server: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
 }
@@ -207,6 +213,13 @@ impl Event {
         text(&self.summary, 512)?;
         if let Some(pane) = &self.pane_id {
             text(pane, 256)?;
+        }
+        if self
+            .pane_server
+            .as_deref()
+            .is_some_and(|server| !pane_server::valid(server))
+        {
+            return Err(Error::InvalidEvent);
         }
         Ok(())
     }
@@ -427,6 +440,7 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 state,
                 summary: summary.into(),
                 pane_id: pane.map(str::to_owned),
+                pane_server: None,
                 waiting,
             }
         }
@@ -579,6 +593,11 @@ const WAITING_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_waiting (
     agent TEXT NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL, since REAL NOT NULL,
     PRIMARY KEY (agent,session_id));";
 
+// Additive like `session_waiting`: a companion that predates it never reads or writes this table.
+const PANE_SERVER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_pane_server (
+    agent TEXT NOT NULL, session_id TEXT NOT NULL, server TEXT NOT NULL,
+    PRIMARY KEY (agent,session_id));";
+
 fn apply_schema(
     transaction: &rusqlite::Transaction<'_>,
 ) -> std::result::Result<(), (StoragePhase, Error)> {
@@ -587,6 +606,7 @@ fn apply_schema(
         reported_history::SCHEMA,
         hooks::AIDER_HEALTH_SCHEMA,
         WAITING_SCHEMA,
+        PANE_SERVER_SCHEMA,
     ] {
         transaction
             .execute_batch(schema)
@@ -874,6 +894,18 @@ impl Store {
                 ),
             }
             .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
+            match &event.pane_server {
+                Some(server) => transaction.execute(
+                    "INSERT INTO session_pane_server VALUES (?1,?2,?3)
+                    ON CONFLICT(agent,session_id) DO UPDATE SET server=excluded.server",
+                    params![event.agent, event.session_id, server],
+                ),
+                None => transaction.execute(
+                    "DELETE FROM session_pane_server WHERE agent=?1 AND session_id=?2",
+                    params![event.agent, event.session_id],
+                ),
+            }
+            .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
             transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
             ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
             summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
@@ -905,6 +937,9 @@ impl Store {
             .execute("DELETE FROM session_waiting WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent=session_waiting.agent AND sessions.session_id=session_waiting.session_id)", [])
             .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
         transaction
+            .execute("DELETE FROM session_pane_server WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent=session_pane_server.agent AND sessions.session_id=session_pane_server.session_id)", [])
+            .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+        transaction
             .commit()
             .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;
         Ok(())
@@ -917,7 +952,7 @@ impl Store {
             "DELETE FROM sessions WHERE updated_at < ?1",
             [now.timestamp_micros() as f64 / 1_000_000.0 - RETENTION_SECONDS],
         )?;
-        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since FROM sessions LEFT JOIN session_waiting USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
+        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since,server FROM sessions LEFT JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
         let mut rows = statement.query([limit])?;
         let mut sessions = Vec::new();
         while let Some(row) = rows.next()? {
@@ -951,6 +986,7 @@ impl Store {
                     state,
                     summary: row.get(4)?,
                     pane_id: row.get(5)?,
+                    pane_server: row.get(10)?,
                     waiting,
                 },
                 updated_at,
@@ -1440,6 +1476,7 @@ mod tests {
                         state: SessionState::Done,
                         summary: "Done".into(),
                         pane_id: None,
+                        pane_server: None,
                         waiting: None,
                     },
                     now + chrono::TimeDelta::microseconds(i),

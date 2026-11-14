@@ -160,8 +160,8 @@ jobs:
         with: &rust-cache-main
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bun install --frozen-lockfile
-      - name: Install bounded storage observation tool
-        run: sudo sh .github/scripts/apt-install.sh strace
+      - name: Install bounded storage observation tool and the tmux the pane-server case runs
+        run: sudo sh .github/scripts/apt-install.sh strace tmux
       - name: Check companion and service packages
         id: agent-checks
         env:
@@ -187,6 +187,10 @@ jobs:
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
         run: cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
+      - name: Name the server of a hook run in a real named tmux pane
+        if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
+        timeout-minutes: 3
+        run: cargo test --locked --package lazysh-agent --test pane_server a_hook_inside_a_real_named_tmux_server_reports_that_server_and_pane -- --ignored --exact
 
   # This optional product workspace is deliberately outside root Cargo/Turbo builds.
   # Build outside the checkout: Zig 0.16.0 writes source-local zig-pkg dependencies.

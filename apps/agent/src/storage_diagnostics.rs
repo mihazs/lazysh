@@ -35,6 +35,7 @@ fn probe(commit_hold: Duration) {
         state: SessionState::Working,
         summary: "Synthetic fixture".into(),
         pane_id: None,
+        pane_server: None,
         waiting: None,
     };
     let workers = std::thread::scope(|scope| {
