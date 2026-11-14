@@ -150,6 +150,37 @@ real SSH with a frozen input window for revocation/output progress, an owned PTY
 for queue ordering, and explicit OpenSSH/Mosh/ET protocol interoperability fixtures.
 These checks do not establish physical mobile timing parity.
 
+## Desktop keyboard quick reference
+
+Five hardware-keyboard shortcuts exist in the desktop client today. Each reads
+**Ctrl** on Windows and Linux and **Cmd** on macOS. The chords are fixed in the
+source and cannot be rebound.
+
+| Shortcut | Action | Where it works |
+| --- | --- | --- |
+| Ctrl+K | Open the command palette | Outside the terminal; inside it Ctrl+K stays with the shell |
+| Ctrl+Shift+P | Open the command palette | Anywhere, including a focused terminal |
+| Ctrl+Shift+A | Open Agents, or return to the terminal | A connected remote session; the local terminal keeps Ctrl+Shift+A |
+| Ctrl+Shift+W | Open Workspaces, or return to the terminal | The current connection |
+| Ctrl+Shift+Y | Toggle the session between Terminal and Agent | A connected remote session; not the local terminal |
+
+None of them acts while you type in another text field or inside a dialog, on a
+key repeat or during IME composition. Agents and Workspaces are described under
+[Open Agents and Workspaces](#open-agents-and-workspaces) and the palette under
+[Command palette](#command-palette). Ctrl+Shift+Y has no other section here; the
+session controls show it in the tooltip of their **Agent** view button.
+
+The table is not the full set: `keyboard.ts` also maps Ctrl/Cmd+O, N, W and 1 to
+9 to the session switcher, a new connection, closing the session and numbered
+sessions, which the [parity matrix](reference/parity-matrix.md) tracks. The
+chord matching lives in [`keyboard.ts`](../apps/client/src/keyboard.ts)
+(`appShortcut`, `paletteShortcut`, `navigationShortcut`, `agentViewShortcut`) and
+its cases in [`keyboard.test.ts`](../apps/client/src/keyboard.test.ts). Vitest
+checks those rules with synthetic key events, including Cmd for some chords, and
+Playwright presses the Ctrl forms in the desktop project. No physical keyboard
+was used, so macOS Cmd and a hardware keyboard on a phone or tablet are not
+verified.
+
 ## Multiplexer gestures, header pulls and long-press keys
 
 Two-finger swipes, the multiplexer pinch and both header pulls default to
