@@ -41,6 +41,17 @@ truncation markers. Private conversion files are removed without upload. The
 probe runs no SDK or simulator commands and does not change XCTest's destination,
 deadline or original result. It is diagnostic evidence, not a destination fix.
 
+The workspace fixture also times each tap and typed value in the host form. An
+action that blocks for 10 s or more prints one `LAZYSH_INPUT_STALL` line (field
+name, action and elapsed milliseconds, never the typed text) and keeps a
+`Stalled native input` screenshot of the whole simulator screen, taken without a
+further element query. A typing-settle wait that fails keeps a `Typing settle
+failure` screenshot beside the `Typing value observations` attachment. Run
+43391171381 showed such a stall (#298): after the Username tap, XCTest's idle
+notification did not arrive for 60 s, three times, while the app, WebContent and
+keyboard host were idle in the retained spindump; typing was never reached. The
+cause is not established. Input, assertions and deadlines are unchanged.
+
 The source-controlled target lives in `src-tauri/apple/project.yml.hbs` and the
 fixture in `src-tauri/apple/UITests/WorkspaceUITests.swift`. Tauri generates the
 Xcode project during `build:ios`. The UI runner deliberately has no app-build
