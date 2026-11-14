@@ -15,6 +15,12 @@ Updating toggles on the same endpoint with an empty recovery field retains the e
 
 After importing a host, enable biometric unlock locally only after its device capability check. To initialize an intentionally empty destination, disconnect and re-enroll with the saved recovery secret, review the target folder, and upload explicitly.
 
+## Key custody and recovery
+
+- **Who holds what.** The 256-bit recovery secret and the WebDAV app password live only in each enrolled device's native credential store. lazysh has no account, service or key escrow. The WebDAV server stores age-encrypted ciphertext and cannot read it; the app password alone decrypts nothing, and the ciphertext alone is unreadable without the secret.
+- **Recovering the secret.** Show it again on any enrolled device, or use the copy you saved at enrollment. Enroll a replacement device with that secret and its own app password.
+- **Losing it.** If every copy and every enrolled device is gone, the remote ciphertext cannot be decrypted. Profiles and credentials already on a device stay usable locally; disconnect and create a fresh group to sync again.
+
 ## Independent data categories
 
 See [independent data categories](reference/sync.md#independent-data-categories) for details.

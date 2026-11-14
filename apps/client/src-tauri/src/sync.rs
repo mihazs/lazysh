@@ -123,6 +123,11 @@ impl Enrollment {
             Scope::Credentials => self.credentials_revision = value,
         }
     }
+    /// Adopt a snapshot this device uploaded or applied as its new rollback and conflict baseline.
+    fn observe(&mut self, scope: Scope, etag: Option<String>, revision: u64) {
+        self.set_etag(scope, etag);
+        self.set_revision(scope, revision);
+    }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -369,6 +374,80 @@ impl Remote {
             .map(|v| etag(v.to_str().map_err(|_| "Invalid WebDAV ETag")?))
             .transpose()
     }
+}
+/// Fetched ciphertext with its strong ETag; `None` when the server has no such resource.
+type Fetched = Option<(Vec<u8>, String)>;
+/// A remote that no longer matches the last observed ETag was changed or deleted elsewhere. It is never
+/// silently overwritten, recreated or erased.
+fn ensure_baseline(enrollment: &Enrollment, scope: Scope, current: &Fetched) -> Result<()> {
+    if current.as_ref().map(|(_, tag)| tag.as_str()) != enrollment.etag(scope) {
+        return Err("Remote sync changed. Fetch and apply a reviewed merge before pushing.".into());
+    }
+    Ok(())
+}
+/// Applying is refused unless the remote is still exactly the snapshot the user reviewed.
+fn ensure_reviewed(current: &Fetched, reviewed: &str) -> Result<()> {
+    if current.as_ref().map(|(_, tag)| tag.as_str()) != Some(reviewed) {
+        return Err("Remote sync changed. Fetch and review it again.".into());
+    }
+    Ok(())
+}
+/// Authenticate a snapshot and refuse one older than this device has already observed.
+fn open(key: &str, bytes: &[u8], scope: Scope, observed: u64) -> Result<Bundle> {
+    let bundle = decrypt(key, bytes, scope)?;
+    if bundle.revision < observed {
+        return Err("Remote sync rollback detected. Local data was preserved.".into());
+    }
+    Ok(bundle)
+}
+/// Fetch and authenticate the snapshot a user would review before applying it.
+async fn fetch_for_review(
+    remote: &Remote,
+    enrollment: &Enrollment,
+    scope: Scope,
+) -> Result<(Bundle, String)> {
+    let (bytes, tag) = remote
+        .fetch(enrollment, scope)
+        .await?
+        .ok_or("No remote snapshot for this category")?;
+    let key = enrollment.recovery()?;
+    let observed = enrollment.revision(scope);
+    let bundle = tauri::async_runtime::spawn_blocking(move || open(&key, &bytes, scope, observed))
+        .await
+        .map_err(|_| "Cannot decrypt sync snapshot")??;
+    Ok((bundle, tag))
+}
+/// Merge `bundle` into the authenticated remote snapshot and encrypt the result.
+async fn seal_upload(
+    enrollment: &Enrollment,
+    scope: Scope,
+    current: Fetched,
+    bundle: Bundle,
+) -> Result<Vec<u8>> {
+    let key = enrollment.recovery()?;
+    let observed = enrollment.revision(scope);
+    tauri::async_runtime::spawn_blocking(move || {
+        let remote = current
+            .map(|(bytes, _)| open(&key, &bytes, scope, observed))
+            .transpose()?;
+        encrypt(&key, &merge_remote(bundle, remote)?)
+    })
+    .await
+    .map_err(|_| "Cannot encrypt sync snapshot")?
+}
+/// Conditionally replace the resource at the observed ETag and adopt the result as the new baseline.
+async fn finish_upload(
+    remote: &Remote,
+    enrollment: &mut Enrollment,
+    scope: Scope,
+    ciphertext: Vec<u8>,
+) -> Result<()> {
+    let tag = remote
+        .put(enrollment, scope, ciphertext, enrollment.etag(scope))
+        .await?;
+    let revision = enrollment.revision(scope) + 1;
+    enrollment.observe(scope, tag, revision);
+    Ok(())
 }
 async fn load(app: &AppHandle) -> Result<Option<Enrollment>> {
     load_for_operation(app, app.vault().operation()).await
@@ -973,11 +1052,7 @@ pub async fn sync_push(
             access.check()?;
             let remote = Remote::new(&enrollment.config.endpoint)?;
             let current = remote.fetch(&enrollment, scope).await?;
-            if current.as_ref().map(|(_, tag)| tag.as_str()) != enrollment.etag(scope) {
-                return Err(
-                    "Remote sync changed. Fetch and apply a reviewed merge before pushing.".into(),
-                );
-            }
+            ensure_baseline(&enrollment, scope, &current)?;
             let mut snapshot = hosts
                 .sync_snapshot()
                 .map_err(|_| "Cannot read local hosts")?;
@@ -1043,29 +1118,10 @@ pub async fn sync_push(
                 },
                 credentials,
             };
-            let key = enrollment.recovery()?;
-            let previous_revision = enrollment.revision(scope);
-            let ciphertext = tauri::async_runtime::spawn_blocking(move || {
-                let remote = current
-                    .map(|(bytes, _)| decrypt(&key, &bytes, scope))
-                    .transpose()?;
-                if remote
-                    .as_ref()
-                    .is_some_and(|bundle| bundle.revision < previous_revision)
-                {
-                    return Err("Remote sync rollback detected".into());
-                }
-                encrypt(&key, &merge_remote(bundle, remote)?)
-            })
-            .await
-            .map_err(|_| "Cannot encrypt sync snapshot")??;
+            let ciphertext = seal_upload(&enrollment, scope, current, bundle).await?;
             credential_operation.check()?;
             access.check()?;
-            let tag = remote
-                .put(&enrollment, scope, ciphertext, enrollment.etag(scope))
-                .await?;
-            enrollment.set_etag(scope, tag);
-            enrollment.set_revision(scope, previous_revision + 1);
+            finish_upload(&remote, &mut enrollment, scope, ciphertext).await?;
             save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
             Ok(Uploaded { uploaded: true })
         })
@@ -1085,17 +1141,12 @@ pub async fn sync_preview(
             let enrollment = load(&app).await?.ok_or("Configure encrypted sync first")?;
             ensure_enabled(&enrollment, scope)?;
             access.check()?;
-            let (bytes, tag) = Remote::new(&enrollment.config.endpoint)?
-                .fetch(&enrollment, scope)
-                .await?
-                .ok_or("No remote snapshot for this category")?;
-            let key = enrollment.recovery()?;
-            let bundle = tauri::async_runtime::spawn_blocking(move || decrypt(&key, &bytes, scope))
-                .await
-                .map_err(|_| "Cannot decrypt sync snapshot")??;
-            if bundle.revision < enrollment.revision(scope) {
-                return Err("Remote sync rollback detected. Local data was preserved.".into());
-            }
+            let (bundle, tag) = fetch_for_review(
+                &Remote::new(&enrollment.config.endpoint)?,
+                &enrollment,
+                scope,
+            )
+            .await?;
             let local = hosts
                 .sync_snapshot()
                 .map_err(|_| "Cannot read local hosts")?;
@@ -1175,9 +1226,7 @@ pub async fn sync_apply(
     let current = Remote::new(&enrollment.config.endpoint)?
         .fetch(&enrollment, scope)
         .await?;
-    if current.as_ref().map(|(_, tag)| tag) != Some(&pending.etag) {
-        return Err("Remote sync changed. Fetch and review it again.".into());
-    }
+    ensure_reviewed(&current, &pending.etag)?;
     let hosts_added = pending.additions.len();
     credential_operation.check()?;
             access.check()?;
@@ -1230,8 +1279,7 @@ pub async fn sync_apply(
         }
         credentials_added += 1;
     }
-    enrollment.set_etag(scope, Some(pending.etag));
-    enrollment.set_revision(scope, pending.bundle.revision);
+    enrollment.observe(scope, Some(pending.etag), pending.bundle.revision);
     save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
     Ok(Applied {
         hosts_added,
@@ -1251,6 +1299,8 @@ fn import_failure(hosts: &AppState, host_id: &str, error: crate::vault::ImportFa
     )
 }
 
+#[cfg(test)]
+mod webdav_round_trip;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1322,7 +1372,7 @@ mod tests {
                 .credentials_stored
         );
     }
-    fn host(id: &str) -> Host {
+    pub(super) fn host(id: &str) -> Host {
         Host {
             default_multiplexer: None,
             default_multiplexer_next: None,
@@ -1352,7 +1402,7 @@ mod tests {
             credentials: Vec::new(),
         }
     }
-    fn enrollment(key: &str) -> Enrollment {
+    pub(super) fn enrollment(key: &str) -> Enrollment {
         Enrollment {
             config: SyncConfig {
                 endpoint: "https://example.invalid/dav/".into(),

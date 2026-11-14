@@ -82,6 +82,8 @@ tokio = { version = "1", features = ["test-util"] }
 axum = "0.8.9"
 lazysh-share = { path = "../../share-service" }
 rcgen = "0.14"
+# A real RFC 4918 server (strong ETags, If-Match, If-None-Match) for encrypted sync round trips.
+dav-server = { version = "0.12", default-features = false, features = ["memfs"] }
 tokio-rustls = "0.26"
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }

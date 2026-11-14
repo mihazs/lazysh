@@ -29,8 +29,15 @@ The scrypt work factor and accepted maximum are both `log2(N)=14` (approximately
 
 The maintained age 0.11.5 line provides the required standard format and current maintenance fixes without age 0.12's unused post-quantum dependency conflicting with the SSH stack's KEM version. reqwest 0.12 uses Rustls with web PKI roots; sync does not require Android platform-verifier JNI setup.
 
-Cargo tests cover wrong keys, tampering, truncation, excessive KDF headers, category separation, secret-free previews, local revision conflicts, pin preservation, additive upload merging and a real loopback HTTP fixture for GET/PUT conditional writes, redirects and body limits. The loopback substitution exists only in test code; production endpoint validation always requires HTTPS.
+Cargo tests cover wrong keys, tampering, truncation, excessive KDF headers, category separation, secret-free previews, local revision conflicts, pin preservation, additive upload merging and a loopback HTTP fixture for GET/PUT conditional writes, redirects and body limits. `src-tauri/src/sync/webdav_round_trip.rs` additionally runs the production transport, crypto, baseline, rollback and merge code against `dav-server`, an independent RFC 4918 WebDAV server with strong ETags and `If-Match`/`If-None-Match`. Enrolled devices and a gate that can revoke app passwords cover:
 
-Not yet verified: a real WebDAV provider, Android/iOS secure-store enrollment and recovery-key display, cross-device mobile lifecycle, or an operational lost-device revocation exercise.
+- **Enrollment and upload.** Two devices share a recovery secret and use their own app passwords. The stored resources contain no host names, preferences, pins or credentials in plaintext. A wrong secret or a wrong app password imports nothing, and enabling settings never creates the credentials resource.
+- **Conflicts.** A stale baseline refuses the upload, and a writer that passes the check but loses the race is stopped by the server's `If-Match`. A preview that went stale is refused without touching local hosts.
+- **Rollback and deletion.** An older snapshot restored over a newer one is detected by a device that observed the newer revision, and a fresh device is documented as unable to tell. A remote resource deleted externally is neither erased locally nor recreated by an upload; a profile deleted locally is not deleted remotely.
+- **Revocation.** Revoking an app password refuses that device's fetch and upload while other devices continue. Rotating to a fresh folder and recovery secret leaves the old secret unable to decrypt the new snapshots; a snapshot copied earlier still opens with the old secret.
+
+The loopback substitution exists only in test code; production endpoint validation always requires HTTPS, so these tests do not cover certificate validation. They do not save imported credentials into the OS vault and do not drive the webview.
+
+Not yet verified: certificate validation and behavior against a hosted WebDAV provider, Android/iOS secure-store enrollment and recovery-key display, cross-device mobile lifecycle, or an operational lost-device revocation exercise. Mobile acceptance remains emulator-only.
 
 For setup and usage, see [sync](../sync.md). Return to the [documentation map](../README.md).
