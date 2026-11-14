@@ -1651,6 +1651,25 @@ mod tests {
         assert!(recovery(&generate_recovery()).is_ok());
     }
     #[test]
+    fn enrollment_saved_before_revision_counters_loads_with_an_empty_baseline() {
+        let saved = serde_json::json!({
+            "config": {"endpoint":"https://example.invalid/dav/","username":"user","settingsEnabled":true,"credentialsEnabled":false},
+            "password": "fixture-password",
+            "recoveryKey": generate_recovery().as_str(),
+            "settingsEtag": null,
+            "credentialsEtag": null
+        });
+        let loaded: Enrollment = serde_json::from_value(saved).unwrap();
+        assert_eq!(
+            (
+                loaded.revision(Scope::Settings),
+                loaded.revision(Scope::Credentials)
+            ),
+            (0, 0)
+        );
+        assert!(loaded.recovery().is_ok());
+    }
+    #[test]
     fn encrypted_files_require_shared_secret_and_reject_tampering_and_expensive_headers() {
         let key = generate_recovery();
         let mut original = settings();
