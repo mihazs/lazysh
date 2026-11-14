@@ -1,5 +1,5 @@
 //! Read-only bounded rollout prefixes. JSON supplies IDs and cutoffs, never paths.
-use super::{conversation, open_transcript, read_record_line, Error, Result, SourceSnapshot};
+use super::{conversation, open_transcript, Error, Result, SourceSnapshot};
 use serde_json::Value;
 use std::{
     collections::HashSet,
@@ -9,6 +9,9 @@ use std::{
 };
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
+/// One record may be as long as the file: Codex writes a whole command, its output or a compaction's replaced history in one line,
+/// and a record the reader cannot take in would hide every turn after it.
+const MAX_RECORD: u64 = MAX_BYTES as u64;
 const MAX_RECORDS: usize = 100_000;
 const MAX_SOURCES: usize = 16;
 
@@ -327,7 +330,7 @@ fn load(
         .checked_add(bytes.len())
         .ok_or(Error::InvalidArgument)?;
     if *charged > MAX_BYTES {
-        return Err(Error::InvalidArgument);
+        return Err(Error::TooLarge);
     }
     let length = cutoff
         .as_ref()
@@ -341,13 +344,7 @@ fn load(
     let mut meta = None;
     let mut previous = None;
     while offset < length {
-        let line = match &history.access {
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            SourceAccess::Anchored { .. } => {
-                super::read_record_line_bounded(&mut cursor, 4 * 1024 * 1024)?
-            }
-            SourceAccess::Path => read_record_line(&mut cursor)?,
-        };
+        let line = super::read_record_line_bounded(&mut cursor, MAX_RECORD)?;
         if line.last() != Some(&b'\n') {
             if cutoff.is_some() {
                 return Err(Error::InvalidEvent);
@@ -371,7 +368,7 @@ fn load(
         }
         history.scanned += 1;
         if history.scanned > MAX_RECORDS {
-            return Err(Error::InvalidArgument);
+            return Err(Error::TooLarge);
         }
         if let Some(n) = value["ordinal"].as_u64() {
             if previous.is_some_and(|p: u64| p.checked_add(1) != Some(n)) {
@@ -481,7 +478,7 @@ fn load(
             thread: thread.clone(),
         });
         if history.records.len() > MAX_RECORDS {
-            return Err(Error::InvalidArgument);
+            return Err(Error::TooLarge);
         }
     }
     if cutoff.is_none() {

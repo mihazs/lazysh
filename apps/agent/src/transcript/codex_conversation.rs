@@ -2,12 +2,42 @@
 use super::window::{select, Window};
 use super::{
     codex_lineage, interaction, message_size, Error, Result, TranscriptAgent, TranscriptPage,
+    MAX_PAGE,
 };
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
 };
+
+/// The longest text one block carries. A command, its output or a reply can be megabytes, so the rest is cut and said so.
+const MAX_TEXT: usize = 262_144;
+/// What one message may serialize to: a page holds at most `MAX_PAGE`, and a message that alone exceeds it ends paging.
+const MAX_MESSAGE: usize = MAX_PAGE - MAX_PAGE / 16;
+/// Cuts the text of a message's blocks to `cap` bytes each, at a character boundary, with a note of how much was left out.
+fn cut(message: &mut Value, cap: usize) {
+    for block in message["blocks"].as_array_mut().into_iter().flatten() {
+        let Some(full) = block["text"].as_str().filter(|text| text.len() > cap) else {
+            continue;
+        };
+        let mut end = cap;
+        while !full.is_char_boundary(end) {
+            end -= 1;
+        }
+        let left = full.len() - end;
+        block["text"] = json!(format!("{}\n… [{left} more bytes not shown]", &full[..end]));
+    }
+}
+/// Bounds a message to a page: each text to `MAX_TEXT`, then to half that again until the serialized message fits, since
+/// escaping can make the JSON several times the text.
+fn fit(message: &mut Value) {
+    let mut cap = MAX_TEXT;
+    cut(message, cap);
+    while cap > 256 && message_size(message).map_or(true, |size| size > MAX_MESSAGE) {
+        cap /= 2;
+        cut(message, cap);
+    }
+}
 
 #[derive(Default)]
 struct Turn {
@@ -51,15 +81,16 @@ impl Projection {
         message_size(&message)?;
         if message["blocks"].as_array().is_some_and(|blocks| {
             blocks.iter().any(|block| {
-                ["text", "name", "id"].iter().any(|field| {
+                ["name", "id"].iter().any(|field| {
                     block[*field]
                         .as_str()
-                        .is_some_and(|text| text.len() > 262_144)
+                        .is_some_and(|text| text.len() > MAX_TEXT)
                 })
             })
         }) {
             return Err(Error::InvalidEvent);
         }
+        fit(&mut message);
         let id = message["id"]
             .as_str()
             .ok_or(Error::InvalidEvent)?

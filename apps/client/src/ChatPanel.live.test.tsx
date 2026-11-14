@@ -207,6 +207,22 @@ describe('when the stream cannot be had',()=>{
   });
 });
 
+describe('a conversation the companion reports as too large',()=>{
+  it('says so once and stops reading it instead of polling a file that will never open',async()=>{
+    watchFails=true;
+    vi.mocked(invoke).mockImplementation(async(command)=>{
+      if(command==='agent_watch_start')throw new Error('no channel');
+      if(command==='agent_transcript')throw new Error('lazysh-agent: TooLarge: operation failed');
+      throw new Error(`Unexpected ${command}`);
+    });
+    render_();await advance(0);
+    expect(screen.getByRole('alert').textContent).toBe('This conversation is too large to open here. Read it in the terminal.');
+    const reads=calls('agent_transcript').length;
+    await advance(60_000);
+    expect(calls('agent_transcript')).toHaveLength(reads);
+  });
+});
+
 describe('tool calls in the timeline',()=>{
   it('shows a tool call as one card that its result updates in place, without a second block or a scroll jump',async()=>{
     render_();await advance(0);await goLive();
