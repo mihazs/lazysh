@@ -1,6 +1,7 @@
 import {createServer,type Server} from 'node:net';
+import {createSocket} from 'node:dgram';
 import {createWriteStream} from 'node:fs';
-import {chmod,copyFile,mkdir,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,mkdir,mkdtemp,readdir,readFile,readlink,realpath,rm,stat,writeFile} from 'node:fs/promises';
 import {isAbsolute,join,resolve} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
@@ -18,6 +19,7 @@ export const sshParityCases=[
   'ownedSshAgentForwardingThroughRealUi',
   'ownedSshAutoFallsBackToSshThroughRealUi',
   'ownedSshForcedEternalTerminalThroughRealUi',
+  'ownedSshMoshCustomServerPathAndPortRangeThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated';
@@ -53,7 +55,7 @@ type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
  * The instrumentation's only host channel. Requests carry the case nonce and one closed
  * action; replies are closed facts. `rotate` points the pinned device port at a second sshd.
  */
-export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>,etSessions:()=>Promise<number>=async()=>0):Control {
+export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>,etSessions:()=>Promise<number>=async()=>0,mosh:()=>Promise<Record<string,unknown>>=async()=>({})):Control {
   const marks=new Map<ParityServer,number>(servers.map(name=>[name,0]));
   const log=(name:ParityServer)=>readFile(join(fixtures[name].directory,'sshd.log'));
   const mark=async(name:ParityServer)=>{marks.set(name,(await log(name)).length);};
@@ -66,6 +68,7 @@ export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<
     if(action==='observe' && name)return sshdLogFacts((await log(name)).subarray(marks.get(name)).toString('utf8'));
     if(action==='rotate'){await rotate();await mark('rotated');return {};}
     if(action==='et')return {sessions:await etSessions()};
+    if(action==='mosh')return mosh();
     throw new Error('action');
   }};
 }
@@ -137,6 +140,48 @@ export async function startOwnedEt(ssh:SshFixture,server:string) {
         if(performance.now()>deadline)throw new Error('Owned ET shell survived teardown');
     }};
 }
+/** A UDP port nothing holds right now, so the range under test is one the server can really take. */
+async function freeUdpPort() {
+  const socket=createSocket('udp4');
+  try {
+    await new Promise<void>((done,fail)=>{socket.once('error',fail);socket.bind(0,'127.0.0.1',done);});
+    return socket.address().port;
+  } finally {await new Promise<void>(done=>socket.close(()=>done()));}
+}
+
+/** The `-p` ranges a custom server path was invoked with, one per bootstrap, from its wrapper's argument log. */
+export const moshRanges=(log:string)=>log.split('\n').flatMap(line=>line.match(/(?:^| )-p ([0-9]+:[0-9]+)(?: |$)/)?.[1]??[]);
+
+/** The UDP ports the fixture's own mosh-server holds, found through its sshd's process tree and the kernel socket table. */
+export async function moshUdpPorts(ssh:Pick<SshFixture,'directory'|'daemon'>) {
+  const root=await ssh.daemon.liveIdentity();
+  if(!root)throw new Error('Owned Mosh namespace identity unavailable');
+  const server=join(ssh.directory,'bin/mosh-server'),inodes=new Set<string>();
+  for(const member of await descendants(root)) {
+    if(await readlink(`/proc/${member.pid}/exe`).catch(()=> '')!==server)continue;
+    for(const file of (await readdir(`/proc/${member.pid}/fd`).catch(()=>[])).slice(0,256)) {
+      const inode=(await readlink(`/proc/${member.pid}/fd/${file}`).catch(()=> '')).match(/^socket:\[([0-9]+)\]$/)?.[1];
+      if(inode)inodes.add(inode);
+    }
+  }
+  const table=(await readFile('/proc/net/udp','utf8')).split('\n').slice(1).map(line=>line.trim().split(/\s+/));
+  return table.filter(fields=>inodes.has(fields[9])).map(fields=>parseInt(fields[1].split(':')[1],16)).sort((a,b)=>a-b);
+}
+
+/**
+ * The official mosh-server behind a custom path. The path is a wrapper that records its arguments and then
+ * runs the fixture's real server, so a case can tell the configured path and range from the defaults.
+ */
+export async function startOwnedMosh() {
+  const binary=await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim());
+  const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary});
+  try {
+    const wrapper=join(ssh.directory,'custom-mosh-server'),log=join(ssh.directory,'mosh-wrapper-args');
+    await writeFile(wrapper,`#!/bin/sh\nprintf '%s\\n' "$*" >> ${log}\nexec ${join(ssh.directory,'bin/mosh-server')} "$@"\n`,{mode:0o700});
+    const udpPort=await freeUdpPort();
+    return {ssh,wrapper,udpPort,facts:async()=>({ranges:moshRanges(await readFile(log,'utf8').catch(()=> '')),udpPorts:await moshUdpPorts(ssh)})};
+  } catch(error) {await ssh.stop();throw error;}
+}
 export const etBinary=(name:'ET_SERVER_BIN'|'ET_TERMINAL_BIN')=>{
   const value=process.env[name];
   if(!value || !isAbsolute(value))throw new Error(`Set ${name} to the pinned official ET 7.0.0 binary`);
@@ -166,6 +211,9 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     const transport=await SshFixture.start(undefined,{companion:true});
     started.push(transport);
     et=await startOwnedEt(transport,etServer);
+    // Mosh's UDP cannot ride `adb reverse`; the emulator reaches the host loopback as 10.0.2.2.
+    const mosh=await startOwnedMosh();
+    started.push(mosh.ssh);
     const nonce=fixtures.primary.nonce;
     // The rotation case pins this device port to the primary key, then the host repoints it.
     const pinned={port:await availablePort()};
@@ -173,7 +221,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
       await device(['reverse',...(rebind?[]:['--no-rebind']),`tcp:${device_}`,`tcp:${host}`]);
       if(!reverses.includes(device_))reverses.push(device_);
     };
-    const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),et.sessions));
+    const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),et.sessions,mosh.facts));
     control=channel.server;
     for(const port of [fixtures.primary.port,fixtures.bastion.port,channel.port,transport.port,et.port])await reverse(port,port);
     await reverse(pinned.port,fixtures.primary.port);
@@ -186,7 +234,8 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     await writeFile(data,JSON.stringify({nonce,username:fixtures.primary.username,controlPort:channel.port,password,passphrase,
       privateKey:fixtures.primary.privateKey,encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
       challenge:fixtures.primary.challenge,expected:fixtures.primary.expected,
-      primary:server(fixtures.primary),bastion:server(fixtures.bastion),transport:{...server(transport),privateKey:transport.privateKey},et:{port:et.port,terminal:etTerminal},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
+      primary:server(fixtures.primary),bastion:server(fixtures.bastion),transport:{...server(transport),privateKey:transport.privateKey},et:{port:et.port,terminal:etTerminal},
+      mosh:{...server(mosh.ssh),privateKey:mosh.ssh.privateKey,host:'10.0.2.2',serverPath:mosh.wrapper,udpPort:mosh.udpPort},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
     if((await stat(data)).size>16*1024)throw new Error('Owned Android parity fixture exceeds native bound');
     await device(['push',data,`${remote}/fixture.json`]);
     await device(['shell','chmod','600',`${remote}/fixture.json`]);

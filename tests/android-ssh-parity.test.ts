@@ -3,7 +3,7 @@ import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
-import {androidSshParityAcceptance,etBinary,etTerminalCount,parityControl,sshdLogFacts,startOwnedEt,validateSshParityReport,sshParityCases} from './support/androidSshParity';
+import {androidSshParityAcceptance,etBinary,etTerminalCount,moshRanges,parityControl,sshdLogFacts,startOwnedEt,startOwnedMosh,validateSshParityReport,sshParityCases} from './support/androidSshParity';
 import {sshCommand} from './support/sshFixture';
 
 const parity=process.env.LAZYSH_ANDROID_UI_SSH_PARITY==='1';
@@ -81,6 +81,24 @@ test.skipIf(!parity)('owned etserver authorizes the etterminal its exec-capable 
     expect(await et.sessions()).toBe(0);
   } finally {await et?.stop();await ssh.stop();}
 },30_000);
+
+test.skipIf(!parity)('owned Mosh wrapper records the custom range it is run with and the UDP port its server then holds',async()=>{
+  const mosh=await startOwnedMosh();
+  try {
+    expect(await mosh.facts()).toEqual({ranges:[],udpPorts:[]});
+    // The bootstrap command the app sends over SSH for a custom server path and a single-port range.
+    const range=`${mosh.udpPort}:${mosh.udpPort}`;
+    const bootstrap=await mosh.ssh.client(true,`'${mosh.wrapper}' new -s -c 256 -p ${range} -l 'LC_ALL=C.UTF-8'`);
+    expect(await bootstrap.finish('owned Mosh bootstrap',15_000)).toContain(`MOSH CONNECT ${mosh.udpPort} `);
+    expect(await mosh.facts()).toEqual({ranges:[range],udpPorts:[mosh.udpPort]});
+  } finally {await mosh.ssh.stop();}
+},30_000);
+
+test('Mosh ranges come only from the -p operand of the wrapper log',()=>{
+  expect(moshRanges("new -s -c 256 -p 60001:60001 -l LC_ALL=C.UTF-8\n")).toEqual(['60001:60001']);
+  expect(moshRanges("new -s -c 256 -l LC_ALL=C.UTF-8 -p 61000:61001\nnew -s -p 5:6\n")).toEqual(['61000:61001','5:6']);
+  expect(moshRanges("new -s -c 256 -l LC_ALL=C.UTF-8\n")).toEqual([]);
+});
 
 test('etserver terminals are counted only from its own start lines',()=>{
   expect(etTerminalCount('Creating server\nWaiting for initial packet...\n')).toBe(0);
