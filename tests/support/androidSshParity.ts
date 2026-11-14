@@ -13,6 +13,7 @@ export const sshParityCases=[
   'ownedSshRotatedHostKeyRefusedThroughRealUi',
   'ownedSshBastionRouteThroughRealUi',
   'ownedSshAgentForwardingThroughRealUi',
+  'ownedSshClipboardAndLinksReachTheSystemThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated';
