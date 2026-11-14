@@ -6,6 +6,7 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 import {ApprovalActions, parseOptions, type Answer, type Suggestion} from './ApprovalChoices';
+import {validPaneIdentity} from './agentPaneIdentity';
 
 
 type Approval = {
@@ -50,7 +51,7 @@ export function parseApprovals(value: unknown): Approval[] {
     if (
       !/^[\da-f-]{36}$/i.test(item.id) ||
       !/^[\da-f]{64}$/i.test(item.expectedHash) ||
-      (item.paneId !== null && !/^%\d{1,30}$/.test(item.paneId)) ||
+      (item.paneId !== null && !validPaneIdentity(item.paneId)) ||
       !Number.isFinite(Date.parse(item.expiresAt)) ||
       JSON.stringify(item.toolInput ?? null).length > 32768
     )

@@ -61,12 +61,7 @@ fn resolve_command(
             "Invalid approval identity or decision",
         ));
     }
-    if pane_id.is_some_and(|pane| {
-        !pane.starts_with('%')
-            || pane.len() < 2
-            || pane.len() > 32
-            || !pane[1..].bytes().all(|b| b.is_ascii_digit())
-    }) {
+    if pane_id.is_some_and(|pane| !lazysh_common::valid_pane_identity(pane)) {
         return Err(SshError::new("invalid_input", "Invalid approval pane"));
     }
     Ok(format!("lazysh-agent approval-resolve --id {} --expected-hash {} --session-id={} --decision {decision}{}", quote(id), quote(hash), quote(agent_session_id), pane_id.map(|pane| format!(" --pane-id={}", quote(pane))).unwrap_or_default())
@@ -129,6 +124,32 @@ mod tests {
             (id, hash.as_str(), None, "allow;cmd"),
         ] {
             assert!(resolve_command(request, digest, "session", pane, decision, &none).is_err());
+        }
+    }
+
+    #[test]
+    fn a_tmux_zellij_or_herdr_pane_is_passed_as_one_quoted_argument_and_nothing_else_is() {
+        let id = "b714333f-82b1-4ee0-a383-6fd6dc1eca01";
+        let hash = "a".repeat(64);
+        let command =
+            |pane| resolve_command(id, &hash, "s", Some(pane), "allow", &Extras::default());
+        for (pane, argument) in [
+            ("%7", "--pane-id='%7'"),
+            ("zellij:my work:3", "--pane-id='zellij:my work:3'"),
+            ("herdr:work:w3V:p1", "--pane-id='herdr:work:w3V:p1'"),
+        ] {
+            assert!(command(pane).unwrap().contains(argument), "{pane}");
+        }
+        for pane in [
+            "zellij:work",
+            "zellij:work:x",
+            "herdr:work",
+            "herdr:w:w3V:p1;cmd",
+            "herdr:a b:w3V:p1",
+            "w3V:p1",
+            "",
+        ] {
+            assert!(command(pane).is_err(), "{pane}");
         }
     }
 

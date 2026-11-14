@@ -443,6 +443,11 @@ pub fn pane_identity() -> Option<String> {
         var("ZELLIJ_PANE_ID").as_deref(),
     )
 }
+/// The pane an approval is bound to: a tmux or Zellij pane as `pane_identity` names it, else the exact Herdr pane.
+/// Herdr comes last so it only names a pane where none was named before, and a hook outside a pane names none.
+pub fn approval_pane_identity() -> Option<String> {
+    pane_identity().or_else(herdr::pane_identity)
+}
 fn identity(tmux: Option<String>, session: Option<&str>, pane: Option<&str>) -> Option<String> {
     tmux.or_else(|| {
         let (session, pane) = (session?, pane?);
