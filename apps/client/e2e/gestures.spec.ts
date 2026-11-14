@@ -94,6 +94,30 @@ test('double tap and one-finger swipes run their configured actions on a real to
   await touch.cdp.detach();
 });
 
+test('triple tap runs its own action once while double and single taps wait to see whether more taps follow',async({page},testInfo)=>{
+  await openHistoryWorkspace(page);
+  await page.evaluate(async()=>{
+    const {defaults,savePreferences}=await import('/src/preferences.ts');
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,tap:'pageDown',doubleTap:'tab',tripleTap:'escape'}});
+  });
+  await mount(page);
+  const touch=await touchscreen(page,testInfo);
+  const at=await canvasCenter(page);
+  const taps=async(count:number)=>{for(let tap=0;tap<count;tap++){await touch.send('touchStart',[at]);await touch.send('touchEnd',[]);}};
+  await taps(3);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b']]);
+  // Neither the double nor the single tap action fires late for the same three taps, and the taps leave no selection that would block the next ones.
+  await page.waitForTimeout(500);
+  expect((await recorded(page)).steps).toEqual([['\x1b']]);
+  expect(await page.evaluate(()=>window.gestures.terminal.hasSelection())).toBe(false);
+  await taps(2);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b'],['\t']]);
+  await taps(1);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b'],['\t'],['\x1b[6~']]);
+  expect(await recorded(page)).toMatchObject({zellij:[],sessions:[],errors:[]});
+  await touch.cdp.detach();
+});
+
 test('a multiplexer pinch can resize text or do nothing instead, and multiplexer actions need an attached terminal',async({page},testInfo)=>{
   await openHistoryWorkspace(page);
   const set=(patch:Record<string,unknown>)=>page.evaluate(async patch=>{
