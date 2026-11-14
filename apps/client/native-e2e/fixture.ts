@@ -348,8 +348,20 @@ export class NativeGui {
   async secondary(args:string[],cwd=this.directory) {
     const canonical=await realpath(cwd);
     if(canonical!==this.directory && !canonical.startsWith(this.directory+'/'))throw new Error('Secondary cwd must stay within the owned fixture');
+    await this.handoff('actual secondary CLI handoff','/usr/bin/env',['--chdir',canonical,this.binary,...args]);
+  }
+  /** Opens `url` with the real `xdg-open`, the owned binary being the private profile's registered handler of `lazysh://` links. */
+  async openUrl(url:string) {
+    if(!/^lazysh:\/\/[A-Za-z0-9_=?&.:/-]+$/.test(url)||!/^[A-Za-z0-9_./-]+$/.test(this.binary))throw new Error('Invalid owned URL dispatch');
+    const applications=join(this.directory,'data','applications');
+    await mkdir(applications,{recursive:true,mode:0o700});
+    await writeFile(join(applications,'lazysh-gui-fixture.desktop'),`[Desktop Entry]\nType=Application\nName=lazysh GUI fixture\nExec=${this.binary} %u\nMimeType=x-scheme-handler/lazysh;\nNoDisplay=true\n`,{mode:0o600});
+    await writeFile(join(this.directory,'config','mimeapps.list'),'[Default Applications]\nx-scheme-handler/lazysh=lazysh-gui-fixture.desktop\n',{mode:0o600});
+    await this.handoff('actual OS URL dispatch','/usr/bin/xdg-open',[url]);
+  }
+  private async handoff(stage:string,program:string,args:string[]) {
     const original=await this.appOwner();
-    await this.namespaced('/usr/bin/env',['--chdir',canonical,this.binary,...args]).finish('actual secondary CLI handoff',10_000);
+    await this.namespaced(program,args).finish(stage,10_000);
     const current=await this.appOwner();
     if(JSON.stringify(current)!==JSON.stringify(original))throw new Error('Secondary CLI replaced the original GUI owner');
     if((await this.browser!.getWindowHandles()).length!==1)throw new Error('Secondary CLI created another native window');
