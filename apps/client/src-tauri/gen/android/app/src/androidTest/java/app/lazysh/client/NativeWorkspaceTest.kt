@@ -3001,8 +3001,10 @@ class NativeWorkspaceTest {
 
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
-    // window control, tab-close detach and reattach. The host independently proves
-    // the remote window state and that the original server and panes survived.
+    // window control, a top/bottom split and zoom of beta's pane from the Sessions
+    // panel, tab-close detach and reattach. The host independently proves the remote
+    // window state, that the split left the original pane untouched and the zoom
+    // returned, and that the original server and panes survived.
     private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
@@ -3012,6 +3014,7 @@ class NativeWorkspaceTest {
         val beta = windows.getJSONObject(1)
         require(alpha.getInt("index") == 0 && alpha.getString("name") == "alpha" && beta.getInt("index") == 1 && beta.getString("name") == "beta")
         for (window in listOf(alpha, beta)) require(Regex("TMUX_(ALPHA|BETA)_[a-f0-9]{32}").matches(window.getString("marker")))
+        for (window in listOf(alpha, beta)) require(Regex("%[0-9]{1,9}").matches(window.getString("paneId")))
         val child = "$parent / $server"
         val labels = JSONArray(listOf(parent, child))
         val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
@@ -3083,6 +3086,52 @@ class NativeWorkspaceTest {
                 if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") selectOwnedConnection(scenario, parent)
                 else onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(1) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
             }
+        }
+        // The Sessions panel lists each window's panes; the ids it shows are tmux's own, read after the action ran.
+        val betaPanes = """
+            (()=>{const window=Array.from(document.querySelectorAll('.tool-panel.multiplexer-panel .mux-list > details > details'))
+              .find(x=>(x.querySelector(':scope > summary')?.textContent??'').trim().startsWith(${JSONObject.quote(title(beta))}));
+              return window ? Array.from(window.querySelectorAll(':scope > .mux-row strong')).map(x=>x.textContent.trim().split(' · ')[1]) : [];})()
+        """
+        // The panel rereads the host when the Sessions view opens, so a pane button exists only once that read finished.
+        fun clickPaneButton(label: String) {
+            awaitDocument(scenario, "tmux pane control $label ready",
+                "Array.from(document.querySelectorAll('section.multiplexer-panel button')).filter(x=>x.textContent.trim()===${JSONObject.quote(label)} && !x.disabled).length===1")
+            click("//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='$label']")
+        }
+        // The display is the real tmux client: a zoomed pane fills it, so beta's marker (printed by the original pane) leaves the screen.
+        fun markerOnScreen(shown: Boolean, stage: String) {
+            sessionView(scenario, "Terminal")
+            awaitDocument(scenario, stage, """
+                (()=>{const visible=n=>n.getClientRects().length>0&&n.getBoundingClientRect().width>0;
+                  const panes=Array.from(document.querySelectorAll('.terminal-pane')).filter(visible);
+                  const screens=panes.length===1?Array.from(panes[0].querySelectorAll('.xterm-screen')).filter(visible):[];
+                  // A screen that is not painted yet has no text at all, so a missing marker on it proves nothing.
+                  return screens.length===1 && screens[0].textContent.trim().length>0 &&
+                    screens[0].textContent.includes(${JSONObject.quote(beta.getString("marker"))})===$shown;})()
+            """) { ms -> evaluate(scenario, """(()=>{const visible=n=>n.getClientRects().length>0&&n.getBoundingClientRect().width>0;
+                const panes=Array.from(document.querySelectorAll('.terminal-pane')).filter(visible);
+                const screens=panes.length===1?Array.from(panes[0].querySelectorAll('.xterm-screen')).filter(visible):[];
+                return [panes.length,screens.length,screens[0]?.textContent.trim().length>0,
+                  screens[0]?.textContent.includes(${JSONObject.quote(beta.getString("marker"))})].join('|');})()""", ms) }
+        }
+        // Split writes a second pane under beta's original one; the panel's refreshed tree is the witness that the action ran.
+        fun splitBeta(): String {
+            val original = beta.getString("paneId")
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "tmux ${title(beta)} lists only its original pane", "JSON.stringify($betaPanes)===${JSONObject.quote("[\"$original\"]")}")
+            clickPaneButton("Split $original top/bottom")
+            awaitDocument(scenario, "tmux split adds a second pane to ${title(beta)}", "(()=>{const ids=$betaPanes;return ids.length===2 && ids.includes(${JSONObject.quote(original)});})()")
+            val added = evaluate(scenario, "$betaPanes.find(id=>id!==${JSONObject.quote(original)})").trim('"')
+            require(Regex("%[0-9]{1,9}").matches(added) && added != original) { "tmux split must add a distinct pane" }
+            markerOnScreen(true, "tmux split keeps the original pane's output on the display")
+            return added
+        }
+        // Zoom toggles: the zoomed pane fills the whole display and the toggle returns the split layout.
+        fun zoomPane(pane: String, zoomed: Boolean) {
+            sessionView(scenario, "Sessions")
+            clickPaneButton("Zoom $pane")
+            markerOnScreen(!zoomed, if (zoomed) "tmux zoom of $pane hides the original pane's output" else "tmux zoom toggle shows the original pane's output again")
         }
         // Agent view is another view of this same tmux display: Android back returns to its terminal,
         // the same xterm node with the same scrollback height, without reattaching.
@@ -3165,13 +3214,18 @@ class NativeWorkspaceTest {
             visible(alpha, beta, "tmux numbered window control shows its window")
             jump(beta, alpha)
             visible(beta, alpha, "tmux Jump To returns to the selected window")
+            val added = splitBeta()
+            zoomPane(added, zoomed = true)
             detach("by closing its tab")
             attach(beta, "after detach")
+            // The zoom belongs to the host's window, so the reattached display still shows only the zoomed pane.
+            markerOnScreen(false, "reattached tmux keeps the zoomed pane")
+            zoomPane(added, zoomed = false)
             visible(beta, alpha, "reattached tmux shows the same selected window and pane")
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, a created, renamed and closed window, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, a created, renamed and closed window, split, zoom, tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure

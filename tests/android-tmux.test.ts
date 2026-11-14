@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
 import {listening,OwnedProcess} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -45,6 +45,20 @@ test('tmux window readback follows only the one added window and refuses a touch
   expect(()=>fold(`${base}\n@4|b`,{windowId:'@3',names:['a'],closed:false})).toThrow('Owned tmux window topology changed');
   expect(()=>fold(`${base}\n@3|a`,{windowId:'@3',names:['a'],closed:true})).toThrow('Owned tmux window topology changed');
   for(const invalid of ['','private text','@3|bad name','@3|'+'x'.repeat(33),`${base}\n@3|a|private`])expect(()=>tmuxWindowRows(invalid)).toThrow('Owned tmux window topology changed');
+});
+
+test('tmux split readback admits only the original pane, one added pane and a closed zoom flag',()=>{
+  const row=(pane:number,pid:number,zoomed=0,path='/owned')=>`%${pane}|${pid}|${zoomed}|${path}`;
+  expect(tmuxSplitRows(`${row(1,101)}\n${row(2,202)}\n`)).toEqual([
+    {paneId:'%1',pid:101,zoomed:false,path:'/owned'},{paneId:'%2',pid:202,zoomed:false,path:'/owned'}]);
+  expect(tmuxSplitRows(`${row(1,101,1)}\n${row(2,202,1)}\n`).every(value=>value.zoomed)).toBe(true);
+  for(const invalid of ['',row(1,101),`${row(1,101)}\n${row(2,202)}\n${row(3,303)}`,`${row(1,101)}\n${row(2,0)}`,`${row(1,101)}\n${row(2,202,2)}`,
+    `${row(1,101)}\n${row(2,202,0,'relative')}`,`${row(1,101)}\n${row(2,202)}|private`,`${row(1,101)}\n${row(2,202,0,'/'+'x'.repeat(2048))}`])
+    expect(()=>tmuxSplitRows(invalid)).toThrow('Owned tmux split topology changed');
+  const owned=(extra:number)=>[0,1,...Array(extra).fill(1)].map((index,line)=>`@${index+1}|${index}|${index===0?'alpha':'beta'}|${index===0?1:0}|%${line}|${100+line}|0`).join('\n');
+  expect(tmuxPaneRows(owned(1),1)).toHaveLength(3);
+  expect(()=>tmuxPaneRows(owned(1))).toThrow('Owned tmux topology changed');
+  expect(()=>tmuxPaneRows(owned(0),1)).toThrow('Owned tmux topology changed');
 });
 
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
@@ -203,6 +217,32 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     // Same window id and name, but a new pane process: the original pane was lost.
     await tmux(`respawn-pane -k -t '${paneId}' 'exec sleep 3600'`);
     await expect(owned.observe()).rejects.toThrow('Owned tmux pane identity changed');
+  } finally {
+    await owned.stop();
+  }
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the app-style split and a returned zoom on the original panes',async()=>{
+  const owned=await TmuxFixture.start();
+  try {
+    const [,beta]=owned.metadata().windows;
+    expect(beta.paneId).toMatch(/^%[0-9]{1,9}$/);
+    const tmux=async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux window action',5000);
+    // Nothing split yet: the readback refuses to call an untouched window a split one.
+    await expect(owned.verifySplitAndZoom()).rejects.toThrow('Owned tmux split topology changed');
+    // The exact commands the app sends for Split top/bottom and Zoom.
+    await tmux(`split-window -d -v -t '${beta.paneId}' -c '${owned.ssh.directory}'`);
+    await owned.verifySplitAndZoom();
+    const added=(await tmux(`list-panes -t '=owned-tmux:1' -F '#{pane_id}'`)).split('\n').find(id=>id && id!==beta.paneId)!;
+    // A zoom that was never toggled back is not the app's final state.
+    await tmux(`resize-pane -Z -t '${added}'`);
+    await expect(owned.verifySplitAndZoom()).rejects.toThrow('Owned tmux split and zoom were not observed');
+    await tmux(`resize-pane -Z -t '${added}'`);
+    await owned.verifySplitAndZoom();
+    await expect(owned.verifyDetachedAndReattached()).rejects.toThrow('Owned tmux attach, detach and reattach were not observed');
+    // The extra pane alone, with the original pane lost, is a changed topology.
+    await tmux(`kill-pane -t '${beta.paneId}'`);
+    await expect(owned.verifySplitAndZoom()).rejects.toThrow();
   } finally {
     await owned.stop();
   }

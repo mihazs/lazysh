@@ -1,5 +1,5 @@
 import {join} from 'node:path';
-import {lstat,readdir,readlink} from 'node:fs/promises';
+import {lstat,readdir,readlink,realpath} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,descendants,identity,type OwnedPid} from './ownedProcess';
 import {SshFixture,stopOwnedTree} from './sshFixture';
@@ -7,10 +7,10 @@ import {SshFixture,stopOwnedTree} from './sshFixture';
 type OwnedWindow={windowId:string;index:number;name:'alpha'|'beta';marker:string;paneId:string;pane:OwnedPid};
 const paneRow=/^(@[0-9]{1,9})\|([0-9]{1,3})\|(alpha|beta)\|([01])\|(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])$/;
 
-/** Parses one bounded `list-panes` readback; anything else is a changed topology. */
-export function tmuxPaneRows(text:string) {
+/** Parses one bounded `list-panes` readback; anything else is a changed topology. `extra` counts panes the app added by a split. */
+export function tmuxPaneRows(text:string,extra=0) {
   const lines=text.trim().split('\n');
-  if(text.length>1024 || lines.length!==2)throw new Error('Owned tmux topology changed');
+  if(text.length>1024 || lines.length!==2+extra)throw new Error('Owned tmux topology changed');
   return lines.map(line=>{
     const row=paneRow.exec(line);
     if(!row)throw new Error('Owned tmux topology changed');
@@ -45,6 +45,17 @@ export function tmuxWindowLifecycle(rows:ReturnType<typeof tmuxWindowRows>,origi
 }
 /** The names the app gives the window it creates and renames, and the host expects in that order. */
 export const tmuxLifecycleNames=['scratch','renamed'] as const;
+const splitRow=/^(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])\|(\/[^|\n]{0,1023})$/;
+/** Parses the bounded `list-panes` readback of the split window: pane, process, window zoom flag and directory. */
+export function tmuxSplitRows(text:string) {
+  const lines=text.trim().split('\n');
+  if(text.length>2048 || lines.length!==2)throw new Error('Owned tmux split topology changed');
+  return lines.map(line=>{
+    const row=splitRow.exec(line);
+    if(!row)throw new Error('Owned tmux split topology changed');
+    return {paneId:row[1],pid:Number(row[2]),zoomed:row[3]==='1',path:row[4]};
+  });
+}
 /** Display clients exclude tmux control-mode clients such as the app's Jump binding. */
 export function tmuxDisplayClients(text:string) {
   const lines=text.split('\n').filter(Boolean);
@@ -101,6 +112,7 @@ export class TmuxFixture {
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
+  private extraPanes=0;
   private constructor(readonly ssh:SshFixture) {}
   static async start(binary=process.env.LAZYSH_TEST_TMUX) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
@@ -200,7 +212,8 @@ export class TmuxFixture {
     }
     if(!tmuxAttachHistoryVerified(this.history))throw new Error('Owned tmux attach, detach and reattach were not observed');
     if((await this.run(['list-sessions','-F','#{session_name}'])).trim()!==this.name)throw new Error('Owned tmux sessions changed');
-    const rows=tmuxPaneRows(await this.panes());
+    const rows=tmuxPaneRows(await this.panes(),this.extraPanes);
+    if(rows.filter(value=>value.name==='alpha').length!==1)throw new Error('Owned tmux remote state differs');
     for(const window of this.windows) {
       const row=rows.find(value=>value.paneId===window.paneId);
       // The app switched to beta through Jump To; the detached session keeps that window.
@@ -214,9 +227,22 @@ export class TmuxFixture {
     await this.observe();
     if(!this.lifecycle?.closed || this.lifecycle.names.join()!==tmuxLifecycleNames.join())throw new Error('Owned tmux window create, rename and close were not observed');
   }
+  /**
+   * The app split beta's original pane top/bottom and zoomed the new pane twice, so the window ends
+   * unzoomed with the original pane untouched and a second pane started in its directory.
+   */
+  async verifySplitAndZoom() {
+    const beta=this.windows.find(window=>window.name==='beta');
+    if(!beta)throw new Error('Owned tmux topology required');
+    const rows=tmuxSplitRows(await this.run(['list-panes','-t',beta.windowId,'-F','#{pane_id}|#{pane_pid}|#{window_zoomed_flag}|#{pane_current_path}']));
+    const original=rows.find(row=>row.paneId===beta.paneId),added=rows.find(row=>row.paneId!==beta.paneId);
+    if(!original || !added || original.pid!==beta.pane.pid || added.pid===beta.pane.pid || rows.some(row=>row.zoomed))throw new Error('Owned tmux split and zoom were not observed');
+    if(await realpath(added.path)!==await realpath(this.ssh.directory))throw new Error('Owned tmux split directory differs');
+    this.extraPanes=1;
+  }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames]};
+    return {name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames]};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */
