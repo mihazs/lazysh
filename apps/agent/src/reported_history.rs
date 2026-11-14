@@ -180,7 +180,12 @@ mod tests {
         )
         .unwrap();
         store
-            .ingest_with_reported_history(event.as_ref(), source.as_ref(), at)
+            .ingest_with_reported_history(
+                event.as_ref(),
+                source.as_ref(),
+                at,
+                crate::notification_policy::Admission::Queue,
+            )
             .unwrap();
     }
 

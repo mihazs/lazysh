@@ -35,6 +35,22 @@ lazysh-agent settings host-browser update --expected-revision 0 --host-browser-e
 
 While it is off, or its file is unreadable, every host-browser command refuses before it starts a process. Turning it off does not stop a browser that already runs. `lazysh-agent host-browser --clear-data` removes the profile that **Keep profile** left, and works with the switch off. See the [reference](reference/companion-settings.md) for the file, the errors and the profile lifetime.
 
+## Quiet notifications for nested agents and an unlocked desktop
+
+If you opt in to the [relay](notification-relay.md#opt-in-the-host-companion), two more host switches decide which events may notify your phone. Both are **off** by default, so nothing changes until you turn one on, and they are not part of the three switches above. There is no control for them in the app yet; use the host terminal:
+
+```sh
+lazysh-agent settings notifications show
+lazysh-agent settings notifications update --expected-revision 0 \
+  --nested-agent-suppression-enabled true \
+  --suppress-while-desktop-unlocked false
+```
+
+- **Nested agents.** An agent that another agent started (a Claude Code session that runs `codex exec`, a hook that starts a headless agent) no longer pages you for work you never see, and its permission requests are not offered for a decision. Events are still recorded and shown on the board. A launcher can mark a nested start with `LAZYSH_PARENT_SESSION_ID`; on Linux and macOS the companion also recognizes known agents above the reporting one.
+- **Unlocked desktop (Linux only).** No notification while you sit at the host's unlocked desktop that already shows the agent. If the lock state is unknown (macOS, Windows, no `loginctl`, a remote or inactive session) you are notified.
+
+Both apply to the next hook run. The [reference](reference/companion-settings.md#notification-policy-nested-agents-and-an-unlocked-desktop) lists exactly which agents, platforms and cases are covered and which validation could not be run.
+
 ## Companion updates (planned)
 
 **Not released yet** ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)). The three switches above do not change. Update behavior is a separate setting with its own revision, kept in `auto-update.json` in the same state directory so that an older companion that shares the directory keeps reading `settings.json`.

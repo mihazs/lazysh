@@ -1,4 +1,7 @@
-use crate::{Error, Result, Store, MAX_INPUT};
+use crate::{
+    notification_policy::{self, Admission, Environment, Reason},
+    Error, Result, Store, MAX_INPUT,
+};
 use chrono::{SecondsFormat, Utc};
 use clap::ValueEnum;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
@@ -348,15 +351,24 @@ impl Drop for Pending {
     }
 }
 
-/// The hook's answer, or `None` when it gives no decision: Codex then asks in its own terminal prompt.
+/// Waits for the user's decision on one permission request, or `None` when the hook gives no decision: Codex then asks
+/// in its own terminal prompt. When the notification policy says another agent started this one, its prompt is not the
+/// user's: the event is recorded without a relay notification, no approval is taken and nothing is returned, so the
+/// agent decides on its own.
 pub fn request(
     directory: &Path,
     input: impl Read,
     agent: ApprovalAgent,
     pane: Option<&str>,
     timeout: u16,
+    environment: &dyn Environment,
 ) -> Result<Option<Value>> {
     let request = hook_request(input, agent, pane, timeout)?;
+    let admission = notification_policy::admission(directory, agent.lifecycle(), environment);
+    if admission == Admission::Skip(Reason::NestedAgent) {
+        record(directory, &request, agent, admission)?;
+        return Ok(None);
+    }
     let mut store = ApprovalStore::open(directory)?;
     store.clean()?;
     let lease = lease_options(true).open(store.lease_path(&request.id))?;
@@ -407,11 +419,7 @@ pub fn request(
         ],
     )?;
     transaction.commit()?;
-    let payload = json!({"session_id":request.session_id,"cwd":request.project,"hook_event_name":"PermissionRequest","tool_name":request.tool_name});
-    if let Some(event) = crate::normalize(&payload, agent.lifecycle(), request.pane_id.as_deref())?
-    {
-        Store::open(directory)?.ingest(&event, Utc::now())?;
-    }
+    record(directory, &request, agent, admission)?;
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout));
     let answer = loop {
         if Instant::now() >= deadline {
@@ -456,6 +464,24 @@ pub fn request(
     Ok(Some(
         json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}}),
     ))
+}
+fn record(
+    directory: &Path,
+    request: &Request,
+    agent: ApprovalAgent,
+    admission: Admission,
+) -> Result<()> {
+    let payload = json!({"session_id":request.session_id,"cwd":request.project,"hook_event_name":"PermissionRequest","tool_name":request.tool_name});
+    if let Some(event) = crate::normalize(&payload, agent.lifecycle(), request.pane_id.as_deref())?
+    {
+        Store::open(directory)?.ingest_with_reported_history(
+            Some(&event),
+            None,
+            Utc::now(),
+            admission,
+        )?;
+    }
+    Ok(())
 }
 
 pub fn list(directory: &Path, limit: u8) -> Result<Value> {

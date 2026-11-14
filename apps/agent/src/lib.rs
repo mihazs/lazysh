@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
 pub mod browser;
+pub mod desktop_lock;
 pub mod devices;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod directory_listing;
@@ -14,6 +15,10 @@ pub mod kimi_code;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
+// The process table is read on Unix only; elsewhere only the declared parent session applies.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub mod nested_agent;
+pub mod notification_policy;
 mod private_json;
 pub mod relay;
 pub mod reported_history;
@@ -121,7 +126,7 @@ lazysh_common::impl_from_error!(Error, Io, io::Error);
 lazysh_common::impl_from_error!(Error, Storage, rusqlite::Error);
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Agent {
     Claude,
     Codex,
@@ -670,7 +675,12 @@ fn state_file_present(path: &Path, nonempty: bool) -> bool {
 }
 
 /// Write one lifecycle report and admit its relay transition, inside the caller's transaction.
-fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64) -> Result<()> {
+fn write_event(
+    transaction: &rusqlite::Transaction<'_>,
+    event: &Event,
+    now: f64,
+    admission: notification_policy::Admission,
+) -> Result<()> {
     let prior: Option<String> = transaction
         .query_row(
             "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
@@ -723,7 +733,8 @@ fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64)
     relay::admit_transition(
         transaction,
         kind,
-        prior.as_deref() != Some(event.state.as_str()),
+        prior.as_deref() != Some(event.state.as_str())
+            && admission == notification_policy::Admission::Queue,
         now as i64,
     )
     .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
@@ -897,13 +908,20 @@ impl Store {
         Ok(Self { connection })
     }
     pub fn ingest(&mut self, event: &Event, now: DateTime<Utc>) -> Result<()> {
-        self.ingest_with_reported_history(Some(event), None, now)
+        self.ingest_with_reported_history(
+            Some(event),
+            None,
+            now,
+            notification_policy::Admission::Queue,
+        )
     }
+    /// `admission` only decides whether a state change may queue a relay notification; the event is recorded either way.
     pub fn ingest_with_reported_history(
         &mut self,
         event: Option<&Event>,
         source: Option<&reported_history::ReportedSource>,
         reported_at: DateTime<Utc>,
+        admission: notification_policy::Admission,
     ) -> Result<()> {
         if let Some(event) = event {
             event
@@ -921,7 +939,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| storage_failure(StoragePhase::IngestBegin, e.into()))?;
         if let Some(event) = event {
-            write_event(&transaction, event, now)?;
+            write_event(&transaction, event, now, admission)?;
         }
         if let Some(source) = source {
             reported_history::insert(&transaction, source, reported_at)?;

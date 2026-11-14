@@ -86,6 +86,7 @@ impl Store {
         &mut self,
         observation: &Observation,
         reported_at: DateTime<Utc>,
+        admission: crate::notification_policy::Admission,
     ) -> Result<()> {
         let now = reported_at.timestamp_micros() as f64 / 1_000_000.0;
         let phase = StoragePhase::SessionWrite;
@@ -110,7 +111,7 @@ impl Store {
                     )
                     .map_err(fail)?;
                 if new == 1 {
-                    write_event(&transaction, event, now)?;
+                    write_event(&transaction, event, now, admission)?;
                 }
                 None
             }

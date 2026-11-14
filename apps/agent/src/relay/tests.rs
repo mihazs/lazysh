@@ -418,3 +418,102 @@ fn schedule_maintenance_terminalizes_exhausted_recovery_without_claiming_again()
     assert_eq!(state, "failed_unknown");
     assert_eq!(attempts, 3);
 }
+
+mod notification_policy {
+    use super::*;
+    use crate::{
+        desktop_lock::Desktop,
+        notification_policy::{update, Admission, Environment},
+        Agent,
+    };
+
+    /// A host with a stated process tree (`nested`) and desktop.
+    struct Host(bool, Desktop);
+    impl Environment for Host {
+        fn nested(&self, _: Agent) -> bool {
+            self.0
+        }
+        fn desktop(&self) -> Desktop {
+            self.1
+        }
+    }
+    /// One transition into needs-attention as the `ingest` command admits it on `host`; returns the queue length.
+    fn attention(
+        directory: &std::path::Path,
+        store: &mut Store,
+        sequence: &[SessionState],
+        host: &Host,
+    ) -> u64 {
+        for state in sequence {
+            let admission = store.admission(directory, Agent::Codex, host).unwrap();
+            store
+                .ingest_with_reported_history(Some(&event(*state)), None, Utc::now(), admission)
+                .unwrap();
+        }
+        store.relay_status().unwrap().pending
+    }
+    const ASK: [SessionState; 1] = [SessionState::NeedsAttention];
+
+    #[test]
+    fn a_nested_agent_is_stored_but_queues_nothing_while_the_switch_is_on() {
+        let (directory, mut store) = enabled();
+        update(directory.path(), 0, true, false).unwrap();
+        let nested = Host(true, Desktop::Unknown);
+        assert_eq!(attention(directory.path(), &mut store, &ASK, &nested), 0);
+        let snapshot = store.snapshot(10, Utc::now()).unwrap();
+        assert_eq!(
+            snapshot.sessions[0].event.state,
+            SessionState::NeedsAttention
+        );
+        // The same agent outside a nesting still notifies, so suppression is per event, not per session.
+        assert_eq!(
+            attention(
+                directory.path(),
+                &mut store,
+                &[SessionState::Done],
+                &Host(false, Desktop::Unknown)
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn the_same_nested_agent_queues_when_the_switch_is_off() {
+        let (directory, mut store) = enabled();
+        update(directory.path(), 0, false, false).unwrap();
+        let nested = Host(true, Desktop::Unlocked);
+        assert_eq!(attention(directory.path(), &mut store, &ASK, &nested), 1);
+    }
+
+    #[test]
+    fn an_unlocked_desktop_suppresses_but_a_locked_or_unknown_one_notifies() {
+        for (desktop, queued) in [
+            (Desktop::Unlocked, 0),
+            (Desktop::Locked, 1),
+            (Desktop::Unknown, 1),
+        ] {
+            let (directory, mut store) = enabled();
+            update(directory.path(), 0, false, true).unwrap();
+            let host = Host(false, desktop);
+            assert_eq!(
+                attention(directory.path(), &mut store, &ASK, &host),
+                queued,
+                "{desktop:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_relay_the_policy_is_not_even_consulted() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        update(directory.path(), 0, true, true).unwrap();
+        let host = Host(true, Desktop::Unlocked);
+        assert_eq!(
+            store
+                .admission(directory.path(), Agent::Codex, &host)
+                .unwrap(),
+            Admission::Queue
+        );
+    }
+}
