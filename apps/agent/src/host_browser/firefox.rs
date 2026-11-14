@@ -427,6 +427,8 @@ impl<'l, 'a> Stream<'l, 'a> {
         }
     }
 
+    // shortcut: no watchdog on a Firefox that stops answering; its requests wait until the channel closes, which
+    // ends it, and the page and capture polls add two entries a second meanwhile. Upgrade with the quality ladder.
     fn request(&mut self, method: &str, params: Value, kind: Pending) -> Result<()> {
         let id = self.launched.link.bidi.send(method, params)?;
         self.pending.push((id, kind));
