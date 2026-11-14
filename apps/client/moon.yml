@@ -155,6 +155,13 @@ tasks:
     env: {LAZYSH_ANDROID_UI_QR: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal
+  # Edge gestures against the real navigation overlays (#1380, #1435); needs a device whose overlays can be switched (Waydroid or an emulator image that has them).
+  test-android-gestures:
+    type: test
+    command: bun test ../../tests/android-gestures.test.ts
+    env: {LAZYSH_ANDROID_GESTURES: '1'}
+    deps: [~:build-android-emulator]
+    options: *envLocal
   test-android-biometric:
     type: test
     command: bun test ../../tests/android-biometric.test.ts
