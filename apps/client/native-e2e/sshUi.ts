@@ -66,8 +66,9 @@ export async function openOwnedRememberedSsh(gui:NativeGui,ssh:SshFixture,entry?
 export async function openOwnedSshWith(gui:NativeGui,ssh:SshFixture,supply:(connect:Terminal)=>Promise<void>) {
   return openSsh(gui,ssh,'ssh',ssh.port,undefined,false,'Owned SSH GUI host',supply);
 }
-async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>|undefined,rememberKey:boolean,name:OwnedHostLabel='Owned SSH GUI host',supply?:(connect:Terminal)=>Promise<void>) {
-  const browser=gui.browser!,owner=await gui.appOwner();
+/** Save a host through the visible editor without connecting; its generated ID is read from the saved file. */
+export async function saveOwnedSshHost(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry?:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>,name:OwnedHostLabel='Owned SSH GUI host') {
+  const browser=gui.browser!;
   gui.stage='owned SSH host editor';
   const add=await browser.$('button[aria-label="Add host"]');await add.waitForDisplayed({timeout:30_000});await add.click();
   const editor=await browser.$('[role="dialog"][aria-label="Add a host"]');await editor.waitForDisplayed();
@@ -81,15 +82,30 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   }
   await (await (await editor.$('label*=Preferred transport')).$('select')).selectByAttribute('value',transport);
   await (await editor.$('button=Save host')).click();await editor.waitForDisplayed({reverse:true});
+}
+/** The generated ID of a host saved through the editor, as the native app stored it. */
+export async function savedOwnedHostId(gui:NativeGui,name:OwnedHostLabel='Owned SSH GUI host') {
+  const hosts:{id:string;name:string}[]=JSON.parse(await readFile(join(gui.directory,'config','app.lazysh.client','hosts.json'),'utf8'));
+  const matches=hosts.filter(host=>host.name===name);
+  if(matches.length!==1)throw new Error('Owned saved host was not stored exactly once');
+  return matches[0].id;
+}
+/** Review the exact ephemeral server fingerprint, then trust it for this connection. */
+export async function trustOwnedHostKey(gui:NativeGui,ssh:SshFixture) {
+  gui.stage='owned SSH explicit fingerprint review';
+  const trust=await gui.browser!.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
+  expect(await trust.getText()).toContain(ssh.fingerprint);
+  await (await trust.$('button=Trust key and connect')).click();
+}
+async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>|undefined,rememberKey:boolean,name:OwnedHostLabel='Owned SSH GUI host',supply?:(connect:Terminal)=>Promise<void>) {
+  const browser=gui.browser!,owner=await gui.appOwner();
+  await saveOwnedSshHost(gui,ssh,transport,port,entry,name);
   gui.stage='owned SSH manual key';
   await (await browser.$(`button[aria-label=${JSON.stringify(`Connect to ${name}`)}]`)).click();
   const connect=await browser.$(`[role="dialog"][aria-label=${JSON.stringify(`Connect to ${name}`)}]`);await connect.waitForDisplayed();
   expect(await (await connect.$('select')).getValue()).toBe(transport);
   await (supply?supply(connect):enterKey(gui,ssh,connect,false,rememberKey));
-  gui.stage='owned SSH explicit fingerprint review';
-  const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
-  expect(await trust.getText()).toContain(ssh.fingerprint);
-  await (await trust.$('button=Trust key and connect')).click();
+  await trustOwnedHostKey(gui,ssh);
   gui.stage='owned SSH terminal prompt';
   const terminalName=entry?`${name} / ${entry.name}`:name;
   const terminal=await browser.$(`.terminal-canvas[aria-label=${JSON.stringify(`Terminal for ${terminalName}`)}] .xterm-screen`);

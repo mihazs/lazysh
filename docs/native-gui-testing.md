@@ -6,6 +6,8 @@ The specification starts the actual application without launch arguments, opens 
 
 A second case starts a fresh original GUI and launches a literal Unicode, shell-looking directory from a separate caller working directory inside the owned fixture. It sends `pwd` through native WebDriver keyboard input and requires the real local terminal to display the canonical target path. The original GUI bus owner/PID/window must remain, and the SSH counter stays zero. The fixture rejects a secondary cwd outside its own canonical directory before launching a child.
 
+`native-e2e/muxLaunch.spec.ts` covers `--mux` through the same real secondary process. It saves a host pointing at an owned OpenSSH server through the visible editor, reads the generated host ID the app stored, and launches `--host ID --mux tmux:owned-launch`. The original GUI opens its normal connection dialog with the mux notice and no tmux client attaches before the synthetic key and host-key review are supplied. The requested picker then lists only the sessions of the named server (a decoy session on the default server stays absent), fixes the server field, and still has no attached client. Clicking **Attach** opens a terminal whose `$TMUX_PANE` and shell PID equal the pane created beforehand on that server, with exactly one client on it and none on the default server. A second case launches `--mux herdr` against an owned Herdr server and requires the attached terminal to draw that server's tab and the original pane's startup paint while the original receiver gets no bytes. Both use the Herdr and tmux fixtures of the SSH suite, so they need the same `LAZYSH_TEST_HERDR`, `LAZYSH_TEST_AGENT_BIN` and `LAZYSH_TEST_RECEIVER_BIN` as the other Herdr cases. These are warm launches only; cold-start argv delivery is covered by the native Cargo tests.
+
 ## Isolation and process ownership
 
 The entire Vitest process runs in an outer private user/network namespace with loopback only. The target listener, test worker and GUI drivers therefore share that private network; host processes cannot reach its listener. A controlled case verifies that a nested namespace cannot reach its parent listener while its own loopback still works. This removes ambient host traffic from the test boundary; it does not identify the source of historical failures.
@@ -64,8 +66,8 @@ The Ubuntu 22.04 producer in [run 40827931880, job 123295170436](https://github.
 The suite covers Linux singleton handoff through the real WebView/native IPC,
 original private-bus owner and preserved form state. It does not establish
 Windows/macOS GUI delivery, biometric prompts, physical screens/devices,
-accessibility/compositor effects, remote authentication, exact tmux-server
-attachment. Those remain tracked in
+accessibility/compositor effects, cold GUI startup through OS argument
+delivery. Those remain tracked in
 [issue #86](https://github.com/mihazs/lazysh/issues/86) and
 [issue #20](https://github.com/mihazs/lazysh/issues/20).
 

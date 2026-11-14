@@ -152,9 +152,9 @@ export class SshFixture {
     return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin',name),...args],this.directory,this.environment);
   }
   /** Observe the system tmux of a `tmux:true` fixture through only its private socket directory. */
-  tmux(args:string[]) {
+  tmux(args:string[],server='default') {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
-    return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
+    return new OwnedProcess('tmux',['-L',server,...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
   static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number}={}) {
     if((options.password!==undefined || options.log) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');

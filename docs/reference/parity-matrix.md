@@ -490,7 +490,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | --- | --- | --- | --- | --- |
 | `-dir` opens a local terminal in a directory | n/a | verified | `src-tauri/desktop_launch.rs:55-145` (desktop-only). `singleton.spec.ts:38-53` real shell `pwd` (NL); `desktop_launch.rs:685-721` (ND); `local.rs:1314-1369`. | Windows warm GUI delivery (#457). |
 | `-host` selects a saved host | n/a | verified | `desktop_launch.rs:102-110,360-447`. `singleton.spec.ts:13-30` (NL). | — |
-| `-mux tmux`, `tmux:SERVER` or `herdr` | n/a | partial | `desktop_launch.rs:35-51,111-130`; MP:30-37,56-57,124,135. `singleton.spec.ts:32-35` checks admission and the notice only; the post-connect picker is Vitest-only. | GUI case through connect, requested picker and attach (#86). |
+| `-mux tmux`, `tmux:SERVER` or `herdr` | n/a | partial | `desktop_launch.rs:35-51,111-130`; MP:30-37,56-57,124,135. `singleton.spec.ts:32-35` checks admission and the notice only; the post-connect picker is Vitest-only. Linux GUI `native-e2e/muxLaunch.spec.ts` (NL) launches `--host ID --mux tmux:SERVER` through the real secondary process, authenticates with a synthetic key and host-key review, asserts the picker lists only that named server's sessions with no tmux client attached, attaches and asserts the pane ID and shell PID of the session created beforehand, one client on that server and none on the default; a second case does the same for `--mux herdr` against an owned Herdr server. It awaits a green `main` run. | A green `main` run of `muxLaunch.spec.ts`; Windows and macOS GUI delivery (#457, #492). |
 
 ## Gaps
 
