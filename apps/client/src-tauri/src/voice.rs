@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::State;
+use tokio::sync::watch;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 pub mod catalog;
 pub mod cloud;
@@ -26,6 +27,17 @@ mod interop_tests;
 const MAX_MODEL: u64 = 160 * 1024 * 1024;
 const MAX_SAMPLES: usize = 16_000 * 30;
 type Result<T> = std::result::Result<T, String>;
+/// Resolves once the cancellation flag is set or its sender is gone.
+async fn cancelled(receiver: &mut watch::Receiver<bool>) {
+    loop {
+        if *receiver.borrow() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            return;
+        }
+    }
+}
 struct Import {
     id: String,
     name: String,
