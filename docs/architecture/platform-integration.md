@@ -40,7 +40,7 @@ Closing these gaps, without relaxing source integrity checks, is [#1312](https:/
 
 | Platform | Service | Status |
 | --- | --- | --- |
-| Android | TalkBack | xterm path uses `screenReaderMode`; native path unproven ([#1329](https://github.com/mihazs/lazysh/issues/1329)) |
+| Android | TalkBack | xterm path uses `screenReaderMode`; native path: row mirror and selection rule built and unit-tested, TalkBack reading unproven ([#1329](https://github.com/mihazs/lazysh/issues/1329), [native rendering](native-rendering.md#accessibility)) |
 | iOS, macOS | VoiceOver | unproven ([#1335](https://github.com/mihazs/lazysh/issues/1335)) |
 | Windows | Narrator, NVDA | unproven (#1335) |
 | Linux | Orca | unproven (#1335) |
