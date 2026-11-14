@@ -15,6 +15,18 @@ const routes:Route[]=[
 ];
 const wheelUp=/^\x1b\[<64;\d+;\d+M$/;
 
+/** Android reports a keyboard either by shrinking the window or by shrinking only the visual viewport. */
+const keyboards:Record<string,{open(page:Page,size:{width:number;height:number}):Promise<unknown>;close(page:Page,size:{width:number;height:number}):Promise<unknown>}>={
+  'the window shrinks':{
+    open:(page,size)=>page.setViewportSize({width:size.width,height:size.height-300}),
+    close:(page,size)=>page.setViewportSize(size),
+  },
+  'only the visual viewport shrinks':{
+    open:page=>page.evaluate(()=>{const viewport=window.visualViewport!;Object.defineProperty(viewport,'height',{configurable:true,value:viewport.height-300});viewport.dispatchEvent(new Event('resize'));}),
+    close:page=>page.evaluate(()=>{const viewport=window.visualViewport!;delete (viewport as {height?:number}).height;viewport.dispatchEvent(new Event('resize'));}),
+  },
+};
+
 async function open(page:Page,route:Route) {
   await mountHistory(page,route.mosh);
   await page.evaluate(lines=>window.ownedHistory.output(lines),historyLines(300));await settle(page);
@@ -65,6 +77,30 @@ for(const route of routes)test.describe(route.name,()=>{
       await drag(page,3,slant);
       expect(await travelled(page,route)-before).toBe(3);
     }
+  });
+
+  for(const [kind,keyboard] of Object.entries(keyboards))test(`one finger drag moves by its own rows while ${kind} as the keyboard opens and closes under it`,async({page},testInfo)=>{
+    await open(page,route);
+    const size=page.viewportSize()!,box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!;
+    // The reader's place: older rows read from local history, or wheel reports an agent received.
+    const place=()=>route.agent
+      ?page.evaluate(pattern=>window.ownedHistory.writes.filter(data=>new RegExp(pattern).test(data)).length,wheelUp.source)
+      :historyView(page).then(view=>-Number(/HISTORY_(\d{4})/.exec(view.top)?.[1]));
+    const places:number[]=[await place()],rows=new Set([await page.evaluate(()=>window.ownedHistory.terminal.rows)]);
+    // The keyboard opens and closes between moves with no wait for the terminal to refit, as it does under a finger.
+    const resizes=new Map([[4,keyboard.open],[8,keyboard.close],[12,keyboard.open]]);
+    let move=0;
+    await fingerDrag(page,{x:box.x+box.width/2,y:box.y+box.height/4},await rowHeight(page),16,{between:async()=>{
+      await resizes.get(++move)?.(page,size);
+      places.push(await place());
+      rows.add(await page.evaluate(()=>window.ownedHistory.terminal.rows));
+    }});
+    await settle(page);
+    places.push(await place());
+    await testInfo.attach('places',{body:JSON.stringify({places,rows:[...rows]}),contentType:'application/json'});
+    // The terminal refitted under the finger, and every move still advanced by exactly its own row: no jump, reversal or stall.
+    expect(rows.size).toBeGreaterThan(1);
+    expect(places.slice(1).map((value,index)=>value-places[index])).toEqual([...Array(16).fill(1),0]);
   });
 });
 
