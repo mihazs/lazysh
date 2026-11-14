@@ -292,6 +292,22 @@ input path, using the agent's profile, with read-back verification.
 A capability ships for an agent only with the fixtures and runtime test listed under
 Test strategy. Until then the table cell falls back to **Show terminal**.
 
+### What is shipped per agent
+
+Status on 2026-11-14, `main` at `744e3bbb`. The table above is the target; this one says what a person gets today, and the
+evidence. [Agent view parity](reference/agent-view-parity.md) has the element-by-element status.
+
+| Agent | In the Agent view today | Falls back to the terminal for |
+| --- | --- | --- |
+| Claude Code | The whole table: timeline, live stream, hook state, questions, menus and approvals (docks), interrupt, header pills (model, mode, context, branch), work panel with sub-agents and workflows, send, queue, attachments, slash palette, copy, search and history ([#1293](https://github.com/mihazs/lazysh/pull/1293), [#1276](https://github.com/mihazs/lazysh/pull/1276), [#1351](https://github.com/mihazs/lazysh/pull/1351), [#1356](https://github.com/mihazs/lazysh/pull/1356), [#1377](https://github.com/mihazs/lazysh/pull/1377), [#1431](https://github.com/mihazs/lazysh/pull/1431)) | A dialog with a text field |
+| Codex | Timeline, live stream, hook state, header from the transcript, send and Stop, the approval prompt and list dialogs answered through keys read back from the screen ([#1490](https://github.com/mihazs/lazysh/pull/1490)), sub-agents in the work panel ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | `request_user_input`, Herdr and Zellij dialogs, the Codex app-server daemon |
+| OpenCode | Timeline from its database, header (model, context in use, cost), send and Stop on tmux ([#1491](https://github.com/mihazs/lazysh/pull/1491)), sub-agents ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | Every dialog: OpenCode marks the highlighted choice by colour only, which a read of the screen's text cannot see, so permission and question prompts wait for its own decision channel ([#1535](https://github.com/mihazs/lazysh/issues/1535)); Herdr and Zellij panes (Herdr's session reference is not a transcript the view can read) |
+| Grok Build, Gemini CLI | The agent's name and hook state, labelled partial, with **Show terminal** and no composer | Everything else |
+| Records-only adapters | The same partial state | Everything else |
+
+The companion reads Grok Build sessions for the Chat tool view; binding them to the Agent view needs a runtime case against a real Grok
+Build, which the development host does not have. A Gemini CLI reader is a separate change ([#1348](https://github.com/mihazs/lazysh/issues/1348)).
+
 ## Input and control mapping
 
 All input goes through one ordered path per session. The Agent view never writes to
