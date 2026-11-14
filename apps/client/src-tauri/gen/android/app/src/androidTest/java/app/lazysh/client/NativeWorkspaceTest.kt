@@ -4705,6 +4705,56 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** Whether the open host editor's client-environment checkbox is ticked ("true" or "false"). */
+    private fun ownedClientEnvironmentChecked(scenario: ActivityScenario<MainActivity>) = evaluate(scenario,
+        "Array.from(document.querySelectorAll('[role=dialog] label')).find(x=>x.textContent.includes('Identify lazysh to this host'))?.querySelector('input')?.checked===true")
+
+    /** Opens a saved host's editor, reads its client-environment checkbox, and leaves without saving. */
+    private fun ownedSavedClientEnvironment(scenario: ActivityScenario<MainActivity>, name: String): String {
+        revealOwnedHosts(scenario)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Edit $name']")).perform(webClick())
+        awaitDocument(scenario, "host editor for $name", present(".port-field input"))
+        val checked = ownedClientEnvironmentChecked(scenario)
+        clickOwnedButton("Cancel")
+        awaitDocument(scenario, "host editor for $name closed", "!" + present(".port-field input"))
+        return checked
+    }
+
+    @Test fun ownedSshClientEnvironmentThroughRealUi() {
+        val off = "Parity env off"
+        val on = "Parity env on"
+        ownedParityCase(listOf(off, on)) { scenario, parity ->
+            addOwnedHost(scenario, off, "127.0.0.1", parity.username, parity.port("primary"))
+            addOwnedHost(scenario, on, "127.0.0.1", parity.username, parity.port("primary")) {
+                onWebView().withElement(findElement(Locator.XPATH,
+                    "//*[@role='dialog']//label[contains(normalize-space(.),'Identify lazysh to this host')]/input[@type='checkbox']"))
+                    .perform(webScrollIntoView()).perform(webClick())
+                assertEquals("The client environment must be opted in for this host only", "true", ownedClientEnvironmentChecked(scenario))
+            }
+            assertEquals("A new host must not identify lazysh by default", "false", ownedSavedClientEnvironment(scenario, off))
+            assertEquals("The opt-in must persist across reopening the host editor", "true", ownedSavedClientEnvironment(scenario, on))
+            val dollar = "$"
+            // The sshd admits `LANG LC_*`, so only the client's own choice decides what the remote shell sees.
+            for ((name, value) in listOf(off to "", on to "lazysh")) {
+                openOwnedConnect(scenario, name)
+                chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+                submitOwnedConnect(scenario)
+                // The first host pins this address and port, so the second shows no fingerprint review.
+                if (name == off) trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+                awaitDocument(scenario, "authenticated $name prompt", terminalScreenContains(parity.prompt("primary")))
+                val proof = "ENV_${value}_${parity.nonce}"
+                val command = "printf 'ENV_%s_%s\\n' \"${dollar}LC_TERMINAL\" '${parity.nonce}'"
+                require(!command.contains(proof)) { "Owned environment proof must not appear in its input" }
+                sendOwnedCommand(scenario, command, parity.label)
+                awaitDocument(scenario, "$name remote LC_TERMINAL", terminalScreenContains(proof))
+                if (value.isEmpty()) assertEquals("A host without the opt-in must not receive LC_TERMINAL", "false",
+                    evaluate(scenario, terminalScreenContains("ENV_lazysh_${parity.nonce}")))
+                endOwnedConnection(scenario, name)
+            }
+            println("lazysh parity: LC_TERMINAL=lazysh reached the remote shell only for the host that opted in")
+        }
+    }
+
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
         val fixture = "Instrumentation ${UUID.randomUUID()}"
         val selector = "button[aria-label='Connect to $fixture']"

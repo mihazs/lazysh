@@ -156,8 +156,8 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
     return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number}={}) {
-    if((options.password!==undefined || options.log) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;acceptEnv?:boolean;shellSeconds?:number}={}) {
+    if((options.password!==undefined || options.log || options.acceptEnv) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
     if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
@@ -216,7 +216,7 @@ export class SshFixture {
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
-        `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no',`PasswordAuthentication ${accounts?'yes':'no'}`,'KbdInteractiveAuthentication no','UsePAM no','StrictModes no',`LogLevel ${log?'DEBUG1':'ERROR'}`,
+        `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no',`PasswordAuthentication ${accounts?'yes':'no'}`,'KbdInteractiveAuthentication no','UsePAM no','StrictModes no',`LogLevel ${log?'DEBUG1':'ERROR'}`,...(options.acceptEnv?['AcceptEnv LANG LC_*']:[]),
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
         ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then ${observeBootstrap}exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
         environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
@@ -294,8 +294,8 @@ export class SshFixture {
       '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
       ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none'])];
   }
-  async client(identity=true,remoteCommand?:string,port=this.port) {
-    return new OwnedProcess('ssh',[remoteCommand===undefined?'-tt':'-T','-p',String(port),...await this.keyOptions(identity,port),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
+  async client(identity=true,remoteCommand?:string,port=this.port,extraOptions:string[]=[]) {
+    return new OwnedProcess('ssh',[remoteCommand===undefined?'-tt':'-T','-p',String(port),...await this.keyOptions(identity,port),...extraOptions,`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
   }
   async sftp() {
     return new OwnedProcess('sftp',['-b','-','-P',String(this.port),...await this.keyOptions(),`${this.username}@127.0.0.1`]);

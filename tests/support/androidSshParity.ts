@@ -6,13 +6,14 @@ import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess,androidSshCleanup,nativeReportCases,ownedSoftwareKeyboard} from './androidSsh';
 import {availablePort,sshCommand} from './sshFixture';
 
-/** The owned SSH parity instrumentation cases (#985), run together in one Gradle invocation. */
+/** The owned SSH parity instrumentation cases (#985, #1642), run together in one Gradle invocation. */
 export const sshParityCases=[
   'ownedSshPasswordLoginThroughRealUi',
   'ownedSshEncryptedKeyLoginThroughRealUi',
   'ownedSshRotatedHostKeyRefusedThroughRealUi',
   'ownedSshBastionRouteThroughRealUi',
   'ownedSshAgentForwardingThroughRealUi',
+  'ownedSshClientEnvironmentThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated';
@@ -102,7 +103,7 @@ async function encryptedIdentity(primary:SshFixture,passphrase:string) {
 
 /**
  * Owned emulator only. Starts a password-enabled primary sshd, a password bastion and a
- * second-key sshd for rotation, then runs the parity cases with the host control channel.
+ * second-key sshd for rotation, then runs the parity cases with the host control channel. Every sshd admits `LANG LC_*` like a stock Debian server.
  */
 export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'../..')) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH parity acceptance requires Linux');
@@ -117,7 +118,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
   let primary=false;
   try {
     const fixtures={} as Fixtures;
-    for(const name of servers)started.push(fixtures[name]=await SshFixture.start(undefined,{password,log:true}));
+    for(const name of servers)started.push(fixtures[name]=await SshFixture.start(undefined,{password,log:true,acceptEnv:true}));
     const nonce=fixtures.primary.nonce;
     // The rotation case pins this device port to the primary key, then the host repoints it.
     const pinned={port:await availablePort()};

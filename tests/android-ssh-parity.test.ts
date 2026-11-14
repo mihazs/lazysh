@@ -46,6 +46,23 @@ test.skipIf(!parity)('owned password sshd accepts only its password and its log 
   } finally {await fixture.stop();}
 });
 
+/** The remote shell's `LC_TERMINAL`, printed through the fixture's interactive shell as the real OpenSSH client sends it. */
+async function remoteClientEnvironment(fixture:SshFixture,send:boolean) {
+  const client=await fixture.client(true,undefined,fixture.port,send?['-o','SetEnv=LC_TERMINAL=lazysh']:[]);
+  client.child.stdin!.end(`printf 'ENV_%s_%s\\n' "$LC_TERMINAL" '${fixture.nonce}'\nexit\n`);
+  return client.finish('owned environment login',10_000);
+}
+
+test.skipIf(!parity)('owned sshd with AcceptEnv delivers only the client environment the client sends',async()=>{
+  const admitting=await SshFixture.start(undefined,{acceptEnv:true}),plain=await SshFixture.start();
+  try {
+    expect(await remoteClientEnvironment(admitting,true)).toContain(`ENV_lazysh_${admitting.nonce}`);
+    expect(await remoteClientEnvironment(admitting,false)).toContain(`ENV__${admitting.nonce}`);
+    // An sshd without AcceptEnv ignores the request, which is why the fixture opts in.
+    expect(await remoteClientEnvironment(plain,true)).toContain(`ENV__${plain.nonce}`);
+  } finally {await admitting.stop();await plain.stop();}
+},30_000);
+
 test.skipIf(!parity)('owned parity control answers only its nonce and closed actions',async()=>{
   const started:SshFixture[]=[];
   try {
@@ -77,6 +94,6 @@ test('parity report counts only every expected native case passing exactly once'
     expect(()=>validateSshParityReport(report(rows))).toThrow();
 });
 
-test.skipIf(!parity)('actual Android app logs in by password, encrypted key, bastion and forwarded agent and refuses a rotated host key',async()=>{
+test.skipIf(!parity)('actual Android app logs in by password, encrypted key, bastion and forwarded agent, refuses a rotated host key and sends LC_TERMINAL only for an opted-in host',async()=>{
   await androidSshParityAcceptance();
 },1_000_000);
