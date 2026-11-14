@@ -8,6 +8,8 @@ import {installTerminalLinks} from './xterm/links';
 import {applyXtermPreferences} from './xterm/terminalBold';
 import {createTerminal, keepViewportScrolls, observeTerminalInput, syncTerminalViewport} from './xterm/terminal';
 import {inclusiveEnd} from './terminalTouchSelection';
+import {TerminalEvents} from './terminalEvents';
+import {cwdFromOsc7, searchRows} from './terminalText';
 import {selectTerminalRange, terminalCellAt, terminalWordAt} from './xterm/selection';
 import type {
   CanonicalResize, Disposable, TerminalAdapter, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
@@ -30,7 +32,7 @@ export class XtermTerminalAdapter implements TerminalAdapter {
   readonly backend = 'xterm' as const;
   readonly dataPath = 'renderer' as const;
   readonly capabilities = xtermCapabilities;
-  private readonly listeners = new Set<{listener: (event: TerminalEvent) => void; types?: ReadonlySet<TerminalEvent['type']>}>();
+  private readonly events = new TerminalEvents();
   private readonly sources = new Map<TerminalEvent['type'], Disposable[]>();
   private readonly pending = new Set<(error: Error) => void>();
   private canonical: CanonicalResize | undefined;
@@ -92,7 +94,7 @@ export class XtermTerminalAdapter implements TerminalAdapter {
     this.unmount?.(); this.unmount = undefined; this.fitAddon?.dispose();
     this.intents?.dispose(); this.canonical?.dispose();
     this.sources.forEach(group => group.forEach(source => source.dispose())); this.sources.clear();
-    this.listeners.clear();
+    this.events.clear();
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
     this.xterm.dispose();
@@ -212,15 +214,8 @@ export class XtermTerminalAdapter implements TerminalAdapter {
   }
 
   search(query: string, direction: 1 | -1, from?: number): TerminalSearchHit | undefined {
-    if (!query) return;
-    const buffer = this.xterm.buffer.active, needle = query.toLocaleLowerCase();
-    const start = from === undefined || from < 0 ? (direction > 0 ? -1 : buffer.length) : from;
-    for (let offset = 1; offset <= buffer.length; offset++) {
-      const row = (start + offset * direction + buffer.length * 2) % buffer.length;
-      const text = buffer.getLine(row)?.translateToString(true) ?? '';
-      const column = text.toLocaleLowerCase().indexOf(needle);
-      if (column >= 0) return {row, column, length: text.length};
-    }
+    const buffer = this.xterm.buffer.active;
+    return searchRows(buffer.length, row => buffer.getLine(row)?.translateToString(true) ?? '', query, direction, from);
   }
 
   cursor() { return {x: this.xterm.buffer.active.cursorX, y: this.xterm.buffer.active.cursorY}; }
@@ -282,21 +277,17 @@ export class XtermTerminalAdapter implements TerminalAdapter {
 
   subscribe(listener: (event: TerminalEvent) => void, types?: readonly TerminalEvent['type'][]): Disposable {
     if (this.disposed) return {dispose() {}};
-    const entry = {listener, types: types && new Set(types)};
-    this.listeners.add(entry);
+    const subscription = this.events.add(listener, types);
     for (const type of types ?? allEventTypes) this.observe(type);
     this.hookIntents();
-    return {dispose: () => { this.listeners.delete(entry); }};
+    return subscription;
   }
 
-  private emit(event: TerminalEvent) {
-    for (const {listener, types} of [...this.listeners]) if (!types || types.has(event.type)) listener(event);
-  }
+  private emit(event: TerminalEvent) { this.events.emit(event); }
 
   private hookIntents() {
     if (!this.canonical || this.intents) return;
-    const wanted = [...this.listeners].some(({types}) => !types || types.has('resizeIntent'));
-    if (wanted) this.intents = this.canonical.onResizeIntent(({cols, rows}) => this.emit({type: 'resizeIntent', size: {columns: cols, rows}}));
+    if (this.events.wants('resizeIntent')) this.intents = this.canonical.onResizeIntent(({cols, rows}) => this.emit({type: 'resizeIntent', size: {columns: cols, rows}}));
   }
 
   /** Wired when the first listener asks for the type, so a terminal nobody observes carries no listeners. */
@@ -318,7 +309,8 @@ export class XtermTerminalAdapter implements TerminalAdapter {
         case 'title': return [x.onTitleChange(title => this.emit({type: 'title', title}))];
         case 'bell': return [x.onBell(() => this.emit({type: 'bell'}))];
         case 'cwd': return [x.parser.registerOscHandler(7, data => {
-          try { const url = new URL(data); if (url.protocol === 'file:') this.emit({type: 'cwd', path: decodeURIComponent(url.pathname)}); } catch { /* A malformed report keeps the last directory. */ }
+          const path = cwdFromOsc7(data);
+          if (path !== undefined) this.emit({type: 'cwd', path});
           return true;
         })];
         case 'clipboard': return [x.parser.registerOscHandler(52, data => {
