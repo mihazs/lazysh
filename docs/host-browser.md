@@ -199,6 +199,47 @@ Everything else is dropped with a counter, and the browser's protocol is not oth
 
 While Control is off, none of this is sent; the client proves it in a test.
 
+Status: the mapping, the **Control**, **Select**, **Keyboard** and **Zoom page** buttons and the keyboard field exist
+as client components (`input.ts` and `HostBrowserInput.tsx` in `apps/client/src/hostBrowser/`) and are driven in the
+developer prototype against a real headless Chromium. They are not in the app yet: the relay's input messages and the
+product view ([#1254](https://github.com/mihazs/lazysh/issues/1254)) carry them to users, and the relay must refuse
+the same messages while Control is off ([#1255](https://github.com/mihazs/lazysh/issues/1255), host side). What the
+client decides:
+
+- **Control** is a switch, off at every start and whenever the view stops being live. The one place input leaves the
+  component checks it, so a touch, a key or a composed character is dropped while it is off, and turning it off ends
+  a gesture under way. A **Select**, **Keyboard** and **Zoom page** button is disabled while it is off. The local zoom
+  of a pinch sends nothing, so it works while Control is off.
+- **Tap** sends `pointer` move, press and release with button `left` and click count 1; the second of two taps within
+  300 ms and 10 displayed pixels has click count 2, and a third tap starts over. A held touch that stays within 10
+  pixels for 500 ms sends the same three with button `right`, and lifting it sends nothing more. Points are the
+  touch point scaled by the frame's device size and offset by the frame's `offsetTop`, through the local zoom.
+- **One-finger drag** sends `wheel` at the first touch point with the finger's travel in page pixels, at most once
+  every 16 ms, and the rest when the finger lifts. A touch that has moved 10 pixels is a drag and cannot become a tap
+  or a long press. The deltas are never summed into a scroll position: where the page is comes from the frame's
+  `scrollOffsetY`, because smooth scrolling does not move 1:1 (measured). The client does not correct the travel from
+  that offset while a drag is under way, so a page that scrolls by more or less than the finger moved lags or leads
+  it. **Select** turns the drag into `pointer` move (button `left`), press at the touch point and release where it ends.
+- **Pinch** zooms the displayed frame locally at once (up to what the page scale allows: 1 to 5 times the page scale
+  the frame reports in `pageScaleFactor`), keeps the part of the frame under the fingers under them, and sends
+  nothing. While it is zoomed in, a one-finger drag pans the zoomed frame instead of scrolling, and a tap still lands
+  on the point under the finger. **Zoom page** sends `pinch {scale}`, the product of the page scale and the local zoom,
+  and shows the frame unzoomed; the browser applies it with `Emulation.setPageScaleFactor` (measured with the
+  screencast running and no mobile emulation: the frame metadata reported 3 after a request for 3). The frame
+  returns at the new scale a moment later; until then the unzoomed old frame shows.
+- **Text** from the keyboard field is sent as `text` and goes to the focused element with `Input.insertText`, so accents,
+  emoji and non-Latin text arrive as typed. A composition (an IME) sends nothing until it ends, then the composed text
+  once; the keys of an IME, such as an Enter that picks a candidate, are not sent. The field holds nothing: every
+  character is sent and cleared.
+- **Keys** are `key {key, modifiers}`: Enter, Backspace, Tab, Escape, the arrows, Home, End, Page Up, Page Down and
+  Delete, and a Control or Meta chord of a letter or digit (modifier bits Alt 1, Control 2, Meta 4, Shift 8). Each
+  is a key down and a key up. The clipboard stays off, so Control or Meta with C, X or V and Shift with Delete are
+  never sent (the relay refuses a key event that carries a clipboard command too). AltGr, which a keyboard reports as
+  Control and Alt, is text, and a chord with Alt alone is left to the keyboard.
+- The keyboard field turns off automatic capitals, correction, completion and spell checking. Detecting that the page
+  focused a password field, to also ask the phone keyboard for no suggestions and no learning, needs the focused
+  element, which the closed relay list does not expose; it is not done, and the stricter hints apply to every field.
+
 ## Controls
 
 - **Address bar** shows the current URL and takes a new one. A typed string without a scheme becomes `https://`.
@@ -296,8 +337,8 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
   gap.
 - **Client side.** The viewer reaches `ws://127.0.0.1:<port>/devtools/browser/<id>`, the port forwarded over SSH
   (the Preview tool can forward a host port, or `ssh -L` can), draws screencast frames on a canvas,
-  acknowledges each after decoding, and sends a tap (press and release together), typed text (`insertText`,
-  so accents, CJK and emoji work) and Enter, Backspace, Tab and arrow keys. It sends only methods on a closed
+  acknowledges each after decoding, and, while Control is on, sends the input of [Input mapping](#input-mapping-for-a-phone):
+  taps, double taps, long presses, drags, pinches, typed text (`insertText`, so accents, CJK and emoji work) and keys. It sends only methods on a closed
   allow list and refuses an endpoint that is not a loopback browser path. It reports frames per second and the
   time from a tap to the first frame that changed.
 - **Try it.** On the host, `LAZYSH_DEV_HOST_BROWSER=1 lazysh-agent host-browser --allow-origin
@@ -308,7 +349,12 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
   when input closes, refusals before anything starts), the same launcher against a real Chrome or Chromium
   where one is on `PATH` (the Ubuntu 24.04 hosted image has Chrome 156), a protocol-client unit test against an
   in-memory DevTools endpoint, and a Playwright test in which a real headless Chromium plays the host: the
-  viewer must draw the fixture page, a tap must turn it blue, and typed accents and CJK must reach its input.
+  viewer must draw the fixture page, a tap must turn it blue, and typed accents and CJK must reach its input. A second test
+  with Control off, then on, taps, double taps and long presses a fixture button, drags a long page until the frames show
+  its scroll offset and a different part of it, types accents and an emoji, a composed character, Backspace and a
+  Control chord into its input, and pinches and commits a page zoom, each checked from the frames the viewer draws or
+  from the page's own state. It drives the viewer with a mouse and with DevTools touch events, not a real finger or
+  a phone keyboard.
   The Playwright test runs in the existing `client` job on the browser the job already installs, and fails
   rather than skips when no browser is found.
 - **What the tests do not cover.** A real SSH hop in CI, a real device, and a headed browser. The measurements

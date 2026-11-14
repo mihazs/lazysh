@@ -1,3 +1,5 @@
+import type { InputMessage } from './input';
+
 /**
  * Developer prototype for the host browser (docs/host-browser.md, "Prototype"): a small DevTools Protocol client
  * for one page of a Chrome-family browser. It is reachable only from the Vite dev server (see main.tsx).
@@ -8,11 +10,14 @@
 export const allowedMethods: ReadonlySet<string> = new Set([
   'Target.getTargets', 'Target.attachToTarget',
   'Page.enable', 'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck',
-  'Emulation.setDeviceMetricsOverride',
+  'Emulation.setDeviceMetricsOverride', 'Emulation.setPageScaleFactor',
   'Input.dispatchMouseEvent', 'Input.dispatchKeyEvent', 'Input.insertText',
 ]);
 
-export type FrameMetadata = { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp: number };
+/** What the browser says about a frame. The page's scroll offset and scale come from here, never from what was sent. */
+export type FrameMetadata = {
+  deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp: number; scrollOffsetY?: number; pageScaleFactor?: number;
+};
 export type Frame = { jpeg: Uint8Array<ArrayBuffer>; metadata: FrameMetadata };
 
 /** Only a loopback DevTools browser endpoint: the SSH-forwarded port on this device. */
@@ -39,7 +44,35 @@ const specialKeys: Record<string, number> = {
 };
 /** Keys that are not text. Printable text and composition go through `text()` so an IME works. */
 export function specialKey(key: string) {
-  return key in specialKeys ? { key, code: key, windowsVirtualKeyCode: specialKeys[key] } : undefined;
+  return Object.hasOwn(specialKeys, key) ? { key, code: key, windowsVirtualKeyCode: specialKeys[key] } : undefined;
+}
+
+const buttons = { none: 0, left: 1, right: 2 };
+/** The DevTools commands for one input message (the relay maps the same messages onto the same methods). */
+export function inputCommands(message: InputMessage): { method: string; params: object }[] {
+  switch (message.type) {
+    case 'pointer': {
+      const { kind, x, y, button, clickCount } = message;
+      const type = { move: 'mouseMoved', press: 'mousePressed', release: 'mouseReleased' }[kind];
+      return [{ method: 'Input.dispatchMouseEvent', params: { type, x, y, button, buttons: kind === 'release' ? 0 : buttons[button], clickCount } }];
+    }
+    case 'wheel': {
+      const { x, y, deltaX, deltaY } = message;
+      return [{ method: 'Input.dispatchMouseEvent', params: { type: 'mouseWheel', x, y, deltaX, deltaY } }];
+    }
+    case 'pinch': return [{ method: 'Emulation.setPageScaleFactor', params: { pageScaleFactor: message.scale } }];
+    case 'text': return [{ method: 'Input.insertText', params: { text: message.text } }];
+    case 'key': {
+      const key = specialKey(message.key) ?? { key: message.key, code: /^\d$/.test(message.key) ? `Digit${message.key}` : `Key${message.key.toUpperCase()}`, windowsVirtualKeyCode: message.key.toUpperCase().charCodeAt(0) };
+      const base = { ...key, modifiers: message.modifiers };
+      // Enter types a line break; a chord and the other keys are not text, so they are raw key events.
+      const text = message.key === 'Enter' && !(message.modifiers & 7) ? '\r' : undefined;
+      return [
+        { method: 'Input.dispatchKeyEvent', params: { type: text ? 'keyDown' : 'rawKeyDown', ...base, ...(text ? { text } : {}) } },
+        { method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...base } },
+      ];
+    }
+  }
 }
 
 type Wire = { id?: number; method?: string; params?: any; result?: any; error?: { message: string }; sessionId?: string };
@@ -98,20 +131,9 @@ export class HostBrowserSession {
     await this.send('Page.startScreencast', { format: 'jpeg', quality: 60, everyNthFrame: 1 }, true);
   }
 
-  /** A tap is a click: press and release are sent together, so it costs one round trip. */
-  tap(point: { x: number; y: number }) {
-    const base = { ...point, button: 'left', clickCount: 1 };
-    return Promise.all([
-      this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base }, true),
-      this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base }, true),
-    ]);
-  }
-  text(text: string) { return this.send('Input.insertText', { text }, true); }
-  async key(name: string) {
-    const key = specialKey(name);
-    if (!key) return;
-    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, ...(name === 'Enter' ? { text: '\r' } : {}) }, true);
-    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key }, true);
+  /** One input message, as the browser's input commands, sent in order so a press never overtakes its move. */
+  async input(message: InputMessage) {
+    await Promise.all(inputCommands(message).map(({ method, params }) => this.send(method, params, true)));
   }
 
   async close() {
