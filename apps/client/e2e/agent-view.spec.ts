@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {expect,test,type Locator,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {workspaceControl} from './fixtures/workspaceControl';
@@ -432,6 +433,32 @@ test('answers a Codex approval prompt open on the terminal with the keys a perso
   await decline.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+});
+
+/** Codex (the base fixture's agent) asks a request_user_input question, as Codex 0.167.0 draws it (a capture). */
+test('answers a question Codex asks with the keys a person presses and offers no Cancel, since Esc interrupts its turn',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const rows=readFileSync(new URL('../src/test/agentDialogs/codex-question.txt',import.meta.url),'utf8').split('\n');
+  await page.evaluate(rows=>{
+    const draw=(lines:string[])=>window.agentView.channels['display-work'].onmessage({type:'data',data:[...new TextEncoder().encode(`\x1b[2J\x1b[H${lines.join('\r\n')}`)]});
+    const at=(index:number)=>rows.map(row=>row.replace(/^( {2}[› ]|    ) ?(\d)\. /,(_,_lead,digit)=>`  ${Number(digit)-1===index?'›':' '} ${digit}. `));
+    let current=0;
+    window.agentView.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)draw(['• You selected the answer.','','› ']);else{current+=input.rows as number;draw(at(current));}};
+    draw(at(0));
+  },rows);
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('heading',{name:'Which color?'})).toBeVisible({timeout:8000});
+  await expect(dialog.getByRole('button',{name:/^Red/})).toHaveAttribute('aria-current','true');
+  expect(await dialog.getByRole('button').allTextContents()).not.toContain('Cancel the dialog');
+  const green=dialog.getByRole('button',{name:/^Green/});
+  await expect(green).toBeEnabled();
+  expect((await green.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  await green.click();
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
 });
 
 test('picks an option of the open dialog with its digit on a desktop keyboard',async({page},testInfo)=>{

@@ -226,3 +226,40 @@ it('shows what a Codex option that keeps a permission rule keeps, and sends noth
   fireEvent.click(screen.getByRole('button', {name: t('agentPickerRememberApply')}));
   await waitFor(() => expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]));
 });
+
+/** Codex's question dialog as the TUI redraws it with the highlight on option `to` (1 to 3): the real captured screen with the marker moved. */
+const codexQuestion = (name: string, to: number) => onTmux(fixture(name)).map(row => row.replace(/^( {2}[› ]|    ) ?(\d)\. /, (_: string, _lead: string, digit: string) => `  ${digit === String(to) ? '›' : ' '} ${digit}. `));
+
+it('answers the questions Codex asks one after the other, with the arrows and Enter a person presses, and offers no Cancel that would interrupt the turn', async () => {
+  bind(false);
+  const control = vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    if (body.kind === 'pick' && !body.enter) {ahead += body.rows; screenOf.set(codexQuestion('codex-question-multi', 1 + ahead));}
+    // Enter takes the highlighted option, and Codex goes on to the next question and then closes the dialog.
+    else screenOf.set(answers.filter(item => item.kind === 'pick' && item.enter).length === 1 ? codexQuestion('codex-question-last', 1) : onTmux([]));
+    return true;
+  });
+  bindTo(control);
+  mount(codexQuestion('codex-question-multi', 1), {agent: 'Codex', waiting: 'question'});
+  const first = await screen.findByRole('region', {name: t('agentPickerTitle')});
+  expect(within(first).getByRole('heading', {name: 'Which color?'})).toBeTruthy();
+  expect(first.textContent).toContain('Question 1/2 (2 unanswered)');
+  expect(within(first).queryByRole('button', {name: t('agentPickerCancel')})).toBeNull();
+  await waitFor(() => expect(option('Green').disabled).toBe(false));
+  fireEvent.click(option('Green'));
+  // The next question is its own dialog: the card shows it and waits for its own tap.
+  await waitFor(() => expect(screen.getByRole('heading', {name: 'Which size?'})).toBeTruthy());
+  expect(answers).toEqual([{kind: 'pick', rows: 1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  ahead = 0;
+  await waitFor(() => expect(option('Small').disabled).toBe(false));
+  fireEvent.click(option('Small'));
+  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+  expect(answers.slice(2)).toEqual([{kind: 'pick', rows: 0, enter: true}]);
+});
+
+it('says the notes box of a Codex question waits in the terminal and sends nothing', async () => {
+  mount(onTmux(fixture('codex-question-notes')), {agent: 'Codex'});
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+  expect(screen.queryAllByRole('button').map(button => button.textContent)).not.toContain('Green');
+  expect(answers).toEqual([]);
+});
