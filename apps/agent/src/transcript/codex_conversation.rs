@@ -14,13 +14,15 @@ use std::{
 const MAX_TEXT: usize = 262_144;
 /// What one message may serialize to: a page holds at most `MAX_PAGE`, and a message that alone exceeds it ends paging.
 const MAX_MESSAGE: usize = MAX_PAGE - MAX_PAGE / 16;
-/// Cuts the text of a message's blocks to `cap` bytes each, at a character boundary, with a note of how much was left out.
+/// Room kept under the cap for the note that says how much was left out, so that the cut text still fits `MAX_TEXT` for the client.
+const NOTE_ROOM: usize = 64;
+/// Cuts the text of a message's blocks to `cap` bytes each (the note included), at a character boundary, with a note of how much was left out.
 fn cut(message: &mut Value, cap: usize) {
     for block in message["blocks"].as_array_mut().into_iter().flatten() {
         let Some(full) = block["text"].as_str().filter(|text| text.len() > cap) else {
             continue;
         };
-        let mut end = cap;
+        let mut end = cap.saturating_sub(NOTE_ROOM);
         while !full.is_char_boundary(end) {
             end -= 1;
         }
