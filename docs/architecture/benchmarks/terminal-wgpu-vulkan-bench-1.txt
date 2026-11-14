@@ -1,0 +1,35 @@
+# run 1 of 6, backend vulkan, environment: (none)
+host load average at start: 11.26 11.07 5.96 7/1915 126822
+adapter: AdapterInfo { name: "AMD Radeon RX 5500 XT (RADV NAVI14)", backend: "Vulkan", device_type: "DiscreteGpu", driver: "radv Mesa 26.2.6-arch3.1" }
+first renderer created in 234 ms; resident set +62568 KiB for the first, +12896 KiB for four more (80x24)
+
+16 MiB per workload, 5 runs, MiB/s median (min to max) of the whole pipeline; frame ms is draw + present per frame (p50 / p99) over all runs
+
+| grid | workload | frame cadence | reference MiB/s | reference frame ms | wgpu MiB/s | wgpu frame ms | frames | rows drawn | reference MiB copied | wgpu MiB uploaded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | per chunk | 14.6 (14.4 to 14.8) | 0.808 / 1.246 | 24.1 (23.0 to 25.9) | 0.318 / 0.582 | 1024 | 24576 | 720.0 | 109.96 |
+| 80x24 | plain text | per window | 173.1 (165.6 to 176.0) | 0.812 / 1.283 | 241.5 (230.1 to 247.0) | 0.314 / 2.131 | 64 | 1536 | 45.0 | 6.88 |
+| 80x24 | ANSI + truecolor | per chunk | 18.5 (17.9 to 18.7) | 0.447 / 0.740 | 21.5 (20.8 to 22.8) | 0.257 / 0.467 | 1024 | 24576 | 720.0 | 74.43 |
+| 80x24 | ANSI + truecolor | per window | 60.0 (59.8 to 60.7) | 0.470 / 0.734 | 60.2 (54.2 to 62.1) | 0.314 / 1.820 | 64 | 1536 | 45.0 | 4.65 |
+| 80x24 | full-screen redraw | per chunk | 21.3 (21.2 to 21.4) | 0.459 / 0.608 | 25.8 (23.8 to 26.4) | 0.260 / 0.529 | 1024 | 24576 | 720.0 | 76.97 |
+| 80x24 | full-screen redraw | per window | 185.2 (166.3 to 187.3) | 0.465 / 0.826 | 170.1 (142.7 to 173.6) | 0.310 / 1.955 | 64 | 1536 | 45.0 | 4.81 |
+| 80x24 | CJK/emoji/combining | per chunk | 15.4 (15.2 to 15.8) | 0.582 / 0.960 | 19.2 (18.1 to 21.1) | 0.276 / 0.517 | 1024 | 24576 | 720.0 | 67.27 |
+| 80x24 | CJK/emoji/combining | per window | 56.7 (55.8 to 57.5) | 0.612 / 0.839 | 56.5 (50.6 to 59.4) | 0.340 / 2.023 | 64 | 1536 | 45.0 | 4.21 |
+| 152x38 | plain text | per chunk | 6.8 (6.7 to 6.9) | 1.724 / 2.353 | 14.3 (13.7 to 14.8) | 0.496 / 0.949 | 1024 | 38912 | 2166.0 | 260.21 |
+| 152x38 | plain text | per window | 92.2 (91.7 to 93.3) | 1.726 / 2.418 | 163.3 (147.8 to 170.8) | 0.520 / 2.271 | 64 | 2432 | 135.4 | 16.27 |
+| 152x38 | ANSI + truecolor | per chunk | 8.2 (8.1 to 8.2) | 1.140 / 1.730 | 13.2 (13.0 to 13.3) | 0.400 / 0.680 | 1024 | 38912 | 2166.0 | 203.47 |
+| 152x38 | ANSI + truecolor | per window | 37.2 (36.7 to 37.6) | 1.174 / 1.746 | 40.1 (39.0 to 41.3) | 0.450 / 1.971 | 64 | 2432 | 135.4 | 12.72 |
+| 152x38 | full-screen redraw | per chunk | 14.1 (13.8 to 14.2) | 0.726 / 1.116 | 22.2 (22.2 to 22.9) | 0.300 / 0.495 | 1024 | 24590 | 1368.8 | 131.04 |
+| 152x38 | full-screen redraw | per window | 143.8 (139.7 to 145.4) | 0.727 / 1.426 | 177.4 (159.3 to 183.3) | 0.328 / 2.083 | 64 | 1550 | 86.3 | 8.25 |
+| 152x38 | CJK/emoji/combining | per chunk | 6.9 (6.4 to 7.0) | 1.355 / 2.450 | 11.9 (11.2 to 12.3) | 0.431 / 0.758 | 1024 | 38912 | 2166.0 | 192.15 |
+| 152x38 | CJK/emoji/combining | per window | 31.3 (30.6 to 32.5) | 1.386 / 2.018 | 35.5 (34.3 to 36.5) | 0.467 / 1.962 | 64 | 2432 | 135.4 | 12.01 |
+
+Full repaint of 64 screens per workload, taken after every 256 KiB of the first 16 MiB (80x24, 8x16 px cells, 20 passes after a warm-up pass): draw + present ms per frame, p50 / p99
+
+| workload | reference | wgpu |
+|---|---|---|
+| plain text | 1.195 / 2.264 | 0.370 / 1.212 |
+| ANSI + truecolor | 0.444 / 0.741 | 0.280 / 1.636 |
+| full-screen redraw | 0.651 / 3.738 | 0.272 / 2.115 |
+| CJK/emoji/combining | 0.574 / 0.939 | 0.252 / 0.476 |
+# exit status 0
