@@ -894,6 +894,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   proof is missing; cancelled enrollment restores off only after confirmed cleanup.
 
 - Four opt-in touch actions for next/previous Zellij tabs and panes. They use
+- Add a developer-only native terminal surface host to the Android app (#1327, part of the terminal engine epic #1302): a `SurfaceView` stacked below the page that a native terminal engine will draw on, placed from a DOM element through three app commands and kept across the window stopping and starting and across Activity recreation (the surface is told when it is ready, resized or lost, in order, and a recreated surface is drawn again from state the process holds). Release builds refuse every command and nothing in the app calls it yet, so xterm.js stays the only engine and the default, terminal behaviour does not change and no defaults change. See `docs/architecture/android-native-surface-host.md`.
   the existing named-session command interface for terminals attached through
   lazysh; plain, local and other multiplexer terminals are rejected. Existing
   gesture defaults remain unchanged. No session switching or timed key input.
