@@ -37,4 +37,69 @@ describe('with a real xterm buffer',()=>{
     expect(opened.at(-1)).toBe('https://hyperlink.example/osc8');
     terminal.dispose();
   });
+  describe('a tap with a finger',()=>{
+    const CELL={width:8,height:16};
+    async function openedTerminal(output:string,beforeOpen?:(terminal:import('@xterm/xterm').Terminal)=>void) {
+      const terminal=await terminalWith(40,output);
+      beforeOpen?.(terminal);
+      // xterm reads the pixel ratio and its changes through matchMedia, which jsdom lacks.
+      window.matchMedia??=((query:string)=>({matches:false,media:query,onchange:null,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){},dispatchEvent:()=>false})) as typeof window.matchMedia;
+      const host=document.createElement('div');
+      document.body.append(host);
+      terminal.open(host);
+      // jsdom has no layout: give the screen one box so a point maps to a cell.
+      const screen=terminal.element!.querySelector('.xterm-screen')!;
+      screen.getBoundingClientRect=()=>({left:0,top:0,right:terminal.cols*CELL.width,bottom:terminal.rows*CELL.height,width:terminal.cols*CELL.width,height:terminal.rows*CELL.height,x:0,y:0,toJSON(){}});
+      return terminal;
+    }
+    const press=(terminal:import('@xterm/xterm').Terminal,pointerType:string,column:number,row:number)=>{
+      const down=new MouseEvent('pointerdown',{bubbles:true});
+      Object.defineProperty(down,'pointerType',{value:pointerType});
+      terminal.element!.dispatchEvent(down);
+      terminal.element!.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:column*CELL.width+3,clientY:row*CELL.height+3}));
+    };
+    const settled=()=>new Promise(resolve=>setTimeout(resolve,0));
+    // Row 0 is "see ~/notes/todo.txt now": the path covers columns 4 to 20.
+    const output='see ~/notes/todo.txt now\r\n';
+
+    it('opens the path under it once the host confirms the file, before any hover',async()=>{
+      const {installTerminalLinks}=await import('./links');
+      const terminal=await openedTerminal(output);
+      const opened:string[]=[];
+      installTerminalLinks(terminal,()=>{},{exists:async()=>true,open:link=>opened.push(link.path)});
+      press(terminal,'touch',10,0);
+      await settled();
+      expect(opened).toEqual(['~/notes/todo.txt']);
+      terminal.dispose();
+    });
+    it('opens the path when the links were installed before the terminal was opened, as the pane does',async()=>{
+      const {installTerminalLinks}=await import('./links');
+      const opened:string[]=[];
+      const terminal=await openedTerminal(output,unopened=>{installTerminalLinks(unopened,()=>{},{exists:async()=>true,open:link=>opened.push(link.path)});});
+      press(terminal,'touch',10,0);
+      await settled();
+      expect(opened).toEqual(['~/notes/todo.txt']);
+      terminal.dispose();
+    });
+    it('opens nothing for a tap beside the path, a path the host does not have, a mouse click or after the links are disposed',async()=>{
+      const {installTerminalLinks}=await import('./links');
+      const terminal=await openedTerminal(output);
+      const opened:string[]=[];
+      let exists=true;
+      const links=installTerminalLinks(terminal,()=>{},{exists:async()=>exists,open:link=>opened.push(link.path)});
+      press(terminal,'touch',1,0);
+      press(terminal,'touch',30,0);
+      press(terminal,'mouse',10,0);
+      exists=false;
+      press(terminal,'touch',10,0);
+      await settled();
+      expect(opened).toEqual([]);
+      exists=true;
+      links.dispose();
+      press(terminal,'touch',10,0);
+      await settled();
+      expect(opened).toEqual([]);
+      terminal.dispose();
+    });
+  });
 });
