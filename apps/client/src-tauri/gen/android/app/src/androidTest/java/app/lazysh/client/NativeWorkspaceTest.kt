@@ -158,12 +158,18 @@ private class NtfyFirstLaunch(started: Long) {
     val deadline = started + TimeUnit.SECONDS.toNanos(6)
     var attempted = false
         private set
+    private var lastAllow = 0L
     fun active(now: Long) = now < deadline
+    // A tap on a freshly shown permission dialog can be dropped, so re-tap while the owned prompt
+    // stays visible, paced so a dialog that is already dismissing is not tapped again.
     fun allow(now: Long, ownedPrompt: Boolean): Boolean {
-        if (!active(now) || !ownedPrompt || attempted) return false
+        if (!active(now) || !ownedPrompt) return false
+        if (attempted && now - lastAllow < retryNanos) return false
         attempted = true
+        lastAllow = now
         return true
     }
+    private val retryNanos = TimeUnit.MILLISECONDS.toNanos(500)
     private var stage="none"
     private var before="unavailable"
     private var after="unavailable"
@@ -4735,7 +4741,11 @@ class NativeWorkspaceTest {
         val policy=NtfyFirstLaunch(0)
         assertTrue("Unowned permission cannot be admitted",!policy.allow(TimeUnit.SECONDS.toNanos(1),false))
         assertTrue("Delayed owned prompt fits original combined budget",policy.allow(TimeUnit.SECONDS.toNanos(5),true))
-        assertTrue("Permission action is consumed before dispatch",!policy.allow(TimeUnit.SECONDS.toNanos(5),true))
+        assertTrue("A tap that left the owned prompt visible is not repeated before the retry interval",!policy.allow(TimeUnit.SECONDS.toNanos(5)+TimeUnit.MILLISECONDS.toNanos(499),true))
+        assertTrue("An unowned prompt is never tapped again",!policy.allow(TimeUnit.SECONDS.toNanos(5)+TimeUnit.MILLISECONDS.toNanos(500),false))
+        assertTrue("The same owned prompt still visible after the retry interval is tapped again",policy.allow(TimeUnit.SECONDS.toNanos(5)+TimeUnit.MILLISECONDS.toNanos(500),true))
+        assertTrue("Retries are paced from the latest tap",!policy.allow(TimeUnit.SECONDS.toNanos(5)+TimeUnit.MILLISECONDS.toNanos(900),true))
+        assertTrue("Retries stop at the original deadline",!policy.allow(TimeUnit.SECONDS.toNanos(6),true))
         assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
         assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
         val trace=NtfyFirstLaunch(0)
@@ -4745,7 +4755,7 @@ class NativeWorkspaceTest {
         assertTrue("Observation does not consume admission",trace.allow(TimeUnit.SECONDS.toNanos(5),true))
         trace.start("click",TimeUnit.SECONDS.toNanos(5));trace.finish(TimeUnit.SECONDS.toNanos(6))
         assertEquals("Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted clickBefore=positive clickAfter=expired firstExpiry=click]",trace.observation("granted"))
-        assertTrue("A returned action does not extend the original deadline or allowance",!trace.active(TimeUnit.SECONDS.toNanos(6)) && !trace.allow(TimeUnit.SECONDS.toNanos(5),true))
+        assertTrue("A returned action does not extend the original deadline or allowance",!trace.active(TimeUnit.SECONDS.toNanos(6)) && !trace.allow(TimeUnit.SECONDS.toNanos(6),true))
         trace.start("menu",TimeUnit.SECONDS.toNanos(6));trace.finish(TimeUnit.SECONDS.toNanos(7));trace.sampled()
         assertEquals("Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied clickBefore=positive clickAfter=expired firstExpiry=click]",trace.observation("denied"))
         val postClick=NtfyFirstLaunch(0)
@@ -5055,9 +5065,11 @@ class NativeWorkspaceTest {
                 firstLaunch.finish(System.nanoTime())
                 firstLaunch.sampled()
                 if(foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime())) break
+                val retry=firstLaunch.attempted
                 if(firstLaunch.allow(System.nanoTime(),ownedPrompt && allow)) {
                     firstLaunch.start("click",System.nanoTime())
-                    checkNotNull(choice).click()
+                    // A re-tap can race the dialog finally dismissing; only the first tap must resolve.
+                    try {checkNotNull(choice).click()} catch(stale:androidx.test.uiautomator.StaleObjectException) {if(!retry)throw stale}
                     firstLaunch.finish(System.nanoTime())
                 }
                 val remaining=firstLaunch.deadline-System.nanoTime()
