@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.62.0
+
+### Minor Changes
+
+- 163c258: Stop a running background task from the Agent view by asking the agent to end it with its TaskStop tool.
+
+### Patch Changes
+
+- e0d72ec: Route the terminal pane's selection, search, paste, links, Herdr navigation, IME and Mosh resize handling through a terminal-engine adapter. xterm.js stays the only engine and the default; behaviour does not change. This is the groundwork for trying a second terminal engine behind an explicit opt-in.
+- @lazysh/account-usage@1.62.0
+  - @lazysh/common@1.62.0
+  - @lazysh/display-idle@1.62.0
+  - @lazysh/et-transport@1.62.0
+  - @lazysh/mosh-transport@1.62.0
+
 ## 1.61.0
 
 ### Minor Changes

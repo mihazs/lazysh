@@ -1,5 +1,11 @@
 # @lazysh/push-registration
 
+## 1.62.0
+
+### Patch Changes
+
+- c263e19: Align the Firebase-free push guidance across the setup, acceptance, testing, architecture and delivery pages with the shipped Android UnifiedPush support.
+
 ## 1.61.0
 
 No changes in this release.
