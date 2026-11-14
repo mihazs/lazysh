@@ -4035,6 +4035,50 @@ class NativeWorkspaceTest {
             sendShell("sh $script && printf '${marker}_%s_END\\n' \"${'$'}LI\"")
             awaitDocument(scenario, "owned companion $script hooks ran", screenContains("${marker}_${nonce}_END"))
         }
+        // A real Android Back press (not the DOM event the browser tests dispatch) leaves the phone's
+        // focused report detail for the same mounted list: its search value, the focused row and the Agents
+        // view come back, and Back does not fall through to the workspace Back that would close the drawer.
+        fun verifyReportedDetailBack() {
+            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden])"
+            val search = "$panel .agent-search input"
+            val rowSelector = ".agent-report-row[aria-label*='for /work/delta']"
+            val snapshot = """(()=>{const panel=document.querySelector(${JSONObject.quote(panel)}),row=panel?.querySelector(${JSONObject.quote(rowSelector)}),
+                detail=panel?.querySelector('.agent-selected-report');
+              return {phone:matchMedia('(max-width: 600px)').matches,documentFocus:document.hasFocus(),panel:!!panel&&panel.getClientRects().length>0,
+                query:panel?.querySelector('.agent-search input')?.value??null,cards:panel?.querySelectorAll('.agent-board .agent-card').length??0,
+                row:!!row,rowFocus:!!row&&document.activeElement===row,detail:!!detail,detailFocus:!!detail&&document.activeElement===detail,
+                detailView:panel?.hasAttribute('data-activity-detail')??false};})()"""
+            val observe = { remaining: Long -> evaluate(scenario, "JSON.stringify($snapshot)", remaining) }
+            fun await(stage: String, condition: String) = awaitDocument(scenario, stage, "(s=>$condition)($snapshot)", observe = observe)
+            await("phone-width reported activity list ready", "s.phone && s.panel && s.cards===3 && !s.detail")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, search)).perform(webScrollIntoView())
+            // "eta" keeps beta and delta and drops alpha, so a list that reset on Back would differ from the filtered one.
+            typeInto(scenario, search, "eta")
+            closeSoftKeyboard()
+            await("search narrows the reported activity list", "s.query==='eta' && s.cards===2 && s.row")
+            // A real finger tap on the row, as a user opens the detail; it also leaves the WebView focused.
+            val row = "$panel $rowSelector"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, row)).perform(webScrollIntoView())
+            awaitDocument(scenario, "touchable reported activity row", workspaceElementVisible(row, true))
+            val center = JSONArray(evaluate(scenario, "(()=>{const r=document.querySelector(${JSONObject.quote(row)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2); view.getLocationOnScreen(origin)
+                val scale = view.width / center.getDouble(2)
+                floatArrayOf((origin[0] + center.getDouble(0) * scale).toFloat(), (origin[1] + center.getDouble(1) * scale).toFloat())
+            }, Press.FINGER))
+            // document.hasFocus() gates the detail's Back handler: without it a real Back would reach the workspace Back.
+            await("focused phone detail replaces the list with document focus", "s.detail && s.detailView && s.detailFocus && s.documentFocus")
+            var imeShown: Boolean? = null
+            scenario.onActivity { imeShown = ViewCompat.getRootWindowInsets(it.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) }
+            assertTrue("The soft keyboard must be closed so Back reaches the detail, not the keyboard", imeShown != true)
+            assertTrue("Android Back must be delivered", UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack())
+            await("Android Back returns the detail to the list with its search, focused row and Agents view",
+                "!s.detail && !s.detailView && s.panel && s.query==='eta' && s.cards===2 && s.rowFocus && s.documentFocus")
+            // Later steps expect the unfiltered board.
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='Clear filters']")).perform(webScrollIntoView()).perform(webClick())
+            await("filters cleared for the next board step", "s.query==='' && s.cards===3")
+            println("lazysh companion board: real Android Back left the phone report detail for the same list with its search value and focused row, still on Agents")
+        }
         fun verifyCompanionHookBoard() {
             val board = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) .agent-board"
             val rows = """(state=>Array.from(document.querySelectorAll(${JSONObject.quote(board)}+" .agent-column[data-state='"+state+"'] .agent-card"))
@@ -4051,6 +4095,7 @@ class NativeWorkspaceTest {
                 " && document.querySelectorAll(${JSONObject.quote("$board .agent-card")}).length===3", observe = observe)
             assertEquals("Hook prompt and tool input must stay on the host", "false", evaluate(scenario,
                 "document.body.textContent.includes('PRIVATE-PROMPT') || document.body.textContent.includes('SECRET-TOKEN')"))
+            verifyReportedDetailBack()
             returnToTerminal()
             hostHooks("approvals")
             openReportedActivity()
