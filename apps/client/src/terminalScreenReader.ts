@@ -64,10 +64,12 @@ const truncate = (text: string, limit: number) => text.length > limit ? `${text.
 export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElement, tuning: Partial<ScreenReaderTuning> = {}): Disposable {
   const limits = {...defaultScreenReaderTuning, ...tuning};
   const doc = host.ownerDocument;
-  const list = doc.createElement('div'), log = doc.createElement('div');
+  const region = doc.createElement('div'), list = doc.createElement('div'), log = doc.createElement('div');
+  // Visually hidden but in the accessibility tree: `display: none`, `hidden` and `aria-hidden` would hide it from a screen reader too.
+  Object.assign(region.style, {position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap', pointerEvents: 'none'});
   list.setAttribute('role', 'list'); list.setAttribute('aria-label', t('terminalA11yScreen'));
   log.setAttribute('role', 'log');
-  host.append(list, log);
+  region.append(list, log); host.append(region);
 
   let before: string[] = [], cursorRow = -1, selection: string | undefined;
   let pending: string[] = [], lastAnnounced = Number.NEGATIVE_INFINITY;
@@ -134,7 +136,7 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
       disposed = true;
       subscription.dispose();
       clearTimeout(settleTimer); clearTimeout(announceTimer);
-      list.remove(); log.remove();
+      region.remove();
     },
   };
 }
