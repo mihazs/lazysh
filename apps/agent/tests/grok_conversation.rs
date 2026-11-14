@@ -102,6 +102,24 @@ fn a_plan_update_becomes_the_shared_plan_card_and_a_replacement_is_a_new_card() 
 }
 
 #[test]
+fn a_plan_with_a_status_the_card_does_not_know_fails_the_conversation_and_keeps_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("updates.jsonl");
+    jsonl::write(
+        &path,
+        &[
+            prompt(0, "Fix it"),
+            event(
+                "plan",
+                json!({"entries":[{"content":"Write the fix","status":"blocked","priority":"high"}]}),
+            ),
+        ],
+    );
+    assert!(conversation(&path, TranscriptAgent::GrokAcp, 100).is_err());
+    assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_ok());
+}
+
+#[test]
 fn rewind_removes_abandoned_tool_updates_and_compaction_never_fetches_paths() {
     let result = run(&[
         prompt(0, "first"),
