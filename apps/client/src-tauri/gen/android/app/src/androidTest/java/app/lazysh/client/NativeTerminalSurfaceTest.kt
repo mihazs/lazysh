@@ -15,7 +15,11 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.graphics.Insets
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+import androidx.customview.widget.ExploreByTouchHelper
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -285,6 +289,53 @@ class NativeTerminalSurfaceTest {
         assertEquals("a rotation is a resize, not a new surface", 1, state().getInt("generation"))
         assertFalse("no loss on the way", recorder.events.any { it.startsWith("lost") })
         awaitBackground()
+    }
+
+    /** Every node of the active window whose text is one of `wanted`, with its bounds on the screen and whether a user can see it. */
+    private fun accessibleRows(wanted: Set<String>): Map<String, Pair<Rect, Boolean>> {
+        val found = HashMap<String, Pair<Rect, Boolean>>()
+        fun walk(node: AccessibilityNodeInfo?) {
+            node ?: return
+            val text = node.text?.toString()
+            if (text in wanted) found[text!!] = Rect().also(node::getBoundsInScreen) to node.isVisibleToUser
+            for (i in 0 until node.childCount) walk(node.getChild(i))
+        }
+        walk(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+        return found
+    }
+
+    /**
+     * Feasibility for #1329, not a feature: the host view can carry a terminal's rows as virtual accessibility nodes even though the
+     * transparent WebView is stacked above it. What a screen reader does with them (touch exploration reaches the topmost view, which is
+     * the page) needs TalkBack and a device, and is not claimed here.
+     */
+    @Test fun theSurfaceViewCanCarryTheRowsOfATerminalAsVirtualAccessibilityNodes() {
+        place(PageDriver.anchor("left:10%;top:25%;width:50%;height:30%"))
+        awaitReady(1)
+        val view = checkNotNull(surfaceView())
+        val rows = listOf("first row of the terminal", "second row of the terminal", "third row of the terminal")
+        ui {
+            view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            ViewCompat.setAccessibilityDelegate(view, object : ExploreByTouchHelper(view) {
+                private fun band() = view.height / rows.size
+                override fun getVirtualViewAt(x: Float, y: Float) = (y.toInt() / band()).coerceIn(0, rows.lastIndex)
+                override fun getVisibleVirtualViews(ids: MutableList<Int>) { ids.addAll(rows.indices) }
+                override fun onPopulateNodeForVirtualView(id: Int, node: AccessibilityNodeInfoCompat) {
+                    node.text = rows[id]
+                    node.setBoundsInParent(Rect(0, id * band(), view.width, (id + 1) * band()))
+                }
+                override fun onPerformActionForVirtualView(id: Int, action: Int, arguments: android.os.Bundle?) = false
+            })
+            view.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+        }
+        val seen = PageDriver.poll("the rows in the accessibility tree") { accessibleRows(rows.toSet()).takeIf { it.size == rows.size } }
+        val surface = screenRect(view)
+        for ((index, text) in rows.withIndex()) {
+            val (bounds, visible) = seen.getValue(text)
+            assertTrue("$text sits inside the surface: $bounds in $surface", surface.contains(bounds) || PageDriver.near(Rect(bounds).also { it.intersect(surface) }, bounds))
+            assertTrue("$text is visible to a user", visible)
+            if (index > 0) assertTrue("rows run top to bottom", bounds.top >= seen.getValue(rows[index - 1]).first.bottom - 1)
+        }
     }
 
     @Test fun removingTheSessionEndsItsSurfaceAndItsCount() {
