@@ -211,6 +211,65 @@ mod tests {
         assert!(!json.contains("owned-fixture"));
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
+    // Hosted runners can stall a re-exec'd probe far past a quiet workstation, so the deadline is
+    // generous but still bounded; the stage file names where a stalled probe stopped.
+    const OWNED_PROBE_DEADLINE: Duration = Duration::from_secs(60);
+    fn record_owned_probe_stage(stage: impl std::fmt::Display) {
+        if let Some(path) = std::env::var_os("LAZYSH_OWNED_CLINE_STAGE") {
+            std::fs::write(path, stage.to_string()).unwrap();
+        }
+    }
+    async fn wait_for_owned_probe(
+        child: &mut tokio::process::Child,
+        deadline: Duration,
+        stage: &Path,
+    ) -> Result<std::process::ExitStatus, String> {
+        if let Ok(status) = tokio::time::timeout(deadline, child.wait()).await {
+            return Ok(status.unwrap());
+        }
+        child.kill().await.unwrap();
+        Err(format!(
+            "owned Cline probe exceeded its {deadline:?} deadline; last stage: {}",
+            std::fs::read_to_string(stage)
+                .unwrap_or_else(|_| "none (probe body never started)".into())
+        ))
+    }
+    #[test]
+    #[ignore = "private owned subprocess selected only by its fixture"]
+    fn owned_hung_probe() {
+        assert!(std::env::var_os("LAZYSH_OWNED_CLINE_STAGE").is_some());
+        record_owned_probe_stage("hung-stage");
+        std::thread::sleep(Duration::from_secs(600));
+    }
+    #[tokio::test]
+    async fn hung_owned_probe_is_killed_and_reported_with_its_stage() {
+        let directory = tempfile::tempdir().unwrap();
+        let stage = directory.path().join("probe.stage");
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "collector::tests::owned_hung_probe", "--ignored"])
+            .env("LAZYSH_OWNED_CLINE_STAGE", &stage)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        while !stage.exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let error = tokio::time::timeout(
+            Duration::from_secs(30),
+            wait_for_owned_probe(&mut child, Duration::from_millis(100), &stage),
+        )
+        .await
+        .expect("a hung probe must be killed, not awaited")
+        .unwrap_err();
+        assert!(error.ends_with("last stage: hung-stage"), "{error}");
+        assert!(
+            child.try_wait().unwrap().is_some(),
+            "the killed probe must be reaped"
+        );
+    }
     #[test]
     #[ignore = "private owned subprocess selected only by its fixture"]
     fn owned_cline_store_probe() {
@@ -218,6 +277,7 @@ mod tests {
             std::env::var("LAZYSH_OWNED_CLINE_PROBE").as_deref(),
             Ok("1")
         );
+        record_owned_probe_stage("configure");
         let mut config = Config::default();
         config.cline.api_key_env.clear();
         if let Some(path) = std::env::var_os("LAZYSH_OWNED_CLINE_AUTH_PATH") {
@@ -226,6 +286,7 @@ mod tests {
         if std::env::var_os("LAZYSH_OWNED_CLINE_INLINE_KEY").is_some() {
             config.cline.api_key = Some("owned-inline-fixture".into());
         }
+        record_owned_probe_stage("availability");
         let available = core::has_local_credentials(core::VendorId::Cline, &config);
         assert_eq!(
             available,
@@ -234,6 +295,7 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         if std::env::var_os("LAZYSH_OWNED_CLINE_CACHE").is_some() {
+            record_owned_probe_stage("cached-collection");
             let mut only =
                 load_config_with(None, None, |vendor, _| vendor == core::VendorId::Cline).unwrap();
             only.cline = config.cline.clone();
@@ -269,6 +331,7 @@ mod tests {
             config.cline.auth_paths = Some(vec![target.clone()]);
             config.cline.api_key = None;
             for (index, step) in steps.iter().enumerate() {
+                record_owned_probe_stage(format_args!("schema-case:{index}"));
                 let text = if let Some(raw) = step["rawStore"].as_str() {
                     raw.to_owned()
                 } else {
@@ -299,6 +362,7 @@ mod tests {
             }
             std::fs::write(path.with_file_name("schema.count"), steps.len().to_string()).unwrap();
         }
+        record_owned_probe_stage("receipt");
         std::fs::write(
             std::env::var_os("LAZYSH_OWNED_CLINE_RECEIPT").expect("owned completion receipt"),
             if available { "present" } else { "missing" },
@@ -842,6 +906,10 @@ mod tests {
                 .env("XDG_CACHE_HOME", directory.path().join("cache"))
                 .env("LAZYSH_OWNED_CLINE_PROBE", "1")
                 .env(
+                    "LAZYSH_OWNED_CLINE_STAGE",
+                    directory.path().join("probe.stage"),
+                )
+                .env(
                     "LAZYSH_OWNED_CLINE_RECEIPT",
                     directory.path().join("probe.result"),
                 )
@@ -875,14 +943,13 @@ mod tests {
                 command.env(name, value);
             }
             let mut child = command.spawn().unwrap();
-            let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
-                Ok(status) => status.unwrap(),
-                Err(_) => {
-                    child.kill().await.unwrap();
-                    let _ = child.wait().await;
-                    panic!("owned Cline probe exceeded its deadline");
-                }
-            };
+            let status = wait_for_owned_probe(
+                &mut child,
+                OWNED_PROBE_DEADLINE,
+                &directory.path().join("probe.stage"),
+            )
+            .await
+            .unwrap_or_else(|stalled| panic!("{case}: {stalled}"));
             assert!(
                 status.success(),
                 "selected Cline store case failed: {case}; receipt={}",
