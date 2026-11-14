@@ -1,5 +1,7 @@
-import {expect,test,type Page,type CDPSession} from '@playwright/test';
-import {fingerDrag,historyLines,mountHistory,rowHeight,settle} from './fixtures/terminalHistory';
+import {expect,test,type Page} from '@playwright/test';
+import {fingerDrag,rowHeight} from './fixtures/terminalHistory';
+import {esc,keyboard,line,open,state,typeWord,type Ime} from './fixtures/swiftkeyKeyboard';
+import {recordedTraces,type RecordedEvent} from './fixtures/swiftkeyTraces';
 
 /**
  * SwiftKey edits the editor through InputConnection calls, derived from its shipped code (REA, 9.13.18.4):
@@ -12,49 +14,6 @@ test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; SwiftKey-shaped IME fixture
 test.skip(({isMobile})=>!isMobile,'The soft keyboard exists on the phone project only.');
 test.afterEach(async({page})=>{await page.evaluate(()=>window.ownedHistory?.dispose());});
 
-type Ime = {compose(text:string,region?:[number,number]):Promise<void>;commit(text:string):Promise<void>;backspace():Promise<void>;done():Promise<void>};
-async function keyboard(page:Page):Promise<Ime> {
-  const cdp:CDPSession=await page.context().newCDPSession(page);
-  // Chromium brackets every composition or commit with a key 229 press; deleteSurroundingText has none.
-  const bracket=async(type:'rawKeyDown'|'keyUp')=>{await cdp.send('Input.dispatchKeyEvent',{type,windowsVirtualKeyCode:229,key:'Unidentified'});};
-  const settle=()=>page.waitForTimeout(8);
-  return {
-    async compose(text,region){
-      await bracket('rawKeyDown');
-      await cdp.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length,...(region?{replacementStart:region[0],replacementEnd:region[1]}:{})});
-      await bracket('keyUp');await settle();
-    },
-    async commit(text){await bracket('rawKeyDown');await cdp.send('Input.insertText',{text});await bracket('keyUp');await settle();},
-    // The emulator's next transaction also follows the previous one by far more than a timer tick.
-    async backspace(){await page.waitForTimeout(30);await bracket('rawKeyDown');await page.evaluate(()=>{document.execCommand('delete');});await bracket('keyUp');await settle();},
-    async done(){await cdp.detach();},
-  };
-}
-/** Types one word the way a predictive keyboard does and ends it with the separator. */
-async function typeWord(ime:Ime,word:string,separator=' ') {
-  for(let end=1;end<=word.length;end++)await ime.compose(word.slice(0,end));
-  await ime.commit(word+separator);
-}
-/** The terminal line the receiver would hold after these bytes: printable text and DEL only. */
-function line(writes:readonly string[]) {
-  let text='';
-  for(const data of writes.filter(data=>!data.startsWith('\x1b[<')))for(const character of data){
-    if(character==='\x7f')text=text.slice(0,-1);else if(character>=' '&&character<='~')text+=character;
-  }
-  return text;
-}
-const state=(page:Page)=>page.evaluate(()=>({
-  writes:window.ownedHistory.writes,
-  editor:window.ownedHistory.terminal.textarea!.value,
-  skipped:document.querySelectorAll('.terminal-edit-review').length,
-}));
-async function open(page:Page,mouse=false) {
-  await mountHistory(page,false);
-  await page.evaluate(lines=>window.ownedHistory.output(lines),historyLines(30));await settle(page);
-  if(mouse){await page.evaluate(()=>window.ownedHistory.raw('\x1b[?1000h\x1b[?1006h'));await settle(page);}
-  await page.evaluate(()=>window.ownedHistory.terminal.focus());
-}
-const esc=(page:Page)=>page.locator('.terminal-keys button',{hasText:/^esc$/}).click();
 
 /** The same fixed transactions as OwnedImeService (predictWord ... eraseOne), so the emulator case has a Chromium twin. */
 test('SwiftKey-shaped transactions put exactly the typed bytes on the wire, and the erase after a toolbar key too',async({page})=>{
@@ -186,3 +145,76 @@ test('erasing Unicode text typed before a toolbar key is still held for review, 
   await expect(page.locator('.terminal-edit-review')).toHaveCount(1);
   expect((await state(page)).writes).toEqual(['né ','\x1b','\x7f']);
 });
+
+/**
+ * Found on an Android 13 WebView with a scripted keyboard (#1505): when deleteSurroundingText erases all of a composing
+ * word, Chromium drops the composition and sends no compositionend. The bridge kept waiting for that event, swallowed every
+ * later insertion, and only a key event (Backspace) flushed what the keyboard believed it had typed.
+ */
+test('a composing word the keyboard erases whole does not swallow the characters and the dot after it',async({page})=>{
+  await open(page);
+  const ime=await keyboard(page);
+  await ime.commit('hi ');
+  await ime.compose('ls');await ime.erase(2);          // the keyboard drops its pending word...
+  await ime.commit('ls');await ime.commit('.');await ime.commit(' ');await ime.commit('x');
+  await expect.poll(async()=>line((await state(page)).writes)).toBe('hi ls. x');
+  await ime.backspace();                                 // ...and Backspace is one DEL of what the terminal holds
+  await ime.done();
+  await expect.poll(async()=>line((await state(page)).writes)).toBe('hi ls. ');
+  const seen=await state(page);
+  expect(seen.editor).toBe('hi ls. ');
+  expect(seen.skipped,JSON.stringify(seen)).toBe(0);
+});
+
+test('a word reopened by a composing region and erased whole is replaced once, then typing continues',async({page})=>{
+  await open(page);
+  const ime=await keyboard(page);
+  for(const letter of 'hello')await ime.commit(letter);
+  await ime.compose('hello',[0,5]);await ime.erase(5);  // setComposingRegion over the word, then deleteSurroundingText(5, 0)
+  await ime.commit('hallo');await ime.commit('.');await ime.commit('z');
+  await ime.done();
+  await expect.poll(async()=>line((await state(page)).writes)).toBe('hallo.z');
+  expect((await state(page)).editor).toBe('hallo.z');
+});
+
+/** Dots in the web profile: a word end, a punctuation that carries its own space, the autospace that removes the space first. */
+test('web profile: a dot after a word, with the autospace rewrite, arrives once and Backspace erases one character',async({page})=>{
+  await open(page);
+  const ime=await keyboard(page);
+  await typeWebWord(ime,'ls',0);                        // "ls "
+  await ime.backspace();await ime.commit('. ');         // SwiftKey removes the space before a dot and commits ". "
+  await typeWebWord(ime,'la',4);                        // "ls. la "
+  await ime.backspace();await ime.commit('.');await ime.commit('txt');
+  await ime.backspace();
+  await ime.done();
+  await expect.poll(async()=>line((await state(page)).writes)).toBe('ls. la.tx');
+  const seen=await state(page);
+  expect(seen.editor).toBe('ls. la.tx');
+  expect(seen.skipped,JSON.stringify(seen)).toBe(0);
+});
+
+/** Replays DOM events recorded on a real Android WebView, with the textarea values they were recorded with. */
+async function replay(page:Page,events:readonly RecordedEvent[]) {
+  await page.evaluate(async (recorded:RecordedEvent[])=>{
+    const area=window.ownedHistory.terminal.textarea!,pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+    for(const [type,inputType,data,isComposing,value,start,end,gap] of recorded){
+      await pause(gap?30:0);
+      if(type==='keydown'||type==='keyup')area.dispatchEvent(new KeyboardEvent(type,{key:'Unidentified',keyCode:229,isComposing,bubbles:true,composed:true,cancelable:true}));
+      else if(type.startsWith('composition'))area.dispatchEvent(new CompositionEvent(type,{data:data??'',bubbles:true,composed:true}));
+      else {
+        if(type==='input'){area.value=value!;area.setSelectionRange(start!,end!);}
+        area.dispatchEvent(new InputEvent(type,{inputType,data,isComposing,bubbles:true,composed:true,cancelable:type==='beforeinput'}));
+      }
+    }
+    await pause(30);
+  },[...events]);
+}
+for(const [name,trace] of Object.entries(recordedTraces))
+  test(`recorded Android WebView trace ${name} (${trace.calls}) puts exactly the typed line on the wire`,async({page})=>{
+    await open(page);
+    await replay(page,trace.events);
+    await expect.poll(async()=>line((await state(page)).writes)).toBe(trace.line);
+    const seen=await state(page);
+    expect(seen.editor).toBe(trace.line);
+    expect(seen.skipped,JSON.stringify(seen)).toBe(0);
+  });

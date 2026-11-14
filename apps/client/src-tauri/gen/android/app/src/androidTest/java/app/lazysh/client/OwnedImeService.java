@@ -130,7 +130,8 @@ public final class OwnedImeService extends InputMethodService {
         // commitText to end a word, deleteSurroundingText to replace or erase). Fixed ASCII, continuing the
         // text the transactions above left in the editor.
         if ("predictWord".equals(method) || "swipeWord".equals(method) || "composingBackspace".equals(method)
-                || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)) {
+                || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)
+                || "dropWord".equals(method)) {
             InputConnection connection = capturedConnection(active);
             boolean accepted = connection.beginBatchEdit();
             try {
@@ -157,6 +158,12 @@ public final class OwnedImeService extends InputMethodService {
                     accepted &= connection.setComposingText("web", 1);
                     accepted &= connection.finishComposingText();
                     accepted &= connection.commitText(" ", 1);
+                } else if ("dropWord".equals(method)) {
+                    // The keyboard erases a word it holds as composing text, whole, and types on (#1505): Chromium drops
+                    // that composition and sends no compositionend, which used to swallow the commit after it.
+                    accepted &= connection.setComposingText("ls", 1);
+                    accepted &= connection.deleteSurroundingText(2, 0);
+                    accepted &= connection.commitText("ls. ", 1);
                 } else {
                     accepted &= connection.deleteSurroundingText(1, 0);
                 }
@@ -167,7 +174,8 @@ public final class OwnedImeService extends InputMethodService {
                     : "swipeWord".equals(method) ? "thetheowned swipe "
                     : "composingBackspace".equals(method) ? "thetheowned swipe ten "
                     : "replacePrevious".equals(method) ? "thetheowned swipe tan "
-                    : "eraseOne".equals(method) ? "thetheowned swipe tan" : "thetheowned swipe tanweb ";
+                    : "eraseOne".equals(method) ? "thetheowned swipe tan"
+                    : "dropWord".equals(method) ? "thetheowned swipe tanweb ls. " : "thetheowned swipe tanweb ";
             result.putBoolean("readMatched", read != null && expected.contentEquals(read));
         }
         if ("lineBreak".equals(method)) {
@@ -200,7 +208,7 @@ public final class OwnedImeService extends InputMethodService {
                     || "eraseTail".equals(method) || "repeatWord".equals(method) || "restoreTail".equals(method)
                     || "predictWord".equals(method) || "swipeWord".equals(method) || "composingBackspace".equals(method)
                     || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)
-                    || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "private".equals(method) || "release".equals(method)))
+                    || "dropWord".equals(method) || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "private".equals(method) || "release".equals(method)))
                 throw new IllegalStateException("Owned IME operation rejected");
             CountDownLatch completed = new CountDownLatch(1);
             AtomicReference<Bundle> result = new AtomicReference<>();

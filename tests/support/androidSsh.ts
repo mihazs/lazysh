@@ -437,9 +437,11 @@ export async function checkRawReceiverIdentity(current:Awaited<ReturnType<typeof
 /**
  * The fixed OwnedImeService transactions, in order: correction, extension, ASCII erase, repeated word, then the
  * SwiftKey-shaped predictive word, gesture word, composing Backspace, erase-and-commit autocorrect, a Backspace
- * after the toolbar Esc key, and a word typed as letter commits and rewritten through a composing region. A lost, repeated or skipped edit changes these bytes.
+ * after the toolbar Esc key, a word typed as letter commits and rewritten through a composing region, and a composing word
+ * the keyboard erases whole before it types on (Chromium sends no compositionend). A lost, repeated or skipped edit changes these bytes.
+ * The receiver binary (apps/agent/examples/owned_terminal_receiver.rs) holds the same stream.
  */
-export const IME_TRANSACTION_WIRE='there\x7f\x7fthe'+'owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f'+'web ';
+export const IME_TRANSACTION_WIRE='there\x7f\x7fthe'+'owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f'+'web '+'ls. ';
 /** Deliberately raw wire bytes: DEL erases only committed ASCII characters. */
 export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
   const expected=imeExpectedWire(nonce);
