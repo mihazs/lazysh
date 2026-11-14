@@ -430,10 +430,7 @@ fn project(
         if value["type"] == "compacted" {
             projection.turn(None).compacted = true;
             let id = format!("compacted-{}", record.key);
-            projection.put(
-                None,
-                super::events::codex_compacted(&id, &value["timestamp"]),
-            )?;
+            projection.put(None, super::events::compacted(&id, &value["timestamp"]))?;
             continue;
         }
         if value["type"] != "event_msg" {
