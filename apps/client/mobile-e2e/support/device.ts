@@ -1,6 +1,5 @@
 import {execFile} from 'node:child_process';
 import {mkdir, open, readFile, rm, stat, writeFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
@@ -40,7 +39,6 @@ export const setNavigation = (adb: Adb, overlay: string) => shell(adb, 'cmd', 'o
 export const setIme = (adb: Adb, ime: string) => shell(adb, 'ime', 'set', ime);
 const putSetting = (adb: Adb, namespace: string, key: string, value: string) =>
   value === 'null' ? shell(adb, 'settings', 'delete', namespace, key) : shell(adb, 'settings', 'put', namespace, key, value);
-export const setAnimationScale = (adb: Adb, scale: string) => Promise.all(ANIMATIONS.map(key => putSetting(adb, 'global', key, scale)));
 export const setRotation = (adb: Adb, user: string, auto: string) =>
   Promise.all([putSetting(adb, 'system', 'user_rotation', user), putSetting(adb, 'system', 'accelerometer_rotation', auto)]);
 export const setPermission = (adb: Adb, permission: string, granted: boolean) =>

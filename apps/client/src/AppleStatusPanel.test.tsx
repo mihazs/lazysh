@@ -11,7 +11,7 @@ afterEach(()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.resetAllMock
 const id='b11c6ca6-e4f7-4f63-859c-d08e66df2239';
 function setup() {
   vi.mocked(listen).mockResolvedValue(()=>{});
-  vi.mocked(invoke).mockImplementation((command,args)=>{
+  vi.mocked(invoke).mockImplementation((command)=>{
     if(command==='apple_status_capability')return Promise.resolve({liveActivities:true,watchPaired:true,watchInstalled:true,watchReachable:true,reason:'Local status.'}) as never;
     if(command==='agent_snapshot')return Promise.resolve({schemaVersion:1,sessions:[]}) as never;
     if(command==='agent_approvals')return Promise.resolve({schemaVersion:1,requests:[]}) as never;
