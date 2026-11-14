@@ -11,7 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 fdroid = ["tauri-plugin-lazysh-push/fdroid"]
-# Optional interop test harness; independent of Linux x86_64 product availability.
+# Optional interop test harness; independent of Linux and Windows x86_64 product availability.
 parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 # The native terminal core (libghostty-vt, built with Zig 0.16.0): off by default so no build needs Zig.
 native-terminal = ["dep:lazysh-terminal-runtime"]
@@ -74,7 +74,7 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
 
-[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+[target.'cfg(all(any(target_os = "linux", target_os = "windows"), target_arch = "x86_64"))'.dependencies]
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime" }
 
 [dev-dependencies]

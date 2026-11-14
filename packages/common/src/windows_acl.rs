@@ -19,9 +19,16 @@ pub const OWNER_RIGHTS: &str = "S-1-3-4";
 const CHANGE: u32 =
     0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x4000_0000 | 0x1000_0000;
 
+/// The rights that let an account remove or rename an object, or hand it to someone else: delete child, DELETE,
+/// WRITE_DAC, WRITE_OWNER, GENERIC_WRITE and GENERIC_ALL. Adding a file or subdirectory is not in it.
+const REPLACE: u32 = 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x4000_0000 | 0x1000_0000;
+
 /// What other accounts must be unable to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Need {
+    /// Replace the object or change its protection. Others may still add entries beside the ones that exist, as to a
+    /// drive root or a shared folder, and read everything: the check for a directory that merely leads to private data.
+    NoForeignReplace,
     /// Change the object or its protection. Reading and running it stay allowed, as for an executable or a directory
     /// that only lists it.
     NoForeignChange,
@@ -90,6 +97,7 @@ pub fn admit(descriptor: &Descriptor, user: &str, need: Need) -> Result<(), Refu
         let exposed = match need {
             Need::Private => ace.mask != 0,
             Need::NoForeignChange => ace.mask & CHANGE != 0,
+            Need::NoForeignReplace => ace.mask & REPLACE != 0,
         };
         if exposed {
             return Err(Refusal::ForeignAccess);
@@ -99,12 +107,18 @@ pub fn admit(descriptor: &Descriptor, user: &str, need: Need) -> Result<(), Refu
 }
 
 #[cfg(windows)]
-pub use native::{admit_path, current_user, describe};
+pub use native::{admit_chain, admit_path, current_user, describe};
 
 #[cfg(windows)]
 mod native {
     use super::*;
-    use std::{ffi::c_void, io, os::windows::ffi::OsStrExt, path::Path, ptr};
+    use std::{
+        ffi::c_void,
+        io,
+        os::windows::ffi::OsStrExt,
+        path::{Component, Path},
+        ptr,
+    };
 
     const SE_FILE_OBJECT: u32 = 1;
     const OWNER_AND_DACL: u32 = 0x1 | 0x4; // OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION
@@ -307,6 +321,50 @@ mod native {
         admit(&describe(path)?, &current_user()?, need)
             .map_err(|refusal| io::Error::new(io::ErrorKind::PermissionDenied, refusal))
     }
+
+    /// Admits every directory from `path`'s volume root down to `path`, which must already be canonical: the
+    /// directories above it by `NoForeignReplace`, so nobody else can swap one for another, and `path` by `leaf`.
+    /// The volume root itself is not read: it cannot be replaced, and a drive's root usually lets any account add
+    /// subdirectories.
+    pub fn admit_chain(path: &Path, leaf: Need) -> io::Result<()> {
+        if !path.has_root() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the path is not absolute",
+            ));
+        }
+        let mut current = std::path::PathBuf::new();
+        let mut parts = path.components().peekable();
+        while let Some(part) = parts.next() {
+            current.push(part);
+            match part {
+                Component::Prefix(_) | Component::RootDir => {}
+                Component::Normal(_) => {
+                    if !std::fs::symlink_metadata(&current)?.is_dir() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "a component of the path is not a directory",
+                        ));
+                    }
+                    admit_path(
+                        &current,
+                        if parts.peek().is_none() {
+                            leaf
+                        } else {
+                            Need::NoForeignReplace
+                        },
+                    )?;
+                }
+                Component::CurDir | Component::ParentDir => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "the path is not canonical",
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +493,36 @@ mod tests {
     }
 
     #[test]
+    fn others_may_add_beside_the_entries_of_a_directory_but_not_replace_or_reprotect_it() {
+        let admitted = |descriptor| admit(&descriptor, USER, Need::NoForeignReplace);
+        for mask in [0x2, 0x4, 0x6, READ_EXECUTE, READ_EXECUTE | 0x6] {
+            assert_eq!(
+                admitted(with(allow(AUTHENTICATED, mask))),
+                Ok(()),
+                "{mask:#x}"
+            );
+        }
+        // Delete child, DELETE, WRITE_DAC, WRITE_OWNER, GENERIC_WRITE and GENERIC_ALL each, then the usual grants.
+        let replace = [0x40, 0x1_0000, 0x4_0000, 0x8_0000, 0x4000_0000, 0x1000_0000];
+        for mask in [MODIFY, FULL].into_iter().chain(replace) {
+            assert_eq!(
+                admitted(with(allow(AUTHENTICATED, mask))),
+                Err(Refusal::ForeignAccess),
+                "{mask:#x}"
+            );
+        }
+        // Who owns the directory and whether it has a DACL still decide.
+        let mut stranger = with(allow(AUTHENTICATED, READ_EXECUTE));
+        stranger.owner = OTHER.into();
+        assert_eq!(admitted(stranger), Err(Refusal::ForeignOwner));
+        let open = Descriptor {
+            owner: USER.into(),
+            dacl: None,
+        };
+        assert_eq!(admitted(open), Err(Refusal::NullDacl));
+    }
+
+    #[test]
     fn deny_entries_and_inherit_only_entries_do_not_count_as_access() {
         let denied = Ace {
             allow: false,
@@ -463,14 +551,13 @@ mod tests {
     }
 }
 
-/// Real files and real ACLs, run by the hosted Windows jobs: the SIDs and DACLs below come from the operating
-/// system, not from this file.
-#[cfg(all(test, windows))]
-mod native_tests {
-    use super::*;
+/// Real ACLs set through `icacls`, for this module's tests and for the crates whose storage checks use it.
+#[cfg(all(windows, any(test, feature = "test-support")))]
+pub mod fixtures {
+    use super::current_user;
     use std::{path::Path, process::Command};
 
-    fn icacls(path: &Path, args: &[&str]) {
+    pub fn icacls(path: &Path, args: &[&str]) {
         let output = Command::new("icacls")
             .arg(path)
             .args(args)
@@ -484,20 +571,43 @@ mod native_tests {
         );
     }
     /// Drops what a temporary folder inherits (a data volume's root grants Authenticated Users modify) so only the
-    /// current user and the system hold access.
-    fn restrict(path: &Path) {
-        let user = format!("*{}:F", current_user().unwrap());
+    /// current user and the system hold access. What a directory holds inherits that.
+    pub fn restrict(path: &Path) {
+        let inherit = if path.is_dir() { "(OI)(CI)" } else { "" };
+        let user = format!("*{}:{inherit}F", current_user().unwrap());
+        let system = format!("*S-1-5-18:{inherit}F");
         icacls(
             path,
-            &[
-                "/inheritance:r",
-                "/grant:r",
-                &user,
-                "/grant:r",
-                "*S-1-5-18:F",
-            ],
+            &["/inheritance:r", "/grant:r", &user, "/grant:r", &system],
         );
     }
+    /// Lets every account modify `path` and what it holds.
+    pub fn expose(path: &Path) {
+        icacls(path, &["/grant", "*S-1-1-0:(OI)(CI)M"]);
+    }
+    /// A junction at `link` that leads to the directory `target`; it needs no privilege, unlike a symbolic link.
+    pub fn junction(link: &Path, target: &Path) {
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stdout)
+        );
+    }
+}
+
+/// Real files and real ACLs, run by the hosted Windows jobs: the SIDs and DACLs below come from the operating
+/// system, not from this file.
+#[cfg(all(test, windows))]
+mod native_tests {
+    use super::{fixtures::*, *};
+    use std::{path::Path, process::Command};
+
     fn admitted(path: &Path, need: Need) -> bool {
         match admit_path(path, need) {
             Ok(()) => true,
@@ -557,21 +667,54 @@ mod native_tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("target");
         std::fs::create_dir(&target).unwrap();
-        let junction = directory.path().join("junction");
-        let made = Command::new("cmd")
-            .args(["/c", "mklink", "/J"])
-            .arg(&junction)
-            .arg(&target)
-            .output()
-            .unwrap();
-        assert!(
-            made.status.success(),
-            "{}",
-            String::from_utf8_lossy(&made.stdout)
-        );
+        let link = directory.path().join("junction");
+        junction(&link, &target);
         restrict(&target);
-        assert!(!admitted(&junction, Need::NoForeignChange));
+        assert!(!admitted(&link, Need::NoForeignChange));
         assert!(admitted(&target, Need::NoForeignChange));
+    }
+
+    #[test]
+    fn a_directory_others_may_only_add_to_stays_admitted_as_an_ancestor() {
+        let directory = tempfile::tempdir().unwrap();
+        restrict(directory.path());
+        // Authenticated Users add subdirectories, as they do to a drive root.
+        icacls(directory.path(), &["/grant", "*S-1-5-11:(AD)"]);
+        assert!(admitted(directory.path(), Need::NoForeignReplace));
+        assert!(!admitted(directory.path(), Need::NoForeignChange));
+        expose(directory.path());
+        assert!(!admitted(directory.path(), Need::NoForeignReplace));
+    }
+
+    #[test]
+    fn a_chain_from_the_drive_root_is_admitted_for_a_private_leaf_and_refused_through_a_foreign_ancestor(
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        restrict(directory.path());
+        let leaf = directory.path().join("leaf");
+        std::fs::create_dir(&leaf).unwrap();
+        let canonical = std::fs::canonicalize(&leaf).unwrap();
+        admit_chain(&canonical, Need::Private).unwrap();
+        // A foreign account that may read the leaf is fine for an ancestor's role but not for private data.
+        icacls(&leaf, &["/grant", "*S-1-1-0:RX"]);
+        admit_chain(&canonical, Need::NoForeignReplace).unwrap();
+        assert!(admit_chain(&canonical, Need::Private).is_err());
+        // The same account able to replace the directory above it makes every path below it untrustworthy.
+        expose(directory.path());
+        let error = admit_chain(&canonical, Need::NoForeignReplace).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn a_chain_refuses_a_relative_path_and_a_file_in_it() {
+        let directory = tempfile::tempdir().unwrap();
+        restrict(directory.path());
+        let file = directory.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        assert!(admit_chain(&canonical, Need::NoForeignReplace).is_err());
+        let relative = admit_chain(Path::new("relative"), Need::NoForeignReplace).unwrap_err();
+        assert_eq!(relative.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! One Linux model and one owned synchronous worker. Cancellation stops delivery, not native CPU work.
+//! One Linux or Windows x86_64 model and one owned synchronous worker. Cancellation stops delivery, not native CPU work.
 use super::{Protected, Result, VoiceState};
 use crate::app_lock::AccessLease;
 use serde::Serialize;
@@ -49,42 +49,65 @@ pub struct Cancelled {
     finishing: bool,
 }
 pub struct ParakeetState {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "windows"),
+        target_arch = "x86_64"
+    ))]
     manager: Result<Arc<local::Manager>>,
 }
 impl ParakeetState {
     pub(super) fn new(root: PathBuf, busy: Arc<AtomicBool>) -> Self {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64"
+        ))]
         {
             Self {
                 manager: local::Manager::new(root, busy),
             }
         }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64"
+        )))]
         {
             let _ = (root, busy);
             Self {}
         }
     }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "windows"),
+        target_arch = "x86_64"
+    ))]
     fn manager(&self) -> Result<&Arc<local::Manager>> {
         self.manager.as_ref().map_err(Clone::clone)
     }
     fn status(&self) -> Status {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64"
+        ))]
         {
             match &self.manager {
                 Ok(manager) => manager.status(),
                 Err(reason) => Status::unavailable(reason.clone()),
             }
         }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64"
+        )))]
         {
-            Status::unavailable("Parakeet is currently available only on Linux x86_64.".into())
+            Status::unavailable(
+                "Parakeet is currently available only on Linux and Windows x86_64.".into(),
+            )
         }
     }
     pub(super) fn cancel_for_lock(&self) {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64"
+        ))]
         if let Ok(manager) = &self.manager {
             manager.cancel_active();
         }
@@ -102,7 +125,10 @@ pub fn voice_parakeet_cancel(
     state: State<'_, VoiceState>,
     request_id: String,
 ) -> Result<Cancelled> {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "windows"),
+        target_arch = "x86_64"
+    ))]
     {
         state
             .parakeet
@@ -111,7 +137,10 @@ pub fn voice_parakeet_cancel(
             .map_err(Clone::clone)?
             .cancel(&request_id)
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(
+        any(target_os = "linux", target_os = "windows"),
+        target_arch = "x86_64"
+    )))]
     {
         let _ = (state, request_id);
         Ok(Cancelled {
@@ -129,7 +158,10 @@ pub async fn voice_parakeet_install(
 ) -> Protected<()> {
     access
         .run(async {
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            ))]
             {
                 state
                     .parakeet
@@ -137,7 +169,10 @@ pub async fn voice_parakeet_install(
                     .install(&access, &request_id, events)
                     .await
             }
-            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            #[cfg(not(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            )))]
             {
                 let _ = (state, request_id, events);
                 Err("Parakeet is unavailable on this platform".into())
@@ -153,11 +188,17 @@ pub async fn voice_parakeet_remove(
 ) -> Protected<()> {
     access
         .run(async {
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            ))]
             {
                 state.parakeet.manager()?.remove(&access, &request_id).await
             }
-            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            #[cfg(not(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            )))]
             {
                 let _ = (state, request_id);
                 Err("Parakeet is unavailable on this platform".into())
@@ -174,7 +215,10 @@ pub async fn voice_parakeet_transcribe(
 ) -> Protected<Transcript> {
     access
         .run(async {
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            ))]
             {
                 state
                     .parakeet
@@ -182,7 +226,10 @@ pub async fn voice_parakeet_transcribe(
                     .transcribe(&access, &request_id, samples)
                     .await
             }
-            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            #[cfg(not(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            )))]
             {
                 let _ = (state, request_id, samples);
                 Err("Parakeet is unavailable on this platform".into())
@@ -191,5 +238,8 @@ pub async fn voice_parakeet_transcribe(
         .await
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    target_arch = "x86_64"
+))]
 mod local;
