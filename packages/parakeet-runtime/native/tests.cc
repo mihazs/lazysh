@@ -16,7 +16,8 @@ namespace {
 int models = 0, streams = 0, results = 0, calls = 0, failure = 0;
 bool allocation_failure = false, cleanup_failure = false, null_result = false, null_text = false, malformed_json = false;
 std::string payload = "hello", destruction;
-void check(bool valid) { if (!valid) throw std::runtime_error("native boundary assertion failed"); }
+void check_at(int line, bool valid) { if (!valid) throw std::runtime_error("native boundary assertion failed at tests.cc:" + std::to_string(line)); }
+#define check(...) check_at(__LINE__, (__VA_ARGS__))
 void stage(int value) { ++calls; if (failure == value) { if (allocation_failure) throw std::bad_alloc(); throw std::runtime_error("synthetic native exception"); } }
 void clean() { if (cleanup_failure) throw std::runtime_error("synthetic cleanup exception"); }
 }

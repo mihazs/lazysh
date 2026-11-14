@@ -1,6 +1,6 @@
 # Dictation
 
-Whisper remains the default. On Linux x86_64, [Parakeet dictation](voice-parakeet.md)
+Whisper remains the default. On Linux x86_64 and Windows x86_64, [Parakeet dictation](voice-parakeet.md)
 adds an explicitly downloaded local model, automatic language detection, and a
 reusable recognizer. Cancel discards its result while synchronous native work may
 continue; controls remain busy until that worker finishes. Other platforms report

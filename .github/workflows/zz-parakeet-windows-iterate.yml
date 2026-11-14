@@ -33,6 +33,12 @@ jobs:
       - name: Runtime tests, lint and format
         if: ${{ !cancelled() }}
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
+      - name: Native build flags
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          Get-ChildItem target\debug\build -Recurse -Filter CMakeCache.txt | Select-String 'CMAKE_CXX_FLAGS|CMAKE_GENERATOR:|CMAKE_BUILD_TYPE' | Select-Object -First 12
+          Get-ChildItem target\debug\build -Recurse -Filter parakeet-boundary-tests.vcxproj | ForEach-Object { Select-String -Path $_.FullName -Pattern 'AdditionalOptions|ExceptionHandling|RuntimeLibrary' | Select-Object -First 8 }
       - name: Exercise Parakeet on Windows x86_64
         if: ${{ !cancelled() }}
         timeout-minutes: 60
