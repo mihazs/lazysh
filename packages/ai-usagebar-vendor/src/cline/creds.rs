@@ -7,6 +7,8 @@
 //! widget reports "sign-in expired" instead, exactly as it would for any other
 //! credential it does not own.
 
+#[path = "bounded_read.rs"]
+mod bounded_read;
 #[path = "store_schema.rs"]
 mod store_schema;
 use std::path::{Path, PathBuf};
@@ -114,7 +116,23 @@ pub fn read_from(path: &Path) -> Option<Credential> {
 }
 
 /// Follow ordinary symlinks to a regular store; reject devices and bound growth.
+///
+/// Windows cannot make an open non-blocking, so the whole read runs under a deadline instead.
 fn read_store(path: &Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let path = path.to_path_buf();
+        bounded_read::run(
+            &bounded_read::STORE_READERS,
+            bounded_read::DEADLINE,
+            move || read_regular_store(&path),
+        )
+    }
+    #[cfg(not(windows))]
+    read_regular_store(path)
+}
+
+fn read_regular_store(path: &Path) -> Option<String> {
     use std::io::Read;
     const LIMIT: u64 = 1024 * 1024;
     let before = std::fs::metadata(path).ok()?;
@@ -130,6 +148,16 @@ fn read_store(path: &Path) -> Option<String> {
         options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
     }
     let file = options.open(path).ok()?;
+    // A path replaced by a pipe or device after the check above is not a disk file.
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+        // SAFETY: `file` owns the handle for the whole call.
+        if unsafe { GetFileType(file.as_raw_handle()) } != FILE_TYPE_DISK {
+            return None;
+        }
+    }
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() || metadata.len() > LIMIT {
         return None;

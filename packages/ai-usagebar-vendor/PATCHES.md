@@ -72,9 +72,20 @@ unavailable credential source yields an error rather than an invented quota.
   scanned. Regular-file reads are bounded to 1 MiB; Unix NONBLOCK open prevents a
   regular-to-FIFO replacement from blocking. Symlinks to regular files work.
   Factor identical existing test-store constructors for zero duplication.
-  Windows rejects newly introduced nondefault environment selection; existing
-  explicit auth_paths/default behavior remains, including its unqualified
-  synchronous-open replacement risk. No Windows race-safety claim is made.
+  Windows rejects newly introduced nondefault environment selection (enabling
+  it is tracked in #1748). Every Windows store read runs on a reader thread
+  (`src/cline/bounded_read.rs`) that owns its handle and buffer: the caller
+  waits 3 s, then asks Windows to cancel that thread's pending synchronous I/O
+  and returns "no credential"; at most four readers are alive at once, so a
+  driver that never answers strands a bounded number of threads and handles and
+  later reads fail fast. The opened handle must also be `FILE_TYPE_DISK`, so a
+  path replaced by a pipe or device after the existence check is not read. This
+  bounds the caller and the resources, not the kernel request: cancellation is
+  best effort and a driver may ignore it. Unix keeps the NONBLOCK open. The
+  deadline and the cap are exercised by the runner's unit tests (run from a
+  copy of this crate with the workspace lockfile, as this crate is excluded
+  from the workspace) and the pipe, oversize and directory cases by
+  `packages/account-usage/tests/cline_store_read.rs`.
   Enable existing serde_json `float_roundtrip` to avoid default decimal double
   rounding admitting nonintegers as positive integers. The 892-case fixture
   includes 105 raw JSON numeric stores (not parse/reserialized numbers) and
