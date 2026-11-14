@@ -9,10 +9,10 @@ import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
 import AgentHistory from './AgentHistory';
 import {publishAnswerGuard, publishTaskGuard, useComposerControl} from './agentDialogAnswer';
-import {herdrScreen, herdrStillRuns, herdrStillWaits, screenRows, type HerdrAgentTarget} from './agentHerdrAnswer';
+import {hostScreen, herdrStillRuns, herdrStillWaits, screenRows, type HerdrAgentTarget} from './agentHerdrAnswer';
 import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {conversationAgents, conversationSource} from './agentConversationSource';
-import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
+import {parseTerminalSnapshot, type TerminalInputLabels, type ZellijTarget} from './ChatTerminalInput';
 import {zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
 import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
@@ -199,9 +199,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     [followed?.herdrSession, followed?.paneId, followed?.terminalId, selected?.conversation.agent, selected?.conversation.path]);
   const herdrClaude = herdrAgent?.agent === 'claude' ? herdrAgent : undefined;
   const herdrGuard = useCallback(async () => !!herdrClaude && shown && access.current() && await herdrStillWaits(invoke, sessionId, herdrClaude) && access.current(), [herdrClaude, shown, access, invoke, sessionId]);
-  useEffect(() => {publishAnswerGuard(sessionId, answerable ? answerGuard : herdrClaude ? herdrGuard : undefined); return () => publishAnswerGuard(sessionId, undefined);}, [sessionId, answerable, answerGuard, herdrClaude, herdrGuard]);
   // The dialog card reads the agent pane's own screen from the host, only while the agent is not busy with a turn.
-  const herdrView = useMemo(() => herdrAgent && herdrScreen(async () => screenRows(await invoke('herdr_agent_screen', {sessionId, target: {herdrSession: herdrAgent.server, pane: herdrAgent.pane, terminal: herdrAgent.terminal, agent: herdrAgent.agent, agentSessionId: herdrAgent.agentSessionId}}))), [herdrAgent, invoke, sessionId]);
+  const herdrView = useMemo(() => herdrAgent && hostScreen(async () => screenRows(await invoke('herdr_agent_screen', {sessionId, target: {herdrSession: herdrAgent.server, pane: herdrAgent.pane, terminal: herdrAgent.terminal, agent: herdrAgent.agent, agentSessionId: herdrAgent.agentSessionId}}))), [herdrAgent, invoke, sessionId]);
   const herdrStillHere = useCallback(async () => !!herdrAgent && shown && access.current() && await herdrStillRuns(invoke, sessionId, herdrAgent) && access.current(), [herdrAgent, shown, access, invoke, sessionId]);
   // What the companion's report of the followed agent says it waits for: Herdr's own status has the wait but not its kind.
   const [herdrReport, setHerdrReport] = useState<AgentSession>();
@@ -250,6 +249,21 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   // A picked conversation has no destination to confirm under Herdr; under Zellij it takes input only through its own report's pane.
   const composerLabels = !guarded ? undefined : terminalInput?.backend==='zellij' ? (proof?.kind==='zellij' ? terminalInput : undefined)
     : selected && !isLinked && terminalInput?.backend!=='tmux' ? undefined : terminalInput;
+  // The followed agent of a Zellij pane: the agent's own report names the pane, the host proves the pane still runs the agent before every key,
+  // and the pane's own viewport (not Zellij's composite screen) is what the dialog card reads.
+  const zellijAgent = useMemo<ZellijTarget | undefined>(() => proof?.kind === 'zellij' && (kept?.agent === 'claude' || kept?.agent === 'codex') ? Object.freeze({zellijSession: proof.session, pane: proof.pane, agent: kept.agent}) : undefined,
+    [proof?.kind === 'zellij' ? proof.session : undefined, proof?.kind === 'zellij' ? proof.pane : undefined, kept?.agent]);
+  // The state the report gives, only while exactly one report still names this pane and this same session.
+  const zellijReport = useCallback(async () => {
+    if (!zellijAgent || !row?.paneId || !shown || !access.current()) return undefined;
+    const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === row.paneId);
+    return rows.length === 1 && rows[0].sessionId === row.sessionId && access.current() ? rows[0].state : undefined;
+  }, [zellijAgent, row?.paneId, row?.sessionId, shown, access, invoke, sessionId]);
+  const zellijAsks = useCallback(async () => await zellijReport() === 'needs_attention', [zellijReport]);
+  const zellijHere = useCallback(async () => await zellijReport() !== undefined, [zellijReport]);
+  const zellijView = useMemo(() => zellijAgent && hostScreen(async () => screenRows(await invoke('zellij_agent_screen', {sessionId, target: zellijAgent}))), [zellijAgent, invoke, sessionId]);
+  const askGuard = answerable ? answerGuard : herdrClaude ? herdrGuard : zellijAgent?.agent === 'claude' ? zellijAsks : undefined;
+  useEffect(() => {publishAnswerGuard(sessionId, askGuard); return () => publishAnswerGuard(sessionId, undefined);}, [sessionId, askGuard]);
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{
     request.current++;setSelecting(false);setUnavailable(false);
@@ -327,7 +341,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {((!selected && tmux) || herdrClaude) && <AgentApprovalDock sessionId={sessionId} shown={shown && fresh} row={row} herdr={herdrClaude} access={access} invoke={invoke} />}
     {herdrAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && selected?.status !== 'working'} terminal={herdrView} agent={agentNames[herdrAgent.agent]} answerable={hasDialogProfile(agentNames[herdrAgent.agent])} guard={herdrStillHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
-    {reader && !selected && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
+    {zellijAgent && row && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && row.state !== 'working'} terminal={zellijView} agent={row.agent} answerable={hasDialogProfile(row.agent)} guard={zellijHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
+    {reader && !selected && !zellijAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
       bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} reading={reading} onReading={changeReading} />}
     {modelAsked && <p role="status" className="agent-composer-note">{t('agentModelAsked')}</p>}
