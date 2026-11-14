@@ -1,0 +1,959 @@
+{
+  "schema": 1,
+  "run": "first burst",
+  "mode": "full",
+  "host": {
+    "loadAverageAtEnd": [
+      13.01,
+      19.13,
+      18.39
+    ],
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalCpus": 24,
+    "os": "Linux 7.3.3-1-cachyos",
+    "cpuGovernor": "powersave"
+  },
+  "toolchain": {
+    "node": "26.6.0",
+    "chromium": "156.0.8078.4",
+    "androidSerial": null,
+    "device": null,
+    "xterm": "5.5.0",
+    "webglAddon": "0.18.0"
+  },
+  "source": {
+    "commit": "6833e335a6c3d54a09d0935f282620f197c38f03",
+    "dirty": true
+  },
+  "launchArgs": [
+    "--use-angle=vulkan",
+    "--enable-features=Vulkan",
+    "--ignore-gpu-blocklist",
+    "--enable-gpu",
+    "--disable-vulkan-surface"
+  ],
+  "results": [
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": false,
+      "profiled": true,
+      "coldProfile": {
+        "totalMs": 181.163,
+        "top": [
+          {
+            "functionName": "(program)",
+            "file": "",
+            "ms": 88.60500000000005,
+            "share": 0.4890899355828731
+          },
+          {
+            "functionName": "(idle)",
+            "file": "",
+            "ms": 31.74,
+            "share": 0.17520133802156068
+          },
+          {
+            "functionName": "clone",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 9.329,
+            "share": 0.05149506245756584
+          },
+          {
+            "functionName": "QC",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 6.305999999999999,
+            "share": 0.03480843218538001
+          },
+          {
+            "functionName": "(garbage collector)",
+            "file": "",
+            "ms": 5.294,
+            "share": 0.029222302567301267
+          },
+          {
+            "functionName": "parse",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 4.164999999999999,
+            "share": 0.022990345710768748
+          },
+          {
+            "functionName": "_extractColor",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 3.1780000000000004,
+            "share": 0.017542213365863892
+          },
+          {
+            "functionName": "_measure",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 2.9319999999999995,
+            "share": 0.016184320197832888
+          },
+          {
+            "functionName": "scroll",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 2.141,
+            "share": 0.01181808647461126
+          },
+          {
+            "functionName": "stream",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 2.126,
+            "share": 0.011735288110706931
+          }
+        ]
+      },
+      "bytes": 1048703,
+      "distinctGlyphs": 6654,
+      "sha256": "a470486bd0428d1eaab17efc037486e0f054e6c4ec1188e53521db3da6102c83",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 4,
+          "wallMsPerRender": 16.550000000745058,
+          "wallMs": 66.20000000298023,
+          "throughputMiBs": 15.107569737056789,
+          "totalCpuMs": 330,
+          "mainThreadTaskMs": 164.859,
+          "rendererCpuMs": 310,
+          "gpuCpuMs": 10.000000000000009,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 4,
+          "wallMsPerRender": 10.074999999254942,
+          "wallMs": 40.29999999701977,
+          "throughputMiBs": 24.816901159110266,
+          "totalCpuMs": 129.99999999999997,
+          "mainThreadTaskMs": 61.42700000000001,
+          "rendererCpuMs": 109.99999999999999,
+          "gpuCpuMs": 19.99999999999999,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 14.566666667660078,
+          "wallMs": 43.70000000298023,
+          "throughputMiBs": 22.88606674073176,
+          "totalCpuMs": 130,
+          "mainThreadTaskMs": 65.70500000000001,
+          "rendererCpuMs": 130,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 42,
+      "coldExtraWallMs": 24.200000002980232,
+      "coldExtraCpuMs": 200,
+      "coldExtraWallMsPerGlyph": 0.0036369101296934523,
+      "coldExtraCpuMsPerGlyph": 0.03005710850616171,
+      "refreshNominalMs": 16.69999999999999,
+      "geometry": {
+        "cols": 46,
+        "rows": 37,
+        "gl": null,
+        "devicePixelRatio": 3,
+        "viewport": [
+          390,
+          844
+        ],
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+      },
+      "project": "phone"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": false,
+      "profiled": true,
+      "coldProfile": {
+        "totalMs": 221.905,
+        "top": [
+          {
+            "functionName": "(program)",
+            "file": "",
+            "ms": 106.67400000000004,
+            "share": 0.48071922669610884
+          },
+          {
+            "functionName": "(idle)",
+            "file": "",
+            "ms": 29.136999999999993,
+            "share": 0.13130393636916696
+          },
+          {
+            "functionName": "parse",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 12.716000000000001,
+            "share": 0.057303801176179
+          },
+          {
+            "functionName": "QC",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 9.184999999999999,
+            "share": 0.04139158648971406
+          },
+          {
+            "functionName": "(garbage collector)",
+            "file": "",
+            "ms": 6.141,
+            "share": 0.02767400464162592
+          },
+          {
+            "functionName": "createRow",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 5.306,
+            "share": 0.023911133142561006
+          },
+          {
+            "functionName": "(anonymous)",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 4.2379999999999995,
+            "share": 0.019098262770104322
+          },
+          {
+            "functionName": "_measure",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 4.045,
+            "share": 0.018228521214033032
+          },
+          {
+            "functionName": "_extractColor",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 3.1830000000000003,
+            "share": 0.014343976025776797
+          },
+          {
+            "functionName": "clone",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 3.1820000000000004,
+            "share": 0.014339469592843787
+          }
+        ]
+      },
+      "bytes": 1048650,
+      "distinctGlyphs": 46076,
+      "sha256": "e4caa1cb104be89ed9af8bc06b6cc096e7c4686097b509adbfd30052ff39c05b",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 6,
+          "wallMsPerRender": 16.566666667660076,
+          "wallMs": 99.40000000596046,
+          "throughputMiBs": 10.061072151302268,
+          "totalCpuMs": 390.00000000000006,
+          "mainThreadTaskMs": 212.073,
+          "rendererCpuMs": 380.00000000000006,
+          "gpuCpuMs": 9.999999999999995,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 4,
+          "wallMsPerRender": 10.174999997019768,
+          "wallMs": 40.69999998807907,
+          "throughputMiBs": 24.571758530524136,
+          "totalCpuMs": 130,
+          "mainThreadTaskMs": 68.45499999999998,
+          "rendererCpuMs": 120,
+          "gpuCpuMs": 9.999999999999995,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.698000000000047,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 13.09999999900659,
+          "wallMs": 39.29999999701977,
+          "throughputMiBs": 25.447088345426266,
+          "totalCpuMs": 130,
+          "mainThreadTaskMs": 66.63900000000001,
+          "rendererCpuMs": 120,
+          "gpuCpuMs": 10.000000000000009,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 39.99999999254942,
+      "coldExtraWallMs": 59.400000013411045,
+      "coldExtraCpuMs": 260.00000000000006,
+      "coldExtraWallMsPerGlyph": 0.0012891744077917146,
+      "coldExtraCpuMsPerGlyph": 0.0056428509419220434,
+      "refreshNominalMs": 16.69999999999999,
+      "geometry": {
+        "cols": 46,
+        "rows": 37,
+        "gl": null,
+        "devicePixelRatio": 3,
+        "viewport": [
+          390,
+          844
+        ],
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+      },
+      "project": "phone"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 1,
+      "paced": false,
+      "profiled": true,
+      "coldProfile": {
+        "totalMs": 259.036,
+        "top": [
+          {
+            "functionName": "(program)",
+            "file": "",
+            "ms": 118.028,
+            "share": 0.45564323105668714
+          },
+          {
+            "functionName": "(idle)",
+            "file": "",
+            "ms": 48.844,
+            "share": 0.18856066338269584
+          },
+          {
+            "functionName": "QC",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 8.157,
+            "share": 0.0314898315292083
+          },
+          {
+            "functionName": "(garbage collector)",
+            "file": "",
+            "ms": 7.414999999999999,
+            "share": 0.028625364814157103
+          },
+          {
+            "functionName": "_measure",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 6.5600000000000005,
+            "share": 0.02532466529748761
+          },
+          {
+            "functionName": "parse",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 6.349,
+            "share": 0.02451010670331537
+          },
+          {
+            "functionName": "(anonymous)",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 5.791,
+            "share": 0.02235596596612054
+          },
+          {
+            "functionName": "createRow",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 4.241,
+            "share": 0.0163722416961349
+          },
+          {
+            "functionName": "replaceChildren",
+            "file": "",
+            "ms": 3.186,
+            "share": 0.012299448725273707
+          },
+          {
+            "functionName": "decode",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 2.189,
+            "share": 0.008450562856128106
+          }
+        ]
+      },
+      "bytes": 1048677,
+      "distinctGlyphs": null,
+      "sha256": "38db846abeda2e2637378981af86a125c2f356f948a7b6c6ab96cfb500b941d9",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 15.637500001117587,
+          "wallMs": 125.1000000089407,
+          "throughputMiBs": 7.994375068221277,
+          "totalCpuMs": 460,
+          "mainThreadTaskMs": 233.47600000000003,
+          "rendererCpuMs": 420,
+          "gpuCpuMs": 30,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.79299999999996,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 4,
+          "wallMsPerRender": 11.925000000745058,
+          "wallMs": 47.70000000298023,
+          "throughputMiBs": 20.966379896089567,
+          "totalCpuMs": 149.99999999999997,
+          "mainThreadTaskMs": 68.19599999999998,
+          "rendererCpuMs": 140,
+          "gpuCpuMs": 9.99999999999998,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 14.366666664679846,
+          "wallMs": 43.099999994039536,
+          "throughputMiBs": 23.204090980145338,
+          "totalCpuMs": 140.00000000000003,
+          "mainThreadTaskMs": 62.39800000000001,
+          "rendererCpuMs": 120,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 45.399999998509884,
+      "coldExtraWallMs": 79.70000001043081,
+      "coldExtraCpuMs": 315,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 16.69999999999996,
+      "geometry": {
+        "cols": 46,
+        "rows": 37,
+        "gl": null,
+        "devicePixelRatio": 3,
+        "viewport": [
+          390,
+          844
+        ],
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+      },
+      "project": "phone"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": false,
+      "profiled": true,
+      "coldProfile": {
+        "totalMs": 1113.395,
+        "top": [
+          {
+            "functionName": "_findGlyphBoundingBox",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 430.68900000000014,
+            "share": 0.3868249812510386
+          },
+          {
+            "functionName": "getImageData",
+            "file": "",
+            "ms": 219.4659999999999,
+            "share": 0.19711423169674724
+          },
+          {
+            "functionName": "(program)",
+            "file": "",
+            "ms": 100.30700000000002,
+            "share": 0.09009111770755214
+          },
+          {
+            "functionName": "T",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 87.51000000000003,
+            "share": 0.07859744295600396
+          },
+          {
+            "functionName": "_drawToCache",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 69.38799999999998,
+            "share": 0.062321098981044445
+          },
+          {
+            "functionName": "(idle)",
+            "file": "",
+            "ms": 35.928,
+            "share": 0.032268871334970965
+          },
+          {
+            "functionName": "putImageData",
+            "file": "",
+            "ms": 18.063999999999997,
+            "share": 0.016224251051962686
+          },
+          {
+            "functionName": "(garbage collector)",
+            "file": "",
+            "ms": 18.002,
+            "share": 0.01616856551358682
+          },
+          {
+            "functionName": "_updateModel",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 14.034000000000002,
+            "share": 0.012604691057531247
+          },
+          {
+            "functionName": "_getFromCacheMap",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 11.654999999999998,
+            "share": 0.010467983060818486
+          }
+        ]
+      },
+      "bytes": 1048703,
+      "distinctGlyphs": 6654,
+      "sha256": "a470486bd0428d1eaab17efc037486e0f054e6c4ec1188e53521db3da6102c83",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 23,
+          "wallMsPerRender": 43.23913043478261,
+          "wallMs": 994.5,
+          "throughputMiBs": 1.0056522037588573,
+          "totalCpuMs": 1799.9999999999998,
+          "mainThreadTaskMs": 1095.005,
+          "rendererCpuMs": 1359.9999999999998,
+          "gpuCpuMs": 430.00000000000006,
+          "droppedFrames": 37,
+          "frameP99Ms": 155.7000000000001,
+          "longTasks": {
+            "n": 5,
+            "totalMs": 514,
+            "maxMs": 176
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 2,
+          "wallMsPerRender": 16.399999998509884,
+          "wallMs": 32.79999999701977,
+          "throughputMiBs": 30.491497461251686,
+          "totalCpuMs": 130.0000000000001,
+          "mainThreadTaskMs": 51.57400000000001,
+          "rendererCpuMs": 110.0000000000001,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699000000000044,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 8.149999998509884,
+          "wallMs": 32.599999994039536,
+          "throughputMiBs": 30.678561865676137,
+          "totalCpuMs": 100.00000000000009,
+          "mainThreadTaskMs": 51.65799999999998,
+          "rendererCpuMs": 100.00000000000009,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.69899999999982,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 32.69999999552965,
+      "coldExtraWallMs": 961.8000000044703,
+      "coldExtraCpuMs": 1684.9999999999998,
+      "coldExtraWallMsPerGlyph": 0.1445446348068035,
+      "coldExtraCpuMsPerGlyph": 0.25323113916441237,
+      "refreshNominalMs": 16.69999999999999,
+      "geometry": {
+        "cols": 46,
+        "rows": 37,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        },
+        "devicePixelRatio": 3,
+        "viewport": [
+          390,
+          844
+        ],
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+      },
+      "project": "phone"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": false,
+      "profiled": true,
+      "coldProfile": {
+        "totalMs": 4690.884,
+        "top": [
+          {
+            "functionName": "_findGlyphBoundingBox",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 2194.934999999998,
+            "share": 0.46791500280117737
+          },
+          {
+            "functionName": "getImageData",
+            "file": "",
+            "ms": 1128.424000000001,
+            "share": 0.24055679057508156
+          },
+          {
+            "functionName": "T",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 449.6250000000003,
+            "share": 0.09585080338801819
+          },
+          {
+            "functionName": "_drawToCache",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 307.0239999999999,
+            "share": 0.0654512028010072
+          },
+          {
+            "functionName": "(program)",
+            "file": "",
+            "ms": 152.60399999999998,
+            "share": 0.03253203447367276
+          },
+          {
+            "functionName": "putImageData",
+            "file": "",
+            "ms": 82.05600000000004,
+            "share": 0.01749265170488122
+          },
+          {
+            "functionName": "(garbage collector)",
+            "file": "",
+            "ms": 54.768,
+            "share": 0.01167541128708363
+          },
+          {
+            "functionName": "(idle)",
+            "file": "",
+            "ms": 39.247,
+            "share": 0.00836665327899816
+          },
+          {
+            "functionName": "fillText",
+            "file": "",
+            "ms": 37.061,
+            "share": 0.007900643034447239
+          },
+          {
+            "functionName": "save",
+            "file": "",
+            "ms": 29.626999999999995,
+            "share": 0.0063158671158783704
+          }
+        ]
+      },
+      "bytes": 1048650,
+      "distinctGlyphs": 46076,
+      "sha256": "e4caa1cb104be89ed9af8bc06b6cc096e7c4686097b509adbfd30052ff39c05b",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 58,
+          "wallMsPerRender": 78.88793103448276,
+          "wallMs": 4575.5,
+          "throughputMiBs": 0.2185707730082863,
+          "totalCpuMs": 7670.000000000002,
+          "mainThreadTaskMs": 4681.218000000001,
+          "rendererCpuMs": 5430.000000000001,
+          "gpuCpuMs": 2230.0000000000005,
+          "droppedFrames": 217,
+          "frameP99Ms": 190.49499999999995,
+          "longTasks": {
+            "n": 38,
+            "totalMs": 3667,
+            "maxMs": 202
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 4,
+          "wallMsPerRender": 7.774999998509884,
+          "wallMs": 31.099999994039536,
+          "throughputMiBs": 32.156610035083034,
+          "totalCpuMs": 149.9999999999995,
+          "mainThreadTaskMs": 54.20400000000036,
+          "rendererCpuMs": 139.9999999999997,
+          "gpuCpuMs": 9.999999999999787,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699999999999818,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 7.325000002980232,
+          "wallMs": 29.30000001192093,
+          "throughputMiBs": 34.13210141612723,
+          "totalCpuMs": 150.00000000000034,
+          "mainThreadTaskMs": 52.72699999999997,
+          "rendererCpuMs": 150.00000000000034,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.600000000000353,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 30.200000002980232,
+      "coldExtraWallMs": 4545.29999999702,
+      "coldExtraCpuMs": 7520.000000000002,
+      "coldExtraWallMsPerGlyph": 0.09864788610115939,
+      "coldExtraCpuMsPerGlyph": 0.16320861185866833,
+      "refreshNominalMs": 16.699999999999932,
+      "geometry": {
+        "cols": 46,
+        "rows": 37,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        },
+        "devicePixelRatio": 3,
+        "viewport": [
+          390,
+          844
+        ],
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+      },
+      "project": "phone"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 1,
+      "paced": false,
+      "profiled": true,
+      "coldProfile": {
+        "totalMs": 5595.869,
+        "top": [
+          {
+            "functionName": "_findGlyphBoundingBox",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 2230.7059999999924,
+            "share": 0.3986344212132186
+          },
+          {
+            "functionName": "getImageData",
+            "file": "",
+            "ms": 1608.854999999998,
+            "share": 0.2875076239275791
+          },
+          {
+            "functionName": "T",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 517.9869999999999,
+            "share": 0.09256596249840729
+          },
+          {
+            "functionName": "_drawToCache",
+            "file": "terminal-bench-CJ28nzQG.js",
+            "ms": 356.389,
+            "share": 0.06368787403707986
+          },
+          {
+            "functionName": "(program)",
+            "file": "",
+            "ms": 206.90799999999996,
+            "share": 0.03697513290607767
+          },
+          {
+            "functionName": "putImageData",
+            "file": "",
+            "ms": 114.15800000000007,
+            "share": 0.020400406085274703
+          },
+          {
+            "functionName": "(garbage collector)",
+            "file": "",
+            "ms": 66.87,
+            "share": 0.011949886603850091
+          },
+          {
+            "functionName": "(idle)",
+            "file": "",
+            "ms": 47.806000000000004,
+            "share": 0.008543087767065314
+          },
+          {
+            "functionName": "save",
+            "file": "",
+            "ms": 46.598000000000006,
+            "share": 0.008327214236073075
+          },
+          {
+            "functionName": "fillText",
+            "file": "",
+            "ms": 37.067,
+            "share": 0.006623993520934819
+          }
+        ]
+      },
+      "bytes": 1048677,
+      "distinctGlyphs": null,
+      "sha256": "38db846abeda2e2637378981af86a125c2f356f948a7b6c6ab96cfb500b941d9",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 62,
+          "wallMsPerRender": 88.00806451612904,
+          "wallMs": 5456.5,
+          "throughputMiBs": 0.18328531496489636,
+          "totalCpuMs": 9500,
+          "mainThreadTaskMs": 5588.402,
+          "rendererCpuMs": 6570,
+          "gpuCpuMs": 2920,
+          "droppedFrames": 266,
+          "frameP99Ms": 162.92600000000004,
+          "longTasks": {
+            "n": 59,
+            "totalMs": 5187,
+            "maxMs": 183
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 4,
+          "wallMsPerRender": 10.675000000745058,
+          "wallMs": 42.70000000298023,
+          "throughputMiBs": 23.42145950904346,
+          "totalCpuMs": 190.00000000000128,
+          "mainThreadTaskMs": 73.11599999999973,
+          "rendererCpuMs": 180.0000000000006,
+          "gpuCpuMs": 10.000000000000675,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.796000000000184,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 10.349999997764826,
+          "wallMs": 41.3999999910593,
+          "throughputMiBs": 24.156915973959823,
+          "totalCpuMs": 200.00000000000017,
+          "mainThreadTaskMs": 72.73999999999958,
+          "rendererCpuMs": 200.00000000000017,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.698000000000704,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 42.04999999701977,
+      "coldExtraWallMs": 5414.45000000298,
+      "coldExtraCpuMs": 9305,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 16.69999999999996,
+      "geometry": {
+        "cols": 46,
+        "rows": 37,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        },
+        "devicePixelRatio": 3,
+        "viewport": [
+          390,
+          844
+        ],
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+      },
+      "project": "phone"
+    }
+  ],
+  "limits": "Headless Chromium on a desktop host: not an Android WebView. A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached."
+}

@@ -69,6 +69,7 @@ Newest first. "Stage" is the rollout stage reached by what shipped, not by the c
 
 | Slice | What changed for users | Stage reached |
 | --- | --- | --- |
+| Where the WebGL addon's first-burst cost goes: a cold-pass CPU profile ([#1323](https://github.com/mihazs/lazysh/issues/1323)) | Nothing visible: a profiling option of the benchmark harness, raw results and ADR 0001 amendment 4. xterm.js DOM renderer stays the default; no setting exists yet. | None: the native engine is not user-selectable. |
 | WebGL addon at the phone grid, under context loss and in an Android System WebView ([#1323](https://github.com/mihazs/lazysh/issues/1323)) | Nothing visible: measurement harness, raw results and ADR 0001 amendment 3. xterm.js DOM renderer stays the default; no setting exists yet. | None: the native engine is not user-selectable. |
 
 ## Rejected alternatives

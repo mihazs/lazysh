@@ -132,3 +132,18 @@ Decisions, recorded per candidate and platform:
 | Every platform, rollout stage and default | Unchanged. No fallback is removed. |
 
 Next measurements, in order: where the addon's 0.2 ms per new cell goes (a profile of a cold pass: glyph drawing, atlas page merging, texture uploads) and whether a mitigation (drawing common glyphs ahead of the first output, a larger atlas, limiting style variety) removes the first-burst cost; then the device runs of [#1340](https://github.com/mihazs/lazysh/issues/1340).
+
+## Amendment 4 (2026-11-14): where the WebGL addon's first-burst cost goes
+
+Scope: [#1323](https://github.com/mihazs/lazysh/issues/1323), the first of the "next measurements" of Amendment 3. Evidence: [the cold-pass profile](terminal-benchmarks.md#where-the-cold-pass-goes-the-addon-scans-every-new-glyph-in-javascript-1323), raw files `benchmarks/terminal-first-burst-profile-xterm-*.json`. The status of this ADR stays **Proposed**.
+
+**What was measured.** A main-thread CPU profile (1 ms sampling) of the cold pass of three WebGL rows and the same rows of the DOM renderer at the phone viewport, hardware GL, two invocations. **What was not:** the Android System WebView, a phone's CPU, the GPU process, any mitigation.
+
+| Item | Result |
+| --- | --- |
+| Where the 0.2 ms per new visible cell goes | **In the addon's JavaScript, not in drawing or on the GPU.** For each new glyph and style the addon draws it into a temporary canvas, reads the canvas back (`getImageData`), compares every pixel with the background and scans the alpha channel in four directions for the glyph's extent. Those steps and the function around them are 74 to 90 % of the cold pass's main-thread time; `fillText` is 1 % or less. The DOM renderer's cold pass has no comparable function. |
+| Can an option of the addon remove it | **Not found.** One unrecorded check with `allowTransparency` removed the pixel comparison and left the scan and the readback. A mitigation lives in the addon or in what is drawn first, and none was tried. |
+| xterm.js WebGL addon | **Unchanged: the leading measured candidate, not cleared, does not ship.** The open gates of Amendment 3 stand; the first-burst gate is now a known property of the addon's glyph cache, so clearing it means an upstream or local change, not tuning. |
+| Native candidates | **A requirement, not a result:** a glyph cache must rasterize once and take the extent from the rasterizer, and the wgpu prototype (dot-pattern glyphs) did not exercise that path. Measuring a real glyph path on the GPU is the next measurement for them. |
+| Every platform, rollout stage and default | Unchanged. No fallback is removed. |
+
