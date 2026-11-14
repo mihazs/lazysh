@@ -4025,7 +4025,6 @@ dependencies = [
  "axum",
  "clap",
  "futures-util",
- "hyper-util",
  "lazysh-common",
  "libc",
  "mime",
@@ -4056,7 +4055,6 @@ version = "1.62.0"
 dependencies = [
  "axum",
  "clap",
- "hyper-util",
  "lazysh-common",
  "libc",
  "rand 0.10.3",
