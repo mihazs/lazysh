@@ -227,6 +227,8 @@ jobs:
           cp packages/common/src/{hex_digest,guarded_target}.rs "$HERDR_CI_ROOT/common/src/"
           # The core replays the Mosh frames the client's e2e suite also uses; one file, two readers.
           cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
+          # Likewise the platform key cases: the client suite checks xterm.js and the key mapping against them, the core replays them.
+          cp -a apps/client/e2e/fixtures/platform-keys "$HERDR_CI_ROOT/platform-keys"
           diff --recursive --brief --no-dereference packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           diff --recursive --brief --no-dereference packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
           diff --recursive --brief --no-dereference packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
@@ -351,6 +353,7 @@ jobs:
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
         env:
           LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-herdr-native/mosh-resize-frames.json
+          LAZYSH_PLATFORM_KEYS_FIXTURES: ${{ runner.temp }}/lazysh-herdr-native/platform-keys
         run: |
           cargo +1.96.1 fmt --check
           cargo +1.96.1 clippy --locked --all-targets -- -D warnings

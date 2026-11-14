@@ -52,7 +52,7 @@ classify() {
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
       apps/client/src-tauri/src/apple_*) add client ios ;;
     # The terminal runtime replays this file in herdr-native; the client e2e suite reads it too.
-    apps/client/e2e/fixtures/mosh-resize-frames.json) add client terminal_runtime ;;
+    apps/client/e2e/fixtures/mosh-resize-frames.json | apps/client/e2e/fixtures/platform-keys/*) add client terminal_runtime ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
     apps/notification-service/*) add agent push relay ;;

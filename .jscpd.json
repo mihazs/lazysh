@@ -22,6 +22,7 @@
     "**/test-results/**",
     "docs/architecture/benchmarks/**",
     "apps/client/bench/fixtures/**",
+    "apps/client/e2e/fixtures/platform-keys/**",
     "packages/mosh-transport/vendor/**",
     "packages/mosh-transport/vendor-android/**",
     "packages/portable-pty-vendor/**",
