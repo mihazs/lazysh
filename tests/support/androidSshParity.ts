@@ -105,7 +105,7 @@ async function encryptedIdentity(primary:SshFixture,passphrase:string) {
  * second-key sshd for rotation, then runs the parity cases with the host control channel.
  */
 export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'../..')) {
-  const {adb,device}=ownedEmulator('SSH parity acceptance');
+  const {serial,adb,device}=ownedEmulator('SSH parity acceptance');
   const password=randomBytes(16).toString('hex'),passphrase=randomBytes(12).toString('hex');
   const started:SshFixture[]=[];
   const reverses:number[]=[];
