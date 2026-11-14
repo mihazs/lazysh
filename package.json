@@ -35,6 +35,7 @@
     "test:mobile-e2e:ci": "moon run client:test-mobile-e2e-ci",
     "test:openssh": "moon run :test-openssh",
     "test:openssh-connections": "moon run :test-openssh-connections",
+    "test:openssh-auth-tunnel": "moon run :test-openssh-auth-tunnel",
     "test:multiplexers": "moon run :test-multiplexers",
     "test:voice": "moon run :test-voice",
     "test:et": "moon run :test-et",

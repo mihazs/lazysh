@@ -1262,6 +1262,13 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --list --ignored | grep -c ': test$' | grep -Fx 6
           bun run test:openssh-connections
+      # Sign-in callback tunnels over real direct-tcpip channels to a fake OAuth server on an owned sshd.
+      - name: Exercise sign-in tunnels, their request guard and teardown over real OpenSSH
+        if: ${{ !cancelled() }}
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::auth_tunnel_fixture::openssh_auth_tunnel_ -- --list --ignored | grep -c ': test$' | grep -Fx 4
+          bun run test:openssh-auth-tunnel
       # Owned loopback sshd stopped and restarted under a live session with a tmux pane.
       - name: Exercise lost-connection detection, refused retries and tmux reattach over real OpenSSH
         if: ${{ !cancelled() }}
