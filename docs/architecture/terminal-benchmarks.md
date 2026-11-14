@@ -693,6 +693,37 @@ A candidate may replace the fallback on a device only if, on that device, all of
 
 CI can only run what is reproducible on hosted runners: parse throughput of the core, per-session memory, golden-image comparisons and an injected-slowdown self-test. Device-only metrics follow a documented manual procedure and are not gated automatically ([#1341](https://github.com/mihazs/lazysh/issues/1341)).
 
+The `terminal-perf` job of `checks.yml` runs `cargo run --release --example perf_gate` in `packages/terminal-runtime` against the same checksum-verified libghostty-vt build as the `herdr-native` job. It is a job of its own, alone on its runner, and it is not a required check: a regression or a noisy host can never skip the jobs that consume `herdr-native`'s binaries. It runs for a pull request that changes `packages/terminal-runtime/**` and on every push to `main`. A metric beyond its limit makes the example exit 1 and the job red; the table goes to the job summary.
+
+What the gate holds, and the limit of each (the limits sit at a distance from the measured value that no run-to-run spread reached; "Measured" is the value, or the lowest to highest, of five invocations on the host below):
+
+| Metric | Measured | Limit | Why this kind of metric |
+| --- | --- | --- | --- |
+| Scrollback rows kept, 80 columns, default 4 MiB budget | 5,280 | at least 5,200 | deterministic (it is the budget policy) |
+| Resident memory per session after 8 MiB of 80-column lines, 10 sessions | 3,922 KiB | at most 5,000 KiB | memory per session; the same in all five invocations |
+| Resident growth over 80 create, feed 1 MiB and drop rounds, after 20 warm-up rounds | 0 KiB | at most 2,048 KiB | no growth over churn; the margin is for another allocator |
+| Allocations per MiB, VT only, plain text | 128.6 | at most 142 | deterministic; two per 16 KiB chunk, so no allocation per byte or per cell on the parse path |
+| Allocations per MiB, VT plus a frame per chunk, plain text | 247,305 | at most 260,000 | deterministic; this is the cost of `Frame` owning a `String` per cell |
+| Reference renderer bytes uploaded per MiB of output, full-screen redraw, one frame per 256 KiB | 2.81 MiB | at most 2.87 MiB | deterministic; what dirty-row damage tracking is for |
+| Frame cost, plain text: throughput with a frame per chunk over VT-only throughput | 0.119 to 0.129 | at least 0.05 | a ratio of two passes in one process |
+| Frame cost, ANSI and truecolor, the same ratio | 0.606 to 0.642 | at least 0.40 | the same, where the parse dominates |
+| VT-only throughput, plain text | 609 to 633 MiB/s | at least 100 MiB/s | an absolute floor for a collapse only |
+
+Golden images are not part of this job: `cargo test --test renderer` compares the reference renderer's output with the committed images pixel for pixel inside `herdr-native` already, and a divergence fails that required job.
+
+Noise handling, in order of preference:
+
+1. **Counts that do not depend on the host** (allocations, rows kept, bytes uploaded, memory per session) carry tight limits. They were identical across five invocations at 1-minute load averages of 4.8 to 7.9 on 24 threads.
+2. **Timed metrics are ratios of two passes in the same process.** The host's speed, clock and load affect both passes and cancel; only a change in the code under test moves the ratio. Each pass is the best of five, because noise only ever slows a pass down. A ratio below its limit is measured again, up to three batches of five passes with the bests carried over, before it fails.
+3. **No absolute latency or throughput threshold finer than a floor.** The one absolute speed, 100 MiB/s for plain text, is about six times below the host measured here and catches a collapse only. Latency tails (the credit latency p99 and the input-to-write p99 of the session benchmark) moved by a factor of two between invocations on a shared host and are not gated.
+4. **Limits sit well away from the measured value.** By arithmetic from the measured ratios, the two ratio limits trip at a frame path about 2.5 to 2.8 times slower than measured (the injected run below, a frame path four times slower, failed both), and the allocation limit at 5 percent more allocations. A gentler regression is not caught by this job; it shows in the benchmark tables above, which are run by hand.
+
+Self-test: `perf_gate --inject slow` spins for three times the time of every `take_frame` call, and `--inject allocs` makes every frame allocate once per cell it carries. The job runs both after the real gate and fails unless each exits with status 1 (a crash exits differently and does not count). On the host above the real gate took 2.8 s, `--inject slow` failed both ratio metrics (plain text 0.039 and ANSI 0.310 against 0.123 and 0.629 without injection, 13.3 s because failing ratios are re-measured) and `--inject allocs` failed the allocation metric (370,185 allocations per MiB against 247,305).
+
+Environment of the figures above: AMD Ryzen 9 5900X (24 threads), Linux 7.3.3, rustc 1.96.1 release profile, libghostty-vt from the vendored Ghostty commit `44f2a44df` built with Zig 0.16.0 `ReleaseFast`, x86_64, 1-minute load average 4.8 to 7.9 during the five invocations. **Not yet measured: the numbers on a hosted `ubuntu-22.04` runner and the job's wall time (including the Zig build).** The limits are the same on every host, so the first runs of the job on a hosted runner are the evidence that they are wide enough there; this section is updated with those figures, and the limits changed only with them in hand.
+
+Not covered, by design: Android and iOS devices, the xterm.js baseline (its harness needs a browser and is not reproducible enough on a hosted runner for a threshold), the wgpu prototype (it needs a GPU), and any latency to the display. Device runs follow [the Android procedure](#android-procedure-manual-gate-not-run).
+
 ## Existing, unrelated measurements
 
 `docs/android-startup-cpu-budget.md` measures emulator startup behaviour for SystemUI ANR sensitivity. It is not a terminal measurement and is not used as a baseline here.
@@ -701,4 +732,4 @@ CI can only run what is reproducible on hosted runners: parse throughput of the 
 
 - Best method for input-to-presentation on Android without external hardware.
 - How to hold radios and brightness constant across energy runs on the available devices.
-- Whether hosted CI can produce stable enough numbers for any latency threshold.
+- Whether hosted CI can produce stable enough numbers for any latency threshold. The `terminal-perf` gate avoids the question: it gates ratios inside one process and counts, and no latency. Whether its limits are wide enough on a hosted runner is checked by its first runs.

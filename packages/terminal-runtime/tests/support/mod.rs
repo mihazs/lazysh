@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use lazysh_terminal_runtime::{
-    ffi, CellWide, Config, Frame, Hooks, Hub, KeyInput, Offer, Origin, PtyWriter, Refused, Session,
-    Size, TerminalRuntime,
+    ffi, Appearance, CellWide, Config, Frame, Hooks, Hub, Image, KeyInput, Offer, Origin,
+    PtyWriter, ReferenceRenderer, Refused, Session, Size, TerminalRenderer, TerminalRuntime, Theme,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex};
@@ -239,6 +239,69 @@ pub fn numbered_lines(count: usize) -> Vec<u8> {
         .collect()
 }
 
+/// A CPU reference renderer on an 8x16 pixel cell surface for `size`.
+pub fn reference_renderer(size: Size) -> ReferenceRenderer {
+    let (w, h) = (u32::from(size.cols) * 8, u32::from(size.rows) * 16);
+    let surface = Image::new(w, h, Theme::default().background).unwrap();
+    ReferenceRenderer::create(surface, Appearance::default()).unwrap()
+}
+
+/// What a renderer does with a frame: apply it, draw the dirty rows, present.
+pub fn draw_frame(renderer: &mut ReferenceRenderer, frame: &Frame) {
+    renderer.apply(frame).expect("apply");
+    renderer.draw().expect("draw");
+    renderer.present().expect("present");
+}
+
+/// One pass of `data` through a fresh 80x24 runtime in transport-sized chunks, calling `after_chunk`
+/// (a frame per chunk, for example) after each one; MiB/s of the whole pass.
+pub fn pass(data: &[u8], mut after_chunk: Option<&mut dyn FnMut(&mut TerminalRuntime)>) -> f64 {
+    let mut rt = runtime(80, 24);
+    let start = Instant::now();
+    for chunk in data.chunks(CHUNK) {
+        feed_chunk(&mut rt, chunk);
+        if let Some(after_chunk) = after_chunk.as_deref_mut() {
+            after_chunk(&mut rt);
+        }
+    }
+    data.len() as f64 / (1024.0 * 1024.0) / start.elapsed().as_secs_f64()
+}
+
+pub fn with_scrollback(cols: u16, bytes: usize) -> TerminalRuntime {
+    TerminalRuntime::new(Config {
+        size: Size::new(cols, 24),
+        scrollback_bytes: bytes,
+        ..Config::default()
+    })
+    .expect("runtime")
+}
+
+/// Numbered lines that exactly fill `cols` minus one column, so none wraps.
+pub fn fit_lines(total: usize, cols: usize) -> Vec<u8> {
+    (0..)
+        .flat_map(|n| format!("{n:0>w$}\r\n", w = cols - 1).into_bytes())
+        .take(total)
+        .collect()
+}
+
+/// Scrollback rows kept after feeding `data` at a byte budget (libghostty-vt budgets bytes, lazysh lines).
+pub fn rows_kept(cols: u16, budget: usize, data: &[u8]) -> usize {
+    let mut rt = with_scrollback(cols, budget);
+    feed(&mut rt, data);
+    rt.scrollback_rows().unwrap()
+}
+
+/// Resident growth in KiB for `count` sessions that each received `data` at the default budget;
+/// `None` where /proc is unavailable. The sessions are dropped before returning.
+pub fn sessions_rss_growth(count: usize, data: &[u8]) -> Option<u64> {
+    let before = rss_kib()?;
+    let mut sessions: Vec<TerminalRuntime> = (0..count).map(|_| runtime(80, 24)).collect();
+    for session in &mut sessions {
+        feed(session, data);
+    }
+    Some(rss_kib()?.saturating_sub(before))
+}
+
 /// Resident set in KiB (Linux), for memory measurements.
 pub fn rss_kib() -> Option<u64> {
     let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
@@ -270,12 +333,12 @@ pub fn plain(total: usize) -> Vec<u8> {
         .collect()
 }
 
-pub fn ansi_color() -> Vec<u8> {
-    (0..).flat_map(|n| format!("\x1b[{}m word{n}\x1b[0m \x1b[1;38;2;{};{};200mtruecolor\x1b[0m \x1b[48;5;{}m  \x1b[0m\r\n", 31 + n % 7, n % 256, (n * 7) % 256, n % 256).into_bytes()).take(TOTAL).collect()
+pub fn ansi_color(total: usize) -> Vec<u8> {
+    (0..).flat_map(|n| format!("\x1b[{}m word{n}\x1b[0m \x1b[1;38;2;{};{};200mtruecolor\x1b[0m \x1b[48;5;{}m  \x1b[0m\r\n", 31 + n % 7, n % 256, (n * 7) % 256, n % 256).into_bytes()).take(total).collect()
 }
 
 /// Full-screen redraw: home, then 24 rows of positioned colored text, like a TUI repaint.
-pub fn redraw() -> Vec<u8> {
+pub fn redraw(total: usize) -> Vec<u8> {
     let frame: String = std::iter::once("\x1b[H".to_string())
         .chain((1..=24).map(|row| {
             format!(
@@ -285,7 +348,7 @@ pub fn redraw() -> Vec<u8> {
             )
         }))
         .collect();
-    frame.into_bytes().into_iter().cycle().take(TOTAL).collect()
+    frame.into_bytes().into_iter().cycle().take(total).collect()
 }
 
 pub fn unicode(total: usize) -> Vec<u8> {
@@ -314,8 +377,8 @@ pub fn slug(name: &str) -> String {
 pub fn workloads() -> [(&'static str, Vec<u8>); 4] {
     [
         ("plain text", plain(TOTAL)),
-        ("ANSI + truecolor", ansi_color()),
-        ("full-screen redraw", redraw()),
+        ("ANSI + truecolor", ansi_color(TOTAL)),
+        ("full-screen redraw", redraw(TOTAL)),
         ("CJK/emoji/combining", unicode(TOTAL)),
     ]
 }
