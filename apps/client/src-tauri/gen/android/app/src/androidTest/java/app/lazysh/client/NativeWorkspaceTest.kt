@@ -4521,15 +4521,16 @@ class NativeWorkspaceTest {
         pasteOwnedText(scenario, parityKey, privateKey, label)
     }
 
-    /** Waits for this refusal in the open dialog with no terminal; unlike awaitDocument, an alert is the goal. */
-    private fun awaitOwnedRefusal(scenario: ActivityScenario<MainActivity>, stage: String, text: String) {
-        val expected = """(()=>{const alert=document.querySelector('[role=dialog] [role=alert]');
+    /** Waits for this refusal in `scope` (the whole open dialog by default) with no terminal; unlike awaitDocument, an alert is the goal. */
+    private fun awaitOwnedRefusal(scenario: ActivityScenario<MainActivity>, stage: String, text: String, scope: String = "[role=dialog]") {
+        val alertSelector = JSONObject.quote("$scope [role=alert]")
+        val expected = """(()=>{const alert=document.querySelector($alertSelector);
             return Boolean(alert?.textContent.includes(${JSONObject.quote(text)})) && !document.querySelector('.terminal-canvas .xterm-screen') &&
               !document.querySelector('[role=dialog] .fingerprint code');})()"""
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(45)
         while (evaluate(scenario, expected) != "true") {
             assertTrue("Owned refusal not shown at $stage: ${evaluate(scenario,
-                "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,200) || ''")}", System.nanoTime() < deadline)
+                "document.querySelector($alertSelector)?.textContent?.slice(0,200) || ''")}", System.nanoTime() < deadline)
             Thread.sleep(200)
         }
     }
@@ -4702,6 +4703,191 @@ class NativeWorkspaceTest {
                 endOwnedConnection(scenario, name)
             }
             println("lazysh parity: only the opted-in host saw a forwarded agent, listing exactly the selected identity")
+        }
+    }
+
+    // Key management (#986). The identity panel lives in the owned connection dialog; every case ends at the owned sshd's own log,
+    // and the expected fingerprints come from the host's `ssh-keygen -l`, never from the app under test.
+    private val identityPanel = "[role=dialog] section[aria-label='SSH key management']"
+    private val identityPassphrase = "$identityPanel input[type=password]"
+    private val publicKeyRefusal = "This is a public key. Import its corresponding private key instead."
+
+    /** A JavaScript string result, decoded from the JSON literal the WebView returns. */
+    private fun evaluateText(scenario: ActivityScenario<MainActivity>, expression: String): String =
+        JSONArray("[" + evaluate(scenario, expression) + "]").getString(0)
+
+    /** Opens the identity panel in the open connection dialog; `importing` switches it from generating to importing a file. */
+    private fun openOwnedIdentityPanel(scenario: ActivityScenario<MainActivity>, importing: Boolean) {
+        clickOwnedButton("Private key")
+        evaluate(scenario, """(()=>{const summary=Array.from(document.querySelectorAll('[role=dialog] summary'))
+            .find(x=>x.textContent.trim()==='Generate or inspect an identity');summary.click();return true;})()""")
+        awaitDocument(scenario, "identity panel open", present("[role=dialog] details[open] section[aria-label='SSH key management']"))
+        if (importing) {
+            evaluate(scenario, """(()=>{const select=document.querySelector(${JSONObject.quote("$identityPanel select")});
+                Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'import');
+                select.dispatchEvent(new Event('change',{bubbles:true}));return true;})()""")
+            awaitDocument(scenario, "identity import mode", present("$identityPanel input[type=file]"))
+        }
+    }
+
+    /** A real touch at the element's centre: Chromium opens a file chooser and accepts clipboard writes only after a trusted gesture, which a scripted click is not. */
+    private fun tapOwnedElement(scenario: ActivityScenario<MainActivity>, selector: String) {
+        closeSoftKeyboard()
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
+        val box = JSONObject(evaluate(scenario, """(()=>{const r=document.querySelector(${JSONObject.quote(selector)}).getBoundingClientRect();
+            return {x:r.left+r.width/2,y:r.top+r.height/2,ratio:window.devicePixelRatio,width:innerWidth,height:innerHeight};})()"""))
+        assertTrue("Owned tap target must sit inside the viewport: $box",
+            box.getDouble("x") in 0.0..box.getDouble("width") && box.getDouble("y") in 0.0..box.getDouble("height"))
+        val origin = IntArray(2)
+        scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).getLocationOnScreen(origin) }
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertTrue("Owned touch was not delivered", device.click(
+            origin[0] + (box.getDouble("x") * box.getDouble("ratio")).toInt(), origin[1] + (box.getDouble("y") * box.getDouble("ratio")).toInt()))
+    }
+
+    /**
+     * Chooses `contents` as the file `name` through the file chooser the WebView really launches. The request is answered the way a
+     * document provider would, with a content URI whose display name is the file's name; the stub is Espresso-Intents'.
+     */
+    private fun pickOwnedKeyFile(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, name: String, contents: String) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "lazysh-ui-key-${parity.nonce}").apply { mkdirs() }
+        val file = File(directory, name)
+        file.writeText(contents)
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        androidx.test.espresso.intent.Intents.init()
+        try {
+            androidx.test.espresso.intent.Intents.intending(org.hamcrest.Matchers.anyOf(
+                androidx.test.espresso.intent.matcher.IntentMatchers.hasAction(Intent.ACTION_GET_CONTENT),
+                androidx.test.espresso.intent.matcher.IntentMatchers.hasAction(Intent.ACTION_OPEN_DOCUMENT)))
+                .respondWith(android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,
+                    Intent().setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)))
+            tapOwnedElement(scenario, "$identityPanel input[type=file]")
+            awaitDocument(scenario, "key file $name loaded", """Array.from(document.querySelectorAll(${JSONObject.quote("$identityPanel .identity-file span")}))
+                .some(x=>x.textContent===${JSONObject.quote("Loaded $name. Its contents stay in memory.")})""")
+            val requests = androidx.test.espresso.intent.Intents.getIntents()
+            assertEquals("The WebView must have asked the system picker exactly once: $requests", 1, requests.size)
+            val request = requests.single()
+            assertTrue("The picker request must be a document-picker action: ${request.action}",
+                request.action == Intent.ACTION_GET_CONTENT || request.action == Intent.ACTION_OPEN_DOCUMENT)
+            assertTrue("The picker request must ask for openable documents", request.hasCategory(Intent.CATEGORY_OPENABLE))
+        } finally {
+            androidx.test.espresso.intent.Intents.release()
+            file.delete()
+            directory.delete()
+        }
+    }
+
+    @Test fun ownedSshImportsKeyFileThroughDocumentPickerAndLogsIn() {
+        val name = "Parity imported key file"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+            parity.mark("primary")
+            openOwnedConnect(scenario, name)
+            openOwnedIdentityPanel(scenario, importing = true)
+            pickOwnedKeyFile(scenario, parity, "id_ed25519", parity.fixture.getString("encryptedKey"))
+            assertEquals("A loaded key file must never be rendered", "false", evaluate(scenario, present("$identityPanel textarea")))
+            val passphrase = parity.fixture.getString("passphrase")
+            typeInto(scenario, identityPassphrase, passphrase)
+            clickOwnedButton("Inspect identity")
+            val fingerprint = parity.fixture.getString("userFingerprint")
+            awaitDocument(scenario, "imported identity fingerprint", "document.querySelector(${JSONObject.quote("$identityPanel .identity-details code")})?.textContent===${JSONObject.quote(fingerprint)}")
+            assertEquals("The shown public key must be the authorized key", parity.fixture.getString("publicKey").split(" ").take(2),
+                evaluateText(scenario, "document.querySelector(${JSONObject.quote("$identityPanel textarea[readonly]")}).value").trim().split(Regex("\\s+")).take(2))
+            val inspected = parity.observe("primary")
+            assertEquals("Inspecting a key file must not connect anywhere: $inspected", 0, parityCount(inspected, "connections"))
+            clickOwnedButton("Use for connection")
+            assertEquals("The imported file must fill the connection's private key", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(parityKey)}).value===${JSONObject.quote(parity.fixture.getString("encryptedKey"))}"))
+            assertEquals("The passphrase must follow the key", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(parityPassword)}).value===${JSONObject.quote(passphrase)}"))
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            proveOwnedShell(scenario, parity, parity.prompt("primary"), "IMPORTED")
+            val facts = parity.observe("primary")
+            assertEquals("The imported identity must be the authorized key: $facts", listOf(fingerprint), parityList(facts, "acceptedPublickey"))
+            println("lazysh parity: a key file chosen through the system picker was inspected, matched ssh-keygen's fingerprint and logged in")
+        }
+    }
+
+    @Test fun ownedSshRefusesPublicKeysBeforeAnyAuthentication() {
+        val name = "Parity public key refusal"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+            parity.mark("primary")
+            openOwnedConnect(scenario, name)
+            val publicKey = parity.fixture.getString("publicKey")
+            // A .pub file chosen in the identity panel is refused locally and never offered for use.
+            openOwnedIdentityPanel(scenario, importing = true)
+            pickOwnedKeyFile(scenario, parity, "id_ed25519.pub", publicKey)
+            clickOwnedButton("Inspect identity")
+            awaitOwnedRefusal(scenario, "public key file inspection", publicKeyRefusal, identityPanel)
+            assertEquals("A public key must not offer an identity to use", "false", evaluate(scenario, present("$identityPanel .identity-details")))
+            val inspected = parity.observe("primary")
+            assertEquals("Inspecting a public key must not connect anywhere: $inspected", 0, parityCount(inspected, "connections"))
+            // Clearing the file also clears its refusal, so the next one is the connection form's own.
+            clickOwnedButton("Remove key file")
+            awaitDocument(scenario, "public key file cleared", "!" + present("$identityPanel [role=alert]"))
+            // The same text pasted as the connection's private key reaches host-key review, then is refused before any authentication.
+            chooseOwnedPrivateKey(scenario, publicKey, parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            awaitOwnedRefusal(scenario, "public key connection", publicKeyRefusal)
+            val facts = parity.observe("primary")
+            assertTrue("The owned server must have been reached for host-key review: $facts", parityCount(facts, "connections") >= 1)
+            assertEquals("No authentication may start with a public key: $facts", 0, parityCount(facts, "userauthRequests"))
+            assertEquals("No key may be accepted: $facts", emptyList<String>(), parityList(facts, "acceptedPublickey"))
+            println("lazysh parity: a public key was refused in the identity panel and in the connection form before any authentication request")
+        }
+    }
+
+    @Test fun ownedSshGeneratesKeyCopiesPublicKeyAndLogsIn() {
+        val name = "Parity generated key"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+            parity.mark("primary")
+            openOwnedConnect(scenario, name)
+            openOwnedIdentityPanel(scenario, importing = false)
+            val passphrase = "generated-${parity.nonce}"
+            typeInto(scenario, identityPassphrase, passphrase)
+            clickOwnedButton("Generate encrypted identity")
+            val details = "$identityPanel .identity-details"
+            awaitDocument(scenario, "generated identity", present("$details code"))
+            val fingerprint = evaluateText(scenario, "document.querySelector(${JSONObject.quote("$details code")}).textContent")
+            val publicKey = evaluateText(scenario, "document.querySelector(${JSONObject.quote("$details textarea[readonly]")}).value").trim()
+            assertTrue("A generated identity must be an Ed25519 public key: $publicKey", publicKey.startsWith("ssh-ed25519 "))
+            // Copy writes the OS clipboard: a sentinel first, so only this tap can put the key there.
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            fun clipboardText(): String? {
+                var text: String? = null
+                instrumentation.runOnMainSync {
+                    text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(instrumentation.targetContext)?.toString()
+                }
+                return text
+            }
+            instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(parity.label, "sentinel-${parity.nonce}")) }
+            val copy = "$details > button:first-of-type"
+            assertEquals("The first identity button must be Copy", "Copy public key", evaluateText(scenario, "document.querySelector(${JSONObject.quote(copy)}).textContent"))
+            tapOwnedElement(scenario, copy)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (clipboardText() != publicKey) {
+                assertTrue("The OS clipboard never held the copied public key; it holds ${clipboardText()?.length ?: -1} characters", System.nanoTime() < deadline)
+                Thread.sleep(100)
+            }
+            // The owned sshd authorizes exactly the copied key, and the host's ssh-keygen must report the fingerprint the app showed.
+            val authorized = parity.control("authorize", "publicKey" to clipboardText()!!)
+            assertEquals("The app's fingerprint must equal ssh-keygen -l for the copied key", fingerprint, authorized.getString("fingerprint"))
+            instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(parity.label, "")) }
+            clickOwnedButton("Use for connection")
+            assertEquals("The generated key must fill the connection's private key", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(parityKey)}).value.startsWith('-----BEGIN OPENSSH PRIVATE KEY-----')"))
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            proveOwnedShell(scenario, parity, parity.prompt("primary"), "GENERATED")
+            val facts = parity.observe("primary")
+            assertEquals("The generated identity must be the authorized key: $facts", listOf(fingerprint), parityList(facts, "acceptedPublickey"))
+            println("lazysh parity: a generated key was copied to the OS clipboard, authorized on the owned sshd and logged in")
         }
     }
 

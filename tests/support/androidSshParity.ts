@@ -1,18 +1,21 @@
 import {createServer,type Server} from 'node:net';
-import {chmod,copyFile,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
+import {appendFile,chmod,copyFile,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess,androidSshCleanup,nativeReportCases,ownedSoftwareKeyboard} from './androidSsh';
 import {availablePort,sshCommand} from './sshFixture';
 
-/** The owned SSH parity instrumentation cases (#985), run together in one Gradle invocation. */
+/** The owned SSH parity instrumentation cases (#985, #986), run together in one Gradle invocation. */
 export const sshParityCases=[
   'ownedSshPasswordLoginThroughRealUi',
   'ownedSshEncryptedKeyLoginThroughRealUi',
   'ownedSshRotatedHostKeyRefusedThroughRealUi',
   'ownedSshBastionRouteThroughRealUi',
   'ownedSshAgentForwardingThroughRealUi',
+  'ownedSshImportsKeyFileThroughDocumentPickerAndLogsIn',
+  'ownedSshRefusesPublicKeysBeforeAnyAuthentication',
+  'ownedSshGeneratesKeyCopiesPublicKeyAndLogsIn',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated';
@@ -33,6 +36,21 @@ export function sshdLogFacts(text:string) {
   };
 }
 
+const ed25519PublicKey=/^ssh-ed25519 [A-Za-z0-9+/]{68}( [!-~]{1,64})?$/;
+/** Appends one generated Ed25519 public key to the primary sshd's authorized keys; the fingerprint is `ssh-keygen -l`'s, not the app's. */
+async function authorizeKey(directory:string,publicKey:unknown) {
+  if(typeof publicKey!=='string' || !ed25519PublicKey.test(publicKey))throw new Error('key');
+  const probe=await mkdtemp(join(tmpdir(),'lazysh-parity-pub-'));
+  try {
+    const file=join(probe,'key.pub');
+    await writeFile(file,publicKey+'\n',{mode:0o600});
+    const fingerprint=(await sshCommand('owned authorized key fingerprint','ssh-keygen',['-l','-E','sha256','-f',file])).trim().split(/\s+/)[1];
+    if(!/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint))throw new Error('key');
+    await appendFile(join(directory,'authorized_keys'),publicKey+'\n');
+    return {fingerprint};
+  } finally {await rm(probe,{recursive:true,force:true});}
+}
+
 /** Requires every parity case to have run exactly once and passed, so a filtered or skipped case cannot count. */
 export function validateSshParityReport(text:string) {
   const {cases,failed}=nativeReportCases(text);
@@ -46,7 +64,8 @@ type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture};
 type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
 /**
  * The instrumentation's only host channel. Requests carry the case nonce and one closed
- * action; replies are closed facts. `rotate` points the pinned device port at a second sshd.
+ * action; replies are closed facts. `rotate` points the pinned device port at a second sshd;
+ * `authorize` installs one app-generated Ed25519 public key on the primary sshd.
  */
 export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>):Control {
   const marks=new Map<ParityServer,number>(servers.map(name=>[name,0]));
@@ -54,12 +73,13 @@ export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<
   const mark=async(name:ParityServer)=>{marks.set(name,(await log(name)).length);};
   return {reply:async request=>{
     if(!request || typeof request!=='object')throw new Error('request');
-    const {nonce:owner,action,server}=request as Record<string,unknown>;
+    const {nonce:owner,action,server,publicKey}=request as Record<string,unknown>;
     if(owner!==nonce)throw new Error('nonce');
     const name=servers.find(value=>value===server);
     if(action==='mark' && name){await mark(name);return {};}
     if(action==='observe' && name)return sshdLogFacts((await log(name)).subarray(marks.get(name)).toString('utf8'));
     if(action==='rotate'){await rotate();await mark('rotated');return {};}
+    if(action==='authorize')return authorizeKey(fixtures.primary.directory,publicKey);
     throw new Error('action');
   }};
 }
@@ -136,7 +156,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     const userFingerprint=(await sshCommand('owned user fingerprint','ssh-keygen',['-l','-E','sha256','-f',join(fixtures.primary.directory,'user.pub')])).trim().split(/\s+/)[1];
     const data=join(fixtures.primary.directory,'android-parity-fixture.json');
     await writeFile(data,JSON.stringify({nonce,username:fixtures.primary.username,controlPort:channel.port,password,passphrase,
-      privateKey:fixtures.primary.privateKey,encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
+      privateKey:fixtures.primary.privateKey,publicKey:(await readFile(join(fixtures.primary.directory,'user.pub'),'utf8')).trim(),encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
       challenge:fixtures.primary.challenge,expected:fixtures.primary.expected,
       primary:server(fixtures.primary),bastion:server(fixtures.bastion),rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
     if((await stat(data)).size>16*1024)throw new Error('Owned Android parity fixture exceeds native bound');

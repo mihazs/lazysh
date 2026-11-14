@@ -68,6 +68,27 @@ test.skipIf(!parity)('owned parity control answers only its nonce and closed act
   } finally {for(const fixture of started)await fixture.stop();}
 },20_000);
 
+test('owned parity control authorizes only a well-formed Ed25519 public key and reports the fingerprint ssh-keygen computes',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-parity-authorize-'));
+  try {
+    const key=join(directory,'generated');
+    await sshCommand('owned generated key','ssh-keygen',['-q','-t','ed25519','-N','','-C','generated@app','-f',key]);
+    const publicKey=(await readFile(`${key}.pub`,'utf8')).trim();
+    const authorized=join(directory,'authorized_keys');
+    await writeFile(authorized,'existing\n',{mode:0o600});
+    const nonce='a'.repeat(32);
+    const control=parityControl({primary:{directory},bastion:{directory},rotated:{directory}} as unknown as Parameters<typeof parityControl>[0],nonce,async()=>{});
+    for(const request of [{nonce:'foreign',action:'authorize',publicKey},{nonce,action:'authorize'},
+      {nonce,action:'authorize',publicKey:`${publicKey}\n${publicKey}`},{nonce,action:'authorize',publicKey:`command="id" ${publicKey}`},
+      {nonce,action:'authorize',publicKey:publicKey.replace('ssh-ed25519','ssh-rsa')},{nonce,action:'authorize',publicKey:publicKey.slice(0,40)}])
+      await expect(control.reply(request)).rejects.toThrow();
+    expect(await readFile(authorized,'utf8')).toBe('existing\n');
+    const fingerprint=(await sshCommand('owned generated fingerprint','ssh-keygen',['-l','-E','sha256','-f',`${key}.pub`])).trim().split(/\s+/)[1];
+    expect(await control.reply({nonce,action:'authorize',publicKey})).toEqual({fingerprint});
+    expect(await readFile(authorized,'utf8')).toBe(`existing\n${publicKey}\n`);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
 test('parity report counts only every expected native case passing exactly once',()=>{
   const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;
   const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
