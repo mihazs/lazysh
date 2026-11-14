@@ -24,6 +24,35 @@ describe("keyboard settings", () => {
       expect(Object.hasOwn(getPreferences(),'tabStrip')).toBe(false);
     } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
   });
+  it.each([['en','Keyboard shortcut for Agents','Keyboard shortcut for Workspaces','Default (Ctrl+Shift+A)','Off'],['pt-BR','Atalho de teclado para Agentes','Atalho de teclado para Espaços','Padrão (Ctrl+Shift+A)','Desativado'],['es','Atajo de teclado para Agentes','Atajo de teclado para Espacios','Predeterminado (Ctrl+Shift+A)','Desactivado']])('rebinds or turns off the Agents and Workspaces chords in %s and refuses taken keys', async (language, agentsLabel, workspacesLabel, defaultOption, off) => {
+    await act(async()=>{await uiI18n.changeLanguage(language);});
+    try {
+      savePreferences({...defaults});const page=mountPreferences(t('preferencesCategoryInput'));
+      const agents=page.getByRole('combobox',{name:agentsLabel}) as HTMLSelectElement, workspaces=page.getByRole('combobox',{name:workspacesLabel}) as HTMLSelectElement;
+      expect([agents.value,workspaces.value]).toEqual(['','']);
+      expect(within(agents).getByRole('option',{name:defaultOption})).toHaveProperty('selected',true);
+      const disabled=(select:HTMLSelectElement)=>[...select.options].filter(option=>option.disabled).map(option=>option.text.slice(-1));
+      // The palette, find in the terminal and the Agent view keep their keys, and Workspaces keeps W.
+      expect(disabled(agents)).toEqual(['F','P','W','Y']);expect(disabled(workspaces)).toEqual(['A','F','P','Y']);
+      fireEvent.change(agents,{target:{value:'B'}});
+      expect(getPreferences().gestureChords).toEqual({navigationAgents:'B'});
+      // Agents' old key is free now, and Workspaces cannot take its new one.
+      expect(disabled(workspaces)).toEqual(['B','F','P','Y']);
+      fireEvent.change(workspaces,{target:{value:'A'}});
+      expect(getPreferences().gestureChords).toEqual({navigationAgents:'B',navigationWorkspaces:'A'});
+      fireEvent.change(workspaces,{target:{value:'off'}});
+      expect(within(workspaces).getByRole('option',{name:off})).toHaveProperty('selected',true);
+      expect(getPreferences().gestureChords).toEqual({navigationAgents:'B',navigationWorkspaces:'off'});
+      fireEvent.change(agents,{target:{value:''}});fireEvent.change(workspaces,{target:{value:''}});
+      expect(getPreferences().gestureChords).toEqual({});
+    } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
+  });
+  it('keeps the Agents and Workspaces chords when the touch gestures are reset', () => {
+    savePreferences({...defaults,gestureChords:{twoUp:'C-b',navigationAgents:'B',navigationWorkspaces:'off'}});
+    const page=mountPreferences('Keyboard and gestures','Terminal touch gestures');
+    fireEvent.click(page.getByRole('button',{name:'Reset gestures'}));
+    expect(getPreferences().gestureChords).toEqual({navigationAgents:'B',navigationWorkspaces:'off'});
+  });
   it('keeps Advanced default and existing records, while saving Simple text verbatim', () => {
     savePreferences({...defaults,chords:[{label:'Existing',keys:'F12, M-h'}]});
     const page=mountPreferences('Keyboard and gestures','Keyboard chords');

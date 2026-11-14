@@ -23,6 +23,17 @@ describe("terminal preferences trust boundary", () => {
     for(const value of ['',7,null,'x'.repeat(161),'a\nb'])expect(parsePreferences({...defaults,usageProvider:value}).usageProvider).toBeUndefined();
     expect(syncablePreferences(parsePreferences({...defaults,usageItem:'hidden',usageProvider:'kimi'}))).toMatchObject({usageItem:'hidden',usageProvider:'kimi'});
   });
+  it('stores a changed Agents or Workspaces keyboard chord among the gesture chords, where clients without it import the same settings and keep the defaults',()=>{
+    expect(defaults.gestureChords).toEqual({});
+    const saved=parsePreferences(JSON.parse(JSON.stringify({...defaults,fontSize:18,gestureChords:{twoUp:'C-b',navigationAgents:'b',navigationWorkspaces:'off'}})));
+    expect(saved.gestureChords).toEqual({navigationAgents:'B',navigationWorkspaces:'off',twoUp:'C-b'});
+    expect(syncablePreferences(saved).gestureChords).toEqual(saved.gestureChords);
+    // The snapshot adds no top-level field, so a client that predates rebinding accepts it and reads only its gesture slots.
+    expect(Object.keys(syncablePreferences(saved)).sort()).toEqual(Object.keys(syncablePreferences(defaults)).sort());
+    expect(parsePreferences({...defaults,gestureChords:{navigationAgents:'A',navigationWorkspaces:'W'}}).gestureChords).toEqual({});
+    for(const gestureChords of [{navigationAgents:'P'},{navigationAgents:'Y'},{navigationWorkspaces:'F'},{navigationAgents:'1'},{navigationAgents:7},{navigationAgents:'B',navigationWorkspaces:'B'},{navigationAgents:'W'}])
+      expect(parsePreferences({...defaults,gestureChords}).gestureChords,JSON.stringify(gestureChords)).toEqual({});
+  });
   it('preserves Shift+Enter as a modified key instead of ordinary submission',()=>{
     expect(parseChord('Shift+Enter')).toBe('\x1b[13;2u');
     expect(parseChord('S-Enter')).toBe('\x1b[13;2u');
