@@ -3824,6 +3824,7 @@ dependencies = [
  "lazysh-share",
  "lazysh-terminal-runtime",
  "libc",
+ "percent-encoding",
  "portable-pty",
  "quircs",
  "rand 0.10.3",

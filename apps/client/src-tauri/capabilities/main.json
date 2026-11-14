@@ -34,6 +34,8 @@
     "allow-connect-mosh",
     "allow-connect-et",
     "allow-open-web-url",
+    "allow-inspect-auth-url",
+    "allow-open-auth-url",
     "allow-list-devices",
     "allow-device-frame",
     "allow-device-action",

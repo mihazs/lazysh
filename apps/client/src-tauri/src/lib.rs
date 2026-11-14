@@ -5,6 +5,7 @@ mod apple_speech;
 mod apple_status;
 mod approvals;
 mod attachment_upload;
+mod auth_browser;
 mod clipboard;
 mod companion;
 mod companion_settings;
@@ -85,6 +86,7 @@ pub fn run() {
         .plugin(tauri_plugin_lazysh_display_idle::init())
         .plugin(clipboard::init())
         .plugin(session_background::init())
+        .plugin(auth_browser::init())
         .plugin(app_icons::init())
         .plugin(edge_gestures::init())
         .plugin(private_keyboard::init())
@@ -198,6 +200,8 @@ pub fn run() {
                 ssh::connect_mosh,
                 et::connect_et,
                 links::open_web_url,
+                auth_browser::inspect_auth_url,
+                auth_browser::open_auth_url,
                 devices::list_devices,
                 devices::device_frame,
                 devices::device_action,

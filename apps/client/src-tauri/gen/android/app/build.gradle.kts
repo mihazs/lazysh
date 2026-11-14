@@ -297,6 +297,8 @@ rust {
 dependencies {
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
+    // The Custom Tab of the sign-in page; the same version tauri-plugin-opener already brings.
+    implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")

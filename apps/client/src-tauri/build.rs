@@ -68,6 +68,8 @@ fn main() {
         "connect_mosh",
         "connect_et",
         "open_web_url",
+        "inspect_auth_url",
+        "open_auth_url",
         "list_devices",
         "device_frame",
         "device_action",
