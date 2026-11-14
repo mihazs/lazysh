@@ -2,6 +2,7 @@ package app.lazysh.client
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.view.Gravity
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -26,6 +27,8 @@ internal class SurfaceHost(activity: Activity, private val web: View, private va
         // Touch, focus, IME and accessibility belong to #1328 and #1329: until then the page above owns every touch and the pane is not announced.
         view.isFocusable = false
         view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        // A SurfaceView asks for RGB_565 unless told otherwise, which would band a terminal's colours; the pane is drawn in 8-bit channels.
+        view.holder.setFormat(PixelFormat.RGBA_8888)
         view.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) { if (!detached) lifecycle.created() }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { if (!detached) lifecycle.changed(holder.surface, width, height) }
