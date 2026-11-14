@@ -48,4 +48,35 @@ The gate fails closed. Every host-browser command except **Clear browser data** 
 
 The browser's profile lives under `host-browser/` in the state directory (mode 0700). Each launcher claims its profile with a marker `<name>.pid` that holds its pid, removes both when it ends, and removes the profiles of dead launchers when the next one starts. **Keep profile** (`--keep-profile`) uses the single profile `host-browser/kept`, which survives until `host-browser --clear-data` and is refused while a running launcher holds it (`BrowserProfileInUse`). A pid that the operating system has reused for another process keeps a crashed launcher's profile until a later start.
 
+## Usage collection policy
+
+The account quota read has its own strict file, `usage-collection.json`, with its own revision, `usage-collection.lock`, 4 KiB limit and the same owner-only, atomic, symlink-refusing storage as `settings.json` ([ADR 0005](../architecture/adr-0005-background-usage-collection.md)). It is separate for the same reason as the update policy: an older companion would refuse an unknown key in `settings.json`.
+
+| CLI operation | Contract |
+| --- | --- |
+| `usage-collection show` | Prints the policy, including its revision. An absent file reports the defaults and creates nothing. |
+| `usage-collection update` | Requires `--expected-revision` and `--account-quota-enabled true|false`. Exit 1 with `SettingsConflict` on a stale revision and `SettingsBusy` while another writer holds the lock. |
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "accountQuotaEnabled": false,
+  "collectorEnabled": false,
+  "collectorIntervalMinutes": 30
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `accountQuotaEnabled` | `true` | Whether `lazysh-agent account-usage` may read provider quotas on this host. Existing hosts keep reading. |
+| `collectorEnabled` | `false` | Reserved for the opt-in background collector, which is not released yet; no command sets it and nothing records samples. |
+| `collectorIntervalMinutes` | `30` | The collector's interval, 5 to 1440. Reserved with the field above. |
+
+With `accountQuotaEnabled` set to `false`, `lazysh-agent account-usage` answers `{"schemaVersion":1,"state":"disabled","source":null,"report":null}` and exits 0. It does so **before** it opens a credential file, starts `ai-usagebar` or a helper process, or makes a request. `disabled` means the quota is unknown because the host forbids reading it: there is no report, so the app shows no percentage and never zero. A policy file that is malformed, has another schema version, an interval outside 5 to 1440, unknown fields or more than 4 KiB makes `account-usage` fail (exit 1, no output), so a host that tried to forbid the read is never treated as allowing it; the file is not repaired.
+
+The change applies to the **next** `account-usage` call. A read already running finishes; nothing is signalled. The guarantee covers the host companion's `account-usage` command, which the app uses for every remote host. It does not govern a companion older than this switch (such a companion has no `usage-collection` command and exits with status 2), nor the desktop app's own read of the machine it runs on, which does not go through the companion.
+
+Native Cargo fixtures run the real binary with a fake `ai-usagebar` that records when it starts: the default policy starts it, a forbidden read does not, a re-enabled switch applies without a restart, and an unreadable policy fails closed. They also cover absent-file reads, persistent updates, stale revisions, strict parsing and file modes. Vitest covers the `disabled` state, which shows no meter and no percentage.
+
 Related: [change host settings](../companion-settings.md) · [companion event storage](companion-events.md) · [documentation](../README.md).

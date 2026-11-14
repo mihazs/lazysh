@@ -35,6 +35,19 @@ lazysh-agent settings host-browser update --expected-revision 0 --host-browser-e
 
 While it is off, or its file is unreadable, every host-browser command refuses before it starts a process. Turning it off does not stop a browser that already runs. `lazysh-agent host-browser --clear-data` removes the profile that **Keep profile** left, and works with the switch off. See the [reference](reference/companion-settings.md) for the file, the errors and the profile lifetime.
 
+## Forbid account quota reads on a host
+
+`lazysh-agent account-usage` reads each configured provider's quota with the host's own sign-ins and makes outbound requests to those providers. By default any connected lazysh app may ask for it. To forbid it on a host, run on that host (the app does not offer this switch yet):
+
+```sh
+lazysh-agent usage-collection show
+lazysh-agent usage-collection update --expected-revision 0 --account-quota-enabled false
+```
+
+Replace `0` with the revision `show` returned. While the switch is off, the AI account usage page and the status-bar item show that this host does not allow account usage reads, with **no percentage**: the quota is unknown, not zero. Nothing reads a credential file, starts a helper or contacts a provider. Turn it back on with `--account-quota-enabled true`; the next refresh uses it, with no restart. A stale revision returns `SettingsConflict`; reread and retry. A malformed `usage-collection.json` makes the quota read fail, not allow it: correct the file; the companion never rewrites it.
+
+The switch binds the host companion. A companion older than this switch ignores it, and the desktop app's own read of its local machine does not use the companion. It is stored in `usage-collection.json`, separate from the three switches above. See the [reference](reference/companion-settings.md#usage-collection-policy).
+
 ## Companion updates (planned)
 
 **Not released yet** ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)). The three switches above do not change. Update behavior is a separate setting with its own revision, kept in `auto-update.json` in the same state directory so that an older companion that shares the directory keeps reading `settings.json`.

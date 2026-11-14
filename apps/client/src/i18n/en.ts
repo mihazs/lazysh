@@ -186,6 +186,7 @@ export const english = {
   accountUsageDisconnected: "The connection for account usage is closed. Restore host tools to refresh.",
   accountUsageTimeout: "The account usage refresh timed out.",
   accountUsageUnavailable: "Account usage is unavailable. Check provider sign-ins and account-usage configuration on this machine.",
+  accountUsageDisabled: "This host does not allow account usage reads, so the quota is unknown. Turn account quota reads on with `lazysh-agent usage-collection update` on the host.",
   companionInstallTitle: "Host companion installation",
   companionInstallButton: "Install companion",
   companionInstallUpdate: "Update companion",

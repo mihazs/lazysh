@@ -152,6 +152,7 @@ const translations = {
   accountUsageDisconnected: ["A conexão para uso da conta está fechada. Restaure as ferramentas do servidor para atualizar.", "La conexión para el uso de la cuenta está cerrada. Restaura las herramientas del servidor para actualizar."],
   accountUsageTimeout: ["A atualização de uso da conta excedeu o tempo limite.", "La actualización del uso de la cuenta agotó el tiempo de espera."],
   accountUsageUnavailable: ["O uso da conta está indisponível. Verifique os logins dos provedores e a configuração de uso da conta nesta máquina.", "El uso de la cuenta no está disponible. Revisa las sesiones de los proveedores y la configuración de uso de la cuenta en esta máquina."],
+  accountUsageDisabled: ["Este servidor não permite ler o uso da conta, então a cota é desconhecida. Ative a leitura de cota com `lazysh-agent usage-collection update` no servidor.", "Este servidor no permite leer el uso de la cuenta, así que la cuota es desconocida. Activa la lectura de cuota con `lazysh-agent usage-collection update` en el servidor."],
   hooksDetected: ["Agentes detectados no servidor", "Agentes detectados en el servidor"],
   hooksDetecting: ["Detectando agentes no servidor…", "Detectando agentes en el servidor…"],
   hooksDetectionUnavailable: ["Detecção indisponível. Atualize o companion ou escolha um perfil manualmente.", "Detección no disponible. Actualiza el companion o elige un perfil manualmente."],

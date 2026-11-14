@@ -29,6 +29,7 @@ mod storage_namespace;
 pub mod transcript;
 pub mod update;
 pub mod usage;
+pub mod usage_collection;
 use clap::ValueEnum;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
