@@ -10,6 +10,8 @@ use tauri::Manager;
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+#[path = "tmux_agent_session_fixture.rs"]
+mod agent_session;
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
 #[path = "tmux_retirement_fixture.rs"]
@@ -79,6 +81,15 @@ impl Fixture {
         mosh: bool,
         user_install: bool,
     ) -> Self {
+        Self::with_environment(herdr, mosh, user_install, Vec::new()).await
+    }
+    /// `extra` is added to the environment the owned sshd gives every remote command; a `PATH` entry is put in front.
+    async fn with_environment(
+        herdr: Option<&std::path::Path>,
+        mosh: bool,
+        user_install: bool,
+        extra: Vec<(&'static str, String)>,
+    ) -> Self {
         let dir = if user_install {
             tempfile::tempdir_in("/tmp").unwrap()
         } else {
@@ -131,6 +142,15 @@ impl Fixture {
         }
         if mosh {
             environment.push(("MOSH_SERVER_NETWORK_TMOUT", "20".into()));
+        }
+        for (key, value) in extra {
+            match environment
+                .iter_mut()
+                .find(|(name, _)| *name == key && key == "PATH")
+            {
+                Some(path) => path.1.insert_str(0, &format!("{value}:")),
+                None => environment.push((key, value)),
+            }
         }
         assert!(
             environment.iter().all(|(_, value)| !value
