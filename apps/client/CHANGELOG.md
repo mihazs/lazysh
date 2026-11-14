@@ -1,5 +1,27 @@
 # @lazysh/client
 
+## 1.63.0
+
+### Minor Changes
+
+- c68f90c: Change a Claude Code session's model from the Agent view on tmux: Switch model (/model) in the options sends one guarded /model and the agent's own model list opens as a card above the message box when the view can read it, else in the terminal.
+- 744e3bb: Update the host companion on the host instead of downloading it on the phone. **Install companion** and **Update companion** now send the host a pin (version, size and SHA-256 verified from the release metadata) and the host downloads, verifies, self-tests and installs the companion itself; the phone fetches only the small metadata. Changed default: the phone's connection to GitHub is no longer used for the transfer.
+
+### Patch Changes
+
+- c1bce22: Record the first runtime capture of the Android native launch (#582). On a Waydroid guest, a cold start and a restore after process death show a brief text placeholder between the branded cover and the workspace; warm start is clean. Documentation only: no behavior change, and the physical-device sequence is still unverified.
+- c770443: Give the Appium device suite its owned SSH, Herdr and tmux hosts (forwarded to the guest with `adb reverse`), app install, reset and permission helpers, the connect-an-owned-host flow and deterministic data, and add the `host-transport` and `host-key-fingerprint` test ids to the host editor and the host key review.
+- a4a98df: Teach the shared Rust terminal core to apply Mosh display frames as a top-anchored resize without reflow. The core is not wired into the app yet and xterm.js stays the only engine and the default, so nothing changes for users; this is groundwork for trying a native engine behind an explicit opt-in.
+- 0018e28: Measure the terminal adapter's write path against writing to xterm.js directly, and record which terminal engine slices have shipped. No terminal behaviour or default changes; xterm.js stays the only engine.
+- c8e4108: Teach the shared Rust terminal core to bring a reader who scrolled back into history to the live screen when typing or pasting is accepted, like xterm.js's `scrollOnUserInput`, so the reply to a key pressed from scrollback (a toolbar Enter confirming an agent menu) is never left out of view. The core is not wired into the app yet and xterm.js stays the only engine and the default, so nothing changes for users; this is groundwork for trying a native engine behind an explicit opt-in.
+- e372f1d: Re-tap the ntfy notification permission Allow button during the Android native acceptance while the same owned prompt stays visible, so a dropped first tap no longer fails the F-Droid ntfy job.
+- a669d49: Run the Appium device suite on the API 36 emulator in CI (report-only): a path-filtered `native-android-appium` job with tier, quarantine and shard selection, one fresh-session retry per spec file with a flaky-spec job summary, JUnit and failure artifacts, a never-gating quarantine job and a nightly run. Test infrastructure only; no product change.
+- @lazysh/account-usage@1.63.0
+  - @lazysh/common@1.63.0
+  - @lazysh/display-idle@1.63.0
+  - @lazysh/et-transport@1.63.0
+  - @lazysh/mosh-transport@1.63.0
+
 ## 1.62.0
 
 ### Minor Changes
