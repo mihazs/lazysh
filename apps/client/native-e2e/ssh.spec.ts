@@ -235,6 +235,28 @@ it('pans the expanded D-pad through one native held pointer and stops bytes in i
   await disconnectOwnedSsh(gui,terminal);
 });
 
+it('generates an encrypted identity and logs in with its public key',async()=>{
+  fixture.captureSafe=false;
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
+  const gui=fixture.gui=await NativeGui.start(),passphrase=randomBytes(12).toString('hex');
+  const {terminal,owner}=await openOwnedSshWith(gui,ssh,async connect=>{
+    await (await connect.$('button=Private key')).click();
+    await (await connect.$('summary=Generate or inspect an identity')).click();
+    const panel=await connect.$('section[aria-label="SSH key management"]');await panel.waitForDisplayed();
+    await (await (await panel.$('label*=Key passphrase')).$('input[type="password"]')).setValue(passphrase);
+    await (await panel.$('button=Generate encrypted identity')).click();
+    // Generation derives the passphrase key with bcrypt, which is slow in a debug build.
+    const publicKey=await panel.$('textarea[readonly]');await publicKey.waitForDisplayed({timeout:60_000});
+    const authorized=await publicKey.getValue();expect(authorized).toMatch(/^ssh-ed25519 /);
+    await writeFile(join(ssh.directory,'authorized_keys'),authorized+'\n',{mode:0o600});
+    await (await panel.$('button=Use for connection')).click();
+    expect(await (await (await connect.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()).toBe(passphrase);
+    await (await connect.$('button=Connect')).click();
+  });
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  await disconnectOwnedSsh(gui,terminal);
+});
+
 it('imports an encrypted private key file, shows its OpenSSH fingerprint and logs in as the authorized identity',async()=>{
   fixture.captureSafe=false;
   const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
@@ -247,15 +269,31 @@ it('imports an encrypted private key file, shows its OpenSSH fingerprint and log
   const encrypted=await readFile(keyFile,'utf8');
   if(encrypted===ssh.privateKey)throw new Error('Owned identity file was not re-encrypted');
   const authorizedPublic=join(ssh.directory,'user.pub');
+  const publicFile=join(keys,'id_ed25519.pub');await copyFile(authorizedPublic,publicFile);
   const authorized=(await readFile(authorizedPublic,'utf8')).trim().split(/\s+/).slice(0,2).join(' ');
   const fingerprint=(await sshCommand('owned identity fingerprint','ssh-keygen',['-l','-E','sha256','-f',authorizedPublic])).trim().split(/\s+/)[1];
   if(!/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint))throw new Error('Invalid owned identity fingerprint');
   const {terminal,owner}=await openOwnedSshWith(gui,ssh,async connect=>{
     gui.stage='owned identity file import';
     await (await connect.$('button=Private key')).click();
+    const connectionKey=await (await connect.$('label*=Private key (OpenSSH or PEM)')).$('textarea');
+    await connectionKey.setValue(await readFile(publicFile,'utf8'));
+    await (await connect.$('button=Connect')).click();
+    const trust=await gui.browser!.$('[role="dialog"][aria-label="Verify this host"]');
+    await trust.waitForDisplayed({timeout:20_000});
+    expect(await trust.getText()).toContain(ssh.fingerprint);
+    await (await trust.$('button=Trust key and connect')).click();
+    const connectionError=await connect.$('.inline-error[role="alert"]');
+    await connectionError.waitForDisplayed({timeout:20_000});
+    expect(await connectionError.getText()).toContain('This is a public key. Import its corresponding private key instead.');
     await (await connect.$('summary=Generate or inspect an identity')).click();
     const panel=await connect.$('section[aria-label="SSH key management"]');await panel.waitForDisplayed();
     await (await (await panel.$('label*=Identity source')).$('select')).selectByAttribute('value','import');
+    await (await (await panel.$('label*=Private key file')).$('input[type="file"]')).addValue(publicFile);
+    await (await panel.$('button=Inspect identity')).click();
+    await (await panel.$('[role="alert"]')).waitForDisplayed({timeout:20_000});
+    expect(await (await panel.$('[role="alert"]')).getText()).toContain('This is a public key. Import its corresponding private key instead.');
+    expect(await panel.$('button=Use for connection').isExisting()).toBe(false);
     // WebDriver file upload fills the same input the native picker fills.
     await (await (await panel.$('label*=Private key file')).$('input[type="file"]')).addValue(keyFile);
     await (await panel.$('span=Loaded id_ed25519. Its contents stay in memory.')).waitForDisplayed();
@@ -270,7 +308,7 @@ it('imports an encrypted private key file, shows its OpenSSH fingerprint and log
     expect(await (await (await connect.$('label*=Private key (OpenSSH or PEM)')).$('textarea')).getValue()===encrypted).toBe(true);
     expect(await (await (await connect.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()===passphrase).toBe(true);
     await (await connect.$('button=Connect')).click();
-  });
+  },true);
   await challengeOwnedSsh(gui,ssh,terminal,owner);
   const catalog=await readFile(join(gui.directory,'config','app.lazysh.client','hosts.json'),'utf8');
   if(catalog.includes('PRIVATE KEY')||catalog.includes(passphrase))throw new Error('Owned host catalog contains imported identity material');
