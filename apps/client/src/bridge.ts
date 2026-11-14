@@ -50,8 +50,8 @@ export type Credentials = {
   passphrase?: string;
 };
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
-/** Discovery's per-host version gate: `missing` names capabilities this version lacks. */
-export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; support: 'full' | 'degraded'; missing: string[] };
+/** Discovery's per-host version gate: `missing` names capabilities this version lacks; `schemaVersion` is the Herdr API schema the host printed. */
+export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; schemaVersion?: number; support: 'full' | 'degraded'; missing: string[] };
 export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean};
 export type HerdrNavigationTarget =
   | {kind:'workspace';workspace:string}

@@ -141,7 +141,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
     {busy && <p className="loading" role="status">{t('muxReading')}</p>}
     {requested && tree && !(requestedHerdr ? tree.herdrAvailable : tree.tmuxAvailable) && <p role="status">{t('desktopLaunchMuxUnavailable',{kind:requested.mux.kind})}</p>}
     {!requested && tree && <p className="muted">tmux {toolStatus('tmux', tree.tmuxAvailable)} · Herdr {toolStatus('herdr', tree.herdrAvailable)} · Zellij {toolStatus('zellij', tree.zellijAvailable)}</p>}
-    {tree?.tools?.filter(tool => tool.support !== 'full' && (!requested || tool.kind===requested.mux.kind)).map(tool => <p key={tool.kind} className="security-note" role="note">{t(limitedNotice[tool.kind])}</p>)}
+    {tree?.tools?.filter(tool => tool.support !== 'full' && (!requested || tool.kind===requested.mux.kind)).map(tool => <p key={tool.kind} className="security-note" role="note">{tool.kind==='herdr' && tool.schemaVersion!==undefined && tool.schemaVersion!==1 ? t('muxLimitedHerdrSchema',{schema:tool.schemaVersion}) : t(limitedNotice[tool.kind])}</p>)}
     {(requestedHerdr ? tree?.herdrAvailable : !requested && (tree?.herdrAvailable || tree?.zellijAvailable)) && <div>{!requested && <label>{t('muxPersistentName')}<input value={persistentName} onChange={e => setPersistentName(e.target.value)} maxLength={200} disabled={busy} /></label>}
       {(['herdr', 'zellij'] as const).filter(kind => (!requested || kind==='herdr') && (kind === 'herdr' ? tree!.herdrAvailable : tree!.zellijAvailable)).map(kind => <div key={kind}>
         {!requested && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void loadPersistent(kind)}>{t('muxListSessions',{kind})}</button>

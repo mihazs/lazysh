@@ -668,6 +668,7 @@ const translations = {
   muxLimitedTmux: ["Ir para e a entrada do Chat exigem tmux 3.4 ou mais recente.", "Ir a y la entrada del Chat requieren tmux 3.4 o posterior."],
   muxLimitedZellij: ["A árvore de áreas de trabalho, fechar, redimensionar e iniciar agentes exigem Zellij 0.45.1.", "El árbol de espacios de trabajo, cerrar, redimensionar e iniciar agentes requieren Zellij 0.45.1."],
   muxLimitedHerdr: ["Somente a navegação está disponível. O suporte completo exige Herdr 0.9.3 a 0.9.5.", "Solo la navegación está disponible. El soporte completo requiere Herdr 0.9.3 a 0.9.5."],
+  muxLimitedHerdrSchema: ["Este Herdr informa o esquema de API {{schema}}, mas o suporte completo exige o esquema 1. Somente a navegação está disponível.", "Este Herdr informa el esquema de API {{schema}}, pero el soporte completo requiere el esquema 1. Solo la navegación está disponible."],
   muxPersistentName: ["Nome da sessão persistente", "Nombre de la sesión persistente"],
   muxListSessions: ["Listar sessões {{kind}}", "Listar sesiones {{kind}}"],
   muxOpenSession: ["Abrir/criar sessão {{kind}}", "Abrir/crear sesión {{kind}}"],

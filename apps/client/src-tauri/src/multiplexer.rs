@@ -319,6 +319,9 @@ pub enum Support {
 pub struct Tool {
     kind: MultiplexerKind,
     version: Option<String>,
+    /// Herdr's `herdr api schema` version when the host printed one.
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u32>,
     support: Support,
     missing: &'static [&'static str],
 }
@@ -327,7 +330,13 @@ fn numbers(value: &str) -> Option<Vec<u32>> {
     value.split('.').map(|part| part.parse().ok()).collect()
 }
 /// The one table from `(kind, version line)` to support; untested versions stay degraded.
+/// Herdr's line carries the host's `herdr api schema` version after a tab; a readable
+/// version other than 1 degrades it, an unreadable one keeps the version verdict.
 fn tool(kind: MultiplexerKind, line: &str) -> Tool {
+    let (line, schema_version) = match (kind, line.rsplit_once('\t')) {
+        (MultiplexerKind::Herdr, Some((line, schema))) => (line, schema.parse().ok()),
+        _ => (line, None),
+    };
     let (name, missing): (_, &'static [&'static str]) = match kind {
         MultiplexerKind::Tmux => ("tmux", &["jump", "confirmedInput"]),
         // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
@@ -351,11 +360,15 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
         )
         .is_some_and(|v| v.len() == 2 && (v[0], v[1]) >= (3, 4)),
         MultiplexerKind::Zellij => numbers(version).is_some_and(|v| v == [0, 45, 1]),
-        MultiplexerKind::Herdr => numbers(version)
-            .is_some_and(|v| v.len() == 3 && v[..2] == [0, 9] && (3..=5).contains(&v[2])),
+        MultiplexerKind::Herdr => {
+            numbers(version)
+                .is_some_and(|v| v.len() == 3 && v[..2] == [0, 9] && (3..=5).contains(&v[2]))
+                && schema_version.is_none_or(|schema| schema == 1)
+        }
     });
     Tool {
         kind,
+        schema_version,
         version: version
             .filter(|v| !v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control))
             .map(str::to_owned),
@@ -447,11 +460,18 @@ fn name(value: &str) -> Result<()> {
 fn discovery_command(server: &crate::tmux_server::TmuxServer, positive_unix: bool) -> String {
     let tmux = server.prefix();
     // Version commands only print; none of them starts a server.
-    let probe = |tool: &str, version: &str| {
-        format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
+    // `herdr api schema` prints the installed binary's embedded schema; it never contacts or starts a server.
+    let probe = |tool: &str, version: &str, schema: &str| {
+        let (field, value) = if schema.is_empty() {
+            ("", String::new())
+        } else {
+            ("\\t%s", format!(" \"$({tool} {schema} 2>/dev/null | sed -n 's/^schema_version: //p' | head -n 1)\""))
+        };
+        format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s{field}\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"{value}; else printf '{tool}\\t0\\n'; fi")
     };
-    let herdr = crate::herdr_path::select(&probe("herdr", "--version"), positive_unix);
-    format!("{}; {herdr}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), probe("zellij", "--version"), quote(PANE_FORMAT))
+    let herdr =
+        crate::herdr_path::select(&probe("herdr", "--version", "api schema"), positive_unix);
+    format!("{}; {herdr}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V", ""), probe("zellij", "--version", ""), quote(PANE_FORMAT))
 }
 
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
@@ -877,20 +897,14 @@ mod tests {
             assert_eq!(host_shell(error).kind(), kind);
         }
     }
+    /// Runs the product discovery script against stub tools and returns the parsed tree and the commands they saw.
     #[cfg(unix)]
-    #[test]
-    fn discovery_script_reports_installed_versions_without_starting_a_server() {
+    fn discover(tools: &[(&str, &str)]) -> (serde_json::Value, String) {
         use std::{os::unix::fs::PermissionsExt, process::Command};
-        let tools = tempfile::tempdir().unwrap();
-        let calls = tools.path().join("calls");
-        for (name, body) in [
-            (
-                "tmux",
-                "case \"$*\" in -V) echo 'tmux 3.2a';; *has-session*) exit 1;; *) exit 9;; esac",
-            ),
-            ("zellij", "echo 'zellij 0.45.1'"),
-        ] {
-            let path = tools.path().join(name);
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("calls");
+        for (name, body) in tools {
+            let path = dir.path().join(name);
             std::fs::write(
                 &path,
                 format!(
@@ -901,14 +915,14 @@ mod tests {
             .unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        for name in ["sh", "head"] {
+        for name in ["sh", "head", "sed"] {
             let real = Command::new("/bin/sh")
                 .args(["-c", &format!("command -v {name}")])
                 .output()
                 .unwrap();
             std::os::unix::fs::symlink(
                 String::from_utf8(real.stdout).unwrap().trim(),
-                tools.path().join(name),
+                dir.path().join(name),
             )
             .unwrap();
         }
@@ -918,13 +932,26 @@ mod tests {
                 &discovery_command(&crate::tmux_server::TmuxServer::Default, false),
             ])
             .env_clear()
-            .env("PATH", tools.path())
+            .env("HOME", dir.path())
+            .env("PATH", dir.path())
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let tree =
             serde_json::to_value(parse_tree(&String::from_utf8(output.stdout).unwrap()).unwrap())
                 .unwrap();
+        (tree, std::fs::read_to_string(calls).unwrap())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn discovery_script_reports_installed_versions_without_starting_a_server() {
+        let (tree, calls) = discover(&[
+            (
+                "tmux",
+                "case \"$*\" in -V) echo 'tmux 3.2a';; *has-session*) exit 1;; *) exit 9;; esac",
+            ),
+            ("zellij", "echo 'zellij 0.45.1'"),
+        ]);
         assert_eq!(
             (
                 &tree["tmuxAvailable"],
@@ -941,9 +968,77 @@ mod tests {
         assert_eq!(tree["tools"][0]["support"], "degraded");
         assert_eq!(tree["tools"][1]["support"], "full");
         assert_eq!(
-            std::fs::read_to_string(calls).unwrap(),
+            calls,
             "tmux -V\nzellij --version\ntmux -u -L default has-session\n"
         );
+    }
+    /// A shell body that answers `herdr --version` like 0.9.5 and `herdr api schema` with `schema`.
+    #[cfg(unix)]
+    fn herdr_printing(schema: &str) -> String {
+        format!("case \"$*\" in --version) echo 'herdr 0.9.5';; 'api schema') {schema};; *) exit 9;; esac")
+    }
+    #[cfg(unix)]
+    #[test]
+    fn herdr_api_schema_version_gates_full_support_without_starting_a_server() {
+        for (schema, shown, support) in [
+            (
+                "printf 'Herdr API schema\\nprotocol: 22\\nschema_version: 1\\nschemas: x\\n'",
+                Some(1),
+                "full",
+            ),
+            (
+                "printf 'Herdr API schema\\nprotocol: 22\\nschema_version: 2\\nschemas: x\\n'",
+                Some(2),
+                "degraded",
+            ),
+            // An unreadable schema keeps the version verdict: the issue only degrades a readable mismatch.
+            ("exit 2", None, "full"),
+            ("printf 'schema_version: new\\n'", None, "full"),
+        ] {
+            let (tree, calls) = discover(&[("herdr", &herdr_printing(schema))]);
+            let herdr = &tree["tools"][0];
+            assert_eq!(herdr["version"], "0.9.5", "{schema}");
+            assert_eq!(herdr["support"], support, "{schema}");
+            assert_eq!(
+                herdr.get("schemaVersion"),
+                shown.map(Into::into).as_ref(),
+                "{schema}"
+            );
+            assert_eq!(
+                herdr["missing"].as_array().unwrap().is_empty(),
+                support == "full",
+                "{schema}"
+            );
+            // Only the two print-only commands run: nothing talks to or starts a Herdr server.
+            assert_eq!(calls, "herdr --version\nherdr api schema\n", "{schema}");
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires LAZYSH_TEST_HERDR_STOCK, the same-run stock Herdr binary"]
+    fn real_herdr_api_schema_gates_discovery_support() {
+        let binary = std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap();
+        let line = lazysh_common::test_support::successful_output(
+            std::process::Command::new(&binary)
+                .arg("--version")
+                .env_clear(),
+        );
+        let version = line.lines().next().unwrap().strip_prefix("herdr ").unwrap();
+        let real = quote(&binary);
+        // The binary is real; the second stub only changes the schema number it prints.
+        let changed = format!("if [ \"$1 $2\" = 'api schema' ]; then {real} \"$@\" | sed 's/^schema_version: 1$/schema_version: 2/'; else exec {real} \"$@\"; fi");
+        for (body, schema, support) in [
+            (format!("exec {real} \"$@\""), 1, "full"),
+            (changed, 2, "degraded"),
+        ] {
+            let (tree, calls) = discover(&[("herdr", &body)]);
+            let herdr = &tree["tools"][0];
+            eprintln!("real Herdr discovery record: {herdr}");
+            assert_eq!(herdr["version"], version);
+            assert_eq!(herdr["schemaVersion"], schema);
+            assert_eq!(herdr["support"], support);
+            assert_eq!(calls, "herdr --version\nherdr api schema\n");
+        }
     }
     #[test]
     fn validates_targets_and_quotes_names_and_format_directories() {

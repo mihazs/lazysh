@@ -3798,6 +3798,10 @@ async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
             .unwrap_or_else(|| panic!("{kind} was not discovered"));
         assert_eq!(tool["version"], versions[kind].as_str(), "{kind}");
         assert_eq!(tool["support"], support, "{kind}");
+        // The stock Herdr's own `herdr api schema` over real OpenSSH.
+        if kind == "herdr" {
+            assert_eq!(tool["schemaVersion"], 1);
+        }
         assert_eq!(discovery[format!("{kind}Available")], true);
     }
 }

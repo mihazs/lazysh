@@ -145,7 +145,7 @@ it('refuses a requested picker routed to a different source ID',async()=>{
 it('lists discovered versions, explains each limited multiplexer and reports the record once read',async()=>{
   const tools=[
     {kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']},
-    {kind:'herdr',version:'0.8.2',support:'degraded',missing:['create']},
+    {kind:'herdr',version:'0.8.2',schemaVersion:1,support:'degraded',missing:['create']},
     {kind:'zellij',version:null,support:'degraded',missing:['tree']},
   ];
   vi.mocked(invoke).mockResolvedValue({...tree,herdrAvailable:true,zellijAvailable:true,tools});const onTools=vi.fn();

@@ -1182,6 +1182,13 @@ jobs:
           test "$(/usr/bin/tmux -V)" = 'tmux 3.4'
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      - name: Report a supported Herdr version as limited when its API schema is not 1, through product discovery on the stock binary
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: multiplexer::tests::real_herdr_api_schema_gates_discovery_support
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: *exact-ignored-case
       - name: Report the newest pinned tmux as supported through product discovery over owned OpenSSH
         if: ${{ !cancelled() }}
         shell: bash

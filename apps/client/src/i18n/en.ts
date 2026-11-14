@@ -640,6 +640,7 @@ export const english = {
   muxLimitedTmux: "Jump To and Chat input need tmux 3.4 or newer.",
   muxLimitedZellij: "The workspace tree, close, resize and agent launch need Zellij 0.45.1.",
   muxLimitedHerdr: "Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.",
+  muxLimitedHerdrSchema: "This Herdr reports API schema {{schema}}, but full support needs schema 1. Only navigation is available.",
   muxPersistentName: "Persistent session name",
   muxListSessions: "List {{kind}} sessions",
   muxOpenSession: "Open/create {{kind}} session",

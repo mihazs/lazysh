@@ -72,8 +72,22 @@ One Rust table maps `(kind, version)` to capabilities. The frontend reads that r
 | --- | --- | --- | --- | --- |
 | tmux | `tmux -V` | ≥ 3.4 | 3.2a–3.3: no Jump To or confirmed input | 3.2a (distribution), 3.4 (distribution and source) and 3.8, the newest release, built from source with sha256 |
 | Zellij | `zellij --version` | 0.45.1 | 0.44.x until verified: no tree, close, resize or run | 0.45.1 static musl asset with sha256 |
-| Herdr | `herdr --version`; API `schema_version` not yet checked → [#1159](https://github.com/mihazs/lazysh/issues/1159) | 0.9.3–0.9.5 | other versions: navigation only | 0.9.3, moving to 0.9.5 in [#1117](https://github.com/mihazs/lazysh/issues/1117) |
+| Herdr | `herdr --version` and `herdr api schema` (`schema_version`, read in discovery) | 0.9.3–0.9.5 with schema 1 (an unreadable schema keeps the version verdict) | other versions, or a readable schema other than 1: navigation only | 0.9.3, moving to 0.9.5 in [#1117](https://github.com/mihazs/lazysh/issues/1117) |
 | rmux | `rmux capabilities --json` (not `-V`, which prints rmux branding) | 0.10.x, wire 8 | wire mismatch: unsupported until the daemon restarts | 0.10.0 release tarball, sha256 `1bec11ef…c2696c5` |
+
+#### Herdr API schema (#1159)
+
+The socket's `ping` reply carries `version`, `protocol` and `capabilities` but no
+`schema_version`; the schema version is printed by `herdr api schema`, which prints the
+installed binary's embedded schema and never contacts or starts a server. Discovery runs
+it after `herdr --version`, so the result does not depend on whether a server is running.
+A readable `schema_version` other than 1 degrades Herdr to navigation only, whatever its
+version string, and the host's tool record carries `schemaVersion`. The Sessions panel
+then says which schema the host reported. An unreadable schema (the command fails or
+prints no number) keeps the version verdict, so a host is never downgraded for a probe
+that did not answer. CI proves both directions on the same-run stock Herdr: it reports
+`full` with `schemaVersion` 1 over real OpenSSH, and the discovery script reports
+`degraded` when a wrapper changes only the schema number the real binary prints.
 
 ### rmux as a tmux-family binary (#1140)
 
@@ -137,7 +151,7 @@ implemented without full evidence, *part* means partial.
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
 | Notification opens the pane | part → #1146 | no → #1146 | part → #1146 | no → #1146 |
 | Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | no → #1140 (while the daemon lives) |
-| Version detection | yes | yes | version yes; API schema → #1159 | no → #1140 |
+| Version detection | yes | yes | yes, version and API schema | no → #1140 |
 
 Restore after a host reboot is not offered for rmux (in-memory daemon) or Zellij;
 lazysh offers to recreate the session instead.
