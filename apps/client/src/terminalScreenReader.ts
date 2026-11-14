@@ -33,6 +33,7 @@ export function needsScreenReaderMirror(adapter: Pick<TerminalAdapter, 'capabili
 export function newScreenLines(before: readonly string[], after: readonly string[]): string[] {
   if (!before.length) return [];
   const changed = after.flatMap((row, index) => row !== before[index] ? [index] : []);
+  if (!changed.length && before.length === after.length) return [];
   // One row edited in place (typing, a spinner): speak what was appended when it only grew, else the row.
   if (before.length === after.length && changed.length === 1) {
     const row = after[changed[0]!]!, old = before[changed[0]!]!;
@@ -118,7 +119,8 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
       else if (cursor !== cursorRow && cursor >= 0 && rows[cursor]?.trim() && before.length) pending = [rows[cursor]!.trim()];
     }
     cursorRow = cursor;
-    before = rows;
+    // History is not compared with the live screen: returning to it must not announce everything that changed meanwhile.
+    before = view.following ? rows : [];
     scheduleAnnouncement();
   };
   const wake = () => { if (!settleTimer && !disposed) settleTimer = setTimeout(settle, limits.settleMs); };
