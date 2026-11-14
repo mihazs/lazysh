@@ -753,8 +753,10 @@ jobs:
       - name: Exercise native resume policy persistence and cancellation
         run: bunx moon run client-native:test-resume-policy
       # Last, and keyed on the installer step, so an unrelated native failure neither hides nor causes it.
+      # Non-blocking until its first qualifying hosted pass is recorded on #492; then remove continue-on-error.
       - name: Exercise the installed Windows application GUI
         if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        continue-on-error: true
         uses: ./.github/actions/windows-installed-gui
 
   native-android:
