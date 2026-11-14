@@ -502,6 +502,37 @@ Microseconds. The change is the one in `hub.rs`: a worker's run queue is two que
 - Detached sessions are not starved: `a_detached_session_keeps_parsing_while_the_attached_one_never_idles` refills an attached session from its own credit hook so it never idles, and a detached one still finishes (it fails by timeout with the burst removed, and the other test fails on the old queue with 147,456 bytes parsed ahead of the echo against a bound of 65,536).
 - Not measured: the cost to the detached sessions (their credit latency while an attached one floods rises by construction to one turn in five on a worker; its size was not recorded), a phone, more or fewer than nine other sessions, split panes with several attached sessions (they share the priority queue and round-robin), and how many workers a device should have. Worker count stays a placeholder: the throughput table above shows the pool size is a real lever on this host and nothing else.
 
+### Scrollback compaction of idle sessions (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example compress_bench` and `cargo run --release --example session_bench memory` in `packages/terminal-runtime` ([#1338](https://github.com/mihazs/lazysh/issues/1338)). A detached session that has received nothing for `HubConfig::compress_after` (2 s by default) has its scrollback compacted by its worker with libghostty-vt's incremental compression, one bounded step at a time and only while no session on that worker has bytes to parse. An attached session is never compacted, and new output or an attach cancels a pending compaction. Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3.3, rustc 1.96.1 release, vendored libghostty-vt built `ReleaseFast`); `compress_bench` and `session_bench memory` ran three times each at 1-minute load averages of about 7 to 11 on 24 threads. No transport, no renderer, no xterm.js side by side and no device.
+
+`compress_bench`: ten sessions (80x24, the default 4 MiB scrollback) each receive 8 MiB; resident memory per session is the growth of the process over ten sessions; every pass asserts the full text is unchanged and the row count equal. The cells are the lowest to highest of the three runs.
+
+| Content | Rows kept | RSS KiB per session, filled | after compaction | Compaction ms per session (worst single step) | Reading the whole history ms, before and after | Attach snapshot ms, before and after |
+| --- | --- | --- | --- | --- | --- | --- |
+| plain text | 5280 | 4016 to 4025 | 642 to 647 | 0.6 to 0.7 (0.07 to 0.08) | 1.6 to 1.7, 2.9 to 3.2 | 0.24, 0.24 to 0.26 |
+| ANSI + truecolor | 4892 | 3352 to 3359 | 563 to 570 | 2.2 to 2.3 (0.28) | 0.6, 2.3 to 2.4 | 0.15, 0.17 |
+| CJK/emoji/combining | 5030 | 3830 to 3836 | 342 to 348 | 1.1 (0.16 to 0.17) | 1.5 to 1.6, 2.6 to 2.7 | 0.15 to 0.16, 0.15 to 0.17 |
+| plain lines, 80 columns | 5280 | 3920 | 392 | 0.7 to 0.8 (0.09 to 0.10) | 1.4, 2.5 to 2.7 | 0.18, 0.18 to 0.20 |
+
+Through the hub (`session_bench memory`, sessions filled with 8 MiB of 80-column lines at a 4 MiB scrollback, then left detached for 3 s with the default 2 s delay), resident memory per session, lowest to highest of three runs:
+
+| Sessions | Filled | After 3 s idle and detached |
+| --- | --- | --- |
+| 5 | 3986 to 3999 KiB | 534 to 547 KiB |
+| 10 | 3958 to 3960 KiB | 486 to 488 KiB |
+
+Churn (100 sessions, 1 MiB each, created and closed per round) over 40 rounds with compaction on: the process stayed between 15,944 and 16,044 KiB from round 1 to round 40, and with it off between 15,028 and 15,192 KiB. A first version that kept a closed session's pending compaction until its timer grew by about 1.4 MiB over the first 12 rounds and then held flat; closing a session now drops that entry, and the figures above are from the version that does.
+
+How this compares with the recorded xterm.js baseline, and why that comparison is weak: the [baseline](#measured-baseline) measured 7.2 to 8.3 MiB of renderer-process resident memory per session at 5 and 10 sessions with 5000 lines each (whole renderer process, DOM renderer, 152 or 46 columns, hidden panes), and 0.8 to 1.2 MiB of JS heap. The native figures above are the Rust core's process only, at 80 columns, with about 5280 rows kept, no renderer surface and no WebView; they are not the same quantity and no ratio is claimed. They do show that ten sessions cost about 40 MiB while all are active and about 8 MiB when nine are idle and detached (9 x 0.49 + 3.96), against 73 to 77 MiB of baseline renderer growth for ten sessions.
+
+What this says, and does not say:
+
+- The saving is real on this host: 83 to 91 % of a full session's resident memory returned, history intact (asserted on every pass), at a cost of 0.6 to 2.3 ms of worker time per session, no single step above 0.28 ms in these runs, and about 1.1 to 1.7 ms more the first time the whole history is read afterwards. An attach snapshot, which reads the visible screen, did not change.
+- What is not known: whether the reclamation works on Android, iOS and Windows (the library reports it as unsupported on some targets, in which case a step does nothing and the saving is zero), what a phone's allocator does with the freed pages, the cost of scrolling back into a compacted history on a device, and any energy cost of the periodic wake. Linux x86_64 with glibc is the only target measured.
+- The 2 s delay is a placeholder: it keeps a session that gets output every few seconds from being compacted and restored in turn, and nothing measured here chose it.
+- `HubConfig::scrollback_budget` (256 MiB) and `session_scrollback_max` (64 MiB) are unchanged placeholders: with compaction ten full sessions cost about 8 MiB on this host, which is not evidence for any particular device budget, and the mapping of the History lines setting to bytes is a separate change.
+
 ### Renderer pipeline cost (host microbenchmark, not a candidate)
 
 Measured with `cargo run --release --example render_bench` in `packages/terminal-runtime` ([#1322](https://github.com/mihazs/lazysh/issues/1322)). It adds the stages above the VT, one at a time, to the same kind of 16 KiB feed as the parse benchmark: `take_frame`, the renderer-side `Screen::apply` plus its dirty-row query, and the CPU reference renderer's draw and present. Frames are taken either after every 16 KiB chunk or once per 256 KiB of output (the credit window, the most that can be in flight); the second is what a renderer that draws once per display refresh sees at best. The reference renderer is a correctness vehicle with a dot-pattern glyph and no font; its row is the cost of a software renderer, not of a candidate. Every reference run ends by checking that its incrementally drawn image equals a full repaint of the final screen. No transport, JS bridge, GPU or device is involved, and none of this may be compared with the xterm.js baseline: its generators are not W2 to W4.

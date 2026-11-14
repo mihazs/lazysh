@@ -48,6 +48,8 @@ Also released in v1.61.0: the core lifecycle ([#1501](https://github.com/mihazs/
 Also merged and waiting for the next version: the attached-first worker queue of the session service ([#1339](https://github.com/mihazs/lazysh/issues/1339)), which cuts the queueing before an echo's screen update under nine flooding sessions; nothing a user can run uses it yet.
 Also merged and waiting for the next version: the `terminal-perf` regression gate ([#1341](https://github.com/mihazs/lazysh/issues/1341)), a non-required CI job over the core's counts and in-process ratios; it changes nothing a user can run.
 
+Also merged and waiting for the next version: idle compaction of detached sessions' scrollback in the session service ([#1338](https://github.com/mihazs/lazysh/issues/1338)); nothing a user can run uses it yet.
+
 **Release stage reached: step 2 complete, no rollout stage (S0 to S5) entered.** Nothing outside the xterm backend imports `@xterm/*` (an import-graph test enforces it), the adapter's write path costs nothing measurable on the desktop harness, and the first end-to-end native path (core, renderer and input on Linux desktop and Android) is the next thing to ship; it ships behind the opt-in the day it works, not after the other platforms.
 
 ## Rollout stages

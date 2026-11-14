@@ -21,6 +21,11 @@
 //! sessions keep parsing (bounded by their credit window) without ever delaying the visible one by
 //! more than the turn in progress.
 //!
+//! A detached session that has received nothing for [`HubConfig::compress_after`] has its
+//! scrollback compacted by its worker, one bounded step at a time and only while no session on that
+//! worker has bytes to parse: the memory of a background session falls to a fraction of its budget
+//! and comes back, page by page, if the user scrolls into it.
+//!
 //! [#1315]: https://github.com/mihazs/lazysh/issues/1315
 //! [#1316]: https://github.com/mihazs/lazysh/issues/1316
 //! [#1319]: https://github.com/mihazs/lazysh/issues/1319
@@ -35,6 +40,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Smallest scrollback grant; below this a session is refused instead of silently crippled.
 const MIN_SCROLLBACK_BYTES: usize = 64 * 1024;
@@ -83,6 +89,10 @@ pub struct HubConfig {
     /// one transport chunk: the slice is also the longest a key press can wait for the session lock
     /// (see the session benchmark).
     pub pump_slice: usize,
+    /// How long a detached session must have received nothing before its scrollback is compacted
+    /// (`None` never compacts). Compaction is a bounded step on an idle worker, never on a session
+    /// that is attached or has bytes waiting.
+    pub compress_after: Option<Duration>,
 }
 
 impl Default for HubConfig {
@@ -93,6 +103,7 @@ impl Default for HubConfig {
             scrollback_budget: 256 * 1024 * 1024,
             session_scrollback_max: 64 * 1024 * 1024,
             pump_slice: 16 * 1024,
+            compress_after: Some(Duration::from_secs(2)),
         }
     }
 }
@@ -163,10 +174,20 @@ pub struct Stats {
     /// Reply bytes the writer refused (input gated) or the reply cap dropped.
     pub replies_dropped: u64,
     pub input_refused: u64,
+    /// Scrollback compaction steps run on this session while it was detached and idle.
+    pub compactions: u64,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A session whose scrollback may be compacted once `due` has passed, if it saw no bytes since
+/// `generation`.
+struct Idle {
+    due: Instant,
+    generation: u64,
+    cell: Arc<Cell>,
 }
 
 /// A worker's run queue: sessions with an attached view first, the rest behind them.
@@ -176,6 +197,8 @@ struct Queue {
     detached: VecDeque<Arc<Cell>>,
     /// Attached turns taken since a detached one last ran.
     streak: u32,
+    /// At most one entry per session.
+    idle: Vec<Idle>,
 }
 
 impl Queue {
@@ -198,6 +221,21 @@ impl Queue {
         self.detached
             .pop_front()
             .or_else(|| self.attached.pop_front())
+    }
+
+    fn arm(&mut self, idle: Idle) {
+        self.idle
+            .retain(|other| !Arc::ptr_eq(&other.cell, &idle.cell));
+        self.idle.push(idle);
+    }
+
+    fn take_due(&mut self, now: Instant) -> Option<Idle> {
+        let index = self.idle.iter().position(|idle| idle.due <= now)?;
+        Some(self.idle.swap_remove(index))
+    }
+
+    fn next_due(&self) -> Option<Instant> {
+        self.idle.iter().map(|idle| idle.due).min()
     }
 }
 
@@ -240,6 +278,9 @@ struct Cell {
     input_refused: AtomicU64,
     /// Typing or pasting returns a scrolled-back viewport to the live screen (xterm's `scrollOnUserInput`).
     scroll_on_user_input: AtomicBool,
+    /// Turns that parsed bytes so far: a compaction armed for an older count is stale.
+    generation: AtomicU64,
+    compactions: AtomicU64,
 }
 
 impl Cell {
@@ -267,6 +308,9 @@ impl Cell {
         let bytes = runtime.pump(slice);
         let (replies, dropped) = runtime.take_replies();
         let more = self.ingress.queued() > 0;
+        if bytes > 0 {
+            self.generation.fetch_add(1, AcqRel);
+        }
         if !more {
             self.scheduled.store(false, Release);
         }
@@ -296,12 +340,70 @@ impl Cell {
             // A producer that offered after the check above saw `scheduled` still set and queued
             // nothing; its offer is ordered after the clear by the ingress lock, so look again.
             self.schedule();
+        } else {
+            self.compact_when_idle();
+        }
+    }
+
+    /// Arm a compaction `compress_after` from now for a session nobody is looking at.
+    fn compact_when_idle(self: &Arc<Self>) {
+        let after = self
+            .shared
+            .upgrade()
+            .and_then(|shared| shared.config.compress_after);
+        if let Some(after) = after {
+            if !self.attached.load(Acquire) {
+                self.arm_compaction(Instant::now() + after);
+            }
+        }
+    }
+
+    fn arm_compaction(self: &Arc<Self>, due: Instant) {
+        if self.released.load(Acquire) {
+            return;
+        }
+        if let Some(shared) = self.shared.upgrade() {
+            let worker = &shared.workers[self.worker];
+            lock(&worker.queue).arm(Idle {
+                due,
+                generation: self.generation.load(Acquire),
+                cell: Arc::clone(self),
+            });
+            worker.wake.notify_one();
+        }
+    }
+
+    /// A closed session has nothing to compact: do not keep its cell alive until the timer.
+    fn disarm_compaction(&self) {
+        if let Some(shared) = self.shared.upgrade() {
+            lock(&shared.workers[self.worker].queue)
+                .idle
+                .retain(|idle| !std::ptr::eq(Arc::as_ptr(&idle.cell), self));
+        }
+    }
+
+    /// One bounded compaction step if nothing happened to the session since it was armed; re-armed
+    /// at once while the VT reports more work, so other sessions' turns always run in between.
+    fn compact(self: &Arc<Self>, generation: u64) {
+        if self.attached.load(Acquire)
+            || self.scheduled.load(Acquire)
+            || self.generation.load(Acquire) != generation
+        {
+            return; // whoever attaches, feeds or detaches arms it again
+        }
+        let more = lock(&self.runtime)
+            .as_mut()
+            .is_some_and(|runtime| runtime.compress_scrollback().unwrap_or(false));
+        self.compactions.fetch_add(1, Relaxed);
+        if more {
+            self.arm_compaction(Instant::now());
         }
     }
 
     /// Close or fail the session: leave the registry, free the VT state now and give the credit
     /// of everything still queued back to the transport so its producer cannot stay blocked.
     fn discard(&self) {
+        self.disarm_compaction();
         self.release();
         drop(lock(&self.runtime).take());
         let queued = self.ingress.clear();
@@ -413,6 +515,8 @@ impl Hub {
             replies_dropped: AtomicU64::new(0),
             input_refused: AtomicU64::new(0),
             scroll_on_user_input: AtomicBool::new(true),
+            generation: AtomicU64::new(0),
+            compactions: AtomicU64::new(0),
         });
         registry.sessions.insert(id, Arc::clone(&cell));
         Ok(Session { cell })
@@ -463,28 +567,56 @@ impl Drop for Hub {
     }
 }
 
+enum Job {
+    Turn(Arc<Cell>),
+    Compact(Idle),
+}
+
 fn run(shared: &HubShared, index: usize) {
     let worker = &shared.workers[index];
     loop {
-        let cell = {
+        let job = {
             let mut queue = lock(&worker.queue);
             loop {
                 if let Some(cell) = queue.pop() {
-                    break cell;
+                    break Job::Turn(cell);
                 }
                 if shared.shutdown.load(Acquire) {
                     return;
                 }
-                queue = worker
-                    .wake
-                    .wait(queue)
-                    .unwrap_or_else(PoisonError::into_inner);
+                let now = Instant::now();
+                if let Some(idle) = queue.take_due(now) {
+                    break Job::Compact(idle);
+                }
+                queue = match queue.next_due() {
+                    Some(due) => {
+                        let wait = worker.wake.wait_timeout(queue, due - now);
+                        wait.unwrap_or_else(PoisonError::into_inner).0
+                    }
+                    None => worker
+                        .wake
+                        .wait(queue)
+                        .unwrap_or_else(PoisonError::into_inner),
+                };
             }
         };
         // A panic in the VT binding or a host hook costs that session, never the worker's others.
         // Only with panic=unwind: the app's release profile sets panic=abort, where any panic ends
         // the process, so this protects tests and unwinding builds, not shipped binaries.
-        if catch_unwind(AssertUnwindSafe(|| cell.turn(shared.config.pump_slice))).is_err() {
+        let (cell, outcome) = match job {
+            Job::Turn(cell) => {
+                let slice = shared.config.pump_slice;
+                let outcome = catch_unwind(AssertUnwindSafe(|| cell.turn(slice)));
+                (cell, outcome)
+            }
+            Job::Compact(Idle {
+                cell, generation, ..
+            }) => {
+                let outcome = catch_unwind(AssertUnwindSafe(|| cell.compact(generation)));
+                (cell, outcome)
+            }
+        };
+        if outcome.is_err() {
             cell.discard();
         }
     }
@@ -543,6 +675,7 @@ impl Session {
             replies_written: self.cell.replies_written.load(Relaxed),
             replies_dropped: self.cell.replies_dropped.load(Relaxed),
             input_refused: self.cell.input_refused.load(Relaxed),
+            compactions: self.cell.compactions.load(Relaxed),
         })
     }
 
@@ -557,6 +690,7 @@ impl Session {
 
     pub fn detach(&self) {
         self.cell.attached.store(false, Release);
+        self.cell.compact_when_idle();
     }
 
     pub fn take_frame(&self) -> Result<Option<Frame>, SessionError> {

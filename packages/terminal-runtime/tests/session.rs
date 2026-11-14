@@ -9,6 +9,7 @@ use lazysh_terminal_runtime::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 use support::*;
 
 fn hub_with_hello() -> (Hub, Fixture) {
@@ -627,4 +628,79 @@ fn a_detached_session_keeps_parsing_while_the_attached_one_never_idles() {
     background.send(&plain(WINDOW));
     background.settle(WINDOW as u64);
     stop.store(true, SeqCst);
+}
+
+fn compacting_hub(after: Duration) -> Hub {
+    Hub::new(HubConfig {
+        compress_after: Some(after),
+        ..HubConfig::default()
+    })
+}
+
+fn history(fixture: &Fixture) -> String {
+    fixture
+        .session
+        .with(|rt| rt.screen_text())
+        .unwrap()
+        .unwrap()
+}
+
+/// A session that has parsed `numbered_lines(20_000)` (about 1.1 MiB, more than its scrollback holds).
+fn filled_session(hub: &Hub, id: &str) -> (Fixture, usize) {
+    let (fixture, lines) = (
+        session(hub, id, config(80, 24, 1 << 20)),
+        numbered_lines(20_000),
+    );
+    fixture.send(&lines);
+    fixture.settle(lines.len() as u64);
+    (fixture, lines.len())
+}
+
+#[test]
+fn an_idle_detached_session_is_compacted_without_changing_its_history_and_an_attached_one_is_not() {
+    let hub = compacting_hub(Duration::from_millis(50));
+    let (quiet, sent) = filled_session(&hub, "quiet");
+    let (watched, _) = filled_session(&hub, "watched");
+    watched.session.attach().unwrap();
+    let before = history(&quiet);
+    wait_until(|| quiet.session.stats().unwrap().compactions > 0);
+    assert_eq!(history(&quiet), before, "compaction changed the history");
+    assert_eq!(
+        history(&watched),
+        before,
+        "the same output reads the same everywhere"
+    );
+    std::thread::sleep(Duration::from_millis(300)); // six times the delay, so its turn would have come
+    assert_eq!(
+        watched.session.stats().unwrap().compactions,
+        0,
+        "a session with a view attached is never compacted"
+    );
+    // New output still lands after the history was compacted.
+    let more = b"after compaction\r\n";
+    quiet.send(more);
+    quiet.settle((sent + more.len()) as u64);
+    assert!(history(&quiet).ends_with("after compaction"));
+}
+
+#[test]
+fn attaching_before_the_timer_cancels_the_compaction_and_detaching_arms_it_again() {
+    let hub = compacting_hub(Duration::from_millis(400));
+    let (fixture, _) = filled_session(&hub, "a");
+    fixture.session.attach().unwrap();
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(fixture.session.stats().unwrap().compactions, 0);
+    fixture.session.detach();
+    wait_until(|| fixture.session.stats().unwrap().compactions > 0);
+}
+
+#[test]
+fn a_hub_without_a_compaction_delay_never_compacts() {
+    let hub = Hub::new(HubConfig {
+        compress_after: None,
+        ..HubConfig::default()
+    });
+    let (fixture, _) = filled_session(&hub, "a");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(fixture.session.stats().unwrap().compactions, 0);
 }

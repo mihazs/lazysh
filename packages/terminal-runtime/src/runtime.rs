@@ -3,7 +3,7 @@ use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::mosh::{self, Action, Display, DisplayFailure};
 use crate::size::{Size, SizeAuthority, SizeOutcome};
-use ghostty_vt::{ActiveScreen, Terminal};
+use ghostty_vt::{ActiveScreen, Terminal, TerminalCompressionResult};
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -493,6 +493,12 @@ impl TerminalRuntime {
         Ok(self
             .terminal
             .read_text_screen((0, 0), (self.size.cols - 1, last), false)?)
+    }
+
+    /// One bounded step of libghostty-vt's idle scrollback compression; `true` while more work
+    /// remains. Meant for a session nobody is looking at once its input has stopped.
+    pub fn compress_scrollback(&mut self) -> Result<bool, Error> {
+        Ok(self.terminal.compress_incremental()? == TerminalCompressionResult::Pending)
     }
 
     pub fn scrollback_rows(&self) -> Result<usize, Error> {
