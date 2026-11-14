@@ -2,17 +2,20 @@
 # Test-only stand-in for an agent TUI (tmux_agent_session_fixture.rs). It draws a prompt and a permission-mode line in
 # the pane it runs in, reads raw keys, appends Claude Code format records to a transcript and logs every submitted
 # prompt, answered question, interrupt and mode change to a second file. No provider, network or account is used.
-transcript=$1 log=$2 companion=$3 state=$4
+# With a fifth argument it also acts as a hook-reporting agent: it runs the companion's `ingest --reported-history` hook
+# the way Claude Code's hooks do, shows each prompt in its pane, logs every key it reads to `$log.keys`, and a `hold ...`
+# prompt keeps its turn running until `$log.release` exists.
+transcript=$1 log=$2 companion=$3 state=$4 report=$5
 modes=('manual mode on' 'accept edits on' 'plan mode on')
-mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0 sub_due=0 flow_due=0
+mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0 sub_due=0 flow_due=0 held=0
 session=${transcript%.jsonl}
 escape() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; printf '%s' "$s"; }
 note() { printf '%s\n' "$1" >> "$log"; }
 # One transcript record: the chain of parentUuid is what makes the reader follow a branch.
 record() {
   count=$((count + 1))
-  printf '{"parentUuid":%s,"isSidechain":false,"cwd":"/work/fixture","sessionId":"5f0c1d2e-0000-4000-8000-0000000000aa","version":"2.1.317","type":"%s","uuid":"r%s","timestamp":"2026-11-04T10:00:%02d.000Z","message":%s}\n' \
-    "$parent" "$1" "$count" "$count" "$2" >> "$transcript"
+  printf '{"parentUuid":%s,"isSidechain":false,"cwd":"/work/fixture","sessionId":"5f0c1d2e-0000-4000-8000-0000000000aa","version":"2.1.317","type":"%s","uuid":"r%s","timestamp":"2026-11-04T10:%02d:%02d.000Z","message":%s}\n' \
+    "$parent" "$1" "$count" "$((count / 60))" "$((count % 60))" "$2" >> "$transcript"
   parent="\"r$count\""
 }
 user() { record user "{\"role\":\"user\",\"content\":\"$(escape "$1")\"}"; }
@@ -54,11 +57,21 @@ permission() {
   local request='{"hook_event_name":"PermissionRequest","session_id":"5f0c1d2e-0000-4000-8000-0000000000aa","cwd":"/work/fixture","tool_name":"Bash","tool_input":{"command":"git push --force-with-lease"}}'
   LAZYSH_STATE_DIR=$state "$companion" approval-request --agent claude --timeout-seconds 60 <<<"$request"
 }
+# The hook Claude Code runs on a lifecycle event (`lazysh-agent claude-config --reported-history`): it names the session, its
+# transcript and, through TMUX_PANE, this pane.
+hook() {
+  [[ -n $report ]] || return 0
+  printf '{"hook_event_name":"%s","session_id":"5f0c1d2e-0000-4000-8000-0000000000aa","transcript_path":"%s","cwd":"/work/fixture"%s}' "$1" "$transcript" "$2" |
+    LAZYSH_STATE_DIR=$state "$companion" ingest --agent claude --reported-history
+}
+# A TUI shows what was submitted; this one does so only when it reports, so the other cases keep their pane unchanged.
+shown() { [[ -z $report ]] || printf '\r\n> %s\r\n' "${1//$'\n'/$'\r\n'}"; }
 draw() { printf '\033[2J\033[H> \r\n\r\n  ⏸ %s · ? for shortcuts' "${modes[$mode]}"; }
 
 stty raw -echo
 printf '\033[?2004h'
 draw
+hook SessionStart ''
 note READY
 while true; do
   IFS= read -rsn1 -d '' -t 0.2 key
@@ -69,9 +82,11 @@ while true; do
     if ((due && now >= due)); then due=0; note BACKGROUND_ENDED; ended; fi
     if ((sub_due && now >= sub_due)); then sub_due=0; note SUBAGENT_ENDED; subagent_ended; fi
     if ((flow_due && now >= flow_due)); then flow_due=0; note WORKFLOW_ENDED; workflow_ended; fi
+    if ((held)) && [[ -e $log.release ]]; then held=0; note HOLD_ENDED; text 'Finished the held work.'; hook Stop ''; fi
     continue
   fi
   ((status == 0)) || break
+  [[ -z $report ]] || printf '%d\n' "'$key" >> "$log.keys"
   if [[ $key == $'\e' ]]; then
     next=
     IFS= read -rsn1 -d '' -t 0.3 next
@@ -92,7 +107,10 @@ while true; do
   if [[ $key == $'\r' || $key == $'\n' ]]; then
     note "SUBMIT $(escape "$buf")"
     user "$buf"
+    shown "$buf"
+    hook UserPromptSubmit ",\"prompt\":\"$(escape "$buf")\""
     case $buf in
+      hold*) note HOLD; held=1 ;;
       ask*) asking=1; note ASKING; ask ;;
       permission*) note PERMISSION_ASKED
         case $(permission) in
@@ -102,7 +120,7 @@ while true; do
       subagent*) note SUBAGENT; subagent; sub_due=$((${EPOCHREALTIME/./} / 1000 + 1500)) ;;
       workflow*) note WORKFLOW; workflow; flow_due=$((${EPOCHREALTIME/./} / 1000 + 1500)) ;;
       background*) note BACKGROUND; background; due=$((${EPOCHREALTIME/./} / 1000 + 1000)) ;;
-      *) text "Answered: ${buf:0:40}" ;;
+      *) text "Answered: ${buf:0:40}"; hook Stop '' ;;
     esac
     buf=
     continue

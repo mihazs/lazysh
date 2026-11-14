@@ -139,14 +139,14 @@ async function cleanupOwnedSshGui(window:NativeGui|undefined,server:Pick<SshFixt
   if(failures.length)throw new AggregateError(failures,'Owned SSH GUI cleanup failed');
 }
 
-/** An owned SSH server whose managed companion path holds `image`, by default the current-source companion (`LAZYSH_TEST_AGENT_BIN`). */
-export async function ownedCompanionSsh(fixture:ReturnType<typeof ownedSshGui>,image?:Buffer) {
+/** An owned SSH server whose managed companion path holds `image`, by default the current-source companion (`LAZYSH_TEST_AGENT_BIN`); `tmux` adds a real tmux (the system one, or the binary it names) in the same owned root. */
+export async function ownedCompanionSsh(fixture:ReturnType<typeof ownedSshGui>,image?:Buffer,options:{tmux?:boolean|string}={}) {
   if(!image) {
     const source=process.env.LAZYSH_TEST_AGENT_BIN;
     if(!source?.startsWith('/'))throw new Error('An owned current-source companion binary is required');
     image=await readFile(source);
   }
-  const ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});fixture.ssh=ssh;
+  const ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true,...options});fixture.ssh=ssh;
   const companion=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
   await mkdir(dirname(companion),{recursive:true,mode:0o700});await writeFile(companion,image,{flag:'wx',mode:0o700});await chmod(companion,0o700);
   return {ssh,companion};
