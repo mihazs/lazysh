@@ -10,7 +10,6 @@ lazysh-common = { path = "../../packages/common", features = ["service"] }
 axum = "0.8.9"
 clap = { version = "4.6", features = ["derive"] }
 futures-util = "0.3"
-hyper-util = { version = "0.1", features = ["http1", "server-auto", "service", "tokio"] }
 mime = "0.3"
 percent-encoding = "2"
 rand = "0.10"
