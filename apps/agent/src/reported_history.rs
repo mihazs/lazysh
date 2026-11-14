@@ -8,7 +8,9 @@ const RETENTION_MILLIS: i64 = 7 * 86400 * 1000;
 // must remain writable by older positional writers and legacy-schema fixtures.
 pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS claude_reported_history (
     session_id TEXT PRIMARY KEY, path TEXT, pane_id TEXT,
-    updated_at INTEGER NOT NULL, ambiguous INTEGER NOT NULL CHECK(ambiguous IN (0,1)));";
+    updated_at INTEGER NOT NULL, ambiguous INTEGER NOT NULL CHECK(ambiguous IN (0,1)));
+CREATE TABLE IF NOT EXISTS reported_history_references (
+    session_id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, path TEXT NOT NULL);";
 
 #[derive(Debug)]
 pub struct ReportedSource {
@@ -91,6 +93,7 @@ pub(crate) fn retain(connection: &Connection, now: DateTime<Utc>) -> Result<()> 
         [now.timestamp_millis().saturating_sub(RETENTION_MILLIS)],
     )?;
     connection.execute("DELETE FROM claude_reported_history WHERE rowid NOT IN (SELECT rowid FROM claude_reported_history ORDER BY updated_at DESC,rowid DESC LIMIT 100)", [])?;
+    connection.execute("DELETE FROM reported_history_references WHERE session_id NOT IN (SELECT session_id FROM claude_reported_history)", [])?;
     Ok(())
 }
 
@@ -107,6 +110,48 @@ pub(crate) fn insert(
 }
 
 impl Store {
+    /// The reported conversation as an opaque reference instead of its host path. A report keeps its
+    /// reference until its path changes, so repeated lookups return the same one.
+    pub fn reported_history_reference(&mut self, id: &str, now: DateTime<Utc>) -> Result<Value> {
+        let mut response = self.reported_history(id, now)?;
+        let Some(path) = response["path"].as_str().map(str::to_owned) else {
+            return Ok(response);
+        };
+        self.connection.execute("INSERT INTO reported_history_references(session_id,token,path) VALUES (?1,?2,?3) ON CONFLICT(session_id) DO UPDATE SET token=excluded.token,path=excluded.path WHERE path<>excluded.path", params![id, uuid::Uuid::new_v4().to_string(), path])?;
+        let token: String = self.connection.query_row(
+            "SELECT token FROM reported_history_references WHERE session_id=?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        let fields = response.as_object_mut().ok_or(Error::InvalidEvent)?;
+        fields.remove("path");
+        fields.insert("reference".into(), json!(token));
+        Ok(response)
+    }
+
+    /// The transcript a reference names. It refuses, without touching any file, a reference this store
+    /// never issued, one whose report changed, expired or became ambiguous, and one of another agent.
+    pub fn reported_reference_path(
+        &mut self,
+        token: &str,
+        agent: transcript::TranscriptAgent,
+        now: DateTime<Utc>,
+    ) -> Result<PathBuf> {
+        let label = match agent {
+            transcript::TranscriptAgent::Claude => "Claude Code",
+            transcript::TranscriptAgent::Codex => "Codex",
+            _ => return Err(Error::InvalidArgument),
+        };
+        retain(&self.connection, now)?;
+        // The agent session must be unique, as the client requires before it binds one.
+        let path: Option<String> = self.connection.query_row("SELECT r.path FROM reported_history_references r JOIN claude_reported_history h ON h.session_id=r.session_id AND h.path=r.path AND h.ambiguous=0 WHERE r.token=?1 AND (SELECT count(*) FROM sessions s WHERE s.session_id=r.session_id)=1 AND EXISTS (SELECT 1 FROM sessions s WHERE s.session_id=r.session_id AND s.agent=?2)", params![token, label], |row| row.get(0)).optional()?;
+        let path = path.ok_or(Error::InvalidArgument)?;
+        if !valid_path(&path) {
+            return Err(Error::InvalidEvent);
+        }
+        Ok(PathBuf::from(path))
+    }
+
     pub fn reported_history(&mut self, id: &str, now: DateTime<Utc>) -> Result<Value> {
         validate_session_id(id)?;
         retain(&self.connection, now)?;
@@ -214,6 +259,65 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM relay_outbox", [], |row| row.get(0))
             .unwrap();
         assert_eq!(queued, 0);
+    }
+
+    #[test]
+    fn a_reference_lives_and_dies_with_the_report_it_was_issued_for() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path()).unwrap();
+        let now = Utc::now();
+        let claude = transcript::TranscriptAgent::Claude;
+        ingest(
+            &mut store,
+            &hook("owned", json!(directory.path().join("a.jsonl"))),
+            now,
+        );
+        let issued = store.reported_history_reference("owned", now).unwrap();
+        assert!(issued.get("path").is_none());
+        let token = issued["reference"].as_str().unwrap().to_owned();
+        assert_eq!(
+            store.reported_history_reference("owned", now).unwrap(),
+            issued
+        );
+        assert_eq!(
+            store.reported_reference_path(&token, claude, now).unwrap(),
+            directory.path().join("a.jsonl")
+        );
+        // Another agent, an unknown token and an unreported session get nothing.
+        for (token, agent) in [
+            (token.as_str(), transcript::TranscriptAgent::Codex),
+            (token.as_str(), transcript::TranscriptAgent::Opencode),
+            ("not-issued", claude),
+        ] {
+            assert!(store.reported_reference_path(token, agent, now).is_err());
+        }
+        let missing = store.reported_history_reference("other", now).unwrap();
+        assert_eq!(missing["status"], "missing");
+        assert!(missing.get("reference").is_none());
+        // The report ages out, and so does its reference; a new report gets a new reference.
+        let later = now + chrono::Duration::days(8);
+        assert!(store
+            .reported_reference_path(&token, claude, later)
+            .is_err());
+        ingest(
+            &mut store,
+            &hook("owned", json!(directory.path().join("b.jsonl"))),
+            later,
+        );
+        let renewed = store.reported_history_reference("owned", later).unwrap();
+        assert_ne!(renewed["reference"], json!(token));
+        assert!(store
+            .reported_reference_path(&token, claude, later)
+            .is_err());
+        let count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM reported_history_references",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

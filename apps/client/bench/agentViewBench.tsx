@@ -26,7 +26,7 @@ const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve
 const painted = async () => { await frame(); await frame(); return performance.now(); };
 const pages = {typical: typicalUrl, heavy: heavyUrl};
 const texts = new Map<string, string>();
-const sessionId = '11111111-1111-4111-8111-111111111111', pane = '%3', path = '/home/owner/.claude/projects/bench/11111111-1111-4111-8111-111111111111.jsonl';
+const sessionId = '11111111-1111-4111-8111-111111111111', pane = '%3', reference = '4e0da3cb-f6d1-468c-89fb-52d2602bd310';
 
 let model = DEFAULT_MODEL;
 let started = 0;
@@ -50,7 +50,7 @@ const herdrTree = () => {
 };
 const entries = (messages: {id: string}[]) => messages.map(message => ({id: message.id, rev: 1, message}));
 
-const companionCommands = new Set(['agent_snapshot', 'agent_reported_history', 'agent_transcript', 'agent_watch_start', 'multiplexer_sessions', 'herdr_tree', 'agent_herdr_conversation']);
+const companionCommands = new Set(['agent_snapshot', 'agent_reported_history_reference', 'agent_reported_conversation', 'agent_watch_start', 'multiplexer_sessions', 'herdr_tree', 'agent_herdr_conversation']);
 async function native(command: string, args: Record<string, unknown>) {
   const start = performance.now();
   // The host probe runs once per connection, and the commands that start together share it.
@@ -80,11 +80,12 @@ async function native(command: string, args: Record<string, unknown>) {
       result = action.kind === 'snapshot' ? {...tmuxChatSnapshot, destination: {...tmuxChatSnapshot.destination, paneId: pane}} : undefined;
       break;
     }
-    case 'agent_reported_history':
+    // The Agent view names its conversation by the companion's reference; the exec costs are those of the lookup and the read.
+    case 'agent_reported_history_reference':
       await wait(model.execs.agent_reported_history * model.execMs);
-      result = {schemaVersion: 1, sessionId, status: 'available', path, reportedAt: '2026-11-13T00:00:00Z', paneId: pane};
+      result = {schemaVersion: 1, sessionId, status: 'available', reference, reportedAt: '2026-11-13T00:00:00Z', paneId: pane};
       break;
-    case 'agent_transcript':
+    case 'agent_reported_conversation':
       await wait(model.execs.agent_transcript * model.execMs + model.hostMs);
       result = JSON.parse(await load(model.page));
       break;

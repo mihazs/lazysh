@@ -38,6 +38,14 @@ pub enum WatchTarget {
         #[serde(default)]
         inline_images: bool,
     },
+    /// A conversation named by the companion's opaque reference, never by its host path.
+    #[serde(rename_all = "camelCase")]
+    Reference {
+        agent: String,
+        reference: String,
+        #[serde(default)]
+        inline_images: bool,
+    },
     /// A Herdr pane's agent session, resolved on the host and re-checked while it is watched.
     #[serde(rename_all = "camelCase")]
     Herdr {
@@ -78,6 +86,7 @@ impl TranscriptWatches {
 }
 
 fn target_command(target: &WatchTarget) -> Result<String> {
+    let images = |on: &bool| if *on { " --inline-images" } else { "" };
     let (agent, source) = match target {
         WatchTarget::Path {
             agent,
@@ -85,12 +94,21 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             inline_images,
         } => {
             ssh::check_path(path)?;
-            let images = if *inline_images {
-                " --inline-images"
-            } else {
-                ""
-            };
-            (agent, format!("--path {}{images}", quote(path)))
+            (
+                agent,
+                format!("--path {}{}", quote(path), images(inline_images)),
+            )
+        }
+        WatchTarget::Reference {
+            agent,
+            reference,
+            inline_images,
+        } => {
+            ssh::check_reference(reference)?;
+            (
+                agent,
+                format!("--reference {}{}", quote(reference), images(inline_images)),
+            )
         }
         WatchTarget::Herdr {
             agent,
@@ -302,7 +320,7 @@ pub async fn agent_watch_start(
                     .await?;
                     Some(pane)
                 }
-                WatchTarget::Path { .. } => None,
+                WatchTarget::Path { .. } | WatchTarget::Reference { .. } => None,
             };
             let mut entries = watches.0.lock().await;
             // A view that rebinds replaces its own watch; another session's watch stays.
@@ -408,6 +426,22 @@ mod tests {
             target_command(&with_images).unwrap(),
             "lazysh-agent transcript-watch --agent codex --path '/x' --inline-images --limit 50"
         );
+        let reference = |agent: &str, id: &str, inline_images| WatchTarget::Reference {
+            agent: agent.into(),
+            reference: id.into(),
+            inline_images,
+        };
+        assert_eq!(
+            target_command(&reference("claude", ID, true)).unwrap(),
+            format!("lazysh-agent transcript-watch --agent claude --reference '{ID}' --inline-images --limit 50")
+        );
+        for bad in [
+            reference("pi", ID, false),
+            reference("claude", "/home/owner/session.jsonl", false),
+            reference("claude", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", false),
+        ] {
+            assert!(target_command(&bad).is_err());
+        }
         let herdr = |agent: &str, id: &str| WatchTarget::Herdr {
             agent: agent.into(),
             agent_session_id: id.into(),
@@ -468,7 +502,18 @@ mod tests {
         assert!(matches!(path, WatchTarget::Path { .. }));
         let herdr: WatchTarget = serde_json::from_value(json!({"kind":"herdr","agent":"codex","agentSessionId":ID,"herdrSession":"s","paneId":"p","terminalId":"t"})).unwrap();
         assert!(matches!(herdr, WatchTarget::Herdr { .. }));
+        let reference: WatchTarget =
+            serde_json::from_value(json!({"kind":"reference","agent":"claude","reference":ID}))
+                .unwrap();
+        assert!(matches!(
+            reference,
+            WatchTarget::Reference {
+                inline_images: false,
+                ..
+            }
+        ));
         for bad in [
+            json!({"kind":"reference","agent":"claude","reference":ID,"path":"/a"}),
             json!({"kind":"path","agent":"claude","path":"/a","extra":1}),
             json!({"kind":"shell","agent":"claude"}),
         ] {

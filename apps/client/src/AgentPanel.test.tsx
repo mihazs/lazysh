@@ -112,6 +112,16 @@ it('rejects malformed or mismatched lookup metadata and paths instead of guessin
     {...reported,path:'/'+ '😀'.repeat(1024)},{...reported,reportedAt:'yesterday'},{...reported,paneId:undefined},
     {...reported,status:'missing'},{...reported,status:'ambiguous'},{...reported,status:'unknown'}])expect(()=>parseReportedHistory(value,'a')).toThrow();
 });
+it('admits a canonical opaque reference in place of a path, and the other way round never',()=>{
+  const reference='4e0da3cb-f6d1-468c-89fb-52d2602bd310';
+  const {path:_path,...named}={...reported,reference};
+  expect(parseReportedHistory(named,'a','reference')).toEqual(named);
+  expect(parseReportedHistory({schemaVersion:1,sessionId:'a',status:'missing'},'a','reference')).toEqual({schemaVersion:1,sessionId:'a',status:'missing'});
+  for(const value of [{...named,reference:'/host/history.jsonl'},{...named,reference:reference.toUpperCase()},{...named,reference:`${reference} `},{...named,reference:undefined},
+    {...named,path:'/host/history.jsonl'},{...reported,reference:undefined},{schemaVersion:1,sessionId:'a',status:'missing',reference}])expect(()=>parseReportedHistory(value,'a','reference')).toThrow();
+  // The path-taking lookup of the Agents shortcut refuses a reply that names a reference.
+  expect(()=>parseReportedHistory({...reported,reference},'a')).toThrow();
+});
 it.each((['source','access','unmount','activity'] as const).flatMap(transition=>(['success','failure'] as const).map(outcome=>({transition,outcome}))))('drops same-mounted late lookup $outcome after $transition ownership ends',async({transition,outcome})=>{
     let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
     const invoke=await historyFixture(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));const route=vi.fn();

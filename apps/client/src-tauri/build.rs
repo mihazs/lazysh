@@ -181,6 +181,8 @@ fn main() {
         "attach_tmux",
         "agent_snapshot",
         "agent_reported_history",
+        "agent_reported_history_reference",
+        "agent_reported_conversation",
         "install_companion",
         "companion_hooks",
         "companion_hook_discovery",

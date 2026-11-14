@@ -39,13 +39,28 @@ beforeEach(()=>{
   vi.useFakeTimers();vi.mocked(invoke).mockReset();access();starts=[];stops=[];watchFails=false;pollFails=false;poll=polled(...first);
   Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
-    if(command==='agent_transcript'){if(pollFails)throw new Error('offline');return poll;}
+    if(command==='agent_transcript' || command==='agent_reported_conversation'){if(pollFails)throw new Error('offline');return poll;}
     if(command==='agent_watch_start'){if(watchFails)throw new Error('no channel');starts.push(args);channel=(args as {events:Channel}).events;return `watch-${starts.length}`;}
     if(command==='agent_watch_stop'){stops.push(args);return;}
     throw new Error(`Unexpected ${command}`);
   });
 });
 afterEach(()=>{cleanup();vi.useRealTimers();});
+
+describe('a conversation bound by the companion reference',()=>{
+  const reference='4e0da3cb-f6d1-468c-89fb-52d2602bd310';
+  it.each([[false,{}],[true,{inlineImages:true}]])('reads, watches and polls it by reference only (previews %s)',async(images,extra)=>{
+    render(<ChatPanel sessionId="host" bound={{agent:'claude',path:reference,reference:true}} images={images} timeline/>);
+    await advance(0);
+    expect(calls('agent_reported_conversation')).toEqual([{sessionId:'host',agent:'claude',reference,...extra}]);
+    expect(starts).toEqual([{sessionId:'host',target:{kind:'reference',agent:'claude',reference,...extra},events:expect.anything()}]);
+    // The stream goes down: the next poll still names the reference, and the path-taking command is never used.
+    await goLive();await send({type:'end',gen:1,seq:2,reason:'ended'});await advance(2000);
+    expect(calls('agent_reported_conversation').length).toBeGreaterThan(1);
+    expect(calls('agent_reported_conversation').every(args=>JSON.stringify(args)===JSON.stringify({sessionId:'host',agent:'claude',reference,...extra}))).toBe(true);
+    expect(calls('agent_transcript')).toEqual([]);
+  });
+});
 
 describe('a bound conversation with a live watch',()=>{
   it('opens one channel for the bound conversation and patches a reply that grows in parts without a reload, a poll or a scroll jump',async()=>{

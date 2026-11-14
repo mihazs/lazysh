@@ -64,24 +64,29 @@ export function parseSnapshot(value: unknown): AgentSession[] {
 export type ReportedHistorySource = Readonly<{
   sessionId:string;agentSessionId:string;path:string;reportedAt:string;paneId:string|null;lease:AccessLease;
 }>;
-type ReportedHistory = {schemaVersion:1;sessionId:string} & (
-  {status:'available';path:string;reportedAt:string;paneId:string|null}|{status:'missing'|'ambiguous'}
+/** A hook report names its conversation by `path` (the Agents shortcut) or by the companion's opaque `reference` (the Agent view). */
+type Locator='path'|'reference';
+type ReportedHistory<K extends Locator='path'> = {schemaVersion:1;sessionId:string} & (
+  ({status:'available';reportedAt:string;paneId:string|null} & Record<K,string>)|{status:'missing'|'ambiguous'}
 );
-export function parseReportedHistory(value:unknown, agentSessionId:string):ReportedHistory {
+const validLocator=(value:unknown,locator:Locator)=>typeof value==='string' && (locator==='reference'
+  ? /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value)
+  : (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/.test(value)) && new TextEncoder().encode(value).length<=4096 && !/[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(value));
+export function parseReportedHistory<K extends Locator='path'>(value:unknown, agentSessionId:string, locator:K='path' as K):ReportedHistory<K> {
   const invalid=()=>new LocalUiError('agentsHistoryInvalid');
   if(!value || typeof value!=='object')throw invalid();
   const row=value as Record<string,unknown>;
   if(row.schemaVersion!==1 || row.sessionId!==agentSessionId)throw invalid();
+  const other=locator==='path'?'reference':'path';
   if(row.status==='missing' || row.status==='ambiguous') {
-    if(['path','reportedAt','paneId'].some(key=>key in row))throw invalid();
+    if(['path','reference','reportedAt','paneId'].some(key=>key in row))throw invalid();
   } else if(row.status==='available') {
-    if(typeof row.path!=='string' || !(row.path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(row.path) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/.test(row.path)) || new TextEncoder().encode(row.path).length>4096
-      || /[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(row.path)
+    if(!validLocator(row[locator],locator) || other in row
       || typeof row.reportedAt!=='string' || row.reportedAt.length>64
       || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(row.reportedAt) || !Number.isFinite(Date.parse(row.reportedAt))
       || !(row.paneId===null || (typeof row.paneId==='string' && new TextEncoder().encode(row.paneId).length<=256 && !/[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(row.paneId))))throw invalid();
   } else throw invalid();
-  return row as ReportedHistory;
+  return row as ReportedHistory<K>;
 }
 
 export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {

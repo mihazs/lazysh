@@ -5,6 +5,7 @@ import {createWatchApplier, parseWatchFrame, type PageParser, type WatchEvent, t
 
 export type WatchTarget =
   | {kind: 'path'; agent: string; path: string; inlineImages?: boolean}
+  | {kind: 'reference'; agent: string; reference: string; inlineImages?: boolean}
   | {kind: 'herdr'; agent: string; agentSessionId: string; herdrSession: string; paneId: string; terminalId: string};
 /** `off` and `connecting` show nothing; `live` is the quiet normal state; `delayed` polls because no stream has
  * opened; `stale` lost a stream that was live; `unsupported` needs a newer host companion. */

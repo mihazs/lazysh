@@ -6,11 +6,12 @@ import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from '../src/test/opencodeRecorded';
 
-type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
+type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{kind?:string;path?:string;reference?:string;inlineImages?:boolean}[];/** Every command the page sent, with its arguments as JSON. */ipc:{command:string;args:string}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[];gone:boolean};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
-const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
+// The host's transcript path stays on the host: the app only ever holds the companion's opaque reference to it.
+const reference='4e0da3cb-f6d1-468c-89fb-52d2602bd310';
 
 /** The commands every synthetic host answers the same way; each fixture adds its own on top. */
 async function installBaseHost(page:Page) {
@@ -34,7 +35,7 @@ async function installBaseHost(page:Page) {
 /** Two restored tmux terminals; hook reports tie a running Codex conversation to pane %3 of `work` only. */
 async function open(page:Page) {
   await installBaseHost(page);
-  await page.addInitScript(({snapshot,bound,transcript,image})=>{
+  await page.addInitScript(({snapshot,bound,reference,image})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'tmux',name:'work'}},{hostId:'fixture',attached:{kind:'tmux',name:'other'}}]));
     // A recorded image is attached to the first prompt; it only comes back when the view asked for previews.
     const messages=(images=false)=>fixture.turns.flatMap((turn,index)=>[
@@ -42,13 +43,14 @@ async function open(page:Page) {
       {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
       {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
     ]);
-    const fixture:Fixture=window.agentView={earlier:0,turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],uploads:[],watchTargets:[],polls:0,watchMode:'off',watchStops:0,
+    const fixture:Fixture=window.agentView={earlier:0,turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],uploads:[],watchTargets:[],ipc:[],polls:0,watchMode:'off',watchStops:0,
       emit:frame=>fixture.watch?.onmessage({type:'frame',frame}),messages};
     const encoder=new TextEncoder();
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
     // The synthetic agent answers each submitted prompt; the terminal echoes it once, as a TUI would.
     const submit=(text:string)=>{echo('display-work',`\r\n> ${text}\r\n`);fixture.turns.push({prompt:text,answer:`Answered: ${text}`});};
     window.nativeFixtureInvoke=async(command,args)=>{
+      fixture.ipc.push({command,args:JSON.stringify(args??null)});
       const base=window.agentViewBase(command);if(base)return base.value;
       if(command==='attach_tmux'){
         fixture.attachments++;const session=`display-${String(args.name)}`;
@@ -79,13 +81,13 @@ async function open(page:Page) {
       const opencode=(window as unknown as {opencodeFixture?:{session:string;database:string;discovery:unknown;page:unknown}}).opencodeFixture;
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??'codex-thread',agent:opencode?'OpenCode':(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_transcripts' && opencode && args.agent==='opencode')return opencode.discovery;
-      if(command==='agent_reported_history' && !opencode)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
+      if(command==='agent_reported_history_reference' && !opencode)return {schemaVersion:1,sessionId:'codex-thread',status:'available',reference,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript' && opencode){
         if(args.path!==opencode.database || args.agent!=='opencode' || args.view!=='conversation' || args.transcriptSessionId!==opencode.session)throw new Error('Unexpected OpenCode transcript');
         fixture.polls++;return opencode.page;
       }
-      if(command==='agent_transcript'){
-        if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
+      if(command==='agent_reported_conversation'){
+        if(args.reference!==reference || args.agent!=='codex' || 'path' in args)throw new Error('Unexpected transcript');
         fixture.polls++;
         // Earlier history: `earlier` messages `e0`..`e{n-1}` sit before the newest page, served 20 at a time by `window.before`.
         const before=(args.window as {before?:string}|undefined)?.before;
@@ -117,7 +119,7 @@ async function open(page:Page) {
       if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
-  },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,transcript,image:preview('regions.png')});
+  },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,reference,image:preview('regions.png')});
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await expect(page.getByRole('tab')).toHaveCount(2);
@@ -191,6 +193,20 @@ test('switches the same tmux session between Terminal and Agent mid-turn without
   await expect(agent.getByText('Answered: Typed here',{exact:true})).toBeVisible({timeout:6000});
 });
 
+test('binds the Codex pane through the companion reference: no host transcript path is received or sent, in the read or the live watch',async({page})=>{
+  const agent=await openLive(page,'stream');
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  const {ipc,watchTargets}=await fixture(page);
+  const commands=new Set(ipc.map(call=>call.command));
+  // The path-taking commands belong to the manual picker; the fixture host would refuse them anyway.
+  expect([...commands].filter(command=>['agent_reported_history','agent_transcript'].includes(command))).toEqual([]);
+  expect(commands.has('agent_reported_history_reference') && commands.has('agent_reported_conversation')).toBe(true);
+  for(const call of ipc.filter(call=>call.command==='agent_reported_conversation'))expect(JSON.parse(call.args)).toMatchObject({agent:'codex',reference});
+  expect(watchTargets.length).toBeGreaterThan(0);
+  expect(watchTargets.every(target=>target.kind==='reference' && target.reference===reference && target.path===undefined)).toBe(true);
+  expect(JSON.stringify(ipc)).not.toMatch(/\.jsonl|\/home\//);
+});
+
 test('names what the agent waits for in the header and opens the Agent view from a needs-you notification',async({page})=>{
   await open(page);
   await page.evaluate(()=>{window.agentView.state='needs_attention';window.agentView.summary='AskUserQuestion';});
@@ -216,10 +232,10 @@ async function asClaude(page:Page) {
   await page.evaluate(()=>{
     const base=window.nativeFixtureInvoke!;
     window.nativeFixtureInvoke=async(command,args)=>{
-      const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
+      const result=await base(command,command==='agent_reported_conversation'?{...args,agent:'codex'}:args);
       if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread'}))};
-      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
-      if(command==='agent_transcript')return {...(result as object),agent:'claude'};
+      if(command==='agent_reported_history_reference')return {...(result as object),sessionId:'claude-thread'};
+      if(command==='agent_reported_conversation')return {...(result as object),agent:'claude'};
       return result;
     };
   });
@@ -319,10 +335,10 @@ async function claudeHere(page:Page,patch:{state?:string;transcript?:object}={})
   await page.evaluate(({state,transcript})=>{
     const base=window.nativeFixtureInvoke!;
     window.nativeFixtureInvoke=async(command,args)=>{
-      const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
+      const result=await base(command,command==='agent_reported_conversation'?{...args,agent:'codex'}:args);
       if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread',...(state?{state}:{})}))};
-      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
-      if(command==='agent_transcript')return {...(result as object),agent:'claude',...transcript};
+      if(command==='agent_reported_history_reference')return {...(result as object),sessionId:'claude-thread'};
+      if(command==='agent_reported_conversation')return {...(result as object),agent:'claude',...transcript};
       return result;
     };
   },patch);
@@ -463,7 +479,7 @@ async function openWithShell(page:Page) {
     const base=window.nativeFixtureInvoke!;
     window.nativeFixtureInvoke=async(command,args)=>{
       const result=await base(command,args);
-      return command==='agent_transcript'?{...(result as object),work:[{id:'sh',kind:'shell',title:'Watch CI',state:'running',taskId:'b89pe81sq',startedAt:new Date(Date.now()-60_000).toISOString(),events:[]}]}:result;
+      return command==='agent_reported_conversation'?{...(result as object),work:[{id:'sh',kind:'shell',title:'Watch CI',state:'running',taskId:'b89pe81sq',startedAt:new Date(Date.now()-60_000).toISOString(),events:[]}]}:result;
     };
   });
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
@@ -627,7 +643,7 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       if(command==='herdr_chat'){if((args.action as {kind:string}).kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
       if(command==='herdr_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
-      if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
+      if(command==='agent_reported_history_reference')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
       if(command==='agent_herdr_conversation'){
         const target=args.target as {agentSessionId:string};record.conversations.push(target.agentSessionId);
         if(!companion)throw {kind:'herdr_conversation_companion_required',message:'Update the companion'};
@@ -1201,7 +1217,6 @@ async function openZellij(page:Page,testInfo:{project:{name:string}}) {
   await page.addInitScript(()=>{
     type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown};
     const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0};
-    const path='/home/owner/.claude/projects/work/a.jsonl';
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
       if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:false,zellijAvailable:true,tools:[{kind:'zellij',version:'0.45.1',support:'full',missing:[]}],sessions:[]};
@@ -1211,8 +1226,8 @@ async function openZellij(page:Page,testInfo:{project:{name:string}}) {
       if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
         {sessionId:'other-thread',agent:'Codex',project:'/other',state:'done',updatedAt:new Date().toISOString(),summary:'Done',paneId:'zellij:another:1',eventCount:2}]};
-      if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',path,reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
-      if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
+      if(command==='agent_reported_history_reference')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',reference:'4e0da3cb-f6d1-468c-89fb-52d2602bd310',reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
+      if(command==='agent_reported_conversation')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
         {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
       if(command==='agent_watch_start')throw new Error('The channel could not open');
       if(command==='agent_watch_stop')return;

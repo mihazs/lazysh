@@ -150,6 +150,8 @@
     "allow-herdr-agent-input",
     "allow-agent-snapshot",
     "allow-agent-reported-history",
+    "allow-agent-reported-history-reference",
+    "allow-agent-reported-conversation",
     "allow-install-companion",
     "allow-companion-hooks",
     "allow-companion-hook-discovery",

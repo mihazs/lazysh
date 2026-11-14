@@ -124,7 +124,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
           try {
             const found = await conversationSource(invoke, sessionId, agent, row.sessionId);
             // The report's own pane is the evidence for OpenCode; Claude Code and Codex also name it in the reported history.
-            if (found && (found.paneId === undefined || found.paneId === pane)) conversation=Object.freeze({agent, path: found.path,...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}});
+            if (found && (found.paneId === undefined || found.paneId === pane)) conversation=Object.freeze({agent, path: found.path,...(found.reference ? {reference: true as const} : {}),...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}});
           } catch { /* A detected agent remains visible when its history is unavailable. */ }
         }
         if (alive && access.current()) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
@@ -156,7 +156,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       const matches=reports.filter(row=>row.sessionId===chosen.sessionId);
       if(!owns())return;
       if(!source || matches.length!==1 || matches[0].agent!==chosen.agent) {setUnavailable(true);return;}
-      setPicked({row:matches[0],conversation:Object.freeze({agent,path:source.path,...(source.transcriptSessionId ? {transcriptSessionId:source.transcriptSessionId} : {}),report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
+      setPicked({row:matches[0],conversation:Object.freeze({agent,path:source.path,...(source.reference ? {reference:true as const} : {}),...(source.transcriptSessionId ? {transcriptSessionId:source.transcriptSessionId} : {}),report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
     } catch {if(owns())setUnavailable(true);}
     finally {if(owns())setSelecting(false);}
   }

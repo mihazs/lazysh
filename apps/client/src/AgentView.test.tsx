@@ -11,6 +11,8 @@ import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogSc
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
+// The companion's opaque references: the host path of a conversation never reaches the app.
+const reference='4e0da3cb-f6d1-468c-89fb-52d2602bd310',nextReference='d11c8bad-7765-4f9d-a719-0f4a47b0b112';
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
 // Each turn starts 72 s before its answer and does one command, one edit and one failed tool call.
 const turn=(prompt:string,answer:string,start=Date.now()-72_000)=>[
@@ -24,13 +26,15 @@ function host(agent:string,rows:unknown[],history:'available'|'missing'|('availa
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='tmux_chat')return tmuxChatReply(command,args);
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
-    if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return (Array.isArray(history)?history.length>1?history.shift():history[0]:history)==='available'?{schemaVersion:1,sessionId:id,status:'available',path:`/home/owner/${agent} 世界.jsonl`,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'}:{schemaVersion:1,sessionId:id,status:'missing'};}
-    if(command==='agent_transcript')return page(agent,pages.length>1?pages.shift()!:pages[0]);
+    if(command==='agent_reported_history_reference'){const id=(args as {agentSessionId:string}).agentSessionId;return (Array.isArray(history)?history.length>1?history.shift():history[0]:history)==='available'?{schemaVersion:1,sessionId:id,status:'available',reference,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'}:{schemaVersion:1,sessionId:id,status:'missing'};}
+    if(command==='agent_reported_conversation')return page(agent,pages.length>1?pages.shift()!:pages[0]);
     throw new Error(`Unexpected ${command}`);
   });
 }
 const options=()=>{const button=screen.getByRole('button',{name:'Agent view options'});if(button.getAttribute('aria-expanded')!=='true')fireEvent.click(button);return screen.getByRole('group',{name:'Agent view options'});};
 const calls=(name:string)=>vi.mocked(invoke).mock.calls.filter(([command])=>command===name).map(([,args])=>args);
+/** Every read of a conversation, by reference or by path. */
+const transcriptReads=()=>[...calls('agent_reported_conversation'),...calls('agent_transcript')];
 const advance=async(ms:number)=>{await act(async()=>{await vi.advanceTimersByTimeAsync(ms);});};
 /** The tmux pane the hook reports tie to a conversation, mounted and settled. */
 const mountTmux=async()=>{render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);};
@@ -49,7 +53,7 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
     expect(sessions.getAttribute('aria-expanded')).toBe('false');fireEvent.click(sessions);
     expect(screen.getByRole('region',{name:'Last-reported agent sessions'})).toBeTruthy();fireEvent.click(options().querySelector('button')!);
     // Claude Code previews of attached images are on by default; Codex waits for the switch.
-    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0,...(agent==='claude'?{inlineImages:true}:{})}]);
+    expect(calls('agent_reported_conversation')).toEqual([{sessionId:'ssh',agent,reference,...(agent==='claude'?{inlineImages:true}:{})}]);
     const turns=screen.getAllByRole('region',{name:'Turn'});
     expect(turns).toHaveLength(1);
     // Prompt and answer are bubbles named by role, without the recorded reader's role headings or follow controls.
@@ -74,14 +78,44 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
   });
 });
 
+describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s conversation reference',(label,agent)=>{
+  it('is the only handle on the conversation: no host path is received or sent, and the live watch names it too',async()=>{
+    host(agent,[row(label,'%3')],'available',[turn('First prompt','First answer')]);
+    await mountTmux();
+    expect(screen.getByText('First answer')).toBeTruthy();
+    const names=new Set(vi.mocked(invoke).mock.calls.map(([command])=>command));
+    // The path-bearing commands are the manual picker's: the Agent view never calls them for a bound conversation.
+    expect(names.has('agent_reported_history')).toBe(false);expect(names.has('agent_transcript')).toBe(false);
+    expect(calls('agent_reported_history_reference')[0]).toEqual({sessionId:'ssh',agentSessionId:`${label}-session`});
+    expect(calls('agent_reported_conversation').every(args=>(args as {reference:string}).reference===reference && !('path' in (args as object)))).toBe(true);
+    // Nothing the view sent anywhere names a transcript file.
+    expect(JSON.stringify(vi.mocked(invoke).mock.calls)).not.toMatch(/\.jsonl|transcript/i);
+  });
+
+  it.each([
+    ['a path instead of a reference',{path:'/private/conversation.jsonl'}],
+    ['a path next to the reference',{reference,path:'/private/conversation.jsonl'}],
+    ['a reference that is a path',{reference:'/private/conversation.jsonl'}],
+    ['an altered reference',{reference:reference.toUpperCase()}],
+  ])('refuses a lookup reply with %s and reads nothing',async(_description,fields)=>{
+    host(agent,[row(label,'%3')],'missing',[turn('First prompt','First answer')]);
+    const fallback=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history_reference'
+      ? Promise.resolve({schemaVersion:1,sessionId:`${label}-session`,status:'available',reportedAt:'2026-11-09T10:00:00Z',paneId:'%3',...fields}) : fallback(command,args,options));
+    await mountTmux();
+    expect(transcriptReads()).toEqual([]);
+    expect(screen.getByText(new RegExp(`^The last ${label} report names this pane, but its conversation is unavailable`))).toBeTruthy();
+  });
+});
+
 describe('a Zellij session',()=>{
   const labels={backend:'zellij' as const,hostLabel:'host',terminalLabel:'work'};
   // The host reports each agent's pane as `zellij:<session>:<pane>` and its history for that same pane.
   function zellijHost(rows:ReturnType<typeof row>[]) {
     vi.mocked(invoke).mockImplementation(async(command,args)=>{
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
-      if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return {schemaVersion:1,sessionId:id,status:'available',path:'/home/owner/a.jsonl',reportedAt:'2026-11-09T10:00:00Z',paneId:rows.find(item=>item.sessionId===id)?.paneId};}
-      if(command==='agent_transcript')return page('claude',turn('Explain the build','The build uses Vite.'));
+      if(command==='agent_reported_history_reference'){const id=(args as {agentSessionId:string}).agentSessionId;return {schemaVersion:1,sessionId:id,status:'available',reference,reportedAt:'2026-11-09T10:00:00Z',paneId:rows.find(item=>item.sessionId===id)?.paneId};}
+      if(command==='agent_reported_conversation')return page('claude',turn('Explain the build','The build uses Vite.'));
       if(command==='zellij_agent_input')return null;
       throw new Error(`Unexpected ${command}`);
     });
@@ -97,7 +131,7 @@ describe('a Zellij session',()=>{
     await advance(0);
     expect(screen.getByText('The build uses Vite.')).toBeTruthy();
     // Only the agent that reports this session's pane is read; the other session's agent and the ended one are not.
-    expect(new Set(calls('agent_reported_history').map(args=>JSON.stringify(args)))).toEqual(new Set([JSON.stringify({sessionId:'ssh',agentSessionId:'Claude Code-session'})]));
+    expect(new Set(calls('agent_reported_history_reference').map(args=>JSON.stringify(args)))).toEqual(new Set([JSON.stringify({sessionId:'ssh',agentSessionId:'Claude Code-session'})]));
     await send('Run the tests');
     expect(calls('zellij_agent_input')).toEqual([{sessionId:'ssh',target:{zellijSession:'work',pane:7,agent:'claude'},input:{kind:'send',text:'Run the tests'}}]);
     expect(calls('tmux_chat')).toEqual([]);
@@ -107,7 +141,7 @@ describe('a Zellij session',()=>{
     zellijHost([row('Claude Code','zellij:work:7'),{...row('Claude Code','zellij:work:9'),sessionId:'second'}]);
     render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={labels} onShowTerminal={()=>{}}/>);
     await advance(0);
-    expect(calls('agent_transcript')).toEqual([]);
+    expect(transcriptReads()).toEqual([]);
     fireEvent.click(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getAllByRole('button')[1]);await advance(0);
     expect(screen.getByText('The build uses Vite.')).toBeTruthy();
     await send('Which one?');
@@ -118,7 +152,7 @@ describe('a Zellij session',()=>{
     zellijHost([row('Claude Code','zellij:work:7'),{...row('Claude Code','zellij:work:7'),sessionId:'restarted'},{...row('Codex','zellij:other:2'),sessionId:'elsewhere'}]);
     render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={labels} onShowTerminal={()=>{}}/>);
     await advance(0);
-    expect(calls('agent_transcript')).toEqual([]);
+    expect(transcriptReads()).toEqual([]);
     fireEvent.click(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getAllByRole('button').find(button=>/Codex/.test(button.textContent!))!);await advance(0);
     expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
     expect(calls('zellij_agent_input')).toEqual([]);
@@ -179,7 +213,7 @@ it('shows the fallback without a transcript picker when no hook report names thi
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={showTerminal}/>);
   await advance(0);
   expect(screen.getByText('No agent conversation for this terminal.')).toBeTruthy();
-  expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
+  expect(calls('agent_reported_history_reference')).toEqual([]);expect(transcriptReads()).toEqual([]);
   fireEvent.click(screen.getByRole('button',{name:'Show terminal'}));expect(showTerminal).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole('button',{name:'Choose transcript'})).toBeNull();
   // No agent in this pane: starting one stages its command in the terminal composer for review; nothing is sent from here.
@@ -196,13 +230,13 @@ it('labels a detected agent without a reported conversation as partial and never
   await advance(0);
   expect(screen.getByText(/^The last Codex report names this pane, but its conversation is unavailable/)).toBeTruthy();
   expect(screen.getByText('Attention').getAttribute('title')).toBe('Last reported: Attention');
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
 });
 
 it('keeps a detected tmux agent visible when its history lookup fails',async()=>{
   host('codex',[row('Codex','%3')],'missing',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history'?Promise.reject(new Error('unavailable')):fallback(command,args,options));
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history_reference'?Promise.reject(new Error('unavailable')):fallback(command,args,options));
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(screen.getByText(/^The last Codex report names this pane, but its conversation is unavailable/)).toBeTruthy();
@@ -211,11 +245,11 @@ it('keeps a detected tmux agent visible when its history lookup fails',async()=>
 it('does not bind history reported for another tmux pane',async()=>{
   host('codex',[row('Codex','%3')],'missing',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history'?Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/private/history',reportedAt:'2026-11-09T10:00:00Z',paneId:'%4'}):fallback(command,args,options));
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history_reference'?Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',reference,reportedAt:'2026-11-09T10:00:00Z',paneId:'%4'}):fallback(command,args,options));
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(screen.getByText(/^The last Codex report names this pane, but its conversation is unavailable/)).toBeTruthy();
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
 });
 
 it('enters the exact selected Herdr pane without reading a conversation',async()=>{
@@ -236,11 +270,11 @@ it('enters the exact selected Herdr pane without reading a conversation',async()
   expect(screen.getByText('builder')).toBeTruthy();expect(screen.getByText('other')).toBeTruthy();
   expect(screen.getByLabelText('Herdr server')).toHaveProperty('disabled',true);
   expect(screen.queryByText('No agent conversation for this terminal.')).toBeNull();
-  expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
+  expect(calls('agent_reported_history_reference')).toEqual([]);expect(transcriptReads()).toEqual([]);
   expect(screen.queryByRole('button',{name:'Open conversation'})).toBeNull();
   fireEvent.click(within(screen.getByText('builder').closest('article')!).getByRole('button',{name:'Enter session'}));
   expect(enter).toHaveBeenCalledExactlyOnceWith('owned',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.anything(),expect.any(Function));
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
 });
 
 it('opens the conversation of the focused Herdr pane by itself through the revalidated host resolver and binds the composer to that pane only',async()=>{
@@ -267,7 +301,7 @@ it('opens the conversation of the focused Herdr pane by itself through the reval
   expect(within(options()).getByText(/^Herdr links this conversation to the focused pane of this terminal: Work · Code\./)).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
   expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
   // The guarded terminal is the pane Herdr links the conversation to, so no destination step is shown and nothing is sent until Send.
   const guarded=()=>calls('herdr_chat').map(args=>(args as {action:{kind:string}}).action.kind);
   expect(guarded()).toEqual(['status','prepare','confirm']);
@@ -286,7 +320,7 @@ it('opens the conversation of the focused Herdr pane by itself through the reval
   expect(staged).toHaveBeenCalledTimes(1);window.removeEventListener('lazysh-prompt-draft',staged);
   available=false;await advance(2000);expect(calls('agent_herdr_conversation')).toHaveLength(2);
   expect(screen.getAllByRole('alert').map(alert=>alert.textContent).join(' ')).toContain('Session unavailable');
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
 });
 
 it('hides Herdr metadata and prevents selection when access is revoked',async()=>{
@@ -296,7 +330,7 @@ it('hides Herdr metadata and prevents selection when access is revoked',async()=
   act(()=>access(true));
   expect(screen.queryByText('builder')).toBeNull();
   await advance(5000);
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
 });
 
 it('lists reported sessions without pane identity and reads nothing while hidden',async()=>{
@@ -307,14 +341,14 @@ it('lists reported sessions without pane identity and reads nothing while hidden
   await advance(0);
   expect(screen.getByText('No agent conversation for this terminal.')).toBeTruthy();
   expect(calls('agent_snapshot')).toHaveLength(1);
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
 });
 
 it('opens only the explicitly selected uniquely reported session and gives it no input authority',async()=>{
   host('codex',[row('Codex',null)],'available',[turn('First prompt','First answer')]);
   render(<AgentView sessionId="ssh" shown tmux={false} terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);
-  expect(calls('agent_transcript')).toEqual([]);
+  expect(transcriptReads()).toEqual([]);
   fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
   expect(screen.getByText('First answer')).toBeTruthy();
   expect(screen.queryByLabelText('Transcript path')).toBeNull();
@@ -343,20 +377,20 @@ it.each(['gone','changed'] as const)('suspends a selected report when it is %s',
   host('codex',rows,'available',[turn('First prompt','First answer'),turn('Stale prompt','Stale answer')]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
   let changed=false;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>changed && change==='changed' && command==='agent_reported_history'
-    ? Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/different',reportedAt:'2026-11-09T10:00:00Z',paneId:null}) : fallback(command,args,options));
+  vi.mocked(invoke).mockImplementation((command,args,options)=>changed && change==='changed' && command==='agent_reported_history_reference'
+    ? Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',reference:nextReference,reportedAt:'2026-11-09T10:00:00Z',paneId:null}) : fallback(command,args,options));
   render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
   await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
   changed=true;if(change==='gone')rows.splice(0);
   await advance(2000);
-  expect(calls('agent_transcript')).toHaveLength(1);expect(screen.queryByText('Stale answer')).toBeNull();
+  expect(calls('agent_reported_conversation')).toHaveLength(1);expect(screen.queryByText('Stale answer')).toBeNull();
   expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
 });
 
 it('discards a selected transcript response if its report disappears during the read',async()=>{
   const rows=[row('Codex',null)];host('codex',rows,'available',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;let finish!:(value:unknown)=>void;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_conversation'
     ? new Promise(resolve=>{finish=resolve;}) : fallback(command,args,options));
   render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
   await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
@@ -372,20 +406,20 @@ it('does not open a session with ambiguous IDs or missing history',async()=>{
   view.rerender(<AgentView key="other" sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
   await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
   expect(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getByRole('alert').textContent).toMatch(/This session's conversation is unavailable/);
-  expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByLabelText('Transcript path')).toBeNull();
+  expect(transcriptReads()).toEqual([]);expect(screen.queryByLabelText('Transcript path')).toBeNull();
 });
 
 it('drops a pending session choice when the view is hidden',async()=>{
   host('codex',[row('Codex',null)],'available',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
   let resolve!:(value:unknown)=>void;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history'?new Promise(done=>{resolve=done;}):fallback(command,args,options));
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history_reference'?new Promise(done=>{resolve=done;}):fallback(command,args,options));
   const props={sessionId:'ssh',tmux:false,onShowTerminal:()=>{}};
   const view=render(<AgentView {...props} shown/>);await advance(0);
   fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));
   view.rerender(<AgentView {...props} shown={false}/>);
-  await act(async()=>resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/private/history',reportedAt:'2026-11-09T10:00:00Z',paneId:null}));
-  expect(calls('agent_transcript')).toEqual([]);
+  await act(async()=>resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',reference,reportedAt:'2026-11-09T10:00:00Z',paneId:null}));
+  expect(transcriptReads()).toEqual([]);
   view.rerender(<AgentView {...props} shown/>);await advance(0);
   expect(screen.getByRole('button',{name:/Codex · \/work/})).toHaveProperty('disabled',false);
 });
@@ -408,7 +442,7 @@ it('lists only the live Herdr agents, never the last-reported sessions of the ho
   expect(screen.getByRole('region',{name:'Live Herdr agents'})).toBeTruthy();
   expect(screen.queryByRole('region',{name:'Last-reported agent sessions'})).toBeNull();
   expect(screen.queryByText(/Claude Code-session|Codex-session/)).toBeNull();
-  expect(calls('agent_snapshot')).toEqual([]);expect(calls('agent_reported_history')).toEqual([]);
+  expect(calls('agent_snapshot')).toEqual([]);expect(calls('agent_reported_history_reference')).toEqual([]);
   // The row says what it is: agent kind, folder, status, workspace and tab by name.
   const card=screen.getByText('/work/codex').closest('article')!;
   expect(within(card).getByText('claude')).toBeTruthy();expect(within(card).getByText('Working')).toBeTruthy();
@@ -595,23 +629,23 @@ it('binds on the next poll once a conversation missing at first is reported',asy
   await advance(5000);await advance(0);
   expect(screen.queryByText(/^The last Codex report names this pane/)).toBeNull();
   expect(within(screen.getByRole('region',{name:'Turn'})).getByText('First answer')).toBeTruthy();
-  const before=calls('agent_reported_history').length;
+  const before=calls('agent_reported_history_reference').length;
   // An available report is checked again because it can expire.
   await advance(5000);
-  expect(calls('agent_reported_history').length).toBeGreaterThan(before);
+  expect(calls('agent_reported_history_reference').length).toBeGreaterThan(before);
 });
 
 it('suspends a stale tmux binding and restores its draft when history returns',async()=>{
-  const next='/home/owner/new.jsonl';
+  const next=nextReference;
   host('codex',[row('Codex','%3')],'available',[turn('First prompt','First answer')]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
   let phase:'initial'|'missing'|'returned'='initial',reads=0;
   let finishOld!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementation((command,args,options)=>{
-    if(command==='agent_transcript' && ++reads===2)return new Promise(resolve=>{finishOld=resolve;});
-    if(command!=='agent_reported_history')return fallback(command,args,options);
+    if(command==='agent_reported_conversation' && ++reads===2)return new Promise(resolve=>{finishOld=resolve;});
+    if(command!=='agent_reported_history_reference')return fallback(command,args,options);
     return Promise.resolve(phase==='missing'?{schemaVersion:1,sessionId:'Codex-session',status:'missing'}:
-      {schemaVersion:1,sessionId:'Codex-session',status:'available',path:phase==='initial'?'/home/owner/codex 世界.jsonl':next,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'});
+      {schemaVersion:1,sessionId:'Codex-session',status:'available',reference:phase==='initial'?reference:next,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'});
   });
   render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Keep this draft'}});
@@ -619,11 +653,11 @@ it('suspends a stale tmux binding and restores its draft when history returns',a
   expect(screen.getByText(/^The last Codex report names this pane, but its conversation is unavailable/)).toBeTruthy();
   expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
   await act(async()=>finishOld(page('codex',turn('Stale prompt','Stale answer'))));
-  const count=calls('agent_transcript').length;await advance(2000);expect(calls('agent_transcript')).toHaveLength(count);
+  const count=calls('agent_reported_conversation').length;await advance(2000);expect(calls('agent_reported_conversation')).toHaveLength(count);
   phase='returned';await advance(3000);await advance(0);
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
   expect(screen.queryByText('Stale answer')).toBeNull();
-  expect(calls('agent_transcript').at(-1)).toMatchObject({sessionId:'ssh',agent:'codex',path:next});
+  expect(calls('agent_reported_conversation').at(-1)).toMatchObject({sessionId:'ssh',agent:'codex',reference:next});
   expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
 });
 
@@ -635,7 +669,7 @@ it('suspends tmux input if the pane snapshot fails after binding',async()=>{
   render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);expect(screen.getByRole('region',{name:'Terminal input'})).toBeTruthy();
   offline=true;await advance(5000);expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
-  const count=calls('agent_transcript').length;await advance(2000);expect(calls('agent_transcript')).toHaveLength(count);
+  const count=calls('agent_reported_conversation').length;await advance(2000);expect(calls('agent_reported_conversation')).toHaveLength(count);
 });
 
 
@@ -643,9 +677,9 @@ it.each(['pane','report','history'] as const)('discards a tmux transcript if its
   const rows=[row('Codex','%3')];host('codex',rows,'available',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;let finish!:(value:unknown)=>void,pane='%3',changed=false;
   vi.mocked(invoke).mockImplementation((command,args,options)=>{
-    if(command==='agent_transcript')return new Promise(resolve=>{finish=resolve;});
+    if(command==='agent_reported_conversation')return new Promise(resolve=>{finish=resolve;});
     if(command==='tmux_chat' && (args as {action:{kind:string}}).action.kind==='snapshot')return Promise.resolve({...tmuxChatSnapshot,destination:{...tmuxChatSnapshot.destination,paneId:pane}});
-    if(command==='agent_reported_history' && changed && change==='history')return Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/different',reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'});
+    if(command==='agent_reported_history_reference' && changed && change==='history')return Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',reference:nextReference,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'});
     return fallback(command,args,options);
   });
   render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
@@ -759,7 +793,7 @@ describe('session info sheet',()=>{
   const withInfo=async(info:unknown,onShowTerminal=()=>{})=>{
     host('claude',[row('Claude Code','%3')],'available',[turn('Plan the work','Here is the plan.')]);
     const base=vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='agent_approvals')return {schemaVersion:1,requests:[]};const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),session:{model:'claude-opus-5-5',info}}:reply;});
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='agent_approvals')return {schemaVersion:1,requests:[]};const reply=await base(command,args);return command==='agent_reported_conversation'?{...(reply as object),session:{model:'claude-opus-5-5',info}}:reply;});
     render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={onShowTerminal}/>);await advance(0);
   };
 
@@ -812,7 +846,7 @@ describe('OpenCode pane',()=>{
     expect(screen.getByText('ok')).toBeTruthy();
     expect(calls('agent_transcripts')[0]).toEqual({sessionId:'ssh',agent:'opencode'});
     expect(calls('agent_transcript')[0]).toMatchObject({agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'});
-    expect(calls('agent_reported_history')).toEqual([]);
+    expect(calls('agent_reported_history_reference')).toEqual([]);
   });
 
   it('draws the shell command OpenCode ran as a tool card with its output, from a recorded session',async()=>{
@@ -849,7 +883,7 @@ describe('OpenCode pane',()=>{
     expect(screen.getByText(/conversation/i)).toBeTruthy();
     expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
     expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
-    expect(calls('agent_transcript')).toEqual([]);
+    expect(transcriptReads()).toEqual([]);
   });
 
   it('retires the view when the pane is taken over by another session',async()=>{
@@ -977,7 +1011,7 @@ describe('answering the open question of the agent',()=>{
   async function open(messages:object[],state='needs_attention',agent='claude',label='Claude Code') {
     host(agent,[row(label,'%3',state)],'available',[[]]);
     const fallback=vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command==='agent_transcript'?{...page(agent,messages),activity:'waiting'}:fallback(command,args,options));
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command==='agent_reported_conversation'?{...page(agent,messages),activity:'waiting'}:fallback(command,args,options));
     render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
     await advance(0);
   }
@@ -1050,7 +1084,7 @@ describe('image previews in the user bubble',()=>{
     host('claude',[row('Claude Code','%3')],'available',[withImage(good)]);
     render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
     await advance(0);
-    expect(calls('agent_transcript')[0]).toMatchObject({agent:'claude',view:'conversation',inlineImages:true});
+    expect(calls('agent_reported_conversation')[0]).toMatchObject({agent:'claude',reference,inlineImages:true});
     const bubble=screen.getByRole('article',{name:'user'});
     expect(within(bubble).getByText('See this')).toBeTruthy();
     expect(within(bubble).getByRole('button',{name:'Image 1 × 1 · View'})).toBeTruthy();
@@ -1059,10 +1093,10 @@ describe('image previews in the user bubble',()=>{
     host('codex',[row('Codex','%3')],'available',[withImage()]);
     render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
     await advance(0);
-    expect(calls('agent_transcript')[0]).not.toHaveProperty('inlineImages');
+    expect(calls('agent_reported_conversation')[0]).not.toHaveProperty('inlineImages');
     fireEvent.click(within(options()).getByRole('checkbox',{name:'Show image previews'}));
     await advance(0);
-    expect(calls('agent_transcript').at(-1)).toMatchObject({agent:'codex',view:'conversation',inlineImages:true});
+    expect(calls('agent_reported_conversation').at(-1)).toMatchObject({agent:'codex',reference,inlineImages:true});
     expect(screen.getByText(/This image cannot be previewed here/)).toBeTruthy();
     expect(screen.queryByRole('button',{name:/· View$/})).toBeNull();
   });
@@ -1126,7 +1160,7 @@ it('shows a message typed while the agent works as a queued card until the agent
   host('claude',[row('Claude Code','%3')],'available',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
   let reply:unknown=first;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'?Promise.resolve(reply):fallback(command,args,options));
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_conversation'?Promise.resolve(reply):fallback(command,args,options));
   render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);
   const cards=screen.getByRole('region',{name:'Queued messages'});
@@ -1145,7 +1179,7 @@ it('ignores a malformed queue from the companion and shows no card',async()=>{
   const reply={...page('claude',turn('First prompt','First answer')),queued:[null,{text:''},{text:5},{text:'x'.repeat(5000)},'text']};
   host('claude',[row('Claude Code','%3')],'available',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
-  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'?Promise.resolve(reply):fallback(command,args,options));
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_conversation'?Promise.resolve(reply):fallback(command,args,options));
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(screen.getByText('First answer')).toBeTruthy();expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
@@ -1155,7 +1189,7 @@ describe('session header',()=>{
   const withSession=(agent:string,session:unknown)=>{
     host(agent,[row(agent==='claude'?'Claude Code':'Codex','%3')],'available',[turn('Plan the work','Here is the plan.')]);
     const base=vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='agent_approvals')return {schemaVersion:1,requests:[]};const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),session}:reply;});
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='agent_approvals')return {schemaVersion:1,requests:[]};const reply=await base(command,args);return command==='agent_reported_conversation'?{...(reply as object),session}:reply;});
   };
   const mount=async()=>{render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);return screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;};
 
@@ -1212,7 +1246,7 @@ describe('working row',()=>{
   const mount=async(state:string,activity:string|undefined,messages:unknown[],updatedAt=new Date().toISOString(),summary='Working')=>{
     host('claude',[{...row('Claude Code','%3',state),updatedAt,summary}],'available',[messages]);
     const base=vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation(async(command,args)=>{const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),activity}:reply;});
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{const reply=await base(command,args);return command==='agent_reported_conversation'?{...(reply as object),activity}:reply;});
     await mountTmux();
   };
   const working=()=>[...document.querySelectorAll('.agent-working-row')].map(node=>node.textContent);
@@ -1273,9 +1307,9 @@ describe('round trips before the first message',()=>{
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
     // Neither read has answered yet, and both are already out.
     expect(names()).toEqual(expect.arrayContaining(['agent_snapshot','tmux_chat']));
-    expect(names()).not.toContain('agent_reported_history');
+    expect(names()).not.toContain('agent_reported_history_reference');
     await release();
-    expect(names()).toContain('agent_reported_history');
+    expect(names()).toContain('agent_reported_history_reference');
   });
 
   it('reads the conversation as soon as the pane is bound, without checking the same report a second time first',async()=>{
@@ -1283,10 +1317,10 @@ describe('round trips before the first message',()=>{
     render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
     await advance(0);
     expect(screen.getByText('First answer')).toBeTruthy();
-    const first=names().indexOf('agent_transcript');
+    const first=names().indexOf('agent_reported_conversation');
     // Only the bind itself looked at the reports before the first read; the check that follows a read comes after it.
     expect(names().slice(0,first).filter(command=>command==='agent_snapshot')).toHaveLength(1);
-    expect(names().slice(0,first).filter(command=>command==='agent_reported_history')).toHaveLength(1);
+    expect(names().slice(0,first).filter(command=>command==='agent_reported_history_reference')).toHaveLength(1);
   });
 
   it('checks the report, the pane and the history together once a conversation has been read',async()=>{
@@ -1297,8 +1331,8 @@ describe('round trips before the first message',()=>{
     vi.mocked(invoke).mockClear();
     // The next poll of a conversation that is already open checks the binding first: the three reads start together.
     await act(async()=>{await vi.advanceTimersByTimeAsync(2000);});
-    expect(names().filter(command=>command!=='agent_watch_start'&&command!=='agent_approvals').sort()).toEqual(['agent_reported_history','agent_snapshot','tmux_chat']);
+    expect(names().filter(command=>command!=='agent_watch_start'&&command!=='agent_approvals').sort()).toEqual(['agent_reported_history_reference','agent_snapshot','tmux_chat']);
     await release();
-    expect(names()).toContain('agent_transcript');
+    expect(names()).toContain('agent_reported_conversation');
   });
 });

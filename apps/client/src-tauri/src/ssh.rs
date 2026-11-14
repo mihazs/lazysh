@@ -3419,6 +3419,123 @@ pub async fn agent_reported_history(
         .await
 }
 
+/// A reported conversation's opaque reference must be a canonical UUID the companion issued.
+pub(crate) fn check_reference(reference: &str) -> Result<()> {
+    if uuid::Uuid::parse_str(reference)
+        .ok()
+        .is_none_or(|id| id.to_string() != reference)
+    {
+        return Err(SshError::new(
+            "invalid_input",
+            "Invalid transcript reference",
+        ));
+    }
+    Ok(())
+}
+
+/// The reply names the conversation by reference only: a host path, or anything else, is refused.
+fn reported_reference_reply(text: &str, agent_session_id: &str) -> Result<serde_json::Value> {
+    let invalid = || SshError::new("invalid_output", "Invalid reported transcript reference");
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid())?;
+    let row = value.as_object().ok_or_else(invalid)?;
+    let available = match row.get("status").and_then(|status| status.as_str()) {
+        Some("available") => true,
+        Some("missing" | "ambiguous") => false,
+        _ => return Err(invalid()),
+    };
+    let keys: &[&str] = if available {
+        &[
+            "schemaVersion",
+            "sessionId",
+            "status",
+            "reference",
+            "paneId",
+            "reportedAt",
+        ]
+    } else {
+        &["schemaVersion", "sessionId", "status"]
+    };
+    if row.len() != keys.len()
+        || keys.iter().any(|key| !row.contains_key(*key))
+        || row["schemaVersion"] != 1
+        || row["sessionId"] != agent_session_id
+        || (available && check_reference(row["reference"].as_str().unwrap_or_default()).is_err())
+    {
+        return Err(invalid());
+    }
+    Ok(value)
+}
+
+/// The Agent view's lookup of a reported conversation: a reference the companion issued, never the host path.
+#[tauri::command]
+pub async fn agent_reported_history_reference(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    agent_session_id: String,
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let command = format!(
+                "{} --reference",
+                reported_history_command(&agent_session_id)?
+            );
+            let session = state.session(&session_id).await?;
+            let reply = crate::companion::exec(&session, command, &lease).await?;
+            reported_reference_reply(&reply, &agent_session_id)
+        })
+        .await
+}
+
+fn reported_conversation_command(
+    agent: &str,
+    reference: &str,
+    inline_images: bool,
+    window: &TranscriptWindow,
+) -> Result<String> {
+    check_reference(reference)?;
+    if !matches!(agent, "claude" | "codex") {
+        return Err(SshError::new(
+            "invalid_input",
+            "Invalid reported conversation agent",
+        ));
+    }
+    Ok(format!(
+        "lazysh-agent transcript --agent {agent} --reference={} --view conversation --limit 50{}{}",
+        quote(reference),
+        if inline_images {
+            " --inline-images"
+        } else {
+            ""
+        },
+        window.flags()?
+    ))
+}
+
+/// Reads the conversation a reference names, newest messages unless a window says otherwise.
+#[tauri::command]
+pub async fn agent_reported_conversation(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    agent: String,
+    reference: String,
+    inline_images: Option<bool>,
+    window: Option<TranscriptWindow>,
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let command = reported_conversation_command(
+                &agent,
+                &reference,
+                inline_images.unwrap_or(false),
+                &window.unwrap_or_default(),
+            )?;
+            transcript_result(&lease, &state, &session_id, command, None).await
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn agent_transcripts(
     lease: AccessLease,
@@ -4195,6 +4312,57 @@ mod tests {
             state.host("target").unwrap().jump_host_id.as_deref(),
             Some("jump")
         );
+    }
+
+    #[test]
+    fn reported_reference_replies_never_carry_a_host_path() {
+        let id = "4e0da3cb-f6d1-468c-89fb-52d2602bd310";
+        let available = serde_json::json!({"schemaVersion":1,"sessionId":"owned","status":"available","reference":id,"paneId":"%7","reportedAt":"2026-11-09T10:00:00Z"});
+        assert_eq!(
+            reported_reference_reply(&available.to_string(), "owned").unwrap(),
+            available
+        );
+        let missing = serde_json::json!({"schemaVersion":1,"sessionId":"owned","status":"missing"});
+        assert!(reported_reference_reply(&missing.to_string(), "owned").is_ok());
+        let mut with_path = available.clone();
+        with_path["path"] = serde_json::json!("/private/history.jsonl");
+        let mut as_reference = available.clone();
+        as_reference["reference"] = serde_json::json!("/private/history.jsonl");
+        let mut legacy = with_path.clone();
+        legacy.as_object_mut().unwrap().remove("reference");
+        let mut missing_with_path = missing.clone();
+        missing_with_path["path"] = serde_json::json!("/private/history.jsonl");
+        for bad in [with_path, as_reference, legacy, missing_with_path] {
+            assert!(reported_reference_reply(&bad.to_string(), "owned").is_err());
+        }
+        assert!(reported_reference_reply(&available.to_string(), "other").is_err());
+        assert!(reported_reference_reply("not json", "owned").is_err());
+    }
+
+    #[test]
+    fn reported_conversation_commands_name_a_reference_never_a_path() {
+        let id = "4e0da3cb-f6d1-468c-89fb-52d2602bd310";
+        let tail = TranscriptWindow::default();
+        assert_eq!(
+            reported_conversation_command("codex", id, false, &tail).unwrap(),
+            format!("lazysh-agent transcript --agent codex --reference='{id}' --view conversation --limit 50")
+        );
+        let before = TranscriptWindow {
+            before: Some("m'1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            reported_conversation_command("claude", id, true, &before).unwrap(),
+            format!("lazysh-agent transcript --agent claude --reference='{id}' --view conversation --limit 50 --inline-images --before='m'\\''1'")
+        );
+        for (agent, reference) in [
+            ("claude; touch bad", id),
+            ("opencode", id),
+            ("claude", "/home/owner/session.jsonl"),
+            ("claude", "4E0DA3CB-F6D1-468C-89FB-52D2602BD310"),
+        ] {
+            assert!(reported_conversation_command(agent, reference, false, &tail).is_err());
+        }
     }
 
     #[test]

@@ -311,6 +311,8 @@ pub fn run() {
                 ssh::attach_tmux,
                 ssh::agent_snapshot,
                 ssh::agent_reported_history,
+                ssh::agent_reported_history_reference,
+                ssh::agent_reported_conversation,
                 companion::install_companion,
                 companion::hooks::companion_hooks,
                 companion::hooks::companion_hook_discovery,

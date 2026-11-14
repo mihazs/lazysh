@@ -2188,7 +2188,7 @@ const translations = {
   agentViewTerminal: ["Terminal", "Terminal"],
   agentViewFinding: ["Procurando o agente neste terminal…", "Buscando el agente en este terminal…"],
   agentViewNoConversation: ["Nenhuma conversa de agente para este terminal.", "No hay ninguna conversación de agente para este terminal."],
-  agentViewPartial: ["O último relato de {{agent}} indica este painel, mas a conversa não está disponível. Ative o histórico informado no companion para acompanhá-la aqui.", "El último informe de {{agent}} señala este panel, pero su conversación no está disponible. Activa el historial notificado en el companion para seguirla aquí."],
+  agentViewPartial: ["O último relato de {{agent}} indica este painel, mas a conversa não está disponível. Ative o histórico informado no companion e atualize o companion para acompanhá-la aqui.", "El último informe de {{agent}} señala este panel, pero su conversación no está disponible. Activa el historial notificado en el companion y actualiza el companion para seguirla aquí."],
   agentViewShowTerminal: ["Mostrar terminal", "Mostrar terminal"],
   agentViewChooseTranscript: ["Escolher transcrição", "Elegir transcripción"],
   agentViewManualNotice: ["Você escolheu esta transcrição. Não está comprovado que ela pertence ao agente deste terminal.", "Elegiste esta transcripción. No está comprobado que pertenezca al agente de este terminal."],

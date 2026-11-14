@@ -78,7 +78,10 @@ open. New sessions open in Terminal.
 For a native tmux terminal, the Agent view reads the pane's `TMUX_PANE` identity,
 finds the newest Claude Code or Codex report from that pane, and looks up its
 reported history. When the history is available, it opens that conversation,
-follows it every 2 seconds and groups it by turn. A history that is missing is
+follows it every 2 seconds and groups it by turn. The companion answers that
+lookup with an opaque reference to the conversation, never its host path, and the
+app reads and watches the conversation through that reference alone (see
+[the reference lookup](#opaque-conversation-reference)). A history that is missing is
 asked for again on the next check, every 5 seconds while the Agent view is shown. Input still goes through the
 [confirmed terminal input](chat-terminal-input.md) or **Stage in terminal**. Without
 a report from the pane, or without reported history for it, the Agent view says so
@@ -142,6 +145,31 @@ discovery setting and returns schema-v1 `available`, `missing` or `ambiguous`.
 Only `available` includes the path, report time and nullable reported pane.
 The hook opt-in controls collection independently of this lookup setting.
 
+#### Opaque conversation reference
+
+`lazysh-agent reported-history --reference --session-id=OPAQUE_ID` answers the same
+lookup with a `reference` in place of the `path`: a UUID the companion issued for that
+report and keeps in its state directory (table `reported_history_references`). A report
+keeps its reference until the path it names changes, then gets a new one; a reference
+ages out and is deleted with its report. The Agent view uses only this lookup for a
+bound Claude Code or Codex conversation, so the app never receives or sends the host
+transcript path for it. The manual **Choose transcript** picker and the Agents
+**Use reported history** shortcut keep their explicit paths.
+
+`lazysh-agent transcript --agent claude|codex --reference UUID --view conversation` and
+`lazysh-agent transcript-watch --agent claude|codex --reference UUID` read the conversation a
+reference names. The companion resolves it on the host under the reported-history setting
+and refuses, with a usage or invalid-argument error and no output, a reference it never
+issued, one altered in any way, one issued for another agent, one whose report now names
+another file, has become ambiguous or has aged out, and any reference sent together with
+`--path`, `--session-id`, a non-zero offset, a checkpoint or any view but `conversation`. A
+refused reference reads no file.
+
+Compatibility: this needs the updated host companion. A companion without
+`reported-history --reference` rejects it as a usage error; the Agent view then shows
+the pane's agent as detected but its conversation as unavailable, and asks to update
+the companion. The Agent view does not fall back to forwarding the host path.
+
 The user action selects a destination terminal for the existing draft staging
 workflow. It is not a live transcript/process binding, direct prompt/Stop action
 or approval grant. A pane ID is server-scoped and may be stale; the shortcut does
@@ -163,12 +191,13 @@ Within each state, the board groups reports by project on the connected host, mo
 
 ### Live conversation stream
 
-`lazysh-agent transcript-watch --agent claude|codex (--path FILE | --session-id UUID)
+`lazysh-agent transcript-watch --agent claude|codex (--path FILE | --reference UUID | --session-id UUID)
 [--limit 1..100] [--interval-ms 50..5000] [--protocol 1]` keeps one command channel open
 and prints one JSON frame per line. `--path` reads a transcript file the way
 `transcript --view conversation` does; `--session-id` resolves a Claude Code or Codex
 session inside the agent's own data root the way `herdr-conversation` does, so no host
-path is supplied. It ends when its standard input closes (an SSH channel going away), on
+path is supplied; `--reference` follows the conversation a
+[`reported-history --reference`](#opaque-conversation-reference) lookup named, and needs the reported-history setting. It ends when its standard input closes (an SSH channel going away), on
 SIGINT or SIGTERM, or when its output breaks; it keeps no state on the host and obeys no
 host setting beyond what the two readers above already check. Other agents have no stream
 and stay on paged reads.

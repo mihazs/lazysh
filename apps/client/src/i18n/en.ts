@@ -2185,7 +2185,7 @@ export const english = {
   agentViewTerminal: "Terminal",
   agentViewFinding: "Looking for the agent in this terminal…",
   agentViewNoConversation: "No agent conversation for this terminal.",
-  agentViewPartial: "The last {{agent}} report names this pane, but its conversation is unavailable. Turn on reported history in the companion to follow it here.",
+  agentViewPartial: "The last {{agent}} report names this pane, but its conversation is unavailable. Turn on reported history in the companion, and update the companion, to follow it here.",
   agentViewShowTerminal: "Show terminal",
   agentViewChooseTranscript: "Choose transcript",
   agentViewManualNotice: "You chose this transcript. It is not proven to belong to the agent in this terminal.",

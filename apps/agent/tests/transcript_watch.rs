@@ -3,6 +3,8 @@
 mod binary;
 #[path = "support/jsonl.rs"]
 mod jsonl;
+#[path = "support/process.rs"]
+mod process;
 
 use serde_json::{json, Value};
 use std::{
@@ -132,6 +134,66 @@ fn a_provider_session_id_is_resolved_inside_the_agent_data_root_only() {
 }
 
 #[test]
+fn a_reference_streams_the_reported_conversation_and_a_foreign_one_streams_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    jsonl::write(&path, &[record("m0", None, "user", "hello")]);
+    let state = directory.path().join("state");
+    let companion = |args: &[&str], input: &Value, state: &Path| {
+        process::run(
+            Command::new(binary::path())
+                .args(args)
+                .env("LAZYSH_STATE_DIR", state)
+                .env("TMUX_PANE", "%7"),
+            input.to_string().as_bytes(),
+        )
+    };
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"owned","cwd":"/owned","transcript_path":path});
+    assert!(companion(
+        &["ingest", "--agent", "claude", "--reported-history"],
+        &payload,
+        &state
+    )
+    .status
+    .success());
+    let lookup = companion(
+        &["reported-history", "--reference", "--session-id", "owned"],
+        &Value::Null,
+        &state,
+    );
+    let reply: Value = serde_json::from_slice(&lookup.stdout).unwrap();
+    let token = reply["reference"].as_str().unwrap();
+    let args = [
+        "--agent",
+        "claude",
+        "--reference",
+        token,
+        "--interval-ms",
+        "50",
+    ];
+    let watch = Watch::start(&args, &[("LAZYSH_STATE_DIR", &state)]);
+    watch.next_of("hello");
+    assert_eq!(
+        watch.next_of("snapshot")["entries"][0]["message"]["blocks"][0]["text"],
+        "hello"
+    );
+    let foreign = directory.path().join("foreign-state");
+    let refused = Command::new(binary::path())
+        .arg("transcript-watch")
+        .args(args)
+        .env("LAZYSH_STATE_DIR", &foreign)
+        .output()
+        .unwrap();
+    assert!(!refused.status.success() && refused.stdout.is_empty());
+    let other_agent = Command::new(binary::path())
+        .args(["transcript-watch", "--agent", "codex", "--reference", token])
+        .env("LAZYSH_STATE_DIR", &state)
+        .output()
+        .unwrap();
+    assert!(!other_agent.status.success() && other_agent.stdout.is_empty());
+}
+
+#[test]
 fn an_older_or_conflicting_invocation_is_a_usage_error_with_exit_code_two() {
     let run = |args: &[&str]| {
         Command::new(binary::path())
@@ -166,6 +228,11 @@ fn an_older_or_conflicting_invocation_is_a_usage_error_with_exit_code_two() {
         ]),
         Some(2)
     );
+    for other in [["--path", "a"], ["--session-id", ID]] {
+        let mut args = vec!["transcript-watch", "--agent", "claude", "--reference", ID];
+        args.extend(other);
+        assert_eq!(run(&args), Some(2));
+    }
 }
 
 #[test]
