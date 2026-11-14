@@ -37,7 +37,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Keep a supported active mobile screen awake | [Keep awake](keep-awake.md) |
 | Enroll a notification device or configure relay delivery (webhook, Gotify, Apprise) | [Notifications](notifications.md) · [Push registration](push-registration.md) · [UnifiedPush enrollment](unifiedpush-enrollment.md) · [Notification relay](notification-relay.md) · [Web push server](web-push-server.md) |
 | Inspect/control an owned Android device or iOS simulator | [Devices](devices.md) |
-| Build and validate native client interfaces | [Native GUI testing](native-gui-testing.md) · [Android testing](android-testing.md) · [iOS testing](ios-testing.md) |
+| Build and validate native client interfaces | [Native GUI testing](native-gui-testing.md) · [Android testing](android-testing.md) · [iOS testing](ios-testing.md) · [Linux desktop runtime measurement](desktop-runtime-measurement.md) |
 | Write or run an Appium test, or add a regression test for a bug | [Write and run Appium tests](how-to/write-and-run-appium-tests.md) · [Regression test index](regression-tests.md) |
 | Verify exact published APKs or startup CPU evidence | [Published APK qualification](android-published-apk.md) · [Android startup CPU budget](android-startup-cpu-budget.md) |
 | Localize UI or produce platform icon assets | [Localization](localization.md) · [App icons](app-icons.md) |
