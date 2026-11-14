@@ -124,13 +124,19 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
     page?.close();page=undefined;
   }
 
-  /** A process that is up but never shows its WebView (seen once in about ten cold starts on the guest) gets one clean restart. */
+  /**
+   * The guest's WebView renderer sometimes fails to start under load (ActivityManager: "sandboxed_process0 ... start timeout"), and the page then never
+   * answers. That is the guest, not the gesture code: the app is restarted up to three times, and every restart is counted in the run's report.
+   */
+  let rendererRestarts=0;
   async function attachOrRestart() {
-    try {return await Page.attach(device,90_000);}
-    catch(error) {
-      console.error(`restarting the app: ${(error as Error).message}`);
-      await device.shell(`am force-stop ${appId}`);await delay(1000);await device.shell(launch);
-      return Page.attach(device,120_000);
+    for(let attempt=1;;attempt++) {
+      try {return await Page.attach(device,attempt<4?60_000:120_000);}
+      catch(error) {
+        if(attempt===4)throw error;
+        rendererRestarts++;console.error(`restarting the app (${attempt}): ${(error as Error).message.slice(0,160)}`);
+        await device.shell(`am force-stop ${appId}`);await delay(1000);await device.shell(launch);
+      }
     }
   }
 
@@ -174,26 +180,32 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
     throw new Error('Back did not close the open page');
   };
 
-  /** A touch `distance` dp from `edge` (at least one pixel inside the screen), and the finger's way inward. */
-  function stroke(edge:Edge,distanceDp:number,geometry:Geometry):{from:[number,number];to:[number,number]} {
+  /**
+   * A touch `distanceDp` from `edge` (at least one pixel inside the screen), and the finger's way inward. The bottom is measured from the bottom of the
+   * app's viewport, which the system bars pad; `screenPx` measures it from the physical screen edge instead, where the launcher's Home zone is.
+   */
+  function stroke(edge:Edge,distanceDp:number,geometry:Geometry,screenPx?:number):{from:[number,number];to:[number,number]} {
     const px=Math.max(1,Math.round(distanceDp*density));
     const row=Math.round(geometry.offsetY+geometry.height*density*0.35);
     if(edge==='left')return {from:[px,row],to:[px+320,row+4]};
     if(edge==='right')return {from:[screen.width-px,row],to:[screen.width-px-320,row+4]};
-    const viewportBottom=Math.round(geometry.offsetY+geometry.height*density);
-    return {from:[200,viewportBottom-px],to:[204,viewportBottom-px-720]};
+    const viewportBottom=screenPx===undefined?Math.round(geometry.offsetY+geometry.height*density):screen.height;
+    const start=screenPx===undefined?px:Math.max(1,screenPx);
+    return {from:[200,viewportBottom-start],to:[204,viewportBottom-start-720]};
   }
   const opened=(view:View,edge:Edge)=>edge==='left'?view.sidebar:edge==='right'?view.agentView:view.bottomMenu;
 
   /** The positions the matrix tries on an edge, in dp from that edge, with what must happen. */
-  function positions(view:View,edge:Edge):{name:string;distance:number;expect:Expectation}[] {
+  type Position={name:string;distance:number;expect:Expectation;screenPx?:number};
+  /** `homePx` is the launcher's Home zone in px from the screen's bottom (dumpsys `mBottomGestureHeight`); the zone is where the system takes a swipe up, not the app's padded estimate. */
+  function positions(view:View,edge:Edge,homePx=84):Position[] {
     const insets=view.insets!,system=edge==='bottom'?Math.max(insets.bottom,insets.mandatoryBottom):insets[edge==='left'?'left':'right'];
     if(insets.navigation!=='gesture') {
       return [{name:'the screen edge',distance:0,expect:'opens'},{name:'the start of the band',distance:2,expect:'opens'},{name:'the end of the band',distance:bandWidth-2,expect:'opens'},{name:'beyond the band',distance:bandWidth+10,expect:'nothing'}];
     }
     const start=system+margin;
     return [
-      {name:'the screen edge',distance:0,expect:'system'},{name:'inside the system zone',distance:system/2,expect:'system'},
+      {name:'the screen edge',distance:0,expect:'system',...(edge==='bottom'?{screenPx:2}:{})},{name:'inside the system zone',distance:system/2,expect:'system',...(edge==='bottom'?{screenPx:Math.round(homePx/2)}:{})},
       {name:'the start of the band',distance:start+2,expect:'opens'},{name:'the middle of the band',distance:start+bandWidth/2,expect:'opens'},
       {name:'the end of the band',distance:start+bandWidth-2,expect:'opens'},{name:'beyond the band',distance:start+bandWidth+10,expect:'nothing'},
     ];
@@ -238,23 +250,24 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
     if(!available.includes(overlay))return;
     await switchTo(overlay);
     const current=await session(),geometry=calibration!;
-    const view=await readView(current),tally:Record<string,number>={};
+    const view=await readView(current),tally:Record<string,number>={},homePx=(await device.edgeBack()).bottom;
     for(const edge of ['left','right','bottom'] as const) {
-      for(const position of positions(view,edge)) {
+      for(const position of positions(view,edge,homePx)) {
         // The Home zone belongs to the launcher: a swipe up from it leaves the app, so it is tried a few times and the app is brought back.
         const tries=edge==='bottom'&&position.expect==='system'?Math.min(3,repetitions):repetitions;
         for(let attempt=1;attempt<=tries;attempt++) {
-          const label=`${overlay} ${edge} ${position.name} (${position.distance} dp) try ${attempt}`;
+          const base=`${overlay} ${edge} ${position.name} (${position.distance} dp) try ${attempt}`;
           await closeEverything(current);
           if(position.expect==='system'&&edge!=='bottom') {
             // Back from the system leaves the app unless something is open: hold the bottom menu open so the system's Back only closes it.
             const hold=stroke('bottom',positions(view,'bottom').find(item=>item.expect==='opens')!.distance,geometry);
             await device.swipe(hold.from,hold.to);
-            await current.until(`${label}: the bottom menu to open`,`document.querySelector('.bottom-menu')?.getAttribute('data-open')==='true'`,5000);
+            await current.until(`${base}: the bottom menu to open`,`document.querySelector('.bottom-menu')?.getAttribute('data-open')==='true'`,5000);
             await delay(500);
           }
           await clearTouches(current);
-          const {from,to}=stroke(edge,position.distance,geometry);
+          const {from,to}=stroke(edge,position.distance,geometry,position.screenPx);
+          const label=`${base} (from ${from} to ${to}, viewport offsetY ${geometry.offsetY} height ${geometry.height} dp)`;
           await device.swipe(from,to);
           await delay(position.expect==='opens'?700:1200);
           const foreground=await device.foreground();
@@ -286,7 +299,7 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
         }
       }
     }
-    console.log(JSON.stringify({gesture:'swipe-matrix',overlay,zonesDp:view.insets,swipesPerPosition:tally}));
+    console.log(JSON.stringify({gesture:'swipe-matrix',overlay,zonesDp:view.insets,swipesPerPosition:tally,rendererRestarts}));
   },2_700_000);
 
   /** The three ways the activity is replaced or reconfigured under a running session; the manifest handles rotation itself, so it is a zone change, not a recreation. */
@@ -351,7 +364,7 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
       expect(await device.foreground(),`${label}: Back did not leave the app`).toContain(appId);
       await delay(900+random(100));
     }
-    console.log(JSON.stringify({gesture:'band-swipes-with-back',overlay,cycles,recreations:counts}));
+    console.log(JSON.stringify({gesture:'band-swipes-with-back',overlay,cycles,recreations:counts,rendererRestarts}));
   },3_600_000);
 
   /** #1435 observation 2: one of thirty left-edge swipes at the claimed row did not open the menu. Misses are counted with what the page saw, not stopped at. */
@@ -375,7 +388,7 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
       await closeEverything(current);
       await delay(400+random(200));
     }
-    console.log(JSON.stringify({gesture:'left-band-swipes',overlay,swipes:swipeRuns,distanceDp:open.distance,touchstarts:started,touchcancels:cancelled,misses}));
+    console.log(JSON.stringify({gesture:'left-band-swipes',overlay,swipes:swipeRuns,distanceDp:open.distance,touchstarts:started,touchcancels:cancelled,misses,rendererRestarts}));
     expect(misses,`${overlay}: left-band swipes that did not open the side menu`).toEqual([]);
   },3_600_000);
 });
