@@ -653,7 +653,8 @@ pub(crate) fn action_command_for(
         }
         TmuxAction::SelectPane { target } => {
             id(target, '%')?;
-            format!("select-pane -t {}", quote(target))
+            // The pane's window first: select-pane alone marks it active in a window the attached client may not show.
+            format!("select-window -t {0} \\; select-pane -t {0}", quote(target))
         }
         TmuxAction::SplitPane {
             target,
@@ -1042,6 +1043,34 @@ mod tests {
         let tree = read_tree();
         assert_eq!(tree.sessions[0].name, "renamed");
         assert_eq!(tree.sessions[0].windows.len(), 2);
+        // Selecting a pane that is not in the shown window brings its window forward and makes that pane the active one.
+        run(action_command(&TmuxAction::SplitPane {
+            target: tree.sessions[0].windows[1].panes[0].id.clone(),
+            horizontal: false,
+            directory: temp.path().to_str().unwrap().to_owned(),
+        })
+        .unwrap());
+        let tree = read_tree();
+        assert!(tree.sessions[0].windows[0].active && !tree.sessions[0].windows[1].active);
+        let hidden = tree.sessions[0].windows[1]
+            .panes
+            .iter()
+            .find(|pane| !pane.active)
+            .unwrap()
+            .id
+            .clone();
+        run(action_command(&TmuxAction::SelectPane {
+            target: hidden.clone(),
+        })
+        .unwrap());
+        let tree = read_tree();
+        assert!(!tree.sessions[0].windows[0].active && tree.sessions[0].windows[1].active);
+        let shown = tree.sessions[0].windows[1]
+            .panes
+            .iter()
+            .find(|pane| pane.active)
+            .unwrap();
+        assert_eq!(shown.id, hidden);
         let window = &tree.sessions[0].windows[1].id;
         run(action_command(&TmuxAction::RenameWindow {
             target: window.clone(),

@@ -76,10 +76,19 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
   return alerts;
 }
 
+type PaneSession = { id: string; attached?: { kind: string; tmuxServer?: string } };
+/** Makes the tmux pane that raised an event the pane its attached terminal shows, so the Agent view follows that agent and not another one in the session.
+ * shortcut: the companion records only `TMUX_PANE`, not its tmux server, so the id is looked up on the server the terminal is attached to; record the socket in the report to bind the exact server. A closed pane still opens its session. */
+export async function focusInboxPane(invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>, session: PaneSession, paneId: string | null | undefined): Promise<void> {
+  if (!paneId || !/^%\d{1,10}$/.test(paneId) || session.attached?.kind !== 'tmux') return;
+  const server = session.attached.tmuxServer;
+  try { await invoke('tmux_action', { sessionId: session.id, action: { type: 'selectPane', target: paneId }, ...(server && server !== 'default' ? { tmuxServer: server } : {}) }); } catch { /* The pane may be gone; the session still opens. */ }
+}
+
 /** `waiting` asks the app for the Agent view: only a needs-you event of an agent whose pane the Agent view can follow has a pending card to show. */
 export function openInboxEvent(eventId: string, sessions: InboxSession[], expectedSessionId?: string): boolean {
   const row = getInbox().rows.find(row => row.eventId === eventId);
   if (!row || (expectedSessionId !== undefined && row.sessionId !== expectedSessionId) || !sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)) return false;
-  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent) } }));
+  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, paneId: row.paneId, waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent) } }));
   return true;
 }

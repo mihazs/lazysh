@@ -593,6 +593,26 @@ it.each([
   expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.saveHost).not.toHaveBeenCalled();
 });
 
+it.each([['agents',{tmuxServer:'agents'}],['default',{}]] as const)('selects the tmux pane of an inbox event on the attached %s server before it opens the Agents board, and opens it when the pane is gone',async(server,extra)=>{
+  enableMuxLaunch({kind:'tmux',tmuxServer:server});
+  const user=userEvent.setup();render(<App/>);
+  await user.type(await screen.findByLabelText('Password'),'explicit-entry');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await user.click(await screen.findByRole('button',{name:'Attach chosen'}));await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
+  const open=(detail:object)=>act(()=>{window.dispatchEvent(new CustomEvent('lazysh-inbox-open',{detail:{sessionId:'mux-attached',waiting:false,...detail}}));});
+  const selects=()=>mocks.invoke.mock.calls.filter(([command])=>command==='tmux_action');
+  open({paneId:'%7'});
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('tmux_action',{sessionId:'mux-attached',action:{type:'selectPane',target:'%7'},...extra},expect.anything()));
+  await waitFor(()=>expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page'));
+  // A pane id that is not a tmux pane id is not sent to tmux, and a pane tmux no longer has still opens the session.
+  await user.click(screen.getByRole('button',{name:t('navigationWorkspaces')}));
+  open({paneId:'zellij:main:4'});
+  const prior=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='tmux_action'?Promise.reject("can't find pane: %9"):prior(command,...args));
+  open({paneId:'%9'});
+  await waitFor(()=>expect(selects()).toHaveLength(2));
+  await waitFor(()=>expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page'));
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
 it('binds a newly offered mux picker to its new SSH control rather than the already active session',async()=>{
   enableMuxLaunch({kind:'tmux',tmuxServer:'agents'});mocks.hostLaunchReceipt=null;
   mocks.api.connect.mockResolvedValueOnce({sessionId:'old-active'}).mockResolvedValueOnce({sessionId:'new-exact-source'});
