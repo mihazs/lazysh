@@ -167,6 +167,8 @@ const api = {
   /** A lost WebGL context silently reverts to the DOM renderer; the driver rejects a run that saw one. */
   contextLosses() { return contextLosses; },
   mismatch() { return lastMismatch; },
+  /** Writes `text` through the page's write path and waits until it is applied. For the accessibility check, which needs known rows. */
+  async write(text: string) { await putAndWait(open().terminal, text); },
   /** The mirror's counters since the page loaded: viewport reads and their time, and DOM mutations of its region. Zero unless the page was opened with ?mirror=on. */
   mirrorStats() { return { ...mirror, mounted: mirrored, listRows: mirrorHost?.querySelectorAll('[role=listitem]').length ?? 0, announced: mirrorHost?.querySelectorAll('[role=log] > div').length ?? 0 }; },
   /** Writes that went through XtermTerminalAdapter.write: zero unless the page was opened with ?write=adapter. */
