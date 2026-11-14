@@ -476,6 +476,13 @@ The first write failing is a plain refusal; a failure after it, or a lost connec
 and is never resent. The listing and the write are separate host calls, so a pane replaced between them is
 the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
 
+The approval dock follows the same evidence: its requests are the Claude Code permission requests whose
+`paneId` is exactly the `zellij:<session>:<pane>` of that one report (see [approvals](approvals.md#in-the-agent-view)).
+A decision is the hook's `resolve_agent_approval`, not a key, so the pane is not read from Zellij; the report
+list is read again just before sending, and nothing is sent when it no longer holds exactly one report for the
+session, or that report names another pane, agent or session. Zellij has no read of a terminal's own pane, so
+focus plays no part.
+
 Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
 key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check

@@ -74,13 +74,18 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
   });
 });
 
+const approval=(id:string,paneId:string|null,sessionId='Claude Code-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+const requestId=(digit:number)=>`${String(digit).repeat(8)}-${String(digit).repeat(4)}-4${String(digit).repeat(3)}-${String(digit).repeat(4)}-${String(digit).repeat(12)}`;
 describe('a Zellij session',()=>{
   const labels={backend:'zellij' as const,hostLabel:'host',terminalLabel:'work'};
   // The host reports each agent's pane as `zellij:<session>:<pane>` and its history for that same pane.
-  function zellijHost(rows:ReturnType<typeof row>[]) {
+  function zellijHost(reports:ReturnType<typeof row>[]|(()=>ReturnType<typeof row>[]),requests:unknown[]=[]) {
+    const rows=()=>typeof reports==='function'?reports():reports;
     vi.mocked(invoke).mockImplementation(async(command,args)=>{
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
-      if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return {schemaVersion:1,sessionId:id,status:'available',path:'/home/owner/a.jsonl',reportedAt:'2026-11-09T10:00:00Z',paneId:rows.find(item=>item.sessionId===id)?.paneId};}
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows()};
+      if(command==='agent_approvals')return {schemaVersion:1,requests};
+      if(command==='resolve_agent_approval')return {schemaVersion:1,accepted:true};
+      if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return {schemaVersion:1,sessionId:id,status:'available',path:'/home/owner/a.jsonl',reportedAt:'2026-11-09T10:00:00Z',paneId:rows().find(item=>item.sessionId===id)?.paneId};}
       if(command==='agent_transcript')return page('claude',turn('Explain the build','The build uses Vite.'));
       if(command==='zellij_agent_input')return null;
       throw new Error(`Unexpected ${command}`);
@@ -122,6 +127,56 @@ describe('a Zellij session',()=>{
     fireEvent.click(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getAllByRole('button').find(button=>/Codex/.test(button.textContent!))!);await advance(0);
     expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
     expect(calls('zellij_agent_input')).toEqual([]);
+  });
+
+  describe('permission requests',()=>{
+    const [mine,otherPane,otherSession,tmuxPane,anotherAgent,noPane]=[1,2,3,4,5,6].map(requestId);
+    const requests=()=>[approval(mine,'zellij:work:7'),approval(otherPane,'zellij:work:9'),approval(otherSession,'zellij:other:7'),approval(tmuxPane,'%3'),approval(anotherAgent,'zellij:work:7','another-session'),approval(noPane,null)];
+    const mount=async()=>{render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={labels} onShowTerminal={()=>{}}/>);await advance(0);await advance(400);};
+    const allow=()=>act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
+    const dock=()=>screen.queryByRole('region',{name:'Pending approvals'});
+
+    it('shows the requests of the pane the one report names, and sends the decision with that exact pane and no key',async()=>{
+      zellijHost([row('Claude Code','zellij:work:7','needs_attention')],requests());
+      await mount();
+      const articles=within(dock()!).getAllByRole('article');
+      expect(articles).toHaveLength(1);expect(articles[0].textContent).toContain(`run ${mine}`);
+      await allow();
+      expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:mine,expectedHash:'a'.repeat(64),agentSessionId:'Claude Code-session',paneId:'zellij:work:7',decision:'allow'}]);
+      // The decision is the hook's: nothing reaches tmux or the Zellij pane.
+      expect(calls('tmux_chat')).toEqual([]);expect(calls('zellij_agent_input')).toEqual([]);
+    });
+
+    it('sends nothing once another agent also reports a pane of the session, so the pane is no longer named exactly',async()=>{
+      let reports=[row('Claude Code','zellij:work:7','needs_attention')];
+      zellijHost(()=>reports,requests());
+      await mount();
+      reports=[...reports,{...row('Claude Code','zellij:work:9'),sessionId:'second'}];
+      await allow();
+      expect(calls('resolve_agent_approval')).toEqual([]);expect(within(dock()!).getByRole('alert')).toBeTruthy();
+    });
+
+    it('sends nothing once the pane reports another agent session, or no longer reports this agent',async()=>{
+      let reports=[row('Claude Code','zellij:work:7','needs_attention')];
+      zellijHost(()=>reports,requests());
+      await mount();
+      reports=[{...reports[0],sessionId:'restarted'}];
+      await allow();
+      expect(calls('resolve_agent_approval')).toEqual([]);
+      reports=[row('Codex','zellij:work:7','needs_attention')];
+      await allow();
+      expect(calls('resolve_agent_approval')).toEqual([]);
+    });
+
+    it('shows no dock, and reads no request, when several agents report panes of the session or the report has no pane',async()=>{
+      zellijHost([row('Claude Code','zellij:work:7'),{...row('Claude Code','zellij:work:9'),sessionId:'second'}],requests());
+      await mount();
+      expect(dock()).toBeNull();expect(calls('agent_approvals')).toEqual([]);
+      cleanup();
+      zellijHost([row('Claude Code',null)],requests());
+      await mount();
+      expect(dock()).toBeNull();expect(calls('agent_approvals')).toEqual([]);
+    });
   });
 });
 
@@ -890,7 +945,6 @@ describe('OpenCode pane',()=>{
 });
 
 describe('permission requests of the agent in this pane',()=>{
-  const approval=(id:string,paneId:string,sessionId='Claude Code-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
   function approvals(requests:unknown[],pane=()=>'%3') {
     host('claude',[row('Claude Code','%3','needs_attention')],'available',[turn('Prompt','Answer')]);
     const fallback=vi.mocked(invoke).getMockImplementation()!;

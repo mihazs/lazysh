@@ -1259,11 +1259,11 @@ test('shows model, plan mode and context left in one header row without taking c
 });
 
 /** A host with Zellij 0.45.1 and one Claude Code agent in pane 7 of session `work`. Zellij is never restored, so the session is attached from Sessions. */
-async function openZellij(page:Page,testInfo:{project:{name:string}}) {
+async function openZellij(page:Page,testInfo:{project:{name:string}},requests:object[]=[]) {
   await installBaseHost(page);
-  await page.addInitScript(()=>{
-    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown};
-    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0};
+  await page.addInitScript(requests=>{
+    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown;decisions:unknown[]};
+    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0,decisions:[]};
     const path='/home/owner/.claude/projects/work/a.jsonl';
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
@@ -1277,18 +1277,20 @@ async function openZellij(page:Page,testInfo:{project:{name:string}}) {
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',path,reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
       if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
         {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:record.decisions.length?[]:requests};
+      if(command==='resolve_agent_approval'){record.decisions.push(args);return {schemaVersion:1,accepted:true};}
       if(command==='agent_watch_start')throw new Error('The channel could not open');
       if(command==='agent_watch_stop')return;
       if(command==='list_directory')return [];
       throw new Error(`Unexpected Zellij fixture command: ${command}`);
     };
-  });
+  },requests);
   await connectHost(page,'Fixture',testInfo.project.name==='phone');
   await (await workspaceControl(page,'Sessions')).click();
   await page.getByRole('button',{name:'List zellij sessions',exact:true}).click();await page.getByRole('button',{name:'Attach zellij work',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
 }
-const zellijFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {zellijFixture:{inputs:unknown[];tmuxCalls:number}}).zellijFixture);
+const zellijFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {zellijFixture:{inputs:unknown[];tmuxCalls:number;decisions:unknown[]}}).zellijFixture);
 
 test('Zellij: the Agent view follows the agent of the attached session and sends and stops through Zellij, and a pane that no longer runs it shows one notice',async({page},testInfo)=>{
   await openZellij(page,testInfo);
@@ -1312,6 +1314,22 @@ test('Zellij: the Agent view follows the agent of the attached session and sends
   await expect(field).toHaveValue('Next step');
   await expectInViewport(page,notice);
   expect((await zellijFixture(page)).tmuxCalls).toBe(0);expect((await zellijFixture(page)).inputs).toHaveLength(2);
+});
+
+test('Zellij: a permission request of the agent pane is answered from the Agent view through the hook, one of another pane is not offered, and no key reaches Zellij',async({page},testInfo)=>{
+  const request=(id:string,paneId:string,command:string)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId,toolName:'Bash',toolInput:{command},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()});
+  const mine='11111111-1111-4111-8111-111111111111';
+  await openZellij(page,testInfo,[request(mine,'zellij:work:7','git push'),request('22222222-2222-4222-8222-222222222222','zellij:work:9','rm -rf elsewhere'),request('33333333-3333-4333-8333-333333333333','zellij:another:7','rm -rf another')]);
+  const dock=agentView(page).getByRole('region',{name:'Pending approvals',exact:true});
+  await expect(dock).toContainText('git push',{timeout:8000});
+  await expect(dock).not.toContainText('rm -rf');
+  const deny=dock.getByRole('button',{name:'Deny request',exact:true});
+  await expect(deny).toBeEnabled();
+  await deny.click();
+  await expect(dock).toHaveCount(0);
+  const after=await zellijFixture(page);
+  expect(after.decisions).toEqual([expect.objectContaining({id:mine,agentSessionId:'claude-thread',paneId:'zellij:work:7',decision:'deny'})]);
+  expect(after.inputs).toEqual([]);expect(after.tmuxCalls).toBe(0);
 });
 
 test('live: an older page loads above the reader while a live append arrives, and the line being read does not move',async({page})=>{
