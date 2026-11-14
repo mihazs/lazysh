@@ -29,7 +29,7 @@ Steps 2 and 3 are valuable even if step 4 selects "keep xterm.js": the contract 
 
 The terminal engine ships slice by slice: every merged slice goes out with the next version, carries a Changeset and a `CHANGELOG.md` entry that says what changed, and keeps xterm.js the default. A native backend becomes reachable only through an explicit opt-in (Settings, Terminal engine: xterm (default) or native (experimental)), the developer override and the kill switch of [#1342](https://github.com/mihazs/lazysh/issues/1342); none of the three exists for native yet, because there is no native backend to select. The rollout gates in [#1342](https://github.com/mihazs/lazysh/issues/1342) and [#1343](https://github.com/mihazs/lazysh/issues/1343) decide a default change or the removal of xterm.js, not the release cadence.
 
-Released so far, with the first release that contains each pull request (from the tags, checked on 2026-11-13). None of these slices was meant to change terminal behaviour for users.
+Released so far, with the first release that contains each pull request (from the tags, checked on 2026-11-14). None of these slices was meant to change terminal behaviour for users.
 
 | Slice | Pull request | First release |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ Released so far, with the first release that contains each pull request (from th
 | Renderer API and CPU reference renderer | [#1437](https://github.com/mihazs/lazysh/pull/1437) | v1.52.0 |
 | Key mapping that matches xterm.js encoding | [#1471](https://github.com/mihazs/lazysh/pull/1471) | v1.56.0 |
 
-Merged and waiting for their first release when this was written: the core lifecycle ([#1501](https://github.com/mihazs/lazysh/pull/1501)), the renderer shootout ([#1479](https://github.com/mihazs/lazysh/pull/1479)), every other consumer behind the adapter ([#1500](https://github.com/mihazs/lazysh/pull/1500), [#1307](https://github.com/mihazs/lazysh/issues/1307), [#1308](https://github.com/mihazs/lazysh/issues/1308)) and the write-path measurement ([#1306](https://github.com/mihazs/lazysh/issues/1306), [benchmarks](terminal-benchmarks.md#write-path-xterm-write-directly-versus-xtermterminaladapterwrite-1306)).
+Also released in v1.61.0: the core lifecycle ([#1501](https://github.com/mihazs/lazysh/pull/1501)) and the renderer shootout ([#1479](https://github.com/mihazs/lazysh/pull/1479)). Version 1.62.0 is prepared ([#1526](https://github.com/mihazs/lazysh/pull/1526) merged; its tag and GitHub release were still pending on 2026-11-14) and carries every other consumer behind the adapter ([#1500](https://github.com/mihazs/lazysh/pull/1500), closing [#1307](https://github.com/mihazs/lazysh/issues/1307) and [#1308](https://github.com/mihazs/lazysh/issues/1308)). The write-path measurement ([#1306](https://github.com/mihazs/lazysh/issues/1306), [benchmarks](terminal-benchmarks.md#write-path-xterm-write-directly-versus-xtermterminaladapterwrite-1306)) ships with the version after that.
 
 **Release stage reached: step 2 complete, no rollout stage (S0 to S5) entered.** Nothing outside the xterm backend imports `@xterm/*` (an import-graph test enforces it), the adapter's write path costs nothing measurable on the desktop harness, and the first end-to-end native path (core, renderer and input on Linux desktop and Android) is the next thing to ship; it ships behind the opt-in the day it works, not after the other platforms.
 
