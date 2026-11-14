@@ -14,12 +14,15 @@ pub enum MultiplexerKind {
 pub struct PersistentSession {
     name: String,
 }
-pub(crate) fn tmux_arg(value: &str) -> String {
-    // tmux parses a trailing semicolon again after the remote shell has parsed argv.
+/// One literal tmux argument: tmux parses a trailing semicolon again after the remote shell has parsed argv.
+pub(crate) fn tmux_word(value: &str) -> String {
     match value.strip_suffix(';') {
-        Some(prefix) => quote(&format!("{prefix}\\;")),
-        None => quote(value),
+        Some(prefix) => format!("{prefix}\\;"),
+        None => value.to_owned(),
     }
+}
+pub(crate) fn tmux_arg(value: &str) -> String {
+    quote(&tmux_word(value))
 }
 
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {

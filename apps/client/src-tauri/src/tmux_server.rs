@@ -15,12 +15,20 @@ impl TmuxServer {
             _ => Err(SshError::new("invalid_tmux_server", "tmux server names must be 1–64 UTF-8 bytes without slash/control characters, and not . or ..")),
         }
     }
-    pub(crate) fn prefix(&self) -> String {
-        let name = match self {
+    pub(crate) fn name(&self) -> &str {
+        match self {
             Self::Default => "default",
             Self::Named(name) => name,
-        };
-        format!("tmux -u -L {}", quote(name))
+        }
+    }
+    pub(crate) fn prefix(&self) -> String {
+        format!("tmux -u -L {}", quote(self.name()))
+    }
+    /// [`Self::prefix`] as exact argv words, for plans that quote each word itself.
+    pub(crate) fn argv(&self) -> Vec<String> {
+        ["tmux", "-u", "-L", self.name()]
+            .map(str::to_owned)
+            .to_vec()
     }
     pub(crate) fn for_session(session: &Session, requested: Option<&str>) -> Result<Self> {
         let attached = session
@@ -72,6 +80,10 @@ mod tests {
         assert_eq!(
             TmuxServer::parse(Some("a'b")).unwrap().prefix(),
             "tmux -u -L 'a'\\''b'"
+        );
+        assert_eq!(
+            TmuxServer::parse(Some("a'b")).unwrap().argv(),
+            ["tmux", "-u", "-L", "a'b"]
         );
     }
 }
