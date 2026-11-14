@@ -378,6 +378,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   },[active,session.id,session.adapter,session.connected,dpadEnabled,preferences.screenReader]);
   const multiplexer = session.local ? undefined : session.attached?.kind;
   const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
+  const multiTap = customTouch && (preferences.bodyGestures.doubleTap !== "none" || preferences.bodyGestures.tripleTap !== "none");
 
   useEffect(() => {
     const visibility = () => {if (document.hidden) {imeInput.current?.reset(); clearModifiers(); repeated.current = true;}};
@@ -662,13 +663,19 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const element = container.current;
     if (!element) return;
     // xterm owns mouse selection, including its edge scrolling; offer actions once it ends.
-    let pressed = false;
-    const down = (event: MouseEvent) => {pressed = event.button === 0;};
+    let pressed = false, touchEnded = 0;
+    const touchUp = (event: PointerEvent) => {if (event.pointerType === 'touch') touchEnded = Date.now();};
+    const down = (event: MouseEvent) => {
+      // A touch tap's compatibility mouse events carry its tap count; xterm would turn the second and third into a word or line selection that blocks the next tap of a multi-tap gesture.
+      if (multiTap && event.detail >= 2 && Date.now() - touchEnded < 500) {event.stopPropagation(); return;}
+      pressed = event.button === 0;
+    };
     const up = () => {if (pressed && activeRef.current && session.adapter.hasSelection()) setSelectionTools(current => current ?? {handles: false}); pressed = false;};
+    element.addEventListener('pointerup', touchUp, true);
     element.addEventListener('mousedown', down, true);
     document.addEventListener('mouseup', up, true);
-    return () => {element.removeEventListener('mousedown', down, true); document.removeEventListener('mouseup', up, true);};
-  }, [session.id, session.adapter]);
+    return () => {element.removeEventListener('pointerup', touchUp, true); element.removeEventListener('mousedown', down, true); document.removeEventListener('mouseup', up, true);};
+  }, [session.id, session.adapter, multiTap]);
 
   // Herdr running in this terminal, attached by lazysh or not, shows its own phone navigation on the live screen.
   const [herdrScreen, setHerdrScreen] = useState(false);

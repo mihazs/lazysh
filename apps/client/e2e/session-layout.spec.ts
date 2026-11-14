@@ -240,3 +240,56 @@ test('visible-screen challenge oracle requires dismissal after a held native cli
   });
   expect(observation).toEqual({oneRow: 1, clipped: false, bufferRetained: true, expanded: true});
 });
+
+test('desktop session shortcuts switch, open, create and close sessions, and a focused terminal keeps its shell chords', async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Hardware keyboard chords');
+  await page.addInitScript(() => {
+    const calls: {command: string; args: Record<string, unknown>}[] = [];
+    Object.assign(window, {fixtureCalls: calls});
+    const fixture = window.nativeFixtureInvoke;
+    window.nativeFixtureInvoke = async (command, args, options) => {
+      calls.push({command, args});
+      return command === 'local_write' ? undefined : fixture(command, args, options);
+    };
+  });
+  await page.goto('/');
+  const switcher = await openSessions(page);
+  await page.keyboard.press('Escape');
+  const tabs = page.locator('.session-tabs [role="tab"]');
+  const selected = (index: number) => expect(tabs.nth(index)).toHaveAttribute('aria-selected', 'true');
+  await selected(1);
+
+  // The focused terminal answers Ctrl/Cmd+digit but keeps Ctrl+O and Ctrl+W for the shell.
+  await page.locator('.terminal-canvas:visible').click();
+  await expect(page.locator('.terminal-canvas:visible .xterm-helper-textarea')).toBeFocused();
+  await page.keyboard.press('Control+1');
+  await selected(0);
+  await page.keyboard.press('Control+2');
+  await selected(1);
+  await page.keyboard.press('Control+9');
+  await selected(1);
+  await page.keyboard.press('Meta+1');
+  await selected(0);
+  await page.keyboard.press('Control+o');
+  await page.keyboard.press('Control+w');
+  await expect(switcher).toBeHidden();
+  await expect(tabs).toHaveCount(2);
+
+  // Away from the terminal the same chords open the switcher, start a connection and close the active session.
+  await tabs.first().focus();
+  await page.keyboard.press('Control+o');
+  await expect(switcher).toBeVisible();
+  await page.keyboard.press('Escape');
+  await tabs.first().focus();
+  await page.keyboard.press('Control+n');
+  await expect(page.getByRole('dialog', {name: /host/i})).toBeVisible();
+  await page.keyboard.press('Escape');
+  await tabs.first().focus();
+  await page.keyboard.press('Control+w');
+  await expect(tabs).toHaveCount(1);
+  await selected(0);
+
+  const calls = await page.evaluate(() => (window as unknown as {fixtureCalls: {command: string; args: Record<string, unknown>}[]}).fixtureCalls);
+  expect(calls.filter(call => call.command === 'local_write').map(call => call.args.data)).toEqual(['\x0f', '\x17']);
+  expect(calls.filter(call => call.command === 'local_disconnect').map(call => call.args.sessionId)).toEqual(['local:fixture-1']);
+});
