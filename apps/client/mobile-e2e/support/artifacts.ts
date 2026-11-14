@@ -5,7 +5,8 @@ import {adbFor} from './device';
 import {inNative, inWebView} from './contexts';
 
 const slug = (text: string) => text.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'unnamed';
-const KEY = /BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|&#10;|\\n)*[A-Za-z0-9+/=]{16,}/;
+// A private key, or an encrypted-sync recovery key (its fixed prefix and the start of its body).
+const KEY = /BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|&#10;|\\n)*[A-Za-z0-9+/=]{16,}|LAZYSH-SYNC-V1-[A-Za-z0-9]{8,}/;
 const quiet = <T>(work: Promise<T>) => work.catch(() => undefined);
 
 /** True while a password or private key is on screen: such a screen is never captured. */

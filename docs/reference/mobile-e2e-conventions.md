@@ -35,6 +35,7 @@ apps/client/mobile-e2e/
     contexts.ts             NATIVE_APP <-> app WebView switch
     gestures.ts             W3C pointer actions, edge swipes
     hosts.ts                owned SSH, Herdr and tmux endpoints from tests/support
+    webdav.ts               owned HTTPS WebDAV server with its own CA, for the encrypted-sync case (a spec starts it)
     artifacts.ts            failure screenshots, page source, logcat tail
   data/                     static, deterministic inputs (no secrets, no keys)
   reports/                  generated; git-ignored (junit/, artifacts/, wdio-appium.log)

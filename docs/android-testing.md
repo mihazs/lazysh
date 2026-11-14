@@ -609,3 +609,41 @@ Run the same probe on a local guest: a scratch IME that executes a fixed script 
 Real-phone check, which only the owner can make: install the build with this fix, open a terminal session on a phone whose
 keyboard is SwiftKey, type words with spaces and a dot, erase words with Backspace, type again, and confirm that every key
 reaches the shell and that the first Backspace after a dot erases exactly one character.
+
+## Encrypted sync against an owned WebDAV server (#1540)
+
+`apps/client/mobile-e2e/specs/regression/sync/1540-encrypted-sync-webdav.e2e.ts` drives the real Encrypted sync panel in the
+packaged debug app against an owned HTTPS WebDAV server, as part of the [Appium suite](#appium-suite-in-ci-1412). It is the
+Android half of the [#17](https://github.com/mihazs/lazysh/issues/17) acceptance; the Rust layer is exercised separately by the
+`sync.rs` tests.
+
+| Case | Asserts in the UI | Asserts on the server |
+| --- | --- | --- |
+| Enroll | the panel reports "Nothing has been uploaded", shows a generated `LAZYSH-SYNC-V1-` recovery key, keeps credentials upload and preview disabled, and after the app is stopped and started again "Show recovery key" shows the same key from the native credential store | no request at all, so nothing was uploaded by enrolling or by restarting |
+| Upload, reset, apply | uploading settings reports success; a second install (the app's data cleared) enrolled with the recovery key previews the saved host, applies it, and lists it among the hosts | one `age` scrypt ciphertext for settings and no credentials resource; the bytes contain neither the host's name, address or user, nor the recovery key, nor the app password; exactly one `PUT` in the whole run |
+| Trust | the same preview fails with "Cannot fetch encrypted sync data" until the owned root is given, then reaches the server | no request while the root is missing, one `GET` after |
+
+**The server.** `support/webdav.ts` serves what the app sends and nothing else: `GET` and conditional `PUT` of two fixed resource
+names behind HTTP Basic, strong ETags, `If-Match` and `If-None-Match: *` preconditions and an 8 MiB limit. It is not a general
+WebDAV provider (no `PROPFIND`, locks or collections), so the case does not stand in for a hosted provider. It listens on
+`127.0.0.1` with a certificate for that address, issued by a CA generated with `openssl` for the run, and the guest reaches it
+through `adb reverse --no-rebind` like the owned SSH hosts. Its own tests (`support/webdav.test.ts`) cover authentication, the
+preconditions, the size limit, refusal of a client holding another CA, teardown and the staging helpers.
+
+**The trust.** Production sync requires HTTPS with the web PKI roots, and a private CA is refused. The `client:build-android-emulator`
+task, which only owned emulator and Waydroid runs use, builds with the `sync-tls-acceptance` Cargo feature (`sync.rs`). That build
+adds one root, read from `sync-test-ca.pem` in the app's config directory (left through `run-as`), its external files directory or
+`/data/local/tmp` (left through `adb push`, for a guest without a working `run-as` such as the shared Waydroid guest), and only for
+the literal `127.0.0.1`. The case removes the shared `/data/local/tmp` copy before and after every test. A published build does not
+compile the feature, so every real endpoint keeps the web PKI roots. The `sync.rs` test
+`an_extra_root_is_trusted_for_the_loopback_literal_only` holds the loopback-only rule, and the third case above shows the app
+refusing the same server until it is given the root.
+
+**Limits.** The local run used a Waydroid guest (Android 13, x86_64, no SELinux enforcement), at its 1920x1080 landscape layout and at
+1080x2340 at density 420; the API 36 emulator evidence is the `native-android-appium` job. An emulator or a Waydroid guest is the only runtime: no physical device, no Samsung or other OEM keystore behaviour and
+no hosted WebDAV provider were exercised. The credentials category is shown to stay off and unused, but uploading saved credentials
+needs a saved vault entry and is not part of this case. Run it like any Appium spec; it needs `openssl` on the host:
+
+```sh
+LAZYSH_E2E_APK=<x86_64 debug apk built by bun run build:android:emulator> bun run --cwd apps/client mobile-e2e -- --spec mobile-e2e/specs/regression/sync/1540-encrypted-sync-webdav.e2e.ts
+```

@@ -15,6 +15,8 @@ fdroid = ["tauri-plugin-lazysh-push/fdroid"]
 parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 # The native terminal core (libghostty-vt, built with Zig 0.16.0): off by default so no build needs Zig.
 native-terminal = ["dep:lazysh-terminal-runtime"]
+# Owned emulator builds only: trusts one extra root for the loopback WebDAV fixture (see `sync.rs`). Never a product feature.
+sync-tls-acceptance = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
