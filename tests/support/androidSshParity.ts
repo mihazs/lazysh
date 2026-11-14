@@ -17,6 +17,7 @@ export const sshParityCases=[
   'ownedSshAgentForwardingThroughRealUi',
   'ownedSshPreviewForwardsAndTearsDownThroughRealUi',
   'ownedSshFilesAndRepositoryReviewThroughRealUi',
+  'ownedSshClipboardAndLinksReachTheSystemThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files';
