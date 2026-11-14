@@ -1,4 +1,5 @@
 import {t,useUi} from './i18n/core';
+import ToolHelp from './ToolHelp';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -261,7 +262,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   return (
     <section className="tool-panel" aria-label={t('devicesTitle')}>
       <h3>{t('devicesHeading')}</h3>
-      <p>{t('devicesHint')}</p>
+      <ToolHelp label={t('devicesAbout')}>{t('devicesHint')}</ToolHelp>
       <div className="tool-bar">
         <label>
           {t('devicesPlatform')}
