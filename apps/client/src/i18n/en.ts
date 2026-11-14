@@ -2204,6 +2204,8 @@ export const english = {
   agentModeMemory: "Memory note",
   agentModeSwitch: "Switch permission mode (Shift+Tab)",
   agentModeNow: "Permission mode: {{mode}}",
+  agentModelSwitch: "Switch model (/model)",
+  agentModelAsked: "Asked the agent for its models. Choose in the list that opened: above the message box, or in the terminal.",
   agentModeUnconfirmed: "Switched once, but the terminal's mode line was not recognised. Check the terminal.",
   agentReceiptSending: "Sending…",
   agentReceiptSent: "Sent",

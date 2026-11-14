@@ -347,11 +347,16 @@ test('answers the open Claude question with the digit of the chosen option and t
   const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
-test('the mode button sends one Shift+Tab per tap to a Claude pane and names the mode the terminal read back',async({page})=>{
+/** A Claude Code agent in the pane, with the Agent view shown. */
+async function showClaudeAgent(page:Page) {
   await open(page);
   await claudeHere(page);
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
-  const agent=agentView(page);
+  return agentView(page);
+}
+
+test('the mode button sends one Shift+Tab per tap to a Claude pane and names the mode the terminal read back',async({page})=>{
+  const agent=await showClaudeAgent(page);
   const button=agent.getByRole('button',{name:'Switch permission mode (Shift+Tab)',exact:true});
   await expect(button).toBeEnabled({timeout:8000});
   const box=(await button.boundingBox())!;
@@ -489,6 +494,26 @@ test('offers no Stop while the agent waits for an answer, because Enter would an
   await page.evaluate(()=>{window.agentView.state='needs_attention';});
   await expect(panel.getByRole('button',{name:'Stop Watch CI'})).toHaveCount(0,{timeout:10000});
   expect(await typedInputs(page)).toEqual([]);
+});
+
+test('Switch model in the options asks a Claude pane for its model list once and closes the options',async({page})=>{
+  const agent=await showClaudeAgent(page);
+  await expect(agent.getByRole('button',{name:'Switch permission mode (Shift+Tab)',exact:true})).toBeEnabled({timeout:8000});
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
+  const menu=agent.getByRole('group',{name:'Agent view options',exact:true});
+  const button=menu.getByRole('button',{name:'Switch model (/model)',exact:true});
+  expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await button.click();
+  await expect(menu).toHaveCount(0);
+  await expect.poll(async()=>(await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({operation:1,input:{kind:'send',text:'/model'}})]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+  // The agent answers with its own model list, which the view lifts as the dialog card; choosing one is the guarded pick.
+  await showDialog(page,0);
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:8000});
+  await dialog.getByRole('button',{name:/^Sonnet/}).click();
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(1).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{

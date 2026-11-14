@@ -133,6 +133,27 @@ async function openConversation(messages:unknown[]) {
   return screen.getByRole('region',{name:'Conversation messages'});
 }
 
+describe('Switch model in the options',()=>{
+  const inputs=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:unknown}}).action).filter(action=>action.kind==='input').map(action=>action.input);
+  const mount=()=>render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+
+  it('asks a Claude Code pane for its model list with one guarded /model and closes the options',async()=>{
+    host('claude',[row('Claude Code','%3')],'available',[turn('First prompt','First answer')]);
+    mount();await advance(0);
+    fireEvent.click(within(options()).getByRole('button',{name:'Switch model (/model)'}));await advance(0);
+    expect(inputs()).toEqual([{kind:'send',text:'/model'}]);
+    expect(screen.queryByRole('group',{name:'Agent view options'})).toBeNull();
+    expect(screen.getByText(/Asked the agent for its models/)).toBeTruthy();
+  });
+
+  it('offers it for no other agent',async()=>{
+    host('codex',[row('Codex','%3')],'available',[turn('First prompt','First answer')]);
+    mount();await advance(0);
+    expect(within(options()).queryByRole('button',{name:'Switch model (/model)'})).toBeNull();
+    expect(inputs()).toEqual([]);
+  });
+});
+
 it('shows what the harness wrote as compact events and keeps token counters out of the message flow',async()=>{
   const flow=await openConversation([
     {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},
