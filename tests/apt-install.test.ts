@@ -133,7 +133,7 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
   test('every runner apt step writes the bounded configuration before apt runs and installs its packages', async () => {
     const runs = await runnerAptSteps();
     // The inventory is pinned so a detector regression cannot make this pass vacuously.
-    expect(runs).toHaveLength(8);
+    expect(runs).toHaveLength(9);
     for (const run of runs) {
       const result = await (await aptRoot())(['bash', '-e', '-c', run]);
       const packages = run.split(/\s+/).slice(run.split(/\s+/).indexOf('.github/scripts/apt-install.sh') + 1).filter(word => word !== '--no-update');
