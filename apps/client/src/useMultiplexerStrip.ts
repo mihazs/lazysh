@@ -76,7 +76,7 @@ export function useMultiplexerStrip({sessionId,attached,enabled,onError}:{sessio
     } else if(ref.kind==='zellij')await invoke('zellij_action',{sessionId,name,action:{type:'goToTab',index:ref.index}});
     else await api.tmuxJump(sessionId,ref.generation,ref.session,ref.window);
   });
-  /** Resolves true once the command ran. Renames or creates through the multiplexer's typed action; a new tab or window is then switched to, like the multiplexer's own `new-tab`. */
+  /** Resolves true once the command ran. Renames, closes or creates through the multiplexer's typed action; a new tab or window is then switched to, like the multiplexer's own `new-tab`. */
   const edit=(change:MuxEdit,label:string,directory:string)=>guarded(change.kind==='herdr'?herdr.refresh:change.kind==='zellij'?zellij.refresh:tmux.refresh,async()=>{
     // The switch is a courtesy after the tab exists: if it fails the tab is still there and the strip shows it, so it never reports the creation as failed.
     let toNew:(()=>Promise<unknown>)|undefined;
