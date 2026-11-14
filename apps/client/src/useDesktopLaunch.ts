@@ -6,7 +6,7 @@ import {validTmuxServer} from './workspace';
 import {captureUiError, LocalUiError, type UiErrorCause} from './i18n/localError';
 
 type Snapshot = {directoryReceipt:string|null; hostReceipt?:string|null; notice:{receipt:string;kind?:'unsupported'|'busy'|'invalid'}|null};
-export type DesktopMux = Readonly<{kind:'tmux';tmuxServer:string}|{kind:'herdr'}>;
+export type DesktopMux = Readonly<{kind:'tmux'|'rmux';tmuxServer:string}|{kind:'herdr'}>;
 export type DesktopMuxRequest = Readonly<{sessionId:string;lease:AccessLease;mux:DesktopMux}>;
 export type DesktopHostLaunch = Readonly<{receipt:string;lease:AccessLease;hosts:readonly Host[];mux:DesktopMux|null}>;
 /** Only a native launch await may brand these finite failures. */
@@ -51,8 +51,8 @@ function preparedMux(value:unknown):DesktopMux|null {
   if(value==null)return null;
   if(typeof value!=='object' || !('kind' in value))throw new LocalUiError('desktopLaunchHostInvalid');
   if(value.kind==='herdr' && Object.keys(value).length===1)return Object.freeze({kind:'herdr'});
-  if(value.kind==='tmux' && 'tmuxServer' in value && validTmuxServer(value.tmuxServer) && Object.keys(value).length===2)
-    return Object.freeze({kind:'tmux',tmuxServer:value.tmuxServer});
+  if((value.kind==='tmux' || value.kind==='rmux') && 'tmuxServer' in value && validTmuxServer(value.tmuxServer) && Object.keys(value).length===2)
+    return Object.freeze({kind:value.kind,tmuxServer:value.tmuxServer});
   throw new LocalUiError('desktopLaunchHostInvalid');
 }
 

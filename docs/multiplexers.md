@@ -31,7 +31,7 @@ Workspaces screen. Current Zellij exposes `switch-session`, but lazysh does not
 yet use it or reconcile remembered attachment names after a host-side session
 switch.
 
-Open **Sessions** on an SSH connection. lazysh discovers tmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
+Open **Sessions** on an SSH connection. lazysh discovers tmux, rmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
 
 ## tmux
 
@@ -242,6 +242,16 @@ start` resolves the executable in the new pane's shell.
 
 Attached tmux and Herdr terminals also offer prefix shortcuts and numbered window/tab controls. Configure one prefix key, such as `Ctrl+b` or `F12`; it is validated with the existing terminal chord parser. The panel uses the host's default action bindings. It only appears on a terminal known to be attached to that multiplexer, so a plain shell never receives prefix input from these controls. Custom host action remappings remain available through the terminal or configurable keyboard chords.
 
+## rmux
+
+[rmux](https://github.com/Helvesec/rmux) (MIT OR Apache-2.0) reimplements tmux's commands, flags and formats in Rust. lazysh drives it through the same stack as tmux, so it is covered by the [tmux](#tmux) section: `rmux -u -L NAME` replaces `tmux -u -L NAME`, server labels follow the same literal rules and are never socket paths, and the tree, session, window and pane actions, attach, numbered-window and prefix shortcuts, saved workspace restore, desktop `--mux rmux[:NAME]` launch and Mosh entry all reuse tmux's command builders. lazysh always runs `rmux` by name, never a `tmux` shim, and does not use rmux's SDK or wire protocol.
+
+In **Sessions**, **Browse rmux sessions** switches the server selector from tmux to rmux; the status line lists rmux next to tmux, Herdr and Zellij. Discovery admits rmux from `rmux capabilities --json` (binary contract 1, wire version 8 and control mode), never from `rmux -V`, which prints tmux branding. Every rmux discovery command runs with `-N`, so probing a host never starts a daemon. If the running daemon refuses this rmux's protocol after an upgrade, rmux is shown as **Unsupported** with "Restart the rmux daemon after upgrading."; a build that does not report those capabilities is also shown as unsupported and is not offered. An rmux session is not found for another family's server label, and a terminal attached to rmux keeps its own labelled server for tree and actions.
+
+**Limited:** rmux 0.10.x is shown as **Limited** until its Jump To control client and confirmed Chat input are verified on a real rmux. An rmux terminal opens as a terminal with window and pane actions; Jump To, the tab strip and Chat input stay hidden for it, and the Agent view uses **Stage in terminal**. rmux's daemon keeps its sessions in memory, so a saved workspace reattaches only while the session still exists after a reconnect or an app restart; a daemon or host restart ends it, and restore fails the way it does for a vanished tmux session. A newly created session is still created by choosing **New session**.
+
+The `native-linux-runtimes` CI job installs the checksum-verified rmux 0.10.0 release with its own installer, so `bin/`, `libexec/` and the daemon stay together, and `bun run test:multiplexers` then runs `real_rmux_lifecycle_and_literal_names`: product discovery plus every typed action with names containing quotes, `$(…)`, `#(…)` and a trailing `;`, with the parsed tree equal to `rmux list-panes -a`. Two further cases run over owned OpenSSH: `real_ssh_discovery_reports_multiplexer_versions_and_support` (rmux 0.10.0 is reported through product discovery) and `real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` (no daemon or socket after a probe, create and tree on a labelled server, attach and terminal output, actions on the bound server, refusal of another family or label, and the durable session after the tab closes). Windows and macOS clients, Android and a real Mosh entry are not yet exercised against rmux.
+
 ## Zellij
 
 List running sessions or enter a name to create/attach one. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
@@ -288,13 +298,13 @@ Either drops a small prompt over the terminal (it takes no layout space): a name
 
 ## Native checks
 
-With tmux, Herdr and Zellij installed on PATH:
+With tmux, rmux, Herdr and Zellij installed on PATH:
 
 ```sh
 bun run test:multiplexers
 ```
 
-The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run stock Herdr build and the checksum-verified official Zellij 0.45.1 release. The Zellij case waits for the attached client's first render before it probes `list-sessions`: Zellij 0.45.1's server panics when a probe disconnects before its first client has created the session, and each later action is observed until its tab or pane state appears, because Zellij applies CLI actions asynchronously.
+The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run stock Herdr build, the checksum-verified official Zellij 0.45.1 release and the checksum-verified rmux 0.10.0 release. The Zellij case waits for the attached client's first render before it probes `list-sessions`: Zellij 0.45.1's server panics when a probe disconnects before its first client has created the session, and each later action is observed until its tab or pane state appears, because Zellij applies CLI actions asynchronously.
 
 The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
 

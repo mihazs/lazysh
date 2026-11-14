@@ -2470,6 +2470,22 @@ it('restores a Herdr session when discovery confirms restore support', async () 
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
 });
 
+it('restores an rmux session on its labelled server without offering Jump To', async () => {
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'rmux',name:'work',tmuxServer:'lab'}}]));
+  mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'restored-rmux'});
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:false,zellijAvailable:false,rmuxAvailable:true,tools:[{kind:'rmux',version:'0.10.0',support:'degraded',missing:['jump','confirmedInput']}],sessions:[]}) : original(command,...args));
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  await waitFor(()=>expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('temporary-shell','rmux','work',expect.any(Function),'lab'));
+  expect(mocks.api.attachTmux).not.toHaveBeenCalled();
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'restored-rmux',tmuxServer:'lab'},expect.anything()));
+  expect(screen.queryByRole('button',{name:'Jump To'})).toBeNull();
+});
+
 /** #1380 and #1435: on a phone in gesture navigation the left handle opens the navigation page, and Android Back always closes it first. */
 describe('the navigation page and Android Back on a phone',()=>{
   const phone=()=>vi.stubGlobal('matchMedia',vi.fn((query:string)=>({matches:query.includes('max-width')||query.includes('coarse'),media:query,addEventListener:vi.fn(),removeEventListener:vi.fn()})));

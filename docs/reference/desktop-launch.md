@@ -5,10 +5,10 @@ The desktop executable is `lazysh`. These selectors refer to an existing saved h
 | Selector | Value and constraints |
 | --- | --- |
 | `--host`, `-host` | Exact opaque saved host ID, 1–100 UTF-8 bytes without control characters. Display names, SSH aliases and raw hostnames are not IDs. |
-| `--mux`, `-mux` | Requires `--host`. Values: `tmux`, `tmux:SERVER`, `herdr`. `tmux` and `tmux:default` denote the default tmux server. |
+| `--mux`, `-mux` | Requires `--host`. Values: `tmux`, `tmux:SERVER`, `rmux`, `rmux:SERVER`, `herdr`. `tmux` and `tmux:default` denote the default tmux server; `rmux` and `rmux:default` the default rmux server. |
 | `--dir`, `-dir` | Existing native directory. Incompatible with host/multiplexer selectors. No fallback to HOME for a failed explicit directory. |
 
-Both separated and equals forms are accepted. Duplicate selectors are refused. tmux server names are literal, 1–64 UTF-8 bytes, without slash or control characters, excluding `.` and `..`; they are not shell commands or socket paths. `--mux` does not accept Zellij or a target session name.
+Both separated and equals forms are accepted. Duplicate selectors are refused. tmux and rmux server names are literal, 1–64 UTF-8 bytes, without slash or control characters, excluding `.` and `..`; they are not shell commands or socket paths. `--mux` does not accept Zellij or a target session name.
 
 | Launch intent | Behavior |
 | --- | --- |

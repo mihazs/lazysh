@@ -1588,7 +1588,7 @@ async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_boo
         assert_eq!(current["name"], name);
         assert_eq!(
             native.tmux_server.lock().unwrap().as_ref(),
-            Some(&crate::tmux_server::TmuxServer::Named(server.into()))
+            Some(&crate::tmux_server::TmuxServer::parse(Some(server)).unwrap())
         );
         write_stdin(
             lease.clone(),
@@ -1841,7 +1841,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         format!(
             "TMUX={} {} display-message -p -t '$0' '#{{socket_path}}'",
             quote(&inherited),
-            TmuxServer::Default.prefix()
+            TmuxServer::parse(None).unwrap().prefix()
         ),
         &lease,
     )
@@ -1867,10 +1867,10 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     .unwrap();
     let native = state.session(&child.session_id).await.unwrap();
     assert_eq!(
-        TmuxServer::for_session(&native, None).unwrap(),
+        TmuxServer::for_session(&native, None, None).unwrap(),
         TmuxServer::parse(Some(hostile)).unwrap()
     );
-    assert!(TmuxServer::for_session(&native, Some("other")).is_err());
+    assert!(TmuxServer::for_session(&native, Some("other"), None).is_err());
     for (name, expected) in [
         (hostile, "selected"),
         ("other", "same"),
@@ -1885,6 +1885,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
                     name: "selected".into(),
                 },
                 None,
+                None,
                 lease.clone(),
             )
             .await
@@ -1898,6 +1899,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
                     directory: f.dir.path().to_str().unwrap().into(),
                 },
                 Some(hostile.into()),
+                None,
                 lease.clone(),
             )
             .await
@@ -1918,12 +1920,17 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
             if name == hostile { 2 } else { 1 }
         );
     }
-    let tree =
-        multiplexer::multiplexer_tree(app.state(), child.session_id.clone(), None, lease.clone())
-            .await
-            .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
-            .into_inner()
-            .unwrap();
+    let tree = multiplexer::multiplexer_tree(
+        app.state(),
+        child.session_id.clone(),
+        None,
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
+    .into_inner()
+    .unwrap();
     assert_eq!(
         serde_json::to_value(tree).unwrap()["sessions"][0]["name"],
         "selected"
@@ -1935,6 +1942,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
             target: "%0".into()
         },
         Some("default".into()),
+        None,
         lease.clone()
     )
     .await
@@ -1956,6 +1964,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
             directory: f.dir.path().to_str().unwrap().into(),
         },
         None,
+        None,
         lease.clone(),
     )
     .await
@@ -1967,6 +1976,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
             name: "destination".into(),
             directory: f.dir.path().to_str().unwrap().into(),
         },
+        None,
         None,
         lease.clone(),
     )
@@ -2916,7 +2926,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     assert_ne!(restored, child);
     let native = second.state::<AppState>().session(&restored).await.unwrap();
     assert_eq!(
-        crate::tmux_server::TmuxServer::for_session(&native, None).unwrap(),
+        crate::tmux_server::TmuxServer::for_session(&native, None, None).unwrap(),
         crate::tmux_server::TmuxServer::parse(Some(saved_server)).unwrap()
     );
     drop(native);
@@ -3701,11 +3711,17 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
     let parent = state.session(&source.session_id).await.unwrap();
     assert_eq!(crate::herdr_path::cached(&parent.handle), None);
-    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let discovery = multiplexer_tree(
+        app.state(),
+        source.session_id.clone(),
+        None,
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
     assert_eq!(
         serde_json::to_value(discovery).unwrap()["herdrAvailable"],
         true
@@ -3767,8 +3783,263 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     servers.stop().await;
 }
 
+/// Stops the labelled rmux daemon of an owned fixture even when an assertion fails.
+struct RmuxServer {
+    binary: PathBuf,
+    sockets: PathBuf,
+    label: &'static str,
+}
+impl RmuxServer {
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env_remove("TMUX")
+            .env_remove("RMUX")
+            .env("RMUX_TMPDIR", &self.sockets)
+            .args(["-L", self.label])
+            .args(args);
+        command
+    }
+    fn pane_ids(&self) -> Vec<String> {
+        let output = self
+            .command(&["list-panes", "-a", "-F", "#{pane_id}"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let mut ids = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+}
+impl Drop for RmuxServer {
+    fn drop(&mut self) {
+        let _ = self.command(&["kill-server"]).output();
+    }
+}
+fn socket_named(directory: &std::path::Path, name: &str) -> bool {
+    fs::read_dir(directory).unwrap().flatten().any(|entry| {
+        entry.file_name() == name || (entry.path().is_dir() && socket_named(&entry.path(), name))
+    })
+}
+async fn rmux_tree(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    label: Option<&str>,
+) -> serde_json::Value {
+    let tree = crate::multiplexer::multiplexer_tree(
+        app.state(),
+        session.into(),
+        label.map(Into::into),
+        label.map(|_| crate::multiplexer::MultiplexerKind::Rmux),
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    serde_json::to_value(tree).unwrap()
+}
 #[tokio::test]
-#[ignore = "requires owned OpenSSH, LAZYSH_TEST_TMUX and LAZYSH_EXPECT_MUX_SUPPORT; optional LAZYSH_TEST_ZELLIJ and LAZYSH_TEST_HERDR_STOCK"]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_RMUX binary"]
+async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
+    use crate::multiplexer::{tmux_action, MultiplexerKind, MultiplexerKind::Rmux, TmuxAction};
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_RMUX").unwrap());
+    assert!(binary.is_absolute());
+    let tools = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&binary, tools.path().join("rmux")).unwrap();
+    // The owned sshd takes its environment from plain `SetEnv` tokens.
+    let sockets = tempfile::tempdir_in("/tmp").unwrap();
+    let f = Fixture::with_environment(
+        None,
+        false,
+        false,
+        vec![
+            ("PATH", tools.path().display().to_string()),
+            ("RMUX_TMPDIR", sockets.path().display().to_string()),
+        ],
+    )
+    .await;
+    // An empty .zshrc keeps zsh's first-run wizard from taking the typed input in the pane.
+    fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+    let label = "owned lab";
+    let server = RmuxServer {
+        binary,
+        sockets: sockets.path().to_owned(),
+        label,
+    };
+    let (_authority, lease) = unlocked_authority();
+    let (app, state) = herdr_native_app(&f);
+    let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let source_id = source.session_id.clone();
+    // Probing a host with no rmux daemon admits rmux by capabilities and leaves no daemon or socket behind.
+    let absent = rmux_tree(&app, &lease, &source_id, Some(label)).await;
+    assert_eq!(absent["rmuxAvailable"], true);
+    assert_eq!(absent["sessions"], serde_json::json!([]));
+    let tool = absent["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["kind"] == "rmux")
+        .unwrap();
+    assert_eq!(
+        (&tool["support"], &tool["missing"]),
+        (
+            &serde_json::json!("degraded"),
+            &serde_json::json!(["jump", "confirmedInput"])
+        )
+    );
+    assert!(
+        !socket_named(sockets.path(), label),
+        "discovery started an rmux daemon"
+    );
+    let directory = f.dir.path().to_str().unwrap().to_owned();
+    let hostile = "literal'$(touch nope)#(printf bad);";
+    for name in ["owned work", hostile] {
+        tmux_action(
+            app.state(),
+            source_id.clone(),
+            TmuxAction::CreateSession {
+                name: name.into(),
+                directory: directory.clone(),
+            },
+            Some(label.into()),
+            Some(Rmux),
+            lease.clone(),
+        )
+        .await
+        .unwrap();
+    }
+    assert!(!f.dir.path().join("nope").exists());
+    let tree = rmux_tree(&app, &lease, &source_id, Some(label)).await;
+    let mut names = tree["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["name"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    let mut expected = vec![hostile.to_owned(), "owned work".to_owned()];
+    expected.sort();
+    assert_eq!(names, expected);
+    let mut panes = tree["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|session| session["windows"].as_array().unwrap())
+        .flat_map(|window| window["panes"].as_array().unwrap())
+        .map(|pane| pane["id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    panes.sort();
+    assert_eq!(
+        panes,
+        server.pane_ids(),
+        "the parsed tree matches rmux list-panes -a"
+    );
+    // Attach through the product: a plain rmux terminal that is bound to its labelled rmux server.
+    let (events, mut output) = super::test_support::json_events();
+    let child = attach_multiplexer(
+        lease.clone(),
+        app.state(),
+        source_id.clone(),
+        Some(label.into()),
+        Rmux,
+        "owned work".into(),
+        80,
+        24,
+        events,
+        None,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let native = state.session(&child.session_id).await.unwrap();
+    assert_eq!(
+        native.tmux_server.lock().unwrap().as_ref(),
+        Some(
+            &crate::tmux_server::TmuxServer::parse_for(
+                crate::tmux_server::Binary::Rmux,
+                Some(label)
+            )
+            .unwrap()
+        )
+    );
+    assert!(
+        native.tmux.lock().unwrap().is_none(),
+        "no Jump To control client before it is verified"
+    );
+    write_stdin(
+        lease.clone(),
+        app.state(),
+        child.session_id.clone(),
+        "printf 'RMUX_%s\\n' READY\n".into(),
+        None,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    owned_terminal_output(&app, &child.session_id, &mut output, b"RMUX_READY").await;
+    // The bound terminal acts on its own server and refuses another family or label.
+    let session_id = tree["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["name"] == "owned work")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let create = |server: Option<&str>, kind: Option<MultiplexerKind>| {
+        tmux_action(
+            app.state(),
+            child.session_id.clone(),
+            TmuxAction::CreateWindow {
+                target: session_id.clone(),
+                name: "second".into(),
+                directory: directory.clone(),
+            },
+            server.map(Into::into),
+            kind,
+            lease.clone(),
+        )
+    };
+    assert!(create(None, Some(MultiplexerKind::Tmux)).await.is_err());
+    assert!(create(Some("other"), None).await.is_err());
+    create(None, None).await.unwrap();
+    let bound = rmux_tree(&app, &lease, &child.session_id, None).await;
+    let windows = bound["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["name"] == "owned work")
+        .unwrap()["windows"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(windows, 2);
+    assert!(crate::tmux_jump::tmux_jump_snapshot(
+        lease.clone(),
+        app.state(),
+        child.session_id.clone()
+    )
+    .await
+    .is_err());
+    // Closing the tab leaves the durable session behind.
+    disconnect_inner(&state, child.session_id.clone())
+        .await
+        .unwrap();
+    let after = rmux_tree(&app, &lease, &source_id, Some(label)).await;
+    assert_eq!(after["sessions"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH, LAZYSH_TEST_TMUX and LAZYSH_EXPECT_MUX_SUPPORT; optional LAZYSH_TEST_ZELLIJ, LAZYSH_TEST_HERDR_STOCK and LAZYSH_TEST_RMUX"]
 async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
     use crate::multiplexer::multiplexer_tree;
     // For example `tmux=full zellij=full herdr=full`; each named tool must be supplied.
@@ -3781,19 +4052,27 @@ async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
             "tmux" => ("LAZYSH_TEST_TMUX", "-V"),
             "zellij" => ("LAZYSH_TEST_ZELLIJ", "--version"),
             "herdr" => ("LAZYSH_TEST_HERDR_STOCK", "--version"),
+            // `rmux -V` prints tmux branding; the version is in the capability record.
+            "rmux" => ("LAZYSH_TEST_RMUX", "capabilities"),
             _ => panic!("unknown multiplexer {kind}"),
         };
         let binary = std::env::var(variable).unwrap();
         std::os::unix::fs::symlink(&binary, tools.path().join(kind)).unwrap();
         let output = Command::new(&binary).arg(flag).output().unwrap();
         let line = String::from_utf8(output.stdout).unwrap();
-        let version = line
-            .lines()
-            .next()
-            .unwrap()
-            .strip_prefix(kind)
-            .unwrap()
-            .trim();
+        let version = if kind == "rmux" {
+            line.lines()
+                .find_map(|row| row.strip_prefix("version:"))
+                .unwrap()
+                .trim()
+        } else {
+            line.lines()
+                .next()
+                .unwrap()
+                .strip_prefix(kind)
+                .unwrap()
+                .trim()
+        };
         versions.insert(kind.to_owned(), version.to_owned());
     }
     // The fixture puts the Herdr directory first on the owned sshd's PATH.
@@ -3801,11 +4080,17 @@ async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
     let (_authority, lease) = unlocked_authority();
     let (app, state) = herdr_native_app(&f);
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
-    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let discovery = multiplexer_tree(
+        app.state(),
+        source.session_id.clone(),
+        None,
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
     let discovery = serde_json::to_value(discovery).unwrap();
     eprintln!("owned discovery tools: {}", discovery["tools"]);
     for pair in expected.split_whitespace() {

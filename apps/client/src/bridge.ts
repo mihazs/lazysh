@@ -49,9 +49,9 @@ export type Credentials = {
   privateKey?: string;
   passphrase?: string;
 };
-export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
-/** Discovery's per-host version gate: `missing` names capabilities this version lacks. */
-export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; support: 'full' | 'degraded'; missing: string[] };
+export type MultiplexerKind = 'tmux' | 'rmux' | 'herdr' | 'zellij';
+/** Discovery's per-host version gate: `missing` names capabilities this version lacks; `unsupported` carries a `reason`. */
+export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; support: 'full' | 'degraded' | 'unsupported'; missing: string[]; reason?: 'capabilities' | 'daemonWire' };
 export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean};
 export type HerdrNavigationTarget =
   | {kind:'workspace';workspace:string}
@@ -108,8 +108,8 @@ export const api = {
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
-  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
-    return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30 },onEvent);
+  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void, tmuxServer?: string) => {
+    return createRemoteSession('attach_multiplexer', { sessionId, kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}), cols: 100, rows: 30 },onEvent);
   },
   listHosts: () => invoke<Host[]>("list_hosts"),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),

@@ -1201,6 +1201,19 @@ jobs:
           # Kept off PATH: only the discovery step below runs it.
           echo "LAZYSH_TMUX_NEWEST=$tmux_root/install/bin/tmux" >> "$GITHUB_ENV"
       - *pinned-zellij
+      - name: Install the pinned official rmux 0.10.0 release outside the checkout
+        # Release asset digest: https://github.com/Helvesec/rmux/releases/download/v0.10.0/SHA256SUMS
+        run: |
+          rmux_root=$(mktemp -d "$RUNNER_TEMP/lazysh-rmux-0.10.0-XXXXXX")
+          sh .github/scripts/pinned-download.sh 1bec11eff08c3313c3a400196e7a93d00b8ad4a24f81ef13debb03355c2696c5 "$rmux_root/rmux.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 16253094 https://github.com/Helvesec/rmux/releases/download/v0.10.0/rmux-0.10.0-linux-x86_64.tar.gz
+          test "$(stat -c%s "$rmux_root/rmux.tar.gz")" -eq 16253094
+          printf '%s  %s\n' '1bec11eff08c3313c3a400196e7a93d00b8ad4a24f81ef13debb03355c2696c5' "$rmux_root/rmux.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$rmux_root/rmux.tar.gz" --directory "$rmux_root" --no-same-owner --no-same-permissions
+          # The installer keeps bin/, libexec/ and the daemon together; a copied bare binary cannot reach its full CLI.
+          "$rmux_root/rmux-0.10.0-linux-x86_64/install.sh" --prefix "$rmux_root/install"
+          test "$("$rmux_root/install/bin/rmux" capabilities --json | jq -r '.version, .wire_version' | paste -sd' ')" = '0.10.0 8'
+          echo "$rmux_root/install/bin" >> "$GITHUB_PATH"
+          echo "LAZYSH_TEST_RMUX=$rmux_root/install/bin/rmux" >> "$GITHUB_ENV"
       - *stock-herdr-guard
       - *stock-herdr-download
       - *stock-herdr-verify
@@ -1322,6 +1335,21 @@ jobs:
         run: |
           test "$("$LAZYSH_TMUX_NEWEST" -V)" = 'tmux 3.8'
           LAZYSH_TEST_TMUX="$LAZYSH_TMUX_NEWEST" cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      - name: Report rmux 0.10.0 as limited through product discovery over owned OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          LAZYSH_EXPECT_MUX_SUPPORT: rmux=degraded
+        run: |
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      - name: Exercise discovery, attach, tree and actions on rmux 0.10.0 over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server
+        run: *exact-ignored-case
       - name: Exercise official ET 7.0.0 transport and SSH bootstrap
         if: ${{ !cancelled() }}
         run: bun run test:et

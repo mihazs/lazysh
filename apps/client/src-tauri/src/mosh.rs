@@ -253,6 +253,11 @@ enum EntryBinding {
         name: String,
         server: crate::tmux_server::TmuxServer,
     },
+    /// rmux: the receipt proves the child started; Jump To's control client is not bound until a real rmux verifies it (#1675).
+    Rmux {
+        marker: String,
+        server: crate::tmux_server::TmuxServer,
+    },
     Herdr {
         name: String,
     },
@@ -359,6 +364,15 @@ impl EntryStartup {
                     *child.tmux_server.lock().map_err(|_| entry_failed())? = Some(server.clone());
                     *child.tmux.lock().map_err(|_| entry_failed())? =
                         Some(crate::tmux_jump::start(control, child.cancel.subscribe()));
+                }
+                EntryBinding::Rmux { marker, server } => {
+                    startup_stage!("rmux-receipt-begin");
+                    crate::tmux_jump::handshake(&mut self.channel, &mut self.bytes, marker)
+                        .await
+                        .ok_or_else(entry_failed)?;
+                    startup_stage!("rmux-receipt-ok");
+                    lease.check()?;
+                    *child.tmux_server.lock().map_err(|_| entry_failed())? = Some(server.clone());
                 }
                 EntryBinding::Herdr { name } => {
                     startup_stage!("herdr-receipt-begin");
@@ -477,18 +491,20 @@ pub(crate) async fn bootstrap_entry(
     entry.prepare(session, lease).await?;
     startup_stage!("target-prepared");
     let (binding, command) = match entry.kind {
-        crate::multiplexer::MultiplexerKind::Tmux => {
+        kind @ (crate::multiplexer::MultiplexerKind::Tmux
+        | crate::multiplexer::MultiplexerKind::Rmux) => {
             let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
             let server = entry.server()?;
             let command = crate::tmux_jump::attach_receipt(&entry.name, &marker, &server);
-            (
-                EntryBinding::Tmux {
+            let binding = match kind {
+                crate::multiplexer::MultiplexerKind::Rmux => EntryBinding::Rmux { marker, server },
+                _ => EntryBinding::Tmux {
                     marker,
                     name: entry.name.clone(),
                     server,
                 },
-                command,
-            )
+            };
+            (binding, command)
         }
         crate::multiplexer::MultiplexerKind::Herdr
             if crate::herdr_guard::available(session, &entry.name, lease).await =>
