@@ -1324,6 +1324,7 @@ export const english = {
   panelInvalidTranscriptList: "Invalid transcript list.",
   chatUpdateCompanion: "Update the host companion to read conversation branches.",
   chatChanged: "Transcript changed. Open it again to restart.",
+  chatTooLarge: "This conversation is too large to open here. Read it in the terminal.",
   chatAddAttachment: "Add attachment",
   chatCloseAttachment: "Close attachment editor",
   chatAttachmentScope: "Upload to this SSH host, then explicitly add its path to this draft. Closing cancels pending upload work; a partial or completed file may remain. Nothing is sent automatically.",

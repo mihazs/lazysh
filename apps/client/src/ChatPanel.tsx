@@ -593,12 +593,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     } catch (e) {
       if (currentRequest(current)) {
         // A companion that predates whole-session reading rejects the window flags; what is loaded stays readable.
+        const tooLarge = /\bTooLarge\b/.test(errorMessage(e));
         setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
-          ? new LocalUiError('chatChanged') : slice && /unexpected argument|unrecognized/i.test(errorMessage(e)) ? new LocalUiError('chatUpdateCompanion') : captureUiError(e));
+          ? new LocalUiError('chatChanged') : slice && /unexpected argument|unrecognized/i.test(errorMessage(e)) ? new LocalUiError('chatUpdateCompanion')
+          : tooLarge ? new LocalUiError('chatTooLarge') : captureUiError(e));
         if (slice) return;
         // A bound conversation keeps trying through a dropped connection, since the stream or the next poll recovers it
-        // and clears the error. A conversation that is no longer this pane's, or a host that cannot read it, stops.
-        const permanent = e instanceof LocalUiError ? ['chatChanged','herdrConversationCompanion','chatUpdateCompanion'].includes(e.key) : (e as {kind?: string} | null)?.kind === 'herdr_target_missing';
+        // and clears the error. A conversation that is no longer this pane's, a host that cannot read it and one that is too large to open stop.
+        const permanent = tooLarge || (e instanceof LocalUiError ? ['chatChanged','herdrConversationCompanion','chatUpdateCompanion'].includes(e.key) : (e as {kind?: string} | null)?.kind === 'herdr_target_missing');
         if (!(bound && automatic) || permanent) {setFollowing(false); followRef.current = false;}
       }
     } finally {

@@ -180,7 +180,7 @@ fn limits_and_recovered_torn_tails_fail_without_fallback() {
         read_checkpointed_grok(&path, 0, 1, None)
             .unwrap_err()
             .class(),
-        "InvalidArgument"
+        "TooLarge"
     );
     assert_eq!(
         read_page(&path, TranscriptAgent::GrokAcp, 0, 1)

@@ -1348,6 +1348,7 @@ const translations = {
   panelInvalidTranscriptList: ["Lista de transcrições inválida.", "Lista de transcripciones no válida."],
   chatUpdateCompanion: ["Atualize o companion do servidor para ler ramificações da conversa.", "Actualiza el companion del servidor para leer ramas de la conversación."],
   chatChanged: ["A transcrição mudou. Abra-a novamente para reiniciar.", "La transcripción cambió. Ábrela de nuevo para reiniciar."],
+  chatTooLarge: ["Esta conversa é grande demais para abrir aqui. Leia-a no terminal.", "Esta conversación es demasiado grande para abrirla aquí. Léela en el terminal."],
   chatAddAttachment: ["Adicionar anexo", "Añadir adjunto"],
   chatCloseAttachment: ["Fechar editor de anexo", "Cerrar editor de adjuntos"],
   chatAttachmentScope: ["Envie para este servidor SSH e adicione o caminho ao rascunho explicitamente. Fechar cancela o envio pendente; um arquivo parcial ou completo pode permanecer. Nada é enviado automaticamente ao agente.", "Sube al servidor SSH y añade su ruta a este borrador explícitamente. Cerrar cancela la subida pendiente; puede quedar un archivo parcial o completo. Nada se envía automáticamente al agente."],
