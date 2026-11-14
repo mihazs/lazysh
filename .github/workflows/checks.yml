@@ -598,6 +598,17 @@ jobs:
           echo "LAZYSH_NATIVE_GUI_XVFB=$tools_dir/Xvfb" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_SECRET_SERVICE=$tools_dir/gnome-keyring-daemon" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_PYTHON=$tools_dir/python3" >> "$GITHUB_ENV"
+      - &pinned-zellij
+        name: Install the pinned official Zellij 0.45.1 release outside the checkout (the native GUI drives it)
+        # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
+        run: |
+          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
+          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
+          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
+          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
+          echo "$zellij_root" >> "$GITHUB_PATH"
+          echo "LAZYSH_TEST_ZELLIJ=$zellij_root/zellij" >> "$GITHUB_ENV"
       - name: Exercise owned Linux native singleton GUI delivery
         id: native-gui
         env:
@@ -650,17 +661,6 @@ jobs:
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           LAZYSH_EXPECT_MUX_SUPPORT='tmux=degraded' cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact --nocapture
       # Last: the stock verification replaces LAZYSH_TEST_HERDR for any later step.
-      - &pinned-zellij
-        name: Install the pinned official Zellij 0.45.1 release outside the checkout
-        # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
-        run: |
-          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
-          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
-          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
-          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
-          echo "$zellij_root" >> "$GITHUB_PATH"
-          echo "LAZYSH_TEST_ZELLIJ=$zellij_root/zellij" >> "$GITHUB_ENV"
       - &stock-herdr-guard
         name: Validate producer artifact ID
         env:
