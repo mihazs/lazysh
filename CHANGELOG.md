@@ -1017,6 +1017,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
 
 - Paper and explicitly light imported terminal themes now darken bright indexed
+- Measure the native terminal core against xterm.js on the exact bytes of the recorded terminal baseline (#1303, part of #1302): `bun bench/dumpWorkloads.ts` writes the baseline's streamed workloads W2, W3 and W4 at its desktop and phone geometries, and `harnessParse.mjs` and the core's `harness_parse` example parse them with xterm.js 5.5.0 headless and with the core, both checking the final screen against the baseline's. On one Linux desktop host the core parsed them 1.6 to 7.7 times faster than `write()`, ANSI-heavy output being the slowest in both; the recorded end-to-end drain of the same workloads in Chromium was far slower than either parser, which puts the time in the renderer and the bridge, not the parse stage. No renderer, bridge or device was involved. Measurement only: xterm.js stays the only terminal engine and the default, and no setting or default changes.
   cube colors and reverse the indexed grayscale ramp using the pinned reference client
   desktop 0.5.28 palette math. This changes their default 256-color rendering;
   base ANSI colors, literal RGB, dark themes and legacy palettes without mode

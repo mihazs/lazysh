@@ -5,12 +5,11 @@
 // fixtures come from `cargo run --release --example dump_workloads -- <dir>` in packages/terminal-runtime.
 import { readFileSync, openSync, readSync, closeSync } from 'node:fs';
 import os from 'node:os';
-import xterm from '@xterm/headless';
-const { Terminal } = xterm;
+import { CHUNK, RUNS, SCROLLBACK_LINES, cell, mibPerS, xtermRun } from './vtBench.mjs';
 
 const [wasmPath, fixtureDir, mib = '16'] = process.argv.slice(2);
 if (!wasmPath || !fixtureDir) { console.error('usage: node bench/wasmVt.mjs <ghostty-vt.wasm> <fixtures-dir> [MiB]'); process.exit(2); }
-const VOLUME = Number(mib) << 20, CHUNK = 16 * 1024, RUNS = 5, COLS = 80, ROWS = 24, SCROLLBACK_LINES = 5000, SCROLLBACK_BYTES = 4 << 20;
+const VOLUME = Number(mib) << 20, COLS = 80, ROWS = 24, SCROLLBACK_BYTES = 4 << 20;
 const WORKLOADS = [['plain text', 'plain-text'], ['ANSI + truecolor', 'ansi---truecolor'], ['full-screen redraw', 'full-screen-redraw'], ['CJK/emoji/combining', 'cjk-emoji-combining']];
 
 const load = slug => {
@@ -18,13 +17,6 @@ const load = slug => {
   readSync(fd, data, 0, VOLUME, 0); closeSync(fd);
   return new Uint8Array(data.buffer, data.byteOffset, VOLUME);
 };
-// xterm.js warns on every writeSync; the private call is only the no-scheduling upper bound of its parser.
-const warn = console.warn;
-console.warn = (message, ...rest) => { if (!String(message).includes('writeSync')) warn(message, ...rest); };
-const median = xs => { const s = [...xs].sort((a, b) => a - b); return [s[s.length >> 1], s[0], s.at(-1)]; };
-const cell = xs => { const [m, lo, hi] = median(xs); return `${m.toFixed(1)} (${lo.toFixed(1)} to ${hi.toFixed(1)})`; };
-const mibPerS = (bytes, ms) => bytes / 1048576 / (ms / 1000);
-
 const module = new WebAssembly.Module(readFileSync(wasmPath));
 /** One libghostty-vt terminal in its own wasm instance: feeds 16 KiB chunks through linear memory like a WebView bridge would. */
 function wasmTerminal() {
@@ -44,19 +36,6 @@ function wasmTerminal() {
   };
 }
 
-async function xtermRun(data, mode) {
-  const term = new Terminal({ cols: COLS, rows: ROWS, scrollback: SCROLLBACK_LINES, allowProposedApi: true });
-  const started = performance.now();
-  if (mode === 'sync') for (let at = 0; at < data.length; at += CHUNK) term._core.writeSync(data.subarray(at, at + CHUNK));
-  else {
-    for (let at = 0; at < data.length; at += CHUNK) term.write(data.subarray(at, at + CHUNK));
-    await new Promise(resolve => term.write('', resolve));
-  }
-  const ms = performance.now() - started, b = term.buffer.active;
-  term.dispose();
-  return { mib: mibPerS(data.length, ms), cursor: [b.cursorX, b.cursorY] };
-}
-
 function wasmRun(data) {
   const t = wasmTerminal(), started = performance.now();
   for (let at = 0; at < data.length; at += CHUNK) t.write(data.subarray(at, at + CHUNK));
@@ -71,10 +50,10 @@ console.log('| workload | xterm.js write() | xterm.js writeSync (private, no sch
 console.log('|---|---|---|---|---|---|');
 for (const [name, slug] of WORKLOADS) {
   const data = load(slug), runs = { write: [], sync: [], wasm: [] };
-  await xtermRun(data.subarray(0, 1 << 20), 'sync'); wasmRun(data.subarray(0, 1 << 20)); // warm the JIT
+  await xtermRun(data.subarray(0, 1 << 20), 'sync', COLS, ROWS); wasmRun(data.subarray(0, 1 << 20)); // warm the JIT
   let xt, w;
   for (let i = 0; i < RUNS; i++) {
-    const a = await xtermRun(data, 'write'), b = await xtermRun(data, 'sync');
+    const a = await xtermRun(data, 'write', COLS, ROWS), b = await xtermRun(data, 'sync', COLS, ROWS);
     w = wasmRun(data); xt = a;
     runs.write.push(a.mib); runs.sync.push(b.mib); runs.wasm.push(w.mib);
   }
