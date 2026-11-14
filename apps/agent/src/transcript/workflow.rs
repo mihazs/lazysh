@@ -224,10 +224,15 @@ pub(super) fn tree(session: &Path, run: &str) -> Option<(Value, Option<&'static 
                     .sum()
             })
     };
-    let tree = json!({
-        "name": file.as_ref().and_then(|file| short(&file["workflowName"], 120)),
+    let mut tree = json!({
         "phases": phases, "agents": rows,
         "totals": {"agents": order.len(), "tokens": total("totalTokens"), "toolCalls": total("totalToolCalls")},
     });
+    if let Some(name) = file
+        .as_ref()
+        .and_then(|file| short(&file["workflowName"], 120))
+    {
+        tree["name"] = json!(name);
+    }
     Some((tree, finished))
 }
