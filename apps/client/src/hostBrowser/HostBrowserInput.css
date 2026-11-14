@@ -1,0 +1,10 @@
+.host-browser-input { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.host-browser-input-bar { display: flex; flex-wrap: wrap; gap: 6px; }
+.host-browser-input-bar .subtle-button { min-height: 44px; }
+.host-browser-input-bar [aria-pressed="true"], .host-browser-input-bar [aria-checked="true"] { border-color: var(--ui-control-border); background: var(--ui-fill-selected); color: var(--theme-text); }
+/* A finger on the frame is input, never a page scroll, a text selection or a browser menu. */
+.host-browser-viewport { position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; outline: 1px solid var(--theme-border, #3f5032); }
+.host-browser-zoom { transform-origin: 0 0; }
+/* The frame fills the width and leaves no gap under it, so a point of the view is a point of the frame. */
+.host-browser-zoom > * { display: block; width: 100%; height: auto; }
+.host-browser-keyboard { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; pointer-events: none; }
