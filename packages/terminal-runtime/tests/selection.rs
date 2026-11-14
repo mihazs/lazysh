@@ -1,5 +1,5 @@
 //! Selection, copy, word and search queries of the core against what the xterm backend answers for
-//! the same bytes (`fixtures/selection.json`; `apps/client/src/selectionFixture.test.ts` replays the
+//! the same bytes (`fixtures/selection.json`; `apps/client/src/xterm/selectionFixture.test.ts` replays the
 //! bytes through xterm.js 5.5.0 and the code lazysh uses today, and fails if the answers drift).
 
 mod support;
