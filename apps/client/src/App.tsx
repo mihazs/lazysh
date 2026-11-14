@@ -126,6 +126,7 @@ const SharePanel = lazy(() => import("./SharePanel"));
 const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
+const RemoteNotificationsPanel = lazy(() => import('./RemoteNotificationsPanel'));
 const AppleStatusPanel = lazy(() => import('./AppleStatusPanel'));
 const TmuxJumpPanel = lazy(() => import('./TmuxJumpPanel'));
 
@@ -2727,7 +2728,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {pushSettings && <Dialog mobilePresentation="page" title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
-        <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /></Suspense>
+        <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /><RemoteNotificationsPanel /></Suspense>
       </Dialog>}
 
       {switcher && <Dialog title={t("appSwitchTerminalSession")} close={()=>setSwitcher(false)}>

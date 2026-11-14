@@ -30,6 +30,7 @@ lazysh-common = { path = "../../../packages/common", features = ["url"] }
 lazysh-companion-release = { path = "../../../packages/companion-release" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
+lazysh-notification-client = { path = "../../../packages/notification-client" }
 lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
