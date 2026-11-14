@@ -339,8 +339,10 @@ mod tests {
     #[test]
     fn codex_lists_only_rollouts_whose_session_meta_names_the_folder() {
         let root = tempfile::tempdir().unwrap();
-        let mine = root.path().join("2026/11/10/rollout-a.jsonl");
-        let theirs = root.path().join("2026/11/10/rollout-b.jsonl");
+        // One component per join: the listing walks real directories, so on Windows its paths use backslashes throughout.
+        let day = root.path().join("2026").join("11").join("10");
+        let mine = day.join("rollout-a.jsonl");
+        let theirs = day.join("rollout-b.jsonl");
         let app = folder("/work/app");
         write(
             &mine,
