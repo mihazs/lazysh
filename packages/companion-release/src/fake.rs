@@ -94,6 +94,8 @@ pub enum Fault {
     DropManifest(usize),
     /// Companion bytes differ from the receipt but keep the length.
     TamperedAsset,
+    /// Companion body is exactly these bytes, announced with their own length.
+    Substitute(Vec<u8>),
     /// Companion body ends cleanly after fewer bytes (no declared length).
     ShortAsset,
     /// Companion body keeps going past the receipt's size (no declared length).
@@ -283,6 +285,7 @@ async fn cdn(State(state): State<Shared>, Path(id): Path<u64>) -> Response {
     let mut bytes = content.clone();
     match fault {
         Some(Fault::TamperedAsset) => bytes[0] ^= 1,
+        Some(Fault::Substitute(other)) => bytes = other.clone(),
         Some(Fault::ShortAsset) => {
             bytes.truncate(bytes.len() / 2);
             return streamed(vec![Ok(Bytes::from(bytes))]);
@@ -292,7 +295,8 @@ async fn cdn(State(state): State<Shared>, Path(id): Path<u64>) -> Response {
             return streamed(vec![Ok(Bytes::from(bytes))]);
         }
         Some(Fault::LyingLength(n)) => {
-            let mut response = bytes.into_response();
+            // A streamed body, so the announced length is the server's own claim.
+            let mut response = streamed(vec![Ok(Bytes::from(bytes))]);
             response
                 .headers_mut()
                 .insert(header::CONTENT_LENGTH, HeaderValue::from(*n));

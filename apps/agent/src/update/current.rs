@@ -1,12 +1,13 @@
 //! The installed companion: the managed copy when there is one, else the running executable.
-use super::report::{Current, Failure, Fault};
+use super::{
+    process,
+    report::{Current, Failure, Fault},
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    time::{Duration, Instant},
 };
 
 pub const NAME: &str = if cfg!(windows) {
@@ -68,42 +69,11 @@ fn trusted(path: &Path) -> bool {
 fn trusted(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
-/// Run `path --version` with an empty environment and a hard time limit.
-fn version_of(path: &Path) -> Option<String> {
-    if !trusted(path) {
-        return None;
-    }
-    let mut child = Command::new(path)
-        .arg("--version")
-        .env_clear()
-        .current_dir(std::env::temp_dir())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = child.try_wait().ok()? {
-            break status;
-        }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let mut text = String::new();
-    child
-        .stdout
-        .take()?
-        .take(256)
-        .read_to_string(&mut text)
-        .ok()?;
-    let version = text.trim().strip_prefix("lazysh-agent ")?;
-    (status.success() && lazysh_companion_release::version(version).is_some())
-        .then(|| version.to_owned())
+/// The version a trusted `path` reports, asked with an empty environment and a time limit.
+pub fn version_of(path: &Path) -> Option<String> {
+    trusted(path)
+        .then(|| process::version_text(path, &std::env::temp_dir()))
+        .flatten()
 }
 fn same_file(left: &Path, right: &Path) -> bool {
     match (fs::canonicalize(left), fs::canonicalize(right)) {

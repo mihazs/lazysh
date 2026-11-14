@@ -1,110 +1,15 @@
 #![cfg(unix)]
-//! The real `lazysh-agent update` process against a local fake HTTPS release server.
+//! The real `lazysh-agent update --check` and `--status` against a local fake HTTPS release server.
 //! The binary under test is built with the `update-test-endpoint` seam; shipped builds ignore it.
 use lazysh_companion_release::{
-    fake::{Fault, Release, Server},
-    sha, TARGETS,
+    fake::{Fault, Server},
+    sha,
 };
-use serde_json::Value;
-use std::{fs, process::Command};
-
-const THIS: &str = env!("CARGO_PKG_VERSION");
-const BINARY: &[u8] = b"companion bytes";
-
-struct Fixture {
-    root: tempfile::TempDir,
-    server: Server,
-}
-struct Run {
-    code: i32,
-    stdout: String,
-    stderr: String,
-}
-impl Run {
-    fn lines(&self) -> Vec<Value> {
-        self.stdout
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-    fn result(&self) -> Value {
-        let lines = self.lines();
-        let last = lines.last().unwrap().clone();
-        assert_eq!(last["event"], "result");
-        assert_eq!(last["schemaVersion"], 1);
-        assert_eq!(last["exitCode"], self.code);
-        last
-    }
-}
-fn release(version: &str) -> Release {
-    TARGETS
-        .iter()
-        .fold(Release::new(version), |release, target| {
-            release.binary(target, BINARY)
-        })
-}
-impl Fixture {
-    fn new(releases: &[Release]) -> Self {
-        Self {
-            root: tempfile::tempdir().unwrap(),
-            server: Server::start(releases.to_vec()),
-        }
-    }
-    fn state(&self) -> std::path::PathBuf {
-        self.root.path().join("state")
-    }
-    fn managed(&self) -> std::path::PathBuf {
-        let data = if cfg!(target_os = "macos") {
-            self.root.path().join("Library/Application Support")
-        } else {
-            self.root.path().join("data")
-        };
-        data.join("lazysh/companion")
-    }
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
-        command
-            .env_clear()
-            .args(["update"])
-            .args(args)
-            .env("HOME", self.root.path())
-            .env("XDG_DATA_HOME", self.root.path().join("data"))
-            .env("LAZYSH_STATE_DIR", self.state())
-            .env("LAZYSH_UPDATE_TEST_ENDPOINT", &self.server.api)
-            .env("LAZYSH_UPDATE_TEST_CA", self.root.path().join("ca.pem"));
-        fs::write(self.root.path().join("ca.pem"), &self.server.ca_pem).unwrap();
-        command
-    }
-    fn run(&self, args: &[&str]) -> Run {
-        self.finish(self.command(args))
-    }
-    fn finish(&self, mut command: Command) -> Run {
-        let output = command.output().unwrap();
-        Run {
-            code: output.status.code().unwrap(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
-    }
-    fn managed_binary(&self, script: &str) {
-        let path = self.managed().join("lazysh-agent");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        }
-    }
-    /// Nothing under the isolated home, state or managed namespace was created.
-    fn assert_untouched(&self) {
-        let entries = fs::read_dir(self.root.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(entries, ["ca.pem"], "update --check must not create state");
-    }
-}
+use std::fs;
+#[path = "support/update_fixture.rs"]
+#[allow(dead_code)]
+mod fixture;
+use fixture::{mode, release, Fixture, BINARY, THIS};
 
 #[test]
 fn check_reports_an_available_release_with_exit_10_and_downloads_nothing() {
@@ -165,32 +70,31 @@ fn check_is_up_to_date_for_the_same_or_an_older_latest_release() {
 #[test]
 fn the_managed_copy_is_what_check_compares_not_the_running_binary() {
     let fixture = Fixture::new(&[release("99.0.0")]);
-    fixture.managed_binary("#!/bin/sh\necho lazysh-agent 0.1.0\n");
+    fixture.managed_binary(b"#!/bin/sh\necho lazysh-agent 0.1.0\n");
     let result = fixture.run(&["--check", "--json"]).result();
     assert_eq!(result["current"]["managed"], true);
     assert_eq!(result["current"]["version"], "0.1.0");
     // A managed copy that cannot say its version is replaced by any release.
-    fixture.managed_binary("#!/bin/sh\necho not a version\n");
+    fixture.managed_binary(b"#!/bin/sh\necho not a version\n");
     let run = fixture.run(&["--check", "--json"]);
     assert_eq!(run.code, 10);
     assert!(run.result()["current"]["version"].is_null());
     let fixture = Fixture::new(&[release("0.1.0")]);
-    fixture.managed_binary("#!/bin/sh\necho lazysh-agent 0.1.0\n");
+    fixture.managed_binary(b"#!/bin/sh\necho lazysh-agent 0.1.0\n");
     assert_eq!(fixture.run(&["--check"]).code, 0);
 }
 #[test]
 fn a_managed_copy_that_others_can_write_is_never_executed() {
-    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new(&[]);
     let marker = fixture.root.path().join("executed");
-    fixture.managed_binary(&format!(
-        "#!/bin/sh\ntouch {}\necho lazysh-agent 0.1.0\n",
-        marker.display()
-    ));
+    fixture.managed_binary(
+        format!(
+            "#!/bin/sh\ntouch {}\necho lazysh-agent 0.1.0\n",
+            marker.display()
+        )
+        .as_bytes(),
+    );
     let binary = fixture.managed().join("lazysh-agent");
-    let mode = |path: &std::path::Path, mode| {
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap()
-    };
     // (executable mode, directory mode): group or world writable either way is refused.
     for (file, directory) in [
         (0o770, 0o700),
@@ -438,25 +342,17 @@ fn status_is_offline_creates_nothing_and_reads_the_recorded_history() {
     fixture.assert_untouched();
 
     let previous = "c".repeat(64);
-    fixture.managed_binary("#!/bin/sh\necho lazysh-agent 1.2.3\n");
+    fixture.managed_binary(b"#!/bin/sh\necho lazysh-agent 1.2.3\n");
     fs::write(fixture.managed().join("lazysh-agent.previous"), b"old").unwrap();
     fs::create_dir_all(fixture.state()).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(fixture.state(), fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    mode(&fixture.state(), 0o700);
     let state = serde_json::json!({"schemaVersion":1,"previous":{"version":"1.2.2","sha256":previous},
         "lastCheck":{"at":"2026-11-13T10:00:00Z","available":true},
         "lastOperation":{"action":"update","outcome":"updated","from":"1.2.2","to":"1.2.3"},
         "fromAFutureVersion":{"ignored":true}});
     let path = fixture.state().join("update-state.json");
     fs::write(&path, state.to_string()).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    mode(&path, 0o600);
     let result = fixture.run(&["--status", "--json"]).result();
     assert_eq!(result["current"]["managed"], true);
     assert_eq!(result["current"]["version"], "1.2.3");

@@ -50,7 +50,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | moon projects, tags, task ids and the `bun run` aliases | [moon task reference](reference/moon-tasks.md) |
 | Per-platform reference-client parity status, evidence and gaps | [Parity matrix](reference/parity-matrix.md) |
 | Companion switches, defaults, revision conflicts and strict schema | [Companion settings](reference/companion-settings.md) |
-| Companion update check: flags, JSON result, exit codes and what is verified | [Companion update](reference/companion-update.md) |
+| Companion update, rollback and dry run: flags, JSON result, exit codes and what is verified | [Companion update](reference/companion-update.md) |
 | Credential storage, identity binding and native resume-lock contracts | [Credentials](credentials.md) |
 | Generic lifecycle protocol, retention and SQLite/WAL safety | [Companion events and storage](reference/companion-events.md) |
 | Provider-specific transcript formats and reader limits | [Companion contracts](companion.md) |
