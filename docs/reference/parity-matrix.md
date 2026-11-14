@@ -246,7 +246,7 @@ The real-runtime cases are `#[ignore]` Rust tests (`bun run test:tmux`, `bun run
 | --- | --- | --- | --- | --- |
 | Discovery | missing | partial | implemented | L: product detection and version over owned OpenSSH are verified (`NLR` `real_ssh_discovery_reports_multiplexer_versions_and_support`, `zellij=full`); listing sessions through the product `multiplexer_sessions` is not run against a real Zellij. A: no Android Zellij case (#1145). |
 | Attach and reattach | missing | partial | implemented | L: ordinary attach through Mosh is verified (`NL` `real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display`); the SSH saved-default entry case `real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap` is `#[ignore]` and no job runs it; reattach after reconnect is not offered (#1145). |
-| Navigation, Jump To, current marker | missing | partial | implemented | Numbered tabs 1 to 20 are verified (`NLR` `zellij::tests::real_zellij_lifecycle_and_actions`, `GoToTab`); there is no tree, no current marker and no Jump To (#1145). |
+| Navigation, Jump To, current marker | missing | partial | implemented | Numbered tabs 1 to 20 are verified (`NLR` `zellij::tests::real_zellij_lifecycle_and_actions`, `GoToTab`); Jump To lists the tabs of the attached session with exactly one `aria-current` row and jumps by tab id (#1145; real `NLR` `real_zellij_lifecycle_and_actions` asserts the parsed tree, the jump out and back and the current tab and pane; mocked `e2e/zellij-jump.spec.ts` on phone and desktop). Panes are not destinations: Zellij 0.45.1's `focus-pane-id` does not move the attached client. No CI run of the new assertions is recorded yet; Android has no case (#1695). |
 | Create | missing | partial | implemented | New tab and pane are verified (`NLR` `real_zellij_lifecycle_and_actions`). A new Git worktree does not exist: #1141. |
 | Agent launch | missing | missing | missing | Not implemented for Zellij: #1141 (PR #1681 open). |
 | Layout actions | missing | partial | implemented | Tab and pane focus and zoom are verified (`NLR` `real_zellij_lifecycle_and_actions`). Rename, close and resize do not exist: #1144. |
@@ -341,7 +341,8 @@ On a Windows machine rmux is reached through local sessions only, because its na
 | Shortcut panel | implemented | implemented | `apps/client/src/ZellijPanel.tsx:33-40` (prefix panel deliberately excluded, MP:139). Vitest `ZellijPanel.test.tsx:8`. | Real action effect. |
 | Numbered tabs (1 to 20 plus number field) | implemented | verified | `ZellijPanel.tsx:36-39`. Mocked `e2e/zellij-quick-tabs.spec.ts:7-46`. Real go-to-tab in `zellij.rs:208` (`NLR`). Re-audit: NLR run 42239021528 `zellij::tests::real_zellij_lifecycle_and_actions` (`GoToTab` through the product `command`). | Android case. |
 | Remote action bridge | implemented | verified | `zellij.rs:8` (`ZellijAction`), `zellij.rs:22` (`command`), `zellij.rs:112` (`zellij_action`); unit tests `zellij.rs:132-201`; real tab and pane actions `zellij.rs:208` (`NLR`). Re-audit: NLR run 42239021528 `real_zellij_lifecycle_and_actions` (new, next and previous tab and pane, zoom). | Android case. |
-| Jump tree, deep links, custom prefix, reconnect restoration | n/a | n/a | Not offered by the reference client for Zellij; lazysh also has none. | — |
+| Jump tree | implemented | implemented | Not offered by the reference client for Zellij; lazysh lists the tabs of the attached session in Jump To with exactly one `aria-current` row and jumps by tab id (#1145): `zellij.rs` `zellij_tree` and the `jump` action, `TmuxJumpPanel` in Zellij mode. Real-Zellij `zellij::tests::real_zellij_lifecycle_and_actions` (parsed tree, jump out and back, current tab and pane) runs in `NLR`; Vitest `TmuxJumpPanel.test.tsx` and `zellijJump.test.ts`; mocked `e2e/zellij-jump.spec.ts` on phone and desktop. No CI run is recorded yet. | Android case (#1695). Panes are not destinations: Zellij 0.45.1's `focus-pane-id` does not move the attached client. |
+| Deep links, custom prefix | n/a | n/a | Not offered by the reference client for Zellij; lazysh also has none. | — |
 
 ## Jump navigation
 
@@ -353,7 +354,7 @@ On a Windows machine rmux is reached through local sessions only, because its na
 | Herdr agent state in the tree | partial | implemented | Same evidence as Herdr per-agent state. | Android and Linux GUI case with a non-unknown state. |
 | List, accordion and grid layouts with remembered preference | partial | partial | tmux layouts and `lazysh.multiplexer.layout` (`TmuxJumpPanel.tsx:17,41`; MP:51,73) verified in `tmux-jump.spec.ts:10,55,78-84` (PW). The Herdr tree has only collapse and expand (`HerdrNavigation.tsx:122-125`). | Herdr list, accordion and grid layouts. |
 | Plain shell reports unavailable | verified | verified | No Jump To for a non-tmux tab (`App.tsx:1523-1524`, `App.tsx:2159`); "Jump To unavailable" on failure (`TmuxJumpPanel.tsx:65`). `tmux-jump.spec.ts:47` (PW). | — |
-| Zellij reports unavailable | implemented | implemented | Same `kind==='tmux'` gate (`App.tsx:1523-1524`, `App.tsx:2159`). | Test with a Zellij-attached tab. |
+| Zellij reports unavailable | implemented | implemented | Jump To is gated on the version table's `tree` capability, so Zellij 0.44.x offers none: `e2e/zellij-jump.spec.ts` "Zellij 0.44 without the tree capability offers no Jump To" (PW). A plain shell gets none. | — |
 
 ## Agent hooks and companion
 

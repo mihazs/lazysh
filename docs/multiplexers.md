@@ -69,8 +69,8 @@ lazysh captures PID/TTY metadata on its own SSH attach channel immediately befor
 verified SSH control channel confirms that exact attached normal client. Every
 jump uses its captured generation and exact session/window IDs with a synchronous
 server-side client guard. It never reopens a control connection to follow a
-restarted server with reused IDs. Plain shells, externally attached/unbound
-terminals and Zellij do not gain this tmux tree. An absent or malformed handshake
+restarted server with reused IDs. Plain shells and externally attached/unbound
+terminals do not gain this tmux tree. A Zellij terminal has its own Jump To, described under [Zellij](#zellij). An absent or malformed handshake
 leaves the terminal usable and navigation unavailable rather than guessing.
 
 The extra `no-output,ignore-size` control client affects attached/client counts
@@ -244,7 +244,7 @@ Attached tmux and Herdr terminals also offer prefix shortcuts and numbered windo
 
 ## Zellij
 
-List running sessions or enter a name to create/attach one. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
+List running sessions or enter a name to create/attach one. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. A Zellij terminal also offers **Jump To**, below.
 
 The Zellij panel includes a tab 1–20 quick-access row alongside the existing manual
 tab-number form. These are explicit shortcuts, not a discovered tab list or a
@@ -260,6 +260,12 @@ not establish current tabs, exact-client binding, automatic restoration, or phys
 device/runtime acceptance. Hiding/persisting this row remains separate work.
 
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
+
+### Zellij Jump To
+
+On Zellij 0.45.1 (the version gate's `tree` capability; 0.44.x and others show no Jump To) a terminal attached to a Zellij session offers **Jump To** with that session's tabs, numbered from 1 like the tab strip, and exactly one **Current** row (`aria-current="location"`): the tab Zellij reports active. Choosing Current closes the panel without sending a command. The list reads `zellij --session S action list-tabs --json --state` and `list-panes --json --all` and joins them by the stable tab id; plugin and suppressed panes are not listed, and a pane of a tab closed between the two reads is dropped. Choosing another tab runs `zellij --session S action go-to-tab-by-id <id>` through the typed `zellij_action` `jump`, shows that tab as Current at once (Zellij applies the action a moment later) and closes the phone menu; Refresh reads the tree again. Host names are shown as text.
+
+The tree also carries each tab's terminal panes and which one is focused, but a pane is not a destination: Zellij 0.45.1's `focus-pane-id` only flags the pane for the CLI and leaves the attached client where it was (verified with `zellij action list-clients` on a live client), so a jump lands on the tab's own focused pane. With several clients attached to one session Zellij reports one focused pane per client and the CLI acts on the session's default client, the limit the other Zellij actions already have. Verified against the pinned Zellij 0.45.1 by `zellij::tests::real_zellij_lifecycle_and_actions` (`native-linux-runtimes`: the parsed tree, a jump to the other tab and back, and the current tab and pane after each) and by Playwright `e2e/zellij-jump.spec.ts` on phone and desktop (exactly one `aria-current` row, a jump by tab id, no Jump To on a version without the capability).
 
 ## Tab strip
 
