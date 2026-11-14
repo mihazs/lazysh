@@ -125,6 +125,23 @@ test('web profile: Backspace inside a word and after the separator is one DEL ea
   expect((await state(page)).skipped).toBe(0);
 });
 
+/** With no text before the caret SwiftKey sends Backspace as KEYCODE_DEL, and Enter is always a key pair, never commitText. */
+test('web profile: Backspace over an empty editor and Enter are key events that put one byte each on the wire',async({page})=>{
+  await open(page);
+  const ime=await keyboard(page);
+  const cdp=await page.context().newCDPSession(page);
+  const press=async(key:string,code:string,keyCode:number)=>{
+    for(const type of ['rawKeyDown','keyUp'] as const)await cdp.send('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:keyCode});
+    await page.waitForTimeout(8);
+  };
+  await press('Backspace','Backspace',8);
+  await typeWebWord(ime,'ls',0);
+  await press('Enter','Enter',13);
+  await ime.done();await cdp.detach();
+  await expect.poll(async()=>(await state(page)).writes.join('')).toBe('\x7fls \r');
+  expect((await state(page)).skipped).toBe(0);
+});
+
 test('Backspace after a toolbar key still erases on the terminal instead of being skipped',async({page})=>{
   await open(page);
   const ime=await keyboard(page);
