@@ -20,7 +20,7 @@ standard binary directories are supported; shared writable source directories
 are refused.
 
 Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
-on the qualified Linux filesystems described below. Explicit version-2 discovery
+on the qualified Linux and macOS filesystems described below. Explicit version-2 discovery
 also enables managed GitHub Copilot CLI setup; explicit version-3 discovery adds
 managed Amp setup, and explicit version-4 discovery adds managed Kimi Code 2.4
 setup, each preserving every older mapping. Gemini uses the selected
@@ -75,16 +75,25 @@ Existing disabled-plugin settings and plugin restrictions are preserved, and set
 does not establish live reporting. See Cline's [plugin locations](https://docs.cline.bot/sdk/plugin-install)
 and [plugin lifecycle](https://docs.cline.bot/sdk/plugins).
 
-Managed writes currently support qualified local Linux filesystems without
-extended access/default ACLs. Special file permission bits, unsafe links,
-read-only files, unhandled ACLs and uncertain ownership are refused. Existing
-ordinary file permissions and group ID are retained. macOS/Windows writes
-remain unsupported; preview is available without accessing a profile. Preview
-labels POSIX shell, Bun JavaScript or Cline JavaScript dialect. On Windows it returns the
-existing unbound print-only templates, explicitly without an executable
-binding or managed-setup support; it does not quote a Windows executable as
-a POSIX command. These
-limits do not disable the existing print-only configuration commands below.
+Managed writes support qualified local Linux and macOS filesystems without
+extended ACLs: POSIX access or default ACLs on Linux, and any extended ACL entry
+on macOS (`chmod +a`). Special file permission bits, unsafe links, read-only
+files, unhandled ACLs, uncertain ownership and a filesystem that cannot report
+its ACLs are refused before anything is written. Existing ordinary file
+permissions and group ID are retained. On macOS the same ownership, preimage,
+cooperative-lock and commit-boundary checks run through `openat`, `renameatx_np`
+and `fstatat` instead of Linux's `renameat2` and `O_PATH`. They are exercised by
+the managed-setup tests on a hosted macOS runner (APFS, extended ACL entries,
+inherited ACL entries, links and replacement races), and the `native-desktop`
+job runs them on every push to `main`. That qualifies the hosted runner's local
+APFS volume for the tested macOS release; HFS+, network or other volumes are
+admitted only by the existing local-filesystem check and were not exercised.
+Windows writes remain unsupported; preview is available without accessing a
+profile. Preview labels POSIX shell, Bun JavaScript or Cline JavaScript dialect.
+On Windows it returns the existing unbound print-only templates, explicitly
+without an executable binding or managed-setup support; it does not quote a
+Windows executable as a POSIX command. These limits do not disable the existing
+print-only configuration commands below.
 
 Configuration is separate from live reporting. Provider disable settings,
 selected-layer overrides and Codex trust review still apply. Lazysh never
