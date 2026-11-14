@@ -12,7 +12,7 @@ import {availablePort,sshCommand} from './sshFixture';
 import {writeFilesFixture} from './androidFilesFixture';
 import {setTimeout as delay} from 'node:timers/promises';
 
-/** The owned SSH parity instrumentation cases (#985), run together in one Gradle invocation. */
+/** The owned SSH parity instrumentation cases (#985, #1642), run together in one Gradle invocation. */
 export const sshParityCases=[
   'ownedSshPasswordLoginThroughRealUi',
   'ownedSshEncryptedKeyLoginThroughRealUi',
@@ -25,6 +25,7 @@ export const sshParityCases=[
   'ownedSshAutoFallsBackToSshThroughRealUi',
   'ownedSshForcedEternalTerminalThroughRealUi',
   'ownedSshMoshCustomServerPathAndPortRangeThroughRealUi',
+  'ownedSshClientEnvironmentThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files';
@@ -215,7 +216,7 @@ export const etBinary=(name:'ET_SERVER_BIN'|'ET_TERMINAL_BIN')=>{
 
 /**
  * Owned emulator only. Starts a password-enabled primary sshd, a password bastion and a
- * second-key sshd for rotation, then runs the parity cases with the host control channel.
+ * second-key sshd for rotation, then runs the parity cases with the host control channel. The password sshds admit `LANG LC_*` like a stock Debian server.
  */
 export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'../..')) {
   const {serial,adb,device}=ownedEmulator('SSH parity acceptance');
@@ -227,7 +228,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
   try {
     const etServer=etBinary('ET_SERVER_BIN'),etTerminal=etBinary('ET_TERMINAL_BIN');
     const fixtures={} as Fixtures;
-    for(const name of servers)started.push(fixtures[name]=await SshFixture.start(undefined,{password,log:true}));
+    for(const name of servers)started.push(fixtures[name]=await SshFixture.start(undefined,{password,log:true,acceptEnv:true}));
     // Commands run (discovery needs `ss`), keys only and a longer shell: the preview case outlives the default 90 s.
     started.push(fixtures.preview=await SshFixture.start(undefined,{log:true,exec:true,shellSeconds:300}));
     // The password and log fixture cannot run commands; Auto and ET need exec requests, so they get their own sshd.
