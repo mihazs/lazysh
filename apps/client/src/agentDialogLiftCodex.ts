@@ -18,8 +18,8 @@ const option = /^( {0,2})([› ]) (\d{1,2})\. (\S.*)$/;
 /** The footers of a question, whole or wrapped over rows by a narrow terminal (which drops the bar where it breaks), compared without their spaces and bars. `notes` is the open notes box. */
 const squash = (text: string) => text.replace(/[\s|]+/g, '');
 const questionFooters = ['answer', 'all'].flatMap(submit => ['', ' | ←/→ to navigate questions'].map(navigate => squash(`tab to add notes | enter to submit ${submit}${navigate} | esc to interrupt`)));
-const notesFooter = /^ {2}tab or esc to clear notes \| enter to submit/;
-const questionStart = /^ {2}tab to add notes \| enter to submit /;
+const notesFooter = /^ {2}tab or esc to clear notes\b/;
+const questionStart = /^ {2}tab to add notes\b/;
 const progress = /^Question \d+\/\d+ \(\d+ unanswered\)$/;
 const rowsBelowFooter = 2;
 /** Codex's approval options that add a rule ("Yes, and don't ask again for commands that start with …"). */

@@ -116,6 +116,10 @@ describe('liftCodexDialog on recorded Codex screens', () => {
       const rows = dialogScreen('codex-question');
       expect(lift('x', rows.map(row => row.replace('| esc to interrupt', '| esc to'))).kind).toBe('unliftable');
       expect(lift('x', rows.map(row => row.replace('submit answer', 'submit anything'))).kind).toBe('unliftable');
+      // A narrow terminal may break the footer anywhere: it is still the footer, read whole, and nothing short of the whole is a question.
+      const wrapped = rows.flatMap(row => row.startsWith('  tab to add notes') ? ['  tab to add notes | enter to', '  submit answer | esc to', '  interrupt'] : [row]);
+      expect(lift('x', wrapped).kind).toBe('dialog');
+      expect(lift('x', wrapped.filter(Boolean).slice(0, -1)).kind).toBe('unliftable');
       // Two footer rows below the last row of the footer are no status row.
       expect(lift('x', [...rows, '  one', '  two', '  three']).kind).toBe('unliftable');
     });
