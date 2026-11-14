@@ -128,8 +128,9 @@ export const api = {
   openAuthUrl: (url: string, browser?: 'inApp' | 'system') => invoke<AuthUrlOutcome>("open_auth_url", { url, browser }),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
-  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
-    return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30 },onEvent);
+  /** `reattach` (reconnect and restore) never creates the session: Zellij fails when it is gone instead of starting an empty one. */
+  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void, reattach=false) => {
+    return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30, ...(reattach ? {createIfMissing:false} : {}) },onEvent);
   },
   listHosts: () => invoke<Host[]>("list_hosts"),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),
