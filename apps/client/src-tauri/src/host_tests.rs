@@ -1,5 +1,5 @@
 //! Real local sessions: `test:local` selects these through the `local::` path segment.
-mod local {
+pub(crate) mod local {
     use crate::{
         app_lock::{AccessLease, AccessState, Guarded, GuardedError},
         host::{Cmd, Host},
@@ -17,7 +17,7 @@ mod local {
 
     type Answer<T> = std::result::Result<Guarded<T>, GuardedError<SshError>>;
     // Boxed before awaiting: the command futures are too large for a test thread's stack in debug.
-    fn ok<T>(answer: impl Future<Output = Answer<T>>) -> impl Future<Output = T> {
+    pub(crate) fn ok<T>(answer: impl Future<Output = Answer<T>>) -> impl Future<Output = T> {
         let answer = Box::pin(answer);
         async move {
             match answer.await {
@@ -35,7 +35,7 @@ mod local {
             }
         }
     }
-    fn lease() -> AccessLease {
+    pub(crate) fn lease() -> AccessLease {
         AccessState::disabled().lease(None).unwrap()
     }
     async fn app(directory: &Path) -> (App<MockRuntime>, String) {
@@ -44,6 +44,54 @@ mod local {
         app.manage(LocalState::default());
         let id = adopted_test_session(&app.state::<LocalState>(), lease()).await;
         (app, id)
+    }
+    /// A temporary home for real tmux, Zellij and Herdr state. Host-tool commands of a session
+    /// from [`Isolated::session`] and the test's own [`Isolated::command`]s see only this
+    /// directory, never the user's multiplexers or their configuration.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) struct Isolated(tempfile::TempDir);
+    #[cfg_attr(not(unix), allow(dead_code))]
+    impl Isolated {
+        pub(crate) fn new() -> Self {
+            Self(tempfile::tempdir().unwrap())
+        }
+        pub(crate) fn path(&self) -> &Path {
+            self.0.path()
+        }
+        fn variables(&self) -> Vec<(String, String)> {
+            [
+                "HOME",
+                "TMUX_TMPDIR",
+                "XDG_RUNTIME_DIR",
+                "XDG_CACHE_HOME",
+                "XDG_CONFIG_HOME",
+            ]
+            .map(|name| (name.to_owned(), path(self.path())))
+            .into_iter()
+            .chain([("TERM".to_owned(), "xterm-256color".to_owned())])
+            .collect()
+        }
+        /// An adopted local session, with its application state beside the isolated home.
+        pub(crate) async fn session(&self) -> (App<MockRuntime>, String) {
+            let (app, id) = app(self.path()).await;
+            app.state::<LocalState>().set_test_env(self.variables());
+            (app, id)
+        }
+        /// A program started as the session's host tools start one, for setup and teardown.
+        pub(crate) fn command(&self, program: &str) -> Command {
+            let mut command = Command::new(program);
+            command.envs(self.variables());
+            for name in [
+                "TMUX",
+                "ZELLIJ",
+                "ZELLIJ_SESSION_NAME",
+                "HERDR_SOCKET_PATH",
+                "HERDR_SESSION",
+            ] {
+                command.env_remove(name);
+            }
+            command
+        }
     }
     /// A live local session resolved through the host context.
     async fn resolved() -> (tempfile::TempDir, App<MockRuntime>, String, Host) {
@@ -692,5 +740,54 @@ mod local {
             .await
             .unwrap();
         assert!(version.starts_with("git version"), "{version}");
+    }
+}
+
+/// Herdr is found on the PATH first and in its owner-checked user install directory last.
+#[cfg(unix)]
+mod herdr_install {
+    use crate::host::with_herdr_install;
+    use std::{ffi::OsString, fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    fn install(home: &std::path::Path) -> PathBuf {
+        let directory = home.join(".local/bin");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("herdr"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(directory.join("herdr"), fs::Permissions::from_mode(0o755)).unwrap();
+        directory
+    }
+
+    #[test]
+    fn the_user_install_directory_comes_after_the_path_and_a_path_hit_wins() {
+        let temp = tempfile::tempdir().unwrap();
+        // The admission walk refuses symbolic links, and some temporary roots are one.
+        let home = fs::canonicalize(temp.path()).unwrap();
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        let (empty, found) = (home.join("empty"), home.join("found"));
+        fs::create_dir_all(&found).unwrap();
+        fs::create_dir_all(&empty).unwrap();
+        fs::write(found.join("herdr"), "").unwrap();
+        let join = |directories: &[&std::path::Path]| std::env::join_paths(directories).unwrap();
+        // No install yet: the PATH is returned as it was.
+        assert_eq!(
+            with_herdr_install(Some(join(&[&empty])), Some(home.clone())),
+            Some(join(&[&empty]))
+        );
+        let directory = install(&home);
+        assert_eq!(
+            with_herdr_install(Some(join(&[&empty])), Some(home.clone())),
+            Some(join(&[&empty, &directory]))
+        );
+        let on_path: Option<OsString> = Some(join(&[&found, &empty]));
+        assert_eq!(
+            with_herdr_install(on_path.clone(), Some(home.clone())),
+            on_path
+        );
+        // A group-writable install directory is not trusted.
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o775)).unwrap();
+        assert_eq!(
+            with_herdr_install(Some(join(&[&empty])), Some(home)),
+            Some(join(&[&empty]))
+        );
     }
 }

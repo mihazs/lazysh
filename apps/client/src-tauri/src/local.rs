@@ -227,6 +227,15 @@ pub(crate) fn tmux_binding(
         Err("Local terminals are unavailable".into())
     }
 }
+/// The tmux server an adopted local terminal is attached to, when it is attached to one.
+#[cfg(desktop)]
+pub(crate) fn tmux_server(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<Option<crate::tmux_server::TmuxServer>, String> {
+    desktop::tmux_server(state, id, lease)
+}
 pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Result<bool, String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
@@ -1197,6 +1206,20 @@ mod desktop {
                 .clone()
                 .ok_or("This terminal has no tmux navigation binding")?;
             Ok((binding, session.cancel.subscribe()))
+        })
+    }
+    pub(super) fn tmux_server(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+    ) -> Result<Option<crate::tmux_server::TmuxServer>, String> {
+        live_session(state, id, lease, |session| {
+            Ok(session
+                .bindings
+                .tmux_server
+                .lock()
+                .map_err(|_| "Local terminal lock failed")?
+                .clone())
         })
     }
     async fn bind_tmux(
