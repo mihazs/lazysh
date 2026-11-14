@@ -1,0 +1,40 @@
+name: zz-windows-gui-iterate
+on:
+  push:
+    branches: [test/windows-installed-gui-foundation]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: bun install --frozen-lockfile
+      - id: bundle
+        uses: actions/cache/restore@v4
+        with: &bundle
+          path: |
+            target/release/lazysh.exe
+            target/release/bundle/nsis
+            target/release/bundle-revision.txt
+          key: zz-gui-bundle-${{ hashFiles('apps/client/src/**', 'apps/client/src-tauri/**', 'apps/client/package.json', 'Cargo.lock', 'bun.lock') }}
+      - if: steps.bundle.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          bun run --cwd apps/client tauri build --bundles nsis -- --locked
+          git rev-parse HEAD > target/release/bundle-revision.txt
+      - if: steps.bundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: *bundle
+      - id: revision
+        shell: bash
+        run: echo "sha=$(cat target/release/bundle-revision.txt)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/windows-installed-gui
+        with:
+          revision: ${{ steps.revision.outputs.sha }}
