@@ -51,7 +51,7 @@ describe('bottom menu',()=>{
     expect(screen.queryByRole('button',{name:'Open bottom menu'})).toBeNull();
     view.unmount();
     savePreferences({...defaults,edgeGestures:{leftMenu:true,bottomMenu:false,viewSwitch:true,zoneWidth:24}});
-    const off=render(<Harness start={false} />);
+    render(<Harness start={false} />);
     expect(document.querySelector('.gesture-handle')).toBeNull();
   });
 });
