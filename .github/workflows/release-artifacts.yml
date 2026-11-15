@@ -91,7 +91,7 @@ jobs:
   # build, so each validated APK is that build's own output. Cargo keeps per-feature artifacts.
   android:
     if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'android')
-    runs-on: sengi-basic-4-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -181,7 +181,7 @@ jobs:
   aggregate:
     needs: [desktop, android, companion]
     if: inputs.platform == 'all'
-    runs-on: sengi-basic-4-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - *checkout
