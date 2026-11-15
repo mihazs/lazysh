@@ -1566,6 +1566,11 @@ jobs:
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" >> "$GITHUB_ENV"
+      - name: Build the real share service for the owned sharing case
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
+        run: |
+          cargo build --locked -p lazysh-share
+          printf '%s\n' "LAZYSH_TEST_SHARE_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-share" >> "$GITHUB_ENV"
       - &android-owned-kvm
         name: Grant this runner access to KVM
         run: |
