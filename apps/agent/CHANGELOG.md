@@ -1,5 +1,15 @@
 # @lazysh/agent
 
+## 1.64.2
+
+### Patch Changes
+
+- 1cfbae9: Give the Windows companion an 8 MiB main-thread stack so `lazysh-agent update`, `update --dry-run` and `update --rollback` no longer crash with a stack overflow (exit 0xC00000FD) while they download, verify and replace the running companion.
+- @lazysh/account-usage@1.64.2
+  - @lazysh/common@1.64.2
+  - @lazysh/companion-release@1.64.2
+  - @lazysh/notification-client@1.64.2
+
 ## 1.64.1
 
 ### Patch Changes
