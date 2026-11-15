@@ -477,7 +477,10 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Androi
 
 // Separate CI owner: only the pinned tmux fixture and packaged UI decide this verdict.
 test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
-  const owned=await TmuxFixture.start();
+  // The source-built companion lets the case open a synthetic transcript and send confirmed Chat input to the displayed pane.
+  const agent=process.env.LAZYSH_TEST_AGENT_BIN;
+  if(!agent)throw new Error('The tmux Chat case needs the source-built companion in LAZYSH_TEST_AGENT_BIN');
+  const owned=await TmuxFixture.start(undefined,agent);
   await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
 },610_000);
 
