@@ -4,6 +4,8 @@ Repeated snapshots and multiple connections to the same host do not duplicate an
 
 Monitoring considers up to 32 distinct connected hosts, with at most four snapshot requests in flight. Polls run every 15 seconds while the app can execute, without overlapping a previous poll. **Refresh inbox** requests an immediate poll. Unchanged snapshots do not rewrite persistent storage. Notification permission is not checked repeatedly when there are no new alerts.
 
+Herdr's event stream adds to this while a Herdr view is shown (see [live updates and the inbox](../multiplexers.md#live-updates-and-the-inbox)): a pane that becomes blocked or done is recorded at once with its `herdr:<server>:<pane id>` identity and no command text, and keeps one row with the companion's hook report when both name the same agent session. Hook and Herdr reports of the same state within 60 seconds are one transition; the comparison uses the device's clock for Herdr's report and the host's for the hook's, so a host more than a minute off shows two alerts. The Herdr side keeps at most 200 recent transitions in memory and writes nothing more to storage than the hook path does.
+
 Selecting an inbox row or supported OS notification action opens only the exact producing SSH connection, if it is still connected to the same saved host. It does not reconnect or send input. Windows reports notification clicks only while the toast is on screen; desktop delivery depends on the notification server and installed-app identity.
 
 For setup, see [agent inbox and local notifications](../notifications.md). For delivery boundaries, see [notification delivery](../explanation/notification-delivery.md).

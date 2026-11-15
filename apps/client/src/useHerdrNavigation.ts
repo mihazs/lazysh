@@ -2,6 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import {withReportedStatus,type ReportedSessionSource} from './HerdrSessionDetails';
+import {rememberHerdrAgents,useHerdrEvents} from './herdrEvents';
 
 export type ReportedSessionRef={source:string;agent:'codex'|'claude'|'opencode';kind:'id';value:string};
 function reportedSession(value:unknown,agent:unknown):ReportedSessionRef|undefined {
@@ -59,7 +60,12 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 }
 
 
-/** One visibility- and lease-owned reader for a terminal's selected Herdr server. */
+/** While the host streams the server's events a change is read when it arrives; the timer then only re-reads
+ * every this many ticks, in case an event was missed. */
+const LIVE_SAFETY_TICKS=12;
+/** One visibility- and lease-owned reader for a terminal's selected Herdr server. Where the host companion streams
+ * `events.subscribe` (docs/companion.md), the tree is read when an event arrives instead of on every tick, and a
+ * lost or unsupported stream returns to the timer. */
 export function useHerdrNavigation({sessionId,herdrSession,visible,reports,intervalMs=5000}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;intervalMs?:number}) {
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
@@ -71,6 +77,7 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
   const [query,setQuery]=useState('');
   useEffect(()=>setQuery(''),[sessionId]);
   const flight=useRef(false);
+  const live=useRef(false);
   const refresh=useRef<()=>Promise<void>>(async()=>{});
   useEffect(()=>{
     let current=true;
@@ -88,7 +95,7 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
         if(server){
           const snapshot=await invoke<HerdrTree>('herdr_tree',{sessionId,name:server});
           const rows=snapshot.agents===undefined?[]:parseHerdrAgents(snapshot);
-          if(owns())setResult({host:sessionId,servers:names,server,rows,snapshot,loaded:true});
+          if(owns()){setResult({host:sessionId,servers:names,server,rows,snapshot,loaded:true});rememberHerdrAgents(sessionId,server,rows);}
         }
         if(owns())setFailure(null);
       }catch(error){if(owns()){setResult(previous=>previous?.host===sessionId?{...previous,rows:[],snapshot:undefined,loaded:false}:null);setFailure({host:sessionId,cause:captureUiError(error)});}}
@@ -96,12 +103,34 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
     };
     refresh.current=read;
     if(visible)void read();
-    const timer=visible?window.setInterval(()=>void read(),intervalMs):undefined;
+    let quiet=0;
+    const timer=visible?window.setInterval(()=>{
+      if(live.current && ++quiet<LIVE_SAFETY_TICKS)return;
+      quiet=0;void read();
+    },intervalMs):undefined;
     return()=>{current=false;window.clearInterval(timer);};
   },[sessionId,selected,visible,invoke,lease,intervalMs]);
   const owned=result?.host===sessionId?result:null;
+  const [shown,setShown]=useState(()=>!document.hidden);
+  useEffect(()=>{
+    const change=()=>setShown(!document.hidden);
+    document.addEventListener('visibilitychange',change);
+    return()=>document.removeEventListener('visibilitychange',change);
+  },[]);
+  const pending=useRef<number|undefined>(undefined);
+  useEffect(()=>()=>window.clearTimeout(pending.current),[]);
+  // One read after a burst of events, and never inside a read that is already running.
+  const reread=()=>{
+    window.clearTimeout(pending.current);
+    pending.current=window.setTimeout(function again(){
+      if(flight.current){pending.current=window.setTimeout(again,250);return;}
+      void refresh.current();
+    },250);
+  };
+  const watch=useHerdrEvents({enabled:visible && shown,sessionId,server:owned?.server??'',lease,invoke,onEvent:reread});
+  live.current=watch==='live';
   const reportReadable=!!reports?.available && reports.lease.current();
   const data=useMemo(()=>owned && withReportedStatus(owned,reports,sessionId),[owned,reports?.rows,reports?.host,reportReadable,sessionId]);
   const agentFailure=data?.snapshot && data.snapshot.agents===undefined?{host:sessionId,cause:new LocalUiError('herdrAgentsUnsupported')}:failure;
-  return {data,failure,agentFailure,busy,query,setQuery,lease,refresh:()=>refresh.current(),selectServer:(name:string)=>setChoice({host:sessionId,name})};
+  return {data,failure,agentFailure,busy,query,setQuery,lease,watch,refresh:()=>refresh.current(),selectServer:(name:string)=>setChoice({host:sessionId,name})};
 }

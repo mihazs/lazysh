@@ -42,11 +42,11 @@ function subscribe(listener: () => void) {
 }
 export function useInbox() { return useSyncExternalStore(subscribe, getInbox, defaults); }
 
-async function hash(value: unknown): Promise<string> {
+export async function hash(value: unknown): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
-const summaryText = (value: string, limit: number) => value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, limit);
+export const summaryText = (value: string, limit: number) => value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, limit);
 
 export async function collectInbox(session: InboxSession, snapshot: unknown, baseline: boolean, canCommit = () => true, persist = true): Promise<InboxRow[]> {
   const reported = parseSnapshot(snapshot);

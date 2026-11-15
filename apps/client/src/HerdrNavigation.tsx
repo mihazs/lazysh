@@ -26,7 +26,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   useUi();
   useAccessSnapshot();
   const model=useHerdrNavigation({sessionId,herdrSession,visible,reports});
-  const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
+  const {data,failure,agentFailure,busy,query,setQuery,lease,watch,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
   const [spaceMenu,setSpaceMenu]=useState<string>();
   const [setupView,setSetupView]=useState<{host:string;open:boolean}>();
@@ -113,6 +113,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
     {actionError instanceof LocalUiError && actionError.key==='herdrNavigationCompanion' && onOpenCompanion && <button className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
+    {data?.server && !setupOpen && ['live','delayed','stale','unsupported'].includes(watch) && <p className="herdr-watch-note muted" role="status" data-watch={watch}>{t(watch==='live'?'herdrWatchLive':watch==='unsupported'?'herdrWatchCompanion':'herdrWatchPolling',{seconds:formatNumber(5)})}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
 
