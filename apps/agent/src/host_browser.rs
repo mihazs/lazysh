@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod input;
 pub mod outbox;
 pub mod profile;
 pub mod relay;

@@ -69,7 +69,8 @@ Security and data (each is tested, not only stated):
 - The first use on a host shows what the browser can reach: the host's network and loopback services, any
   file the browser can open, and every site the user signs in to inside it. The user confirms per host. The
   confirmation is remembered on the device for that host only, never synced.
-- **Control** is a second switch per session, off at every start.
+- **Control** is a second switch per session, off at every start. The relay enforces it: while it is off every input
+  message is refused and counted, whatever the client is, and it is off again when a session starts afresh.
 
 ### Managed browser (default)
 
@@ -168,7 +169,8 @@ header (sequence, width, height, scroll offset, timestamp), so the client never 
 | client to relay | `tabs`, `activateTab {id}`, `newTab`, `closeTab {id}` | Pages only. |
 | client to relay | `ack {sequence, decodeMs}` | After the device decoded a frame. |
 | client to relay | `quality {rung}`, `pause`, `resume` | Pause when hidden. |
-| client to relay | `pointer {kind, x, y, ...}`, `wheel`, `pinch`, `key`, `text` | Accepted only while Control is on. |
+| client to relay | `control {on}` | Turns Control on or off for the session. Off when a session starts. |
+| client to relay | `pointer {kind, x, y, button, clickCount}`, `wheel {x, y, deltaX, deltaY}`, `pinch {scale}`, `key {key, modifiers}`, `text {text}` | Accepted only while Control is on; see "Relay wire format". |
 | relay to client | `frame`, `state`, `tabs`, `dialog {kind, text}`, `closed {reason}` | Page strings are untrusted text. |
 
 Everything else is dropped with a counter, and the browser's protocol is not otherwise reachable.
@@ -187,15 +189,36 @@ the body.
 
 Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome", headed?, viewport: {width,
 height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
-scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause` and `resume`. Anything else,
-including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
+scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause`, `resume`, `control {on}` and the
+input messages below. Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
 than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
 browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
 111 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
-`page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (sent at
-count 1, 2, 4, 8 and so on), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
+`page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (one count
+per reason, sent at count 1, 2, 4, 8 and so on; the reasons are `OperationRefused`, `ControlOff`,
+`InputOutOfRange`, `PermissionRefused` and `InputRateLimited`), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
 `BrowserExited`, `PageCrashed`, `ProtocolViolation`, or the class of a failure before the stream started
 (`HostBrowserDisabled`, `BrowserNotFound`, `AddressRefused`, `ViewportInvalid`, and so on).
+
+`control {on}` turns Control on or off, and `capabilities.control` in `state` says the relay accepts it. Control is
+off when a session starts, and the relay never turns it on. While it is off, each input message is refused with
+`ControlOff` and never forwarded; turning it off stops forwarding at once. Input messages are in the page's CSS
+pixels, the space of a frame's `width` and `height`, and have no other fields:
+
+| Message | Fields and bounds | Browser call |
+| --- | --- | --- |
+| `pointer` | `kind`: `move`, `press` or `release`; `x`, `y` inside the viewport; `button`: `none`, `left` or `right` (a press and a release need a button); `clickCount` 0 to 3 | `Input.dispatchMouseEvent` (`mouseMoved`, `mousePressed`, `mouseReleased`, with the held `buttons`) |
+| `wheel` | `x`, `y` inside the viewport; `deltaX`, `deltaY` within 10000 | `Input.dispatchMouseEvent` (`mouseWheel`) |
+| `pinch` | `scale` from 1 to 5 | `Emulation.setPageScaleFactor` |
+| `key` | `key`: Backspace, Tab, Enter, Escape, PageUp, PageDown, End, Home, an arrow or Delete, or one ASCII letter or digit with Control or Meta in `modifiers` (Alt 1, Control 2, Meta 4, Shift 8) | `Input.dispatchKeyEvent`, a down and an up; only an Enter without Alt, Control or Meta types a line break |
+| `text` | `text` of at most 4 KiB, inserted as typed (accents, CJK, emoji) | `Input.insertText` |
+
+The mapping is `inputCommands` in `apps/client/src/hostBrowser/cdp.ts`, so the prototype and the relay stay equal,
+and every call still passes the allow-list. A value outside a bound is refused with `InputOutOfRange`. An editing
+shortcut that moves the clipboard (Control or Meta with C, X or V, and Shift with Delete) is refused with
+`PermissionRefused`, and a key event never carries editing commands. A flood is refused with `InputRateLimited`:
+the relay forwards at most 240 input messages a second, with a burst of the same size, which a hand on a phone
+does not reach (a drag is one `wheel` per frame). The relay does not log or keep a coordinate, a key or a text.
 
 Pacing is the relay's job. It acknowledges the browser's screencast frame at once and keeps only the newest
 frame for the device; at most two frames are unacknowledged, and the client sends `ack` after it decoded a frame,
@@ -258,7 +281,8 @@ launcher applies the address rule to its first page.
 | **Keyboard** button | Raises the phone keyboard | Needed because the view has no native text field. |
 | Hover | Not offered | A phone has no hover. A long press then move, or **Select** mode, reaches hover menus. |
 
-While Control is off, none of this is sent; the client proves it in a test.
+While Control is off, none of this is sent; the client proves it in a test, and the relay refuses it anyway
+(see "Relay wire format").
 
 ## Controls
 
@@ -325,7 +349,7 @@ Design from those facts:
 | 1 | This specification, the feasibility measurements, and a developer-flagged Chrome prototype with a CI test (done) | [#1250](https://github.com/mihazs/lazysh/issues/1250) | No. Prototype off by default and hidden. |
 | 2 | Opt-in gate, managed profile, lifecycle, limits | [#1258](https://github.com/mihazs/lazysh/issues/1258) slices A to C | With the viewer below |
 | 2 | Chrome relay and viewer, view-only. The host relay (`host-browser serve`) is done; the app's bridge and viewer are the remaining slices. | [#1254](https://github.com/mihazs/lazysh/issues/1254) | Yes, off until enabled |
-| 3 | Chrome input | [#1255](https://github.com/mihazs/lazysh/issues/1255) | Yes |
+| 3 | Chrome input. The relay's `control` and input messages are done ([#1709](https://github.com/mihazs/lazysh/issues/1709)); the app's wiring of them is the remaining slice ([#1710](https://github.com/mihazs/lazysh/issues/1710)). | [#1255](https://github.com/mihazs/lazysh/issues/1255) | Yes |
 | 4 | Address bar, tabs, navigation, open on device | [#1256](https://github.com/mihazs/lazysh/issues/1256) | Yes |
 | 5 | Adaptive rate and quality, pause when hidden | [#1259](https://github.com/mihazs/lazysh/issues/1259) | Yes |
 | 6 | Firefox through BiDi | [#1257](https://github.com/mihazs/lazysh/issues/1257) | Yes |

@@ -6,10 +6,13 @@
 //! never sends a protocol command: every command goes through [`allow::command`] before it is written, and a
 //! client message that is not in the closed [`wire::Client`] set is refused and counted.
 //!
+//! Input reaches the browser only while the client has turned Control on (off at every start), as the few fixed
+//! messages of [`input`], each bounded and rate limited.
+//!
 //! The browser, its helpers and its profile end with the channel: standard input closing, SIGINT, SIGTERM or
 //! SIGHUP, or the browser exiting. Nothing about a page is logged or written to disk.
 use super::{
-    allow, browser_command, find_binary,
+    allow, browser_command, find_binary, input,
     outbox::Outbox,
     profile, settings, terminate,
     wire::{self, Client, Viewport},
@@ -18,7 +21,7 @@ use crate::{Error, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     io::{self, BufRead, BufReader, Read, Write},
     path::Path,
     process::{Child, Command, Stdio},
@@ -216,8 +219,10 @@ fn session(
         target,
         viewport,
         paused: false,
+        control: false,
+        limit: input::Limit::new(Instant::now()),
         sequence: 0,
-        refused: 0,
+        refused: BTreeMap::new(),
         page: (String::new(), String::new()),
         polled: Instant::now(),
     };
@@ -227,7 +232,7 @@ fn session(
         "state": "running",
         "browser": product,
         "viewport": {"width": viewport.width, "height": viewport.height, "scale": viewport.scale},
-        "capabilities": {"view": true, "control": false, "navigation": false, "tabs": false},
+        "capabilities": {"view": true, "control": true, "navigation": false, "tabs": false},
     }));
     relay.run()
 }
@@ -415,9 +420,13 @@ struct Relay {
     target: String,
     viewport: Viewport,
     paused: bool,
+    /// Whether input reaches the browser. Off when a session starts, and it must be off again whenever the relay
+    /// starts the browser anew: a client turns it on, never the relay.
+    control: bool,
+    limit: input::Limit,
     sequence: u32,
-    /// Client messages outside the closed set, by count: never their content.
-    refused: u64,
+    /// Client messages that were refused, by reason and count: never their content.
+    refused: BTreeMap<&'static str, u64>,
     page: (String, String),
     /// When the page's title was last asked for.
     polled: Instant,
@@ -498,21 +507,43 @@ impl Relay {
                     .control(json!({"type": "state", "state": "running"}));
             }
             Ok(Client::Pause {} | Client::Resume {}) => {}
+            Ok(Client::Control { on }) => self.control = on,
             // A second open, or any message outside the closed set: counted, never forwarded.
-            Ok(Client::Open { .. }) | Err(_) => self.refuse(),
+            Ok(Client::Open { .. }) | Err(_) => self.refuse(allow::Refusal::Unlisted.reason()),
+            // What is left is input; `input::commands` refuses a message that is not.
+            Ok(message) => self.input(&message)?,
         }
         Ok(())
     }
 
-    /// Tell the client about the first refusal and every doubling after it, so a flood stays small.
-    fn refuse(&mut self) {
-        self.refused += 1;
-        if self.refused.is_power_of_two() {
-            self.outbox.control(json!({
-                "type": "refused",
-                "reason": allow::Refusal::Unlisted.reason(),
-                "count": self.refused,
-            }));
+    /// One input message: refused while Control is off, outside the bounds or in a flood, else its calls in order.
+    // shortcut: turning Control off while a button is held leaves the page's button pressed until the next click;
+    // upgrade when the viewer can start a drag and switch Control off in the same gesture.
+    fn input(&mut self, message: &Client) -> Result<()> {
+        if !self.control {
+            self.refuse(input::CONTROL_OFF);
+            return Ok(());
+        }
+        match input::commands(message, self.viewport) {
+            Err(reason) => self.refuse(reason),
+            Ok(_) if !self.limit.take(Instant::now()) => self.refuse(input::RATE_LIMITED),
+            Ok(calls) => {
+                for (method, params) in calls {
+                    self.link.cdp.send(method, params, Some(&self.session))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Tell the client about the first refusal of a reason and every doubling after it, so a flood stays small.
+    fn refuse(&mut self, reason: &'static str) {
+        let count = self.refused.entry(reason).or_default();
+        *count += 1;
+        if count.is_power_of_two() {
+            let count = *count;
+            self.outbox
+                .control(json!({"type": "refused", "reason": reason, "count": count}));
         }
     }
 
