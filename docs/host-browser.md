@@ -309,6 +309,52 @@ launcher applies the address rule to its first page.
 | Socket-free | yes (pipe) | no |
 | Concurrent clients | several (the relay allows one) | one session, owned and always ended by the relay; a leaked one is cleared by restarting the owned browser |
 
+### App bridge
+
+The app runs the relay over the verified SSH session with six Tauri commands in `apps/client/src-tauri/src/host_browser.rs`
+([#1704](https://github.com/mihazs/lazysh/issues/1704), slice 2 of [#1254](https://github.com/mihazs/lazysh/issues/1254)),
+shaped like the Devices tool's `device_stream_*`. They are in the permission manifest (`build.rs`) and the main capability.
+The viewer that uses them is the next slice ([#1705](https://github.com/mihazs/lazysh/issues/1705)); nothing in the app calls
+them yet.
+
+| Command | Does |
+| --- | --- |
+| `host_browser_start(sessionId, viewport {width, height, scale?}, url?)` | Opens one SSH exec channel that runs `lazysh-agent host-browser serve`, sends `open` and returns a token at once. How the start went arrives as messages. The size and the address are checked first, with the relay's limits (100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels scaled; `http`, `https` or `about:blank`). |
+| `host_browser_next(sessionId, browserId)` | One message as bytes, one pull at a time (a second is refused as `busy`). Waits up to 15 s and then answers one `0` byte. After the closing message was read, a pull fails. |
+| `host_browser_ack(sessionId, browserId, sequence, decodeMs?)` | Sends `ack` after the device decoded a frame, which lets the relay send another. |
+| `host_browser_pause`, `host_browser_resume` | Send `pause` and `resume`. A frame queued before a pause is dropped. |
+| `host_browser_stop(sessionId, browserId)` | Ends the channel's input, so the relay ends its browser and removes its profile, closes the channel and waits (up to 8 s) for that to finish. It works while the app is locked. |
+
+**What a pull answers.** Bytes, never base64 and never a JSON string of an image: the relay's tag and then its message
+without the length. A first byte of `1` is a JSON object, `2` is a frame (`sequence:u32be width:u16be height:u16be
+scrollY:f32be timestampMs:u64be`, then the JPEG as the relay sent it), `0` alone means nothing came. The JSON objects are
+the relay's `state`, `page` and `refused` and a final `closed {reason, detail?}`, re-serialized from what the app
+validated, so a field the relay did not promise never reaches the web view. The relay's first `state` carries the browser, the page size and the capabilities; its answers to `pause` and `resume` name only `state`, and the app passes that on as it is. Page strings are untrusted text. The app
+also ends a session with a `closed` of its own, whose `reason` is one of `Stopped`, `Disconnected`, `ConnectFailed`,
+`ChannelFailed`, `StartTimeout` (nothing came for 120 s after the channel started), `HostCommandFailed`, `ChannelEnded`,
+`CompanionRequired` and `ProtocolViolation`.
+
+**The same bounds as the relay.** A length of zero or above the largest message (a frame is at most 20 header bytes and
+4 MiB of JPEG), a tag other than 1 and 2, a JSON object over 64 KiB, a frame without its header, a page of no size or a
+JPEG that does not start with `FF D8 FF`, a `state`, `page`, `refused` or `closed` that is not what it says or is over
+its bound (title 512, address 2048, reason 64 letters or digits, detail 256) ends the session with `ProtocolViolation`
+and closes the channel. A message type the app does not know is skipped, so a later relay can add messages.
+
+**Back pressure.** The app keeps the newest frame and the newest message of each kind, never a queue, and the relay keeps
+at most two frames unacknowledged, so a slow device sees fewer frames.
+
+**Fail closed.** A companion that predates `host-browser serve` exits with a usage error, which a wrapper turns into a
+marker line: the session ends with `CompanionRequired`. A companion with the switch off sends `closed
+{reason: "HostBrowserDisabled"}`. Either way nothing is started or retried; the viewer names the class.
+
+**Lifetime.** One browser runs per session and two per app (a third is refused as `busy`). Stopping, a lock, the end of the
+SSH connection and the end of the session each end the channel's input and close it, which ends the relay's browser, its
+helpers and its profile. A browser whose channel ended holds no slot.
+
+**Data.** The app keeps no page text or frame outside memory and writes none to a log, to its storage or to a crash
+report. An error names an operation and a reason; the text of a message that fails to parse is dropped, because
+serde's own message quotes the value.
+
 ## Input mapping for a phone
 
 | Phone gesture | Page effect | Detail |
