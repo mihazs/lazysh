@@ -17,6 +17,34 @@ export function tmuxPaneRows(text:string) {
     return {windowId:row[1],index:Number(row[2]),name:row[3] as 'alpha'|'beta',active:row[4]==='1',paneId:row[5],pid:Number(row[6]),dead:row[7]==='1'};
   });
 }
+const windowRow=/^(@[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})$/;
+/** Parses one bounded `list-windows` readback of the owned session. */
+export function tmuxWindowRows(text:string) {
+  const lines=text.trim().split('\n');
+  if(text.length>1024 || lines.length>8)throw new Error('Owned tmux window topology changed');
+  return lines.map(line=>{
+    const row=windowRow.exec(line);
+    if(!row)throw new Error('Owned tmux window topology changed');
+    return {windowId:row[1],name:row[2]};
+  });
+}
+/** The one window beyond the originals that the app adds: every name it showed, in order, and whether it is gone. */
+export type TmuxWindowLifecycle={windowId:string;names:string[];closed:boolean};
+/**
+ * Folds one readback into that window's lifecycle. The originals must keep their id and name, so a rename or a
+ * close that reached one of them fails here, and a second added window or a reappearance is a changed topology.
+ */
+export function tmuxWindowLifecycle(rows:ReturnType<typeof tmuxWindowRows>,originals:readonly {windowId:string;name:string}[],seen?:TmuxWindowLifecycle) {
+  for(const original of originals)
+    if(rows.find(row=>row.windowId===original.windowId)?.name!==original.name)throw new Error('Owned tmux original window changed');
+  const extra=rows.filter(row=>!originals.some(original=>original.windowId===row.windowId));
+  if(extra.length>1 || (extra.length===1 && seen && (seen.windowId!==extra[0].windowId || seen.closed)))throw new Error('Owned tmux window topology changed');
+  if(!extra.length)return seen && {...seen,closed:true};
+  if(!seen)return {windowId:extra[0].windowId,names:[extra[0].name],closed:false};
+  return seen.names.at(-1)===extra[0].name?seen:{...seen,names:[...seen.names,extra[0].name]};
+}
+/** The names the app gives the window it creates and renames, and the host expects in that order. */
+export const tmuxLifecycleNames=['scratch','renamed'] as const;
 /** Display clients exclude tmux control-mode clients such as the app's Jump binding. */
 export function tmuxDisplayClients(text:string) {
   const lines=text.split('\n').filter(Boolean);
@@ -72,6 +100,7 @@ export class TmuxFixture {
   private serverPid:OwnedPid|undefined;
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
+  private lifecycle:TmuxWindowLifecycle|undefined;
   private constructor(readonly ssh:SshFixture) {}
   static async start(binary=process.env.LAZYSH_TEST_TMUX) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
@@ -152,6 +181,7 @@ export class TmuxFixture {
   async observe() {
     if(!await this.server?.liveIdentity() || !await this.alive(this.serverPid) || !this.windows.length)throw new Error('Owned tmux server identity changed');
     for(const window of this.windows)if(!await this.alive(window.pane))throw new Error('Owned tmux pane identity changed');
+    this.lifecycle=tmuxWindowLifecycle(tmuxWindowRows(await this.run(['list-windows','-t',`=${this.name}`,'-F','#{window_id}|#{window_name}'])),this.windows,this.lifecycle);
     const count=tmuxDisplayClients(await this.run(['list-clients','-t',`=${this.name}`,'-F','#{client_control_mode}']));
     if(this.history.at(-1)!==count) {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
@@ -178,9 +208,14 @@ export class TmuxFixture {
       if(!(await this.run(['capture-pane','-p','-t',window.paneId])).includes(window.marker))throw new Error('Owned tmux pane content changed');
     }
   }
+  /** The app created one more window, renamed it and closed it: the monitor saw exactly those names in order, and no window beyond the originals now. */
+  async verifyWindowLifecycle() {
+    await this.observe();
+    if(!this.lifecycle?.closed || this.lifecycle.names.join()!==tmuxLifecycleNames.join())throw new Error('Owned tmux window create, rename and close were not observed');
+  }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker}))};
+    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames]};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */

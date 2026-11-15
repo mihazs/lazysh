@@ -671,8 +671,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
     }
     if(tmux) {
+      await tmux.verifyWindowLifecycle();
       await tmux.verifyDetachedAndReattached();
-      console.log('Owned packaged tmux: discovery, numbered window, Jump To, detach and reattach verified against the original server and pane processes');
+      console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, detach and reattach verified against the original server and pane processes');
     }
     if(sharedHerdr)await herdr!.expectNavigationBytes();
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}

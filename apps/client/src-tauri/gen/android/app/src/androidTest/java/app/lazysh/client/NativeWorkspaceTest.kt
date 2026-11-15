@@ -2900,19 +2900,21 @@ class NativeWorkspaceTest {
             val forbidden = JSONArray(listOf(other.getString("marker")))
             awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,$labels,1,${JSONObject.quote(target.getString("marker"))},$forbidden);})()")
         }
+        // The Workspaces panel lists exactly these windows (title and active mark) in the one session, as read back from the host; `also` adds checks on its `panel`.
+        fun panelWindows(expected: List<String>, also: String = "true") = """
+            (()=>{const panels=document.querySelectorAll('.tool-panel.multiplexer-panel');if(panels.length!==1)return false;
+              const panel=panels[0],sessions=Array.from(panel.querySelectorAll('.mux-list > details'));
+              if(panel.querySelector('.loading,[role=alert]') || sessions.length!==1)return false;
+              const expected=${JSONArray(expected)},windows=Array.from(sessions[0].querySelectorAll(':scope > details > summary')).map(x=>x.textContent.trim());
+              return sessions[0].querySelector(':scope > summary')?.textContent.trim()===${JSONObject.quote("$server · ${expected.size} windows")} &&
+                windows.length===expected.length && windows.every((x,i)=>x===expected[i]) && ($also);})()
+        """
         fun attach(active: JSONObject, stage: String) {
             sessionView(scenario, "Sessions")
-            val expected = JSONArray(listOf(alpha, beta).map { title(it) + if (it === active) " · active" else "" })
-            awaitDocument(scenario, "live tmux sessions discovered $stage", """
-                (()=>{const panels=document.querySelectorAll('.tool-panel.multiplexer-panel');if(panels.length!==1)return false;
-                  const panel=panels[0],sessions=Array.from(panel.querySelectorAll('.mux-list > details'));
-                  if(panel.querySelector('.loading,[role=alert]') || sessions.length!==1)return false;
-                  const expected=$expected,windows=Array.from(sessions[0].querySelectorAll(':scope > details > summary')).map(x=>x.textContent.trim());
-                  const attach=Array.from(panel.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote("Attach $server")});
-                  return /^tmux \S+ \((?:Supported|Limited)\)/.test(panel.querySelector('p.muted')?.textContent??'') &&
-                    sessions[0].querySelector(':scope > summary')?.textContent.trim()===${JSONObject.quote("$server · 2 windows")} &&
-                    windows.length===expected.length && windows.every((x,i)=>x===expected[i]) && attach.length===1 && !attach[0].disabled;})()
-            """)
+            awaitDocument(scenario, "live tmux sessions discovered $stage", panelWindows(listOf(alpha, beta).map { title(it) + if (it === active) " · active" else "" }, """
+                /^tmux \S+ \((?:Supported|Limited)\)/.test(panel.querySelector('p.muted')?.textContent??'') &&
+                  (attach=>attach.length===1 && !attach[0].disabled)(Array.from(panel.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote("Attach $server")}))
+            """))
             click("//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='Attach $server']")
             awaitDocument(scenario, "owned tmux display attached $stage", """
                 (()=>{const tabs=document.querySelectorAll('.session-tabs [role=tab]');
@@ -2982,6 +2984,51 @@ class NativeWorkspaceTest {
                 return [pane?.style.display, !!document.querySelector('section.agent-view:not([hidden])'), document.querySelector("[aria-label='Session view'] button[aria-pressed=true]")?.getAttribute('aria-label'),
                   pane?.querySelector('.xterm-scroll-area')?.style.height, $before].join('|');})()""", ms) }
         }
+        // One more window through the real UI, named by the host fixture: New window and Rename window in the Workspaces panel, then a held finger on its tab-strip
+        // chip, Close and the confirmation. The host reads each state from its own tmux tree; the original windows stay listed.
+        fun windowLifecycle(created: String, renamed: String) {
+            val originals = listOf(alpha, beta).map { title(it) + if (it === beta) " · active" else "" }
+            fun listed(vararg extra: String, stage: String) {
+                sessionView(scenario, "Sessions")
+                awaitDocument(scenario, stage, panelWindows(originals + extra))
+            }
+            fun chip(name: String) = ".mux-strip .mux-chip[title=${JSONObject.quote(name)}]"
+            fun stripShows(name: String, shown: Boolean, stage: String) {
+                sessionView(scenario, "Terminal")
+                awaitDocument(scenario, stage, if (shown) present(chip(name)) else "!${present(chip(name))}")
+            }
+            fun nameWindow(open: String, name: String, stage: String) {
+                click("//section[contains(@class,'multiplexer-panel')]$open")
+                val field = "form[aria-label='Workspace details'] input[maxlength='200']"
+                awaitDocument(scenario, "$stage form open", present(field)) { ms ->
+                    evaluate(scenario, "JSON.stringify({forms:Array.from(document.querySelectorAll('form')).map(x=>x.getAttribute('aria-label')),panel:document.querySelector('.multiplexer-panel')?.innerText?.slice(0,400)})", ms)
+                }
+                replaceNativeText(scenario, field, name)
+                closeSoftKeyboard()
+                click("//form[@aria-label='Workspace details']//button[normalize-space(.)='Save workspace']")
+            }
+            listed(stage = "two windows listed before the extra one")
+            // The prefix shortcuts also have a New window key; the session's own button is in the list.
+            nameWindow("//div[contains(@class,'mux-list')]//button[normalize-space(.)='New window']", created, "New window")
+            listed("2: $created", stage = "Workspaces panel lists the created window")
+            stripShows(created, true, "tab strip shows the created window")
+            listed("2: $created", stage = "Workspaces panel again lists the created window")
+            nameWindow("//details[summary[starts-with(normalize-space(.),'2: $created')]]//button[normalize-space(.)='Rename window']", renamed, "Rename window")
+            listed("2: $renamed", stage = "Workspaces panel lists the renamed window")
+            stripShows(renamed, true, "tab strip shows the renamed window")
+            stripShows(created, false, "tab strip no longer shows the old name")
+            // The strip's own actions need a long press: a real finger held past its half second, then the menu's Close and the confirmation that names the window.
+            awaitDocument(scenario, "tab strip chip touchable", workspaceElementVisible(chip(renamed), true))
+            holdFinger(scenario, chip(renamed), 900)
+            awaitDocument(scenario, "tab strip menu opened by the held finger", present(".mux-strip .mux-menu"))
+            click("//div[contains(@class,'mux-menu')]//button[normalize-space(.)='Close']")
+            awaitDocument(scenario, "tab strip confirmation names the window", "document.querySelector('.mux-strip [role=alertdialog]')?.textContent.includes(${JSONObject.quote(renamed)})===true")
+            click("//div[@role='alertdialog']//button[normalize-space(.)='Close']")
+            stripShows(renamed, false, "tab strip no longer shows the closed window")
+            listed(stage = "Workspaces panel lists only the original windows again")
+        }
+        val lifecycle = tmux.getJSONArray("lifecycle")
+        require(lifecycle.length() == 2) { "Owned tmux window names required" }
         var primaryFailure: Throwable? = null
         try {
             attach(alpha, "before detach")
@@ -2997,8 +3044,10 @@ class NativeWorkspaceTest {
             detach("by closing its tab")
             attach(beta, "after detach")
             visible(beta, alpha, "reattached tmux shows the same selected window and pane")
+            windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
+            visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, a created, renamed and closed window, tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -5585,6 +5634,21 @@ class NativeWorkspaceTest {
             assertEquals("One owned native DOWN epoch",epoch,event.downTime)
             InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
         } finally {event.recycle()}
+    }
+
+    /** One real finger held on the element's centre: its DOM geometry mapped to the screen, DOWN, the hold, then UP. */
+    private fun holdFinger(scenario: ActivityScenario<MainActivity>, selector: String, holdMillis: Long) {
+        val geometry = JSONArray(evaluate(scenario, "(()=>{const r=document.querySelector(${JSONObject.quote(selector)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
+        val origin = IntArray(2); var scale = 0.0
+        scenario.onActivity { activity ->
+            val web = requireNotNull(webView(activity.window.decorView))
+            web.getLocationOnScreen(origin); scale = web.width / geometry.getDouble(2)
+        }
+        val point = floatArrayOf((origin[0] + geometry.getDouble(0) * scale).toFloat(), (origin[1] + geometry.getDouble(1) * scale).toFloat())
+        val pointer = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }
+        val epoch = android.os.SystemClock.uptimeMillis()
+        sendOwnedFinger(pointer, epoch, android.view.MotionEvent.ACTION_DOWN, point)
+        try { Thread.sleep(holdMillis) } finally { sendOwnedFinger(pointer, epoch, android.view.MotionEvent.ACTION_UP, point) }
     }
 
     private fun openOwnedInputPreferences(scenario: ActivityScenario<MainActivity>, raw: OwnedRawSshInput, sections: List<String>) {
