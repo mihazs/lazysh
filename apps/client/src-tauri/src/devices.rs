@@ -1,6 +1,7 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
-use crate::companion::exec as exec_for_access;
+use crate::host::Host;
+use crate::local::LocalState;
 use crate::ssh::{quote, AppState, Result, SshError};
 use tauri::State;
 pub mod stream;
@@ -100,17 +101,19 @@ fn android_gesture_command(
         .ok_or_else(|| SshError::new("invalid_input", "Unsupported Android video action"))?;
     android_command(id, &format!("{subcommand} {arguments}"))
 }
-async fn remote_json(
+/// Runs a companion command line on the session's host: over SSH, or on this device.
+async fn companion_json(
     state: &AppState,
+    local: &LocalState,
     access: &AccessLease,
     session_id: &str,
     command: Result<String>,
 ) -> Result<serde_json::Value> {
     let command = command?;
-    let session = state.session(session_id).await?;
+    let host = Host::resolve(state, local, session_id, access).await?;
     access.check()?;
     Ok(serde_json::from_str(
-        &exec_for_access(&session, command, access).await?,
+        &host.companion(access, command).await?,
     )?)
 }
 
@@ -118,12 +121,14 @@ async fn remote_json(
 pub async fn android_device_probe(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
 ) -> Protected<serde_json::Value> {
     access
-        .run(remote_json(
+        .run(companion_json(
             &state,
+            &local,
             &access,
             &session_id,
             android_command(&id, "probe"),
@@ -134,12 +139,14 @@ pub async fn android_device_probe(
 pub async fn android_ui_tree(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
 ) -> Protected<serde_json::Value> {
     access
-        .run(remote_json(
+        .run(companion_json(
             &state,
+            &local,
             &access,
             &session_id,
             android_command(&id, "ui tree"),
@@ -186,14 +193,16 @@ fn ui_action_command(id: &str, node: &UiNode, kind: &str) -> Result<String> {
 pub async fn android_ui_action(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
     node: UiNode,
     kind: String,
 ) -> Protected<serde_json::Value> {
     access
-        .run(remote_json(
+        .run(companion_json(
             &state,
+            &local,
             &access,
             &session_id,
             ui_action_command(&id, &node, &kind),
@@ -204,13 +213,15 @@ pub async fn android_ui_action(
 pub async fn ios_device_probe(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
     socket: String,
 ) -> Protected<serde_json::Value> {
     access
-        .run(remote_json(
+        .run(companion_json(
             &state,
+            &local,
             &access,
             &session_id,
             companion_command(&id, &socket, "probe"),
@@ -222,6 +233,7 @@ pub async fn ios_device_probe(
 pub async fn ios_device_action(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
     socket: String,
@@ -242,21 +254,25 @@ pub async fn ios_device_action(
                 })?,
             };
             display_size(width, height, "Invalid iOS point dimensions")?;
-            let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
-            let session = state.session(&session_id).await?;
-            access.check()?;
-            Ok(serde_json::from_str(
-                &exec_for_access(&session, command, &access).await?,
-            )?)
+            companion_json(
+                &state,
+                &local,
+                &access,
+                &session_id,
+                companion_command(&id, &socket, &format!("{subcommand} {arguments}")),
+            )
+            .await
         })
         .await
 }
 /// Touch an Android device while its video is shown. The host refuses the gesture when the display
 /// no longer has the `width` x `height` the pointer was mapped from (rotation or resize).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease plus the typed IPC fields.
 pub async fn android_device_action(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     id: String,
     width: u32,
@@ -264,8 +280,9 @@ pub async fn android_device_action(
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
     access
-        .run(remote_json(
+        .run(companion_json(
             &state,
+            &local,
             &access,
             &session_id,
             android_gesture_command(&id, width, height, &action),
@@ -276,22 +293,23 @@ pub async fn android_device_action(
 pub async fn list_devices(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     device_platform: String,
 ) -> Protected<serde_json::Value> {
     access
         .run(async {
             platform(&device_platform)?;
-            let session = state.session(&session_id).await?;
-            access.check()?;
-            Ok(serde_json::from_str(
-                &exec_for_access(
-                    &session,
-                    format!("lazysh-agent devices list --platform {device_platform}"),
-                    &access,
-                )
-                .await?,
-            )?)
+            companion_json(
+                &state,
+                &local,
+                &access,
+                &session_id,
+                Ok(format!(
+                    "lazysh-agent devices list --platform {device_platform}"
+                )),
+            )
+            .await
         })
         .await
 }
@@ -299,6 +317,7 @@ pub async fn list_devices(
 pub async fn device_frame(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     device_platform: String,
     id: String,
@@ -307,19 +326,17 @@ pub async fn device_frame(
         .run(async {
             platform(&device_platform)?;
             identifier(&id)?;
-            let session = state.session(&session_id).await?;
-            access.check()?;
-            Ok(serde_json::from_str(
-                &exec_for_access(
-                    &session,
-                    format!(
-                        "lazysh-agent devices screenshot --platform {device_platform} --id={}",
-                        quote(&id)
-                    ),
-                    &access,
-                )
-                .await?,
-            )?)
+            companion_json(
+                &state,
+                &local,
+                &access,
+                &session_id,
+                Ok(format!(
+                    "lazysh-agent devices screenshot --platform {device_platform} --id={}",
+                    quote(&id)
+                )),
+            )
+            .await
         })
         .await
 }
@@ -385,14 +402,16 @@ fn action_command(device_platform: &str, id: &str, action: DeviceAction) -> Resu
 pub async fn device_action(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     device_platform: String,
     id: String,
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
     access
-        .run(remote_json(
+        .run(companion_json(
             &state,
+            &local,
             &access,
             &session_id,
             action_command(&device_platform, &id, action),

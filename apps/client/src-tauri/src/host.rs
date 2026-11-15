@@ -6,9 +6,13 @@ use crate::{
     local::LocalState,
     ssh::{self, AppState, Destination, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
 };
+use russh::ChannelMsg;
 use serde::Serialize;
 use std::{pin::Pin, sync::Arc, time::Duration};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite},
+    sync::watch,
+};
 
 pub(crate) enum Host {
     Remote(Arc<ssh::Session>),
@@ -108,6 +112,76 @@ impl Source {
 pub(crate) trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
 pub(crate) type Stream = Box<dyn Duplex>;
+/// What a started long-lived command produced next.
+pub(crate) enum Chunk {
+    Data(Vec<u8>),
+    /// The command ended with a failing exit status.
+    Failed,
+    /// The command ended and nothing more will arrive.
+    Closed,
+    /// Transport traffic that carries no output.
+    Other,
+}
+/// A started long-lived command whose stdout is read in chunks. `close` asks it to stop by ending
+/// its stdin, then makes sure it is gone.
+pub(crate) enum CommandStream {
+    Remote(ssh::OwnedChannel),
+    #[cfg(desktop)]
+    Local(Box<LocalStream>),
+}
+impl CommandStream {
+    async fn remote(session: &ssh::Session, lease: &AccessLease, command: String) -> Result<Self> {
+        let channel = ssh::open_owned_channel(
+            &session.handle,
+            lease,
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await?;
+        let started = async {
+            lease.check()?;
+            tokio::time::timeout(Duration::from_secs(10), channel.exec(true, command))
+                .await
+                .map_err(|_| SshError::new("timeout", "Starting device stream timed out"))?
+                .map_err(SshError::from)
+        }
+        .await;
+        let stream = Self::Remote(channel);
+        match started {
+            Ok(()) => Ok(stream),
+            Err(error) => {
+                stream.close().await;
+                Err(error)
+            }
+        }
+    }
+    /// The next piece of output; cancel-safe.
+    pub(crate) async fn next(&mut self) -> Result<Chunk> {
+        match self {
+            Self::Remote(channel) => Ok(match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => Chunk::Data(data.to_vec()),
+                Some(ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => Chunk::Failed,
+                Some(_) => Chunk::Other,
+                None => Chunk::Closed,
+            }),
+            #[cfg(desktop)]
+            Self::Local(stream) => stream.next().await,
+        }
+    }
+    /// Ends the command: stdin EOF first, so a companion stops its own children, then removal.
+    pub(crate) async fn close(self) {
+        match self {
+            Self::Remote(channel) => {
+                let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                    let _ = channel.eof().await;
+                    let _ = channel.close().await;
+                })
+                .await;
+            }
+            #[cfg(desktop)]
+            Self::Local(stream) => stream.close().await,
+        }
+    }
+}
 
 impl Host {
     /// Resolves a session id; `local:` ids need an adopted, live local terminal.
@@ -213,6 +287,35 @@ impl Host {
                     )
                 })
                 .await
+            }
+        }
+    }
+    /// Turns true, or closes, when the session behind this host ends.
+    pub(crate) fn cancel(&self) -> watch::Receiver<bool> {
+        match self {
+            Self::Remote(session) => session.cancel.subscribe(),
+            #[cfg(desktop)]
+            Self::Local(host) => host.cancel.clone(),
+        }
+    }
+    /// Starts one `lazysh-agent …` command line that keeps running: over an owned SSH channel, or
+    /// as a child of this device.
+    pub(crate) async fn companion_stream(
+        &self,
+        lease: &AccessLease,
+        line: String,
+    ) -> Result<CommandStream> {
+        match self {
+            Self::Remote(session) => {
+                let command = crate::companion::command(session, line, lease).await?;
+                CommandStream::remote(session, lease, command).await
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                let cmd = crate::companion::local::command(&line).await?;
+                Ok(CommandStream::Local(Box::new(
+                    host.spawn_stream(lease, &cmd).await?,
+                )))
             }
         }
     }
@@ -446,6 +549,39 @@ pub(crate) struct LocalHost {
     #[cfg(test)]
     env: Vec<(String, String)>,
 }
+/// A local child kept running for its output. Dropping it kills the child and its descendants.
+#[cfg(desktop)]
+pub(crate) struct LocalStream {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    _tree: lazysh_account_usage::ProcessTree,
+}
+#[cfg(desktop)]
+impl LocalStream {
+    async fn next(&mut self) -> Result<Chunk> {
+        let mut data = Vec::with_capacity(64 * 1024);
+        if self.stdout.read_buf(&mut data).await? > 0 {
+            return Ok(Chunk::Data(data));
+        }
+        Ok(if self.child.wait().await?.success() {
+            Chunk::Closed
+        } else {
+            Chunk::Failed
+        })
+    }
+    async fn close(mut self) {
+        // End of stdin is how a companion learns to stop the processes it started (they are in
+        // groups of their own); only a child that ignores it is killed.
+        drop(self.stdin);
+        if tokio::time::timeout(Duration::from_secs(2), self.child.wait())
+            .await
+            .is_err()
+        {
+            let _ = self.child.kill().await;
+        }
+    }
+}
 /// Multiplexer and shell start-up variables a lazysh started inside a multiplexer would leak.
 #[cfg(desktop)]
 pub(crate) const INHERITED: [&str; 7] = [
@@ -473,30 +609,19 @@ impl LocalHost {
             None
         }
     }
-    async fn exec(
-        &self,
-        lease: &AccessLease,
-        cmd: &Cmd,
-        deadline: Duration,
-        limit: usize,
-    ) -> Result<Vec<u8>> {
-        use std::process::Stdio;
+    /// The command with its constant environment, without the multiplexer variables a lazysh
+    /// started inside one would leak, on the login PATH and starting in the home directory (as a
+    /// relative path means over SSH). The caller chooses stdio and spawns it with `spawn`.
+    async fn command(&self, lease: &AccessLease, cmd: &Cmd) -> Result<tokio::process::Command> {
         let (program, args) = cmd
             .argv
             .split_first()
             .ok_or_else(|| SshError::new("invalid_command", "Empty command"))?;
         let mut command = tokio::process::Command::new(program);
-        command
-            .args(args)
-            .envs(cmd.env.iter().copied())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.args(args).envs(cmd.env.iter().copied());
         for name in INHERITED {
             command.env_remove(name);
         }
-        #[cfg(test)]
-        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         lease
             .check()
             .map_err(|_| SshError::new("app_locked", "App access changed"))?;
@@ -517,11 +642,20 @@ impl LocalHost {
         if let Some(path) = path {
             command.env("PATH", path);
         }
-        // Relative paths mean the home directory, as they do over SSH.
+        #[cfg(test)]
+        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         if let Some(home) = crate::local::home_dir() {
             command.current_dir(home);
         }
-        let (mut child, _tree) = lease
+        Ok(command)
+    }
+    /// Starts it as an owned process tree, only while the session is open and the lease current.
+    fn spawn(
+        &self,
+        lease: &AccessLease,
+        command: &mut tokio::process::Command,
+    ) -> Result<(tokio::process::Child, lazysh_account_usage::ProcessTree)> {
+        lease
             .with_current(|| {
                 // Hold the cancellation read guard until spawn completes, so close and
                 // lease revocation cannot pass the authority check before the child starts.
@@ -529,14 +663,32 @@ impl LocalHost {
                 if *cancelled {
                     return Err(SshError::new("disconnected", "Session closed"));
                 }
-                lazysh_account_usage::spawn_owned(&mut command).map_err(|error| {
+                lazysh_account_usage::spawn_owned(command).map_err(|error| {
                     SshError::new(
                         "remote_command_failed",
-                        format!("Could not start {program}: {error}"),
+                        format!(
+                            "Could not start {}: {error}",
+                            command.as_std().get_program().to_string_lossy()
+                        ),
                     )
                 })
             })
-            .map_err(|_| SshError::new("app_locked", "App access changed"))??;
+            .map_err(|_| SshError::new("app_locked", "App access changed"))?
+    }
+    async fn exec(
+        &self,
+        lease: &AccessLease,
+        cmd: &Cmd,
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<Vec<u8>> {
+        use std::process::Stdio;
+        let mut command = self.command(lease, cmd).await?;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, _tree) = self.spawn(lease, &mut command)?;
         let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take())
         else {
             return Err(SshError::new(
@@ -575,6 +727,29 @@ impl LocalHost {
             let _ = child.kill().await;
         }
         result
+    }
+    /// A child with piped stdin and stdout that keeps running until `LocalStream::close` or the
+    /// stream is dropped. Its stderr is discarded: nothing reads it.
+    async fn spawn_stream(&self, lease: &AccessLease, cmd: &Cmd) -> Result<LocalStream> {
+        use std::process::Stdio;
+        let mut command = self.command(lease, cmd).await?;
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let (mut child, tree) = self.spawn(lease, &mut command)?;
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            return Err(SshError::new(
+                "remote_command_failed",
+                "Command pipes are unavailable",
+            ));
+        };
+        Ok(LocalStream {
+            child,
+            stdin,
+            stdout,
+            _tree: tree,
+        })
     }
     async fn blocking<T: Send + 'static>(
         &self,
@@ -650,12 +825,16 @@ pub(crate) async fn local_command(program: &str) -> tokio::process::Command {
     command
 }
 #[cfg(desktop)]
-fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
-    let name = if cfg!(windows) {
+fn executable(program: &str) -> String {
+    if cfg!(windows) {
         format!("{program}.exe")
     } else {
         program.to_owned()
-    };
+    }
+}
+#[cfg(desktop)]
+fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
+    let name = executable(program);
     std::env::split_paths(path).any(|directory| directory.join(&name).is_file())
 }
 /// The PATH Herdr runs with: a Herdr on the PATH always wins; otherwise its owner-checked
@@ -679,6 +858,14 @@ fn with_herdr_install(
     directories.push(install);
     std::env::join_paths(directories).ok().or(path)
 }
+/// The PATH local commands receive: the login shell's where it was probed, else the process's.
+#[cfg(desktop)]
+pub(crate) async fn local_path() -> std::ffi::OsString {
+    match login_path().await {
+        Some(path) => path.clone(),
+        None => std::env::var_os("PATH").unwrap_or_default(),
+    }
+}
 /// Whether `program` resolves on the PATH local commands receive.
 #[cfg(desktop)]
 pub(crate) async fn local_program(program: &str) -> bool {
@@ -694,6 +881,49 @@ pub(crate) async fn local_program(program: &str) -> bool {
             .unwrap_or_default(),
         program,
     )
+}
+/// Whether `lazysh-agent devices` finds an Android SDK `adb` on this device, where it looks:
+/// under `ANDROID_HOME` or `ANDROID_SDK_ROOT` when either is set (and nowhere else), else the PATH.
+#[cfg(desktop)]
+fn adb_resolves(sdk: Option<std::ffi::OsString>, path: &std::ffi::OsStr) -> bool {
+    match sdk {
+        Some(root) => std::path::Path::new(&root)
+            .join("platform-tools")
+            .join(executable("adb"))
+            .is_file(),
+        None => on_path(path, "adb"),
+    }
+}
+/// Whether this device can show host devices: Android through an SDK `adb`, iOS simulators
+/// through `xcrun simctl` on macOS.
+#[cfg(desktop)]
+pub(crate) async fn local_devices() -> bool {
+    let path = local_path().await;
+    adb_resolves(
+        std::env::var_os("ANDROID_HOME").or_else(|| std::env::var_os("ANDROID_SDK_ROOT")),
+        &path,
+    ) || (cfg!(target_os = "macos") && on_path(&path, "xcrun"))
+}
+
+/// Polls until process `pid` is gone; false when it still runs after ten seconds.
+#[cfg(all(test, desktop))]
+pub(crate) async fn process_gone(pid: u32) -> bool {
+    for _ in 0..200 {
+        #[cfg(unix)]
+        let running = unsafe { libc::kill(pid as i32, 0) } == 0;
+        #[cfg(windows)]
+        let running = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .is_ok_and(|listed| {
+                String::from_utf8_lossy(&listed.stdout).contains(&format!("\"{pid}\""))
+            });
+        if !running {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
 }
 
 #[cfg(desktop)]

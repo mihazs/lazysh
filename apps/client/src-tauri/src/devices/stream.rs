@@ -1,10 +1,11 @@
 use super::*;
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
-use russh::ChannelMsg;
+use crate::host::{Chunk, Host};
+use crate::local::LocalState;
 use serde::Serialize;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::{watch, Mutex};
 
 const MAX_RECORD: usize = 720_000;
@@ -80,7 +81,7 @@ fn record(bytes: &[u8], id: &str, platform: &str) -> Result<Value> {
 }
 pub(crate) async fn receive(
     access: AccessLease,
-    session: Arc<crate::ssh::Session>,
+    host: Host,
     command: String,
     id: String,
     platform: String,
@@ -88,72 +89,58 @@ pub(crate) async fn receive(
     output: watch::Sender<Packet>,
 ) -> Result<()> {
     access.check()?;
-    let mut disconnected = session.cancel.subscribe();
+    let mut disconnected = host.cancel();
     if *cancel.borrow() || *disconnected.borrow() {
         return Ok(());
     }
-    let command = tokio::select! {biased;
+    let mut feed = tokio::select! {biased;
         _=access.cancelled()=>return Ok(()),
         _=cancel.changed()=>return Ok(()),
         _=disconnected.changed()=>return Ok(()),
-        result=crate::companion::command(&session,command,&access)=>result?,
-    };
-    let mut channel = tokio::select! { biased;
-        _=access.cancelled()=>return Ok(()),
-        _=cancel.changed()=>return Ok(()),
-        _=disconnected.changed()=>return Ok(()),
-        result=crate::ssh::open_owned_channel(&session.handle, &access, tokio::time::Instant::now()+Duration::from_secs(10))=>result?,
+        result=host.companion_stream(&access,command)=>result?,
     };
     let maximum = Duration::from_secs(if platform == "android" { 180 } else { 900 });
     let result=tokio::time::timeout(maximum,async {
-        tokio::select! {biased;
-            _=access.cancelled()=>return Ok(()),
-            _=cancel.changed()=>return Ok(()),
-            _=disconnected.changed()=>return Ok(()),
-            result=async {access.check()?;tokio::time::timeout(Duration::from_secs(10),channel.exec(true,command)).await.map_err(|_|SshError::new("timeout","Starting device stream timed out"))?.map_err(SshError::from)}=>result?,
-        }
         let mut buffer=Vec::new();let mut sequence=0;
         let startup_deadline=tokio::time::Instant::now()+Duration::from_secs(12);
         loop {
             let read_timeout=if sequence==0 {startup_deadline.saturating_duration_since(tokio::time::Instant::now())} else {Duration::from_secs(12)};
             if sequence==0 && read_timeout.is_zero() {return Err(SshError::new("timeout","Device stream did not produce its first frame"));}
-            let msg=tokio::select! {biased;
+            let chunk=tokio::select! {biased;
                 _=access.cancelled()=>return Ok(()),
             _=cancel.changed()=>return Ok(()),
                 _=disconnected.changed()=>return Ok(()),
-                msg=tokio::time::timeout(read_timeout,channel.wait())=>match msg {
-                    Ok(msg)=>msg,
+                chunk=tokio::time::timeout(read_timeout,feed.next())=>match chunk {
+                    Ok(chunk)=>chunk?,
                     Err(_) if platform=="android" && sequence>0 && buffer.is_empty()=>continue,
                     Err(_)=>return Err(SshError::new("timeout","Device stream stopped producing frames")),
                 },
             };
-            match msg {
-                Some(ChannelMsg::Data{data})=>{
-                    for byte in data.iter().copied() {
+            match chunk {
+                Chunk::Data(data)=>{
+                    for byte in data {
                         if byte==b'\n' {
                             access.check()?;let frame=record(&buffer,&id,&platform)?;buffer.clear();sequence+=1;
                             output.send_replace(Packet{sequence,frame:Some(frame),error:None,idle:false});
                         } else {if buffer.len()>=MAX_RECORD {return Err(SshError::new("output_too_large","Device stream frame exceeds limit"));}buffer.push(byte);}
                     }
                 },
-                Some(ChannelMsg::ExitStatus{exit_status}) if exit_status!=0=>return Err(SshError::new("remote_command_failed","Device video stopped; verify host video tools and device availability")),
-                None=>return Err(SshError::new("disconnected","Device video ended; start another preview if needed")),
-                _=>{},
+                Chunk::Failed=>return Err(SshError::new("remote_command_failed","Device video stopped; verify host video tools and device availability")),
+                Chunk::Closed=>return Err(SshError::new("disconnected","Device video ended; start another preview if needed")),
+                Chunk::Other=>{},
             }
         }
     }).await.map_err(|_|SshError::new("timeout","Device preview reached its maximum duration"));
     // EOF cancels the companion's stdin watcher even when the simulator is idle.
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        let _ = channel.eof().await;
-        channel.close().await
-    })
-    .await;
+    feed.close().await;
     result?
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease and states plus the existing typed IPC fields.
 pub async fn device_stream_start(
     access: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     streams: State<'_, DeviceStreams>,
     session_id: String,
     id: String,
@@ -173,7 +160,7 @@ pub async fn device_stream_start(
                     ))
                 }
             };
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             let mut entries = streams.0.lock().await;
             ensure_capacity(&mut entries, &session_id)?;
             let token = uuid::Uuid::new_v4().to_string();
@@ -196,7 +183,7 @@ pub async fn device_stream_start(
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = receive(
                     source_access,
-                    session,
+                    host,
                     command,
                     id,
                     platform,
