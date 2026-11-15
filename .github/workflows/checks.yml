@@ -1169,6 +1169,15 @@ jobs:
         # A composite step cannot carry its own timeout: the runner rejects the manifest. This bounds the driver install and the case.
         timeout-minutes: 30
         uses: ./.github/actions/windows-installed-gui
+      # The SSH server the Windows GUI SSH case will connect to. Non-blocking until its first qualifying hosted pass is recorded on #1632.
+      - name: Exercise the owned Windows OpenSSH server fixture
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        timeout-minutes: 10
+        continue-on-error: true
+        shell: bash
+        env:
+          LAZYSH_TEST_WINDOWS_SSH: '1'
+        run: bun test tests/windows-ssh-server.test.ts --test-name-pattern 'owned Windows OpenSSH server'
 
   native-android:
     needs: changes
