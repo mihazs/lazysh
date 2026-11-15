@@ -3951,7 +3951,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         )
     );
     assert!(
-        native.tmux.lock().unwrap().is_none(),
+        native.bindings.tmux.lock().unwrap().is_none(),
         "no Jump To control client before it is verified"
     );
     // Typed before the rmux client takes over the terminal, the line is echoed by the SSH tty and never reaches the pane.
@@ -4008,6 +4008,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
     assert_eq!(windows, 2);
     assert!(crate::tmux_jump::tmux_jump_snapshot(
         lease.clone(),
+        app.state(),
         app.state(),
         child.session_id.clone()
     )

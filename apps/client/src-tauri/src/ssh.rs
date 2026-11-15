@@ -3620,7 +3620,7 @@ pub async fn list_multiplexer_sessions(
 ) -> AccessResult<Vec<MuxSession>> {
     lease.run(async {
 
-    let (session, server) = crate::tmux_server::TmuxServer::for_id(&state, &session_id, tmux_server.as_deref(), crate::multiplexer::family_binary(kind)?).await?;
+    let (session, server) = crate::multiplexer::family_server(&state, &session_id, tmux_server.as_deref(), kind).await?;
     let text=exec(&session, &lease,format!("{} list-sessions -F '#{{session_id}}\t#{{session_name}}\t#{{session_windows}}\t#{{session_attached}}'", server.prefix())).await?;
     Ok(text
         .lines()

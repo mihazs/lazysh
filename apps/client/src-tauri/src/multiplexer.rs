@@ -121,7 +121,7 @@ impl Entry {
                     "tmux",
                     "-u",
                     "-L",
-                    server.name(),
+                    server.label(),
                     "new-session",
                     "-A",
                     "-s",
@@ -133,11 +133,18 @@ impl Entry {
                     "tmux",
                     "-u",
                     "-L",
-                    server.name(),
+                    server.label(),
                     "attach-session",
                     "-t",
                     &target,
                 ]
+            }
+            // shortcut: rmux is attached over SSH only; a local PTY needs its own verified `new-session -A` and Windows story.
+            (MultiplexerKind::Rmux, _) => {
+                return Err(SshError::new(
+                    "invalid_target",
+                    "rmux sessions in local terminals are not available yet",
+                ))
             }
             (MultiplexerKind::Herdr, _) => vec!["herdr", "--session", &self.name],
             (MultiplexerKind::Zellij, true) => vec!["zellij", "attach", "--create", &self.name],
@@ -834,15 +841,24 @@ pub(crate) fn action_command_for(
     Ok(format!("{} {command}", server.prefix()))
 }
 
-/// The binary a command's `kind` expects (tmux when absent); a Herdr or Zellij kind is refused.
-pub(crate) fn family_binary(
+/// The session an SSH id names and the tmux-family server `kind` expects (tmux when absent); a Herdr or Zellij kind is refused.
+pub(crate) async fn family_server(
+    state: &AppState,
+    session_id: &str,
+    label: Option<&str>,
     kind: Option<MultiplexerKind>,
-) -> Result<Option<crate::tmux_server::Binary>> {
-    kind.map(|kind| {
-        kind.binary()
-            .ok_or_else(|| SshError::new("invalid_target", "Use the tmux or rmux workspace tree"))
-    })
-    .transpose()
+) -> Result<(
+    std::sync::Arc<crate::ssh::Session>,
+    crate::tmux_server::TmuxServer,
+)> {
+    let binary = kind
+        .map(|kind| {
+            kind.binary().ok_or_else(|| {
+                SshError::new("invalid_target", "Use the tmux or rmux workspace tree")
+            })
+        })
+        .transpose()?;
+    crate::tmux_server::TmuxServer::for_id(state, session_id, label, binary).await
 }
 
 #[tauri::command]
@@ -855,13 +871,8 @@ pub async fn multiplexer_tree(
 ) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
-            let (session, server) = crate::tmux_server::TmuxServer::for_id(
-                &state,
-                &session_id,
-                tmux_server.as_deref(),
-                family_binary(kind)?,
-            )
-            .await?;
+            let (session, server) =
+                family_server(&state, &session_id, tmux_server.as_deref(), kind).await?;
             let output = crate::ssh::exec_for_access(
                 &session,
                 discovery_command(&server, crate::herdr_path::admit(&session, &access).await?),
@@ -897,13 +908,8 @@ pub async fn tmux_action(
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
-            let (session, server) = crate::tmux_server::TmuxServer::for_id(
-                &state,
-                &session_id,
-                tmux_server.as_deref(),
-                family_binary(kind)?,
-            )
-            .await?;
+            let (session, server) =
+                family_server(&state, &session_id, tmux_server.as_deref(), kind).await?;
             let command = action_command_for(&action, &server)?;
             crate::ssh::exec_for_access(&session, command, &access).await?;
             Ok(())

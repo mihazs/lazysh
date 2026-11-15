@@ -84,6 +84,8 @@ fn an_attach_entry_refuses_unknown_fields_and_invalid_targets() {
         json!({"kind":"tmux","name":"a".repeat(201)}),
         json!({"kind":"tmux","name":"a","tmuxServer":"a/b"}),
         json!({"kind":"zellij","name":"a","tmuxServer":"other"}),
+        // rmux is attached over SSH only.
+        json!({"kind":"rmux","name":"a"}),
     ] {
         let rejected = entry(invalid.clone()).map_or(true, |entry| entry.argv().is_err());
         assert!(rejected, "{invalid}");
