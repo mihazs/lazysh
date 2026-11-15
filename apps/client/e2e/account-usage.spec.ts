@@ -13,6 +13,7 @@ test('account quota uses one accessible footer row at 393px and localizes withou
       if(command==='credential_protection')return {available:false,reason:'Owned browser fixture'};
       if(command==='connect')return {sessionId:'quota-session'};
       if(command==='account_usage'){reads++;return {schemaVersion:1,source:'builtin',state:'ready',report:{primary:'codex',entries:[{id:'codex',name:'Codex account',shortName:'LONG-PROVIDER-ACCOUNT',plan:'Pro',status:'ready',stale:false,fetchedAt:new Date().toISOString(),resetCredits:null,rows:[{type:'metric',label:'Weekly',percent:12345.67,value:'12345.67%',detail:'Owned quota fixture',headline:'percent',reading:'used',resetAt:null,windowSeconds:null,regen:null,modelPool:false}]}]}};}
+      if(command==='usage_collector_status')return {state:'ready',status:{schemaVersion:1,observedAt:'2026-11-14T12:05:00Z',policyRevision:2,accountQuotaEnabled:true,collector:{enabled:true,intervalMinutes:30,timer:{state:'installed',linger:true}},lastRun:{at:'2026-11-14T12:00:00Z',outcome:'recorded',reason:null},samples:{state:'ok',count:1,oldest:'2026-11-14T12:00:00Z',newest:'2026-11-14T12:00:00Z',bytes:300},recent:[{recordedAt:'2026-11-14T12:00:00Z',source:'builtin',truncated:false,entries:[{id:'codex',name:'Codex account',status:'ready',stale:false,fetchedAt:'2026-11-14T11:59:00Z',rows:[{label:'Weekly',percent:61,reading:'used',resetAt:null,windowSeconds:null}]}]}]}};
       if(command.startsWith('plugin:event|')||['resize','ack_output','disconnect','cancel_credential_auth'].includes(command))return;
       throw new Error(`Unexpected account quota fixture command: ${command}`);
     };
@@ -31,9 +32,14 @@ test('account quota uses one accessible footer row at 393px and localizes withou
   });
   if(testInfo.project.name==='phone'){expect(layout.target).toBeGreaterThanOrEqual(44);expect(layout.withChip).toBeLessThanOrEqual(45);}else{expect(layout.withChip).toBeLessThanOrEqual(layout.withoutChip+0.5);}expect(layout.overflow).toBe(false);expect(layout.footerOverflow).toBe(false);
   await chip.click();await expect(page.getByRole('region',{name:'AI account usage',exact:true})).toBeVisible();
+  const collector=page.getByRole('region',{name:'Background collection',exact:true});
+  await expect(collector).toContainText('On: about one sample every 30 min');
+  await expect(collector.getByRole('listitem')).toContainText('Codex account: Weekly 61% used');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth)).toBe(false);
   const reads=await page.evaluate(()=>Reflect.get(window,'accountQuotaReads'));
   await page.evaluate(async()=>{const {uiI18n}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage('pt-BR');});
   await expect(page.getByRole('region',{name:'Uso da conta de IA',exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'Atualizar',exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:'Coleta em segundo plano',exact:true})).toContainText('Ativada');
   expect(await page.evaluate(()=>Reflect.get(window,'accountQuotaReads'))).toBe(reads);
 });
