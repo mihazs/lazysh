@@ -152,13 +152,13 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
       }
       if(command==='companion_hook_discovery'){
         const schemaVersion=args.schemaVersion===undefined?1:args.schemaVersion;
-        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||(schemaVersion!==1&&schemaVersion!==2&&schemaVersion!==3))throw new Error('Wrong discovery source');
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||![1,2,3,4].includes(schemaVersion))throw new Error('Wrong discovery source');
         state.hookDiscoveryVersions.push(schemaVersion);
         return {schemaVersion,supported:true,managedSetupSupported:true,truncated:false,agents:[
           {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
           {agent:'claude',setup:'managed',executable:null,profiles:[{path:'/owned/other-profile',source:'default',state:'directory'}]},
           ...['droid','gemini','cursor','opencode','cline'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
-          {agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[]},
+          {agent:'kimi',setup:schemaVersion>=4?'managed':'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[{path:'/owned/.kimi-code',source:'HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'directory'}]},
           {agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]},
         ]};
       }
@@ -829,9 +829,11 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
-  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([3]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([4]);
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
-  await expect(detected.getByRole('button',{name:/Kimi.*Manual setup/})).toBeDisabled();
+  // Only Kimi Code's current profile is selectable; the legacy profile stays metadata.
+  await expect(detected.getByRole('button',{name:/Kimi.*\.kimi-code/})).toBeEnabled();
+  await expect(detected.getByRole('button',{name:/Kimi.*\/owned\/\.kimi(?!-)/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
   await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
   expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);

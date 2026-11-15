@@ -570,6 +570,9 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     fs::copy(&executable, directory.join("bin/copilot")).unwrap();
     fs::copy(&executable, directory.join("bin/amp")).unwrap();
+    fs::copy(&executable, directory.join("bin/kimi")).unwrap();
+    let kimi_profile = directory.join(".kimi-code");
+    fs::create_dir(&kimi_profile).unwrap();
     let copilot_profile = directory.join(".copilot");
     fs::create_dir(&copilot_profile).unwrap();
     let amp_profile = directory.join(".config/amp");
@@ -640,9 +643,38 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
         assert_eq!(row["setup"], "manual");
         assert_eq!(row["profiles"], serde_json::json!([]));
     }
+    let v4 = crate::companion::hooks::discover_version(&host, lease, 4)
+        .await
+        .unwrap();
+    let kimi = |discovery: &serde_json::Value| {
+        discovery["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["agent"] == "kimi")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(kimi(&v4)["setup"], "managed");
+    assert_eq!(
+        kimi(&v4)["profiles"][0]["path"],
+        kimi_profile.to_str().unwrap()
+    );
+    for old in [&discovery, &v2, &newest] {
+        assert_eq!(kimi(old)["setup"], "manual");
+    }
     assert!(!marker.exists());
     for agent in [
-        "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline", "copilot", "amp",
+        "claude",
+        "codex",
+        "droid",
+        "gemini",
+        "cursor",
+        "opencode",
+        "cline",
+        "copilot",
+        "amp",
+        "kimi-code",
     ] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
@@ -663,6 +695,10 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
             let request = serde_json::from_value(serde_json::json!({"agent":agent,"action":action,"profileRoot":profile,"expectedPlan":plan})).unwrap();
             crate::companion::hooks::execute(&host, request, lease)
         };
+        let kimi_config = profile.join("config.toml");
+        if agent == "kimi-code" {
+            fs::write(&kimi_config, "# keep\nkey = \"secret\"\n").unwrap();
+        }
         let opaque = profile.join("config.json");
         if agent == "copilot" {
             fs::write(&opaque, "// preserve opaque Copilot config\n{}").unwrap();
@@ -716,6 +752,11 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
             assert!(fs::read_to_string(profile.join(name))
                 .unwrap()
                 .contains("{ \"keep\" : true }"));
+        } else if agent == "kimi-code" {
+            assert_eq!(
+                fs::read_to_string(&kimi_config).unwrap(),
+                "# keep\nkey = \"secret\"\n"
+            );
         } else if agent == "copilot" {
             assert!(!profile.join("hooks/lazysh.json").exists());
             assert_eq!(
