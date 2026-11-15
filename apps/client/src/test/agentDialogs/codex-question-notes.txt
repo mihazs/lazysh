@@ -1,0 +1,18 @@
+› Call the request_user_input tool once with one question: Which color? options red and green. Do
+  nothing else.
+
+
+• Hook failed
+  └ plugin contents changed; hook approval required
+
+
+  Question 1/1 (1 unanswered)
+  Which color?
+
+    1. Red (Recommended)  Choose red.
+  › 2. Green              Choose green.
+    3. None of the above  Optionally, add details in notes (tab)
+
+  › Add notes
+
+  tab or esc to clear notes | enter to submit answer

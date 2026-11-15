@@ -1,0 +1,34 @@
+
+
+
+  Question 1/1 (1 unanswered)
+  Which database should the long running
+  migration use for the staging cluster
+  tonight?
+
+  › 1. PostgreSQL 16           Use
+       (Recommended)           PostgreSQL 16
+                               with logical
+                               replication
+                               enabled for
+                               the migration
+                               on the
+                               staging
+                               cluster
+                               tonight.
+    2. SQLite                  Use SQLite
+                               for a tiny
+                               local file as
+                               the database
+                               for the
+                               migration on
+                               the staging
+                               cluster
+                               tonight.
+    3. None of the above       Optionally,
+                               add details
+                               in notes
+                               (tab)
+
+  tab to add notes | enter to submit answer
+  esc to interrupt

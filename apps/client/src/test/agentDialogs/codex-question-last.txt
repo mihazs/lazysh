@@ -1,0 +1,13 @@
+› Call the request_user_input tool once with exactly two questions: 1) Which color? red or green.
+  2) Which size? small or large. Do nothing else.
+
+
+
+  Question 2/2 (1 unanswered)
+  Which size?
+
+  › 1. Small (Recommended)  Choose small.
+    2. Large                Choose large.
+    3. None of the above    Optionally, add details in notes (tab)
+
+  tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt

@@ -72,4 +72,62 @@ describe('liftCodexDialog on recorded Codex screens', () => {
     expect(lift('x', rows.map(row => row.replace('  2. Yes', '› 2. Yes'))).kind).toBe('unliftable');
     expect(lift('x', rows.map(row => row.replace('  3. No', '  4. No'))).kind).toBe('unliftable');
   });
+
+  describe('a request_user_input question', () => {
+    it('reads the question as the title, its place among the questions as the body, and no Cancel to offer', () => {
+      const found = dialog('codex-question');
+      expect(found.title).toBe('Which color?');
+      expect(found.body).toEqual(['Question 1/1 (1 unanswered)']);
+      expect(found.options).toEqual([{label: 'Red (Recommended)', detail: 'Choose red.'}, {label: 'Green', detail: 'Choose green.'}, {label: 'None of the above', detail: 'Optionally, add details in notes (tab)'}]);
+      expect(found.highlighted).toBe(0);
+      expect(found.hint).toEqual([]);
+      // Esc interrupts the turn in this dialog, so the card must not offer it as a way out.
+      expect(found.interrupts).toBe(true);
+      expect(dialog('codex-approval').interrupts).toBeUndefined();
+    });
+
+    it('follows the highlight as the arrow keys move it, under a tmux status row', () => {
+      const rows = dialogScreen('codex-question');
+      const moved = dialog('codex-question', onTmux(rows.map(row => row.replace('› 1.', '  1.').replace('  2. Green', '› 2. Green'))));
+      expect(moved.highlighted).toBe(1);
+      expect(moved.signature).toBe(dialog('codex-question').signature);
+    });
+
+    it('tells the questions of one dialog apart, and reads the footer that submits them all', () => {
+      const [first, last] = [dialog('codex-question-multi'), dialog('codex-question-last')];
+      expect([first.title, first.body]).toEqual(['Which color?', ['Question 1/2 (2 unanswered)']]);
+      expect([last.title, last.body]).toEqual(['Which size?', ['Question 2/2 (1 unanswered)']]);
+      expect(last.options.map(option => option.label)).toEqual(['Small (Recommended)', 'Large', 'None of the above']);
+      expect(first.signature).not.toBe(last.signature);
+    });
+
+    it('reads a phone-width screen, where the question, both columns of an option and the footer all wrap', () => {
+      const found = dialog('codex-question-narrow');
+      expect(found.options[0]).toEqual({label: 'PostgreSQL 16 (Recommended)', detail: 'Use PostgreSQL 16 with logical replication enabled for the migration on the staging cluster tonight.'});
+      expect(found.title).toBe('Which database should the long running migration use for the staging cluster tonight?');
+      expect(found.options.map(option => option.label)).toEqual(['PostgreSQL 16 (Recommended)', 'SQLite', 'None of the above']);
+      expect(found.options[1].detail).toBe('Use SQLite for a tiny local file as the database for the migration on the staging cluster tonight.');
+      expect(found.highlighted).toBe(0);
+    });
+
+    it('does not read the notes box, a footer that is cut off or one it was not captured with', () => {
+      // The notes box is a text field: the terminal has it.
+      expect(lift('codex-question-notes').kind).toBe('unliftable');
+      const rows = dialogScreen('codex-question');
+      expect(lift('x', rows.map(row => row.replace('| esc to interrupt', '| esc to'))).kind).toBe('unliftable');
+      expect(lift('x', rows.map(row => row.replace('submit answer', 'submit anything'))).kind).toBe('unliftable');
+      // A narrow terminal may break the footer anywhere: it is still the footer, read whole, and nothing short of the whole is a question.
+      const wrapped = rows.flatMap(row => row.startsWith('  tab to add notes') ? ['  tab to add notes | enter to', '  submit answer | esc to', '  interrupt'] : [row]);
+      expect(lift('x', wrapped).kind).toBe('dialog');
+      expect(lift('x', wrapped.filter(Boolean).slice(0, -1)).kind).toBe('unliftable');
+      // Two footer rows below the last row of the footer are no status row.
+      expect(lift('x', [...rows, '  one', '  two', '  three']).kind).toBe('unliftable');
+    });
+
+    it('refuses a question whose first row does not count the questions, or that has no question text', () => {
+      const rows = dialogScreen('codex-question');
+      expect(lift('x', rows.map(row => row.replace('Question 1/1 (1 unanswered)', 'Something else'))).kind).toBe('unliftable');
+      expect(lift('x', rows.filter(row => !row.includes('Which color?'))).kind).toBe('unliftable');
+    });
+  });
 });

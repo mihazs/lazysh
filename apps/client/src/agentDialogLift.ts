@@ -13,6 +13,8 @@ export type LiftedDialog = Readonly<{
   highlighted: number;
   /** What the dialog says about its keys, the footer last. */
   hint: readonly string[];
+  /** Esc interrupts the agent's turn instead of closing the dialog (a Codex question), so the card offers no Cancel. */
+  interrupts?: true;
   /** Same title, body, options and footer: the dialog a person saw is the dialog an answer is sent to. */
   signature: string;
 }>;
