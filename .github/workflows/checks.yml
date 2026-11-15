@@ -793,6 +793,13 @@ jobs:
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
       - name: Exercise multiplexer version gates, command building and tree parsing
         run: "cargo test --locked -p lazysh --lib -- multiplexer:: zellij:: herdr:: herdr_create:: tmux_jump::"
+      - name: Exercise the companion's Herdr pane focus over a real Windows named pipe
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-agent --lib herdr:: -- --list | grep -Fx 'herdr::tests::real_named_pipe_carries_the_focus_request_and_reports_a_missing_pipe: test'
+          cargo test --locked -p lazysh-agent --lib herdr::
       - name: Exercise the remote Herdr user-install admission script with Darwin stat
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
