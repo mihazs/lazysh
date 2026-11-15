@@ -463,9 +463,24 @@ Tests assert behaviour, not source text.
   sent from the composer reaches the pane once (one submission, its bytes and one Enter) and becomes
   a turn; a prompt typed in the terminal becomes a turn within 5 s while **Both** shows the two
   views (the window is 1500 px wide because the sessions list takes 300 px of the 1100 px Both
-  needs). The agent is a stand-in, not Claude Code: provider behaviour, macOS, Windows and Android
-  are not covered by it. Still to add: guarded Herdr (agent detection and the session report) and
-  the Android instrumentation case.
+  needs). The same three cases run in `agentViewHerdrAgent.spec.ts` against a real guarded Herdr
+  (`LAZYSH_TEST_HERDR`): the stand-in runs in the focused pane under a process named `claude`
+  (Herdr detects an agent by that name), prints enough output first for the pane to have scrollback,
+  and draws `esc to interrupt` on its mode line while a `hold ...` turn runs, which Herdr's own
+  Claude detection reads as working. The fixture reports the session with
+  `herdr pane report-agent-session --source herdr:claude` once Herdr detects the process, and the
+  transcript sits where `lazysh-agent herdr-conversation` resolves that id
+  (`$HOME/.claude/projects/<folder>/<id>.jsonl`), so the Agent view links the focused pane's
+  conversation by itself and its composer binds to the guarded pane with no confirmation step. The
+  round trip keeps the terminal node, the pane (id, terminal, tab, scrollback length), the one SSH
+  connection (the sshd side's socket, to the inode), the agent's key log and the fixture's original
+  receiver pane, which stays empty; the prompt sent from the composer reaches the pane once (one
+  submission, its bytes and one Enter) and shows once in it; the prompt typed in the terminal
+  becomes a turn in **Both** within 5 s (about 0.2 s measured). Both specs share their cases
+  (`agentViewScenarios.ts`) and differ only in the multiplexer (`reportingAgent.ts`). The agent is a
+  stand-in, not Claude Code, and Herdr's state for it comes from the drawn hint, not from Claude's
+  own hooks: provider behaviour, macOS, Windows and Android are not covered by these specs. Still to
+  add: the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.
 - **Co-existence cases, required in every slice**:

@@ -2,9 +2,10 @@
 # Test-only stand-in for an agent TUI (tmux_agent_session_fixture.rs). It draws a prompt and a permission-mode line in
 # the pane it runs in, reads raw keys, appends Claude Code format records to a transcript and logs every submitted
 # prompt, answered question, interrupt and mode change to a second file. No provider, network or account is used.
-# With a fifth argument it also acts as a hook-reporting agent: it runs the companion's `ingest --reported-history` hook
-# the way Claude Code's hooks do, shows each prompt in its pane, logs every key it reads to `$log.keys`, and a `hold ...`
-# prompt keeps its turn running until `$log.release` exists.
+# With a fifth argument it also acts as a reporting agent: it shows each prompt in its pane, logs every key it reads to
+# `$log.keys`, and a `hold ...` prompt keeps its turn running until `$log.release` exists. The value `report` also runs the
+# companion's `ingest --reported-history` hook the way Claude Code's hooks do (a tmux pane names itself through TMUX_PANE);
+# any other value (`keys`) leaves the report to the multiplexer that hosts the pane, as Herdr's own session report does.
 transcript=$1 log=$2 companion=$3 state=$4 report=$5
 modes=('manual mode on' 'accept edits on' 'plan mode on')
 mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0 sub_due=0 flow_due=0 held=0
@@ -60,13 +61,16 @@ permission() {
 # The hook Claude Code runs on a lifecycle event (`lazysh-agent claude-config --reported-history`): it names the session, its
 # transcript and, through TMUX_PANE, this pane.
 hook() {
-  [[ -n $report ]] || return 0
+  [[ $report == report ]] || return 0
   printf '{"hook_event_name":"%s","session_id":"5f0c1d2e-0000-4000-8000-0000000000aa","transcript_path":"%s","cwd":"/work/fixture"%s}' "$1" "$transcript" "$2" |
     LAZYSH_STATE_DIR=$state "$companion" ingest --agent claude --reported-history
 }
 # A TUI shows what was submitted; this one does so only when it reports, so the other cases keep their pane unchanged.
 shown() { [[ -z $report ]] || printf '\r\n> %s\r\n' "${1//$'\n'/$'\r\n'}"; }
 draw() { printf '\033[2J\033[H> \r\n\r\n  ⏸ %s · ? for shortcuts' "${modes[$mode]}"; }
+# The mode line is also where Claude Code shows `esc to interrupt` while a turn runs, which is what a multiplexer that reads the
+# screen (Herdr) takes for a working agent. Rewritten in place, so nothing else on the screen moves.
+hint() { printf '\x1b7\033[3;1H\033[2K  ⏸ %s · %s\x1b8' "${modes[$mode]}" "$1"; }
 
 stty raw -echo
 printf '\033[?2004h'
@@ -82,7 +86,7 @@ while true; do
     if ((due && now >= due)); then due=0; note BACKGROUND_ENDED; ended; fi
     if ((sub_due && now >= sub_due)); then sub_due=0; note SUBAGENT_ENDED; subagent_ended; fi
     if ((flow_due && now >= flow_due)); then flow_due=0; note WORKFLOW_ENDED; workflow_ended; fi
-    if ((held)) && [[ -e $log.release ]]; then held=0; note HOLD_ENDED; text 'Finished the held work.'; hook Stop ''; fi
+    if ((held)) && [[ -e $log.release ]]; then held=0; note HOLD_ENDED; text 'Finished the held work.'; hint '? for shortcuts'; hook Stop ''; fi
     continue
   fi
   ((status == 0)) || break
@@ -110,7 +114,7 @@ while true; do
     shown "$buf"
     hook UserPromptSubmit ",\"prompt\":\"$(escape "$buf")\""
     case $buf in
-      hold*) note HOLD; held=1 ;;
+      hold*) note HOLD; held=1; hint 'esc to interrupt' ;;
       ask*) asking=1; note ASKING; ask ;;
       permission*) note PERMISSION_ASKED
         case $(permission) in
