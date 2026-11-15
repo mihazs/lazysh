@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "candidate": "xterm-webgl",
+  "run": "context loss",
+  "host": {
+    "loadAverageAtEnd": [
+      13.43,
+      12.42,
+      10.11
+    ],
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "os": "Linux 7.3.3-1-cachyos"
+  },
+  "toolchain": {
+    "node": "26.6.0",
+    "xterm": "5.5.0",
+    "webglAddon": "0.18.0",
+    "playwright": "1.64.1"
+  },
+  "source": {
+    "commit": "2e89b89d847b4b1b8c53cc09724ce0875a8461ee",
+    "dirty": false
+  },
+  "androidSerial": "192.168.240.112:5555",
+  "device": {
+    "serial": "192.168.240.112:5555",
+    "release": "13",
+    "model": "WayDroid x86_64 Device",
+    "wmSize": "Physical size: 1920x1080\nOverride size: 1080x2340",
+    "wmDensity": "Physical density: 180\nOverride density: 420",
+    "focus": "mCurrentFocus=Window{7741454 u0 app.lazysh.webviewbench/app.lazysh.webviewbench.WebActivity}"
+  },
+  "launchArgs": [],
+  "restoreWindowMs": 3000,
+  "context": {
+    "geometry": {
+      "cols": 48,
+      "rows": 33,
+      "scrollback": 5000,
+      "cursorBlink": true,
+      "fontSize": 14,
+      "devicePixelRatio": 2.625,
+      "viewport": [
+        411,
+        759
+      ],
+      "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36",
+      "hardwareConcurrency": 24,
+      "build": "production",
+      "renderer": "xterm-webgl",
+      "canvases": 2,
+      "gl": {
+        "vendor": "AMD",
+        "renderer": "AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.3-1-cachyos)"
+      },
+      "domNodes": 110
+    },
+    "chromium": "153.0.8010.36"
+  },
+  "results": [
+    {
+      "scenario": "restored quickly",
+      "restoreAfterMs": 300,
+      "identicalWhileLost": false,
+      "pixelsIdenticalAfterRestore": true,
+      "restoreToIdenticalPixelsMsUpperBound": 313,
+      "loseToCanvasLostMs": 19.100000001490116,
+      "restoreToCanvasRestoredMs": 7.899999998509884,
+      "addonGaveUp": 0,
+      "canvasesAfter": 2
+    },
+    {
+      "scenario": "restored just inside the addon grace period",
+      "restoreAfterMs": 2000,
+      "identicalWhileLost": false,
+      "pixelsIdenticalAfterRestore": true,
+      "restoreToIdenticalPixelsMsUpperBound": 321,
+      "loseToCanvasLostMs": 19.600000001490116,
+      "restoreToCanvasRestoredMs": 11.299999997019768,
+      "addonGaveUp": 0,
+      "canvasesAfter": 2
+    },
+    {
+      "scenario": "output while lost, then restored",
+      "bytesWhileLost": 684,
+      "pixelsIdenticalToNeverLost": true,
+      "restoreToIdenticalPixelsMsUpperBound": 404,
+      "addonGaveUp": 0
+    },
+    {
+      "scenario": "never restored, then WebGL attached again",
+      "loseToAddonGaveUpMs": 3002.8000000044703,
+      "fallbackPixelsIdenticalToDomRenderer": true,
+      "fallbackToIdenticalPixelsMsUpperBound": 414,
+      "canvasesAfterFallback": 0,
+      "lateRestoreKeepsDomPixels": true,
+      "bufferKeptAcrossFallback": true,
+      "reattachPixelsIdenticalToWebgl": true,
+      "reattachToIdenticalPixelsMsUpperBound": 267,
+      "canvasesAfterReattach": 2,
+      "addonGaveUpTotal": 1
+    }
+  ],
+  "limits": "The Android System WebView of the device with that adb serial, no backgrounding of an app, no GPU process crash; the context is taken away with WEBGL_lose_context. Pixel comparison against a terminal fed the same bytes; times are upper bounds with the resolution of one screenshot unless taken in the page."
+}

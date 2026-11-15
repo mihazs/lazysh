@@ -9,7 +9,7 @@ import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/re
 import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { XtermTerminalAdapter } from '../src/xtermTerminalAdapter';
 import type { TerminalAdapter } from '../src/terminalAdapter';
-import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
+import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, styledText, summarize, type StyleFamily, type Workload } from './workloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
 const WINDOW = 256 * 1024;
@@ -22,8 +22,11 @@ const requested = new URLSearchParams(location.search).get('renderer');
 if (requested !== null && !['dom', 'canvas', 'webgl'].includes(requested)) throw new Error(`Unknown renderer candidate: ${requested}`);
 const candidate = (requested ?? 'dom') as RendererCandidate;
 let contextLosses = 0;
+/** Timestamped events of the context-loss run: the forced loss and restore, the canvas events, the addon giving up. */
+const lossLog: { type: string; at: number }[] = [];
+const note = (type: string) => lossLog.push({ type, at: performance.now() });
 /** Loads the candidate's renderer addon on an opened terminal; a lost WebGL context falls back to DOM, which would invalidate the numbers, so it is counted. */
-const attach = (terminal: Harness['terminal']) => attachRendererCandidate(terminal, candidate, () => { contextLosses++; });
+const attach = (terminal: Harness['terminal']) => attachRendererCandidate(terminal, candidate, () => { contextLosses++; note('fallback'); });
 /** The GPU the WebGL candidate really ran on (software rasterizer or hardware), from the page's own context. */
 function glInfo() {
   try {
@@ -117,7 +120,7 @@ const sameScreen = (expected: string[]) => {
 };
 
 /** Applies chunks through the same credit window and ack-after-write contract as App.tsx. */
-async function drain(json: string[], until?: () => boolean) {
+async function drain(json: string[], until?: () => boolean, paced = false) {
   const { terminal } = harness!, ack: number[] = [];
   let inflight = 0, waiter: (() => void) | undefined, decodeMs = 0, bytes = 0;
   for (let i = 0; (until ? !until() : i < json.length); i++) {
@@ -128,7 +131,7 @@ async function drain(json: string[], until?: () => boolean) {
     inflight += data.length; bytes += data.length;
     const written = performance.now();
     put(terminal, data, () => { inflight -= data.length; ack.push(performance.now() - written); waiter?.(); waiter = undefined; });
-    await yieldTask();
+    await (paced ? frame() : yieldTask());
   }
   while (inflight > 0) await new Promise<void>(resolve => { waiter = resolve; });
   return { bytes, decodeMs, ackMs: ack };
@@ -136,6 +139,14 @@ async function drain(json: string[], until?: () => boolean) {
 
 async function settle() { await putAndWait(harness!.terminal, ''); await frame(); await frame(); }
 async function reset() { harness!.terminal.reset(); await settle(); echoColumn = 0; }
+
+/** The terminal's WebGL canvas: the one that has a webgl2 context (the addon's link layer is a 2D canvas, for which getContext('webgl2') is null). */
+function webglContext() {
+  for (const canvas of harness!.terminal.element?.querySelectorAll('canvas') ?? []) { const gl = canvas.getContext('webgl2'); if (gl) return { canvas, gl }; }
+  return null;
+}
+/** The extension object is kept: getExtension() returns null once the context is lost. */
+let loser: WEBGL_lose_context | null = null;
 
 const api = {
   open() {
@@ -149,6 +160,26 @@ const api = {
   },
   /** A lost WebGL context silently reverts to the DOM renderer; the driver rejects a run that saw one. */
   contextLosses() { return contextLosses; },
+  /** Context-loss run: fixed pixels (no blinking cursor, not focused), text written and parsed, and the canvas count. */
+  quiet() { harness!.terminal.options.cursorBlink = false; harness!.terminal.blur(); },
+  async write(text: string) { await new Promise<void>(resolve => harness!.terminal.write(text, resolve)); await settle(); },
+  canvases() { return harness!.terminal.element?.querySelectorAll('canvas').length ?? 0; },
+  /** Forces the loss of the WebGL context (WEBGL_lose_context); false if the terminal has none. */
+  loseContext() {
+    const lost = webglContext();
+    if (!lost) return false;
+    const { canvas } = lost;
+    loser = lost.gl.getExtension('WEBGL_lose_context');
+    canvas.addEventListener('webglcontextlost', () => note('canvas-lost'));
+    canvas.addEventListener('webglcontextrestored', () => note('canvas-restored'));
+    note('lose'); loser!.loseContext();
+    return true;
+  },
+  restoreContext() { note('restore'); loser!.restoreContext(); },
+  /** After the addon gave up and was disposed: what a production integration does on resume. */
+  reattach() { note('reattach'); attach(harness!.terminal); },
+  contextEvents() { return lossLog.slice(); },
+  screenLines() { return screenText(); },
   mismatch() { return lastMismatch; },
   /** Writes that went through XtermTerminalAdapter.write: zero unless the page was opened with ?write=adapter. */
   adapterWrites() { return adapterWrites; },
@@ -158,15 +189,24 @@ const api = {
     await prepare(kind === 'plain' ? plainText({ bytes: size, cols, rows, seed: 20 }) : kind === 'ansi' ? ansiColor({ bytes: size, cols, rows, seed: 30 }) : fullScreenRedraw({ frames: size, cols, rows, seed: 40 }));
     return { bytes: prepared!.bytes, chunks: prepared!.chunks.length, sha256: prepared!.sha256, description: prepared!.description };
   },
-  /** W2, W3, W4: stream the prepared bytes and check the final screen. */
-  async stream() {
+  /** Words in `styles` distinct styles of one family (first-burst cost, #1323): returns how many glyph-style pairs a glyph cache has to draw once. */
+  async prepareStyled(family: StyleFamily, styles: number, size: number) {
+    const { cols, rows } = open().terminal, workload = styledText({ bytes: size, cols, rows, seed: 50, styles, family });
+    await prepare(workload);
+    return { bytes: prepared!.bytes, chunks: prepared!.chunks.length, sha256: prepared!.sha256, description: prepared!.description, distinctGlyphs: workload.distinctGlyphs };
+  },
+  /** W2, W3, W4: stream the prepared bytes and check the final screen. `paced` waits for a frame after every chunk, so each chunk is rendered, as output that arrives over time is. */
+  async stream(paced = false) {
     await reset();
+    let renders = 0;
+    const counting = harness!.terminal.onRender(() => { renders++; });
     const meter = meterFrames(), started = performance.now();
-    const { bytes, decodeMs, ackMs } = await drain(prepared!.json);
+    const { bytes, decodeMs, ackMs } = await drain(prepared!.json, undefined, paced);
     const wallMs = performance.now() - started;
     await settle();
     const frames = meter.stop();
-    return { bytes, wallMs, throughputMiBs: bytes / 1048576 / (wallMs / 1000), decodeMs, decodeMsPerMiB: decodeMs / (bytes / 1048576), ackMs: summarize(ackMs), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: sameScreen(prepared!.screen), chunkBytes: CHUNK };
+    counting.dispose();
+    return { renders, bytes, wallMs, throughputMiBs: bytes / 1048576 / (wallMs / 1000), decodeMs, decodeMsPerMiB: decodeMs / (bytes / 1048576), ackMs: summarize(ackMs), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: sameScreen(prepared!.screen), chunkBytes: CHUNK };
   },
   /** W1: one remote burst at a time; write to apply, and write to the render that shows it. */
   async shell(interactions: number) {

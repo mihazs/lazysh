@@ -1,0 +1,3578 @@
+{
+  "schema": 1,
+  "run": "first burst",
+  "mode": "full",
+  "host": {
+    "loadAverageAtEnd": [
+      6.93,
+      6.77,
+      7.96
+    ],
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalCpus": 24,
+    "os": "Linux 7.3.3-1-cachyos",
+    "cpuGovernor": "powersave"
+  },
+  "toolchain": {
+    "node": "26.6.0",
+    "chromium": "156.0.8078.4",
+    "xterm": "5.5.0",
+    "webglAddon": "0.18.0"
+  },
+  "source": {
+    "commit": "1d89530d7c96142a162167d33b11b804c21f1b83",
+    "dirty": false
+  },
+  "launchArgs": [
+    "--use-angle=vulkan",
+    "--enable-features=Vulkan",
+    "--ignore-gpu-blocklist",
+    "--enable-gpu",
+    "--disable-vulkan-surface"
+  ],
+  "results": [
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048795,
+      "distinctGlyphs": 26,
+      "sha256": "a0960faabd4902e5c2daa5f97711bfba165ff794c7a9cecc9543695745865414",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 3,
+          "wallMsPerRender": 16.366666667163372,
+          "wallMs": 49.100000001490116,
+          "throughputMiBs": 20.370852436760448,
+          "totalCpuMs": 180.00000000000003,
+          "mainThreadTaskMs": 71.244,
+          "rendererCpuMs": 160.00000000000003,
+          "gpuCpuMs": 19.99999999999999,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 36.5,
+          "wallMs": 36.5,
+          "throughputMiBs": 27.402982319871043,
+          "totalCpuMs": 109.99999999999999,
+          "mainThreadTaskMs": 50.70099999999999,
+          "rendererCpuMs": 99.99999999999997,
+          "gpuCpuMs": 10.000000000000009,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 2,
+          "wallMsPerRender": 14.949999999254942,
+          "wallMs": 29.899999998509884,
+          "throughputMiBs": 33.451801161375926,
+          "totalCpuMs": 80.00000000000007,
+          "mainThreadTaskMs": 47.348,
+          "rendererCpuMs": 80.00000000000007,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.797999999999956,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 33.19999999925494,
+      "coldExtraWallMs": 15.900000002235174,
+      "coldExtraCpuMs": 85,
+      "coldExtraWallMsPerGlyph": 0.6115384616244298,
+      "coldExtraCpuMsPerGlyph": 3.269230769230769,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 32,
+      "paced": false,
+      "bytes": 1048974,
+      "distinctGlyphs": 832,
+      "sha256": "d3b7f5d54d56d228d24d7ad1d5ca9b8c3061e8f550c6013525c9b7f55aa51d4c",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 15,
+          "wallMsPerRender": 17.679999999701977,
+          "wallMs": 265.19999999552965,
+          "throughputMiBs": 3.7721702956063066,
+          "totalCpuMs": 540,
+          "mainThreadTaskMs": 332.055,
+          "rendererCpuMs": 490.00000000000006,
+          "gpuCpuMs": 39.99999999999998,
+          "droppedFrames": 1,
+          "frameP99Ms": 31.07599999999998,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 128.90000000596046,
+          "wallMs": 128.90000000596046,
+          "throughputMiBs": 7.760896527010637,
+          "totalCpuMs": 260,
+          "mainThreadTaskMs": 164.23499999999996,
+          "rendererCpuMs": 229.99999999999997,
+          "gpuCpuMs": 30,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 11,
+          "wallMsPerRender": 16.545454545454547,
+          "wallMs": 182,
+          "throughputMiBs": 5.496591002076537,
+          "totalCpuMs": 349.99999999999983,
+          "mainThreadTaskMs": 235.76300000000006,
+          "rendererCpuMs": 319.99999999999983,
+          "gpuCpuMs": 30,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.789999999999964,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 155.45000000298023,
+      "coldExtraWallMs": 109.74999999254942,
+      "coldExtraCpuMs": 235.0000000000001,
+      "coldExtraWallMsPerGlyph": 0.13191105768335268,
+      "coldExtraCpuMsPerGlyph": 0.28245192307692324,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048860,
+      "distinctGlyphs": 6654,
+      "sha256": "a1f9a09a9c7a1c658b698376d27fb53cec58e3dc9e9e3104bef7194fd1cb1414",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 7,
+          "wallMsPerRender": 21.17142857078995,
+          "wallMs": 148.19999999552965,
+          "throughputMiBs": 6.7494658808099315,
+          "totalCpuMs": 420.0000000000001,
+          "mainThreadTaskMs": 202.56399999999996,
+          "rendererCpuMs": 380.00000000000006,
+          "gpuCpuMs": 40.000000000000036,
+          "droppedFrames": 2,
+          "frameP99Ms": 33.39399999999998,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 163.39999999850988,
+          "wallMs": 163.39999999850988,
+          "throughputMiBs": 6.12160858944297,
+          "totalCpuMs": 320,
+          "mainThreadTaskMs": 208.23600000000002,
+          "rendererCpuMs": 290.00000000000006,
+          "gpuCpuMs": 29.99999999999997,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.79099999999996,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 17,
+          "wallMsPerRender": 16.647058823529413,
+          "wallMs": 283,
+          "throughputMiBs": 3.5345259487839558,
+          "totalCpuMs": 540,
+          "mainThreadTaskMs": 340.518,
+          "rendererCpuMs": 470,
+          "gpuCpuMs": 49.999999999999986,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 223.19999999925494,
+      "coldExtraWallMs": -75.00000000372529,
+      "coldExtraCpuMs": -9.999999999999886,
+      "coldExtraWallMsPerGlyph": -0.011271415690370497,
+      "coldExtraCpuMsPerGlyph": -0.0015028554253080683,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": false,
+      "bytes": 1048926,
+      "distinctGlyphs": 46288,
+      "sha256": "fbe0e24630fe8421e2fd9be52560c93042a5bdd391199c580ff1d6c4638f6472",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 17,
+          "wallMsPerRender": 17.735294117647058,
+          "wallMs": 301.5,
+          "throughputMiBs": 3.3178566700190455,
+          "totalCpuMs": 650,
+          "mainThreadTaskMs": 367.66299999999995,
+          "rendererCpuMs": 590,
+          "gpuCpuMs": 60,
+          "droppedFrames": 2,
+          "frameP99Ms": 33.39999999999998,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 114.40000000596046,
+          "wallMs": 114.40000000596046,
+          "throughputMiBs": 8.744176450687261,
+          "totalCpuMs": 240.0000000000001,
+          "mainThreadTaskMs": 149.92100000000002,
+          "rendererCpuMs": 210.00000000000009,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.79399999999996,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 12,
+          "wallMsPerRender": 16.39166666629414,
+          "wallMs": 196.69999999552965,
+          "throughputMiBs": 5.085581016947009,
+          "totalCpuMs": 389.9999999999999,
+          "mainThreadTaskMs": 249.52799999999996,
+          "rendererCpuMs": 339.9999999999999,
+          "gpuCpuMs": 39.99999999999998,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999955,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 155.55000000074506,
+      "coldExtraWallMs": 145.94999999925494,
+      "coldExtraCpuMs": 335,
+      "coldExtraWallMsPerGlyph": 0.0031530850328217886,
+      "coldExtraCpuMsPerGlyph": 0.007237296923608711,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "indexed",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048641,
+      "distinctGlyphs": 6656,
+      "sha256": "85ede68f5b1f50c24efdb31152548bf9921019eb1d7c6afc49e837fc29f7d030",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 31,
+          "wallMsPerRender": 23.758064516129032,
+          "wallMs": 736.5,
+          "throughputMiBs": 1.3578574186429957,
+          "totalCpuMs": 1550,
+          "mainThreadTaskMs": 816.3900000000001,
+          "rendererCpuMs": 1400,
+          "gpuCpuMs": 140,
+          "droppedFrames": 15,
+          "frameP99Ms": 44.979999999999976,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 81.30000000447035,
+          "wallMs": 81.30000000447035,
+          "throughputMiBs": 12.300885470794306,
+          "totalCpuMs": 240,
+          "mainThreadTaskMs": 114.48700000000001,
+          "rendererCpuMs": 219.99999999999997,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.795999999999957,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 15,
+          "wallMsPerRender": 22,
+          "wallMs": 330,
+          "throughputMiBs": 3.0304908752441406,
+          "totalCpuMs": 790.0000000000002,
+          "mainThreadTaskMs": 411.0090000000002,
+          "rendererCpuMs": 730.0000000000002,
+          "gpuCpuMs": 59.99999999999994,
+          "droppedFrames": 5,
+          "frameP99Ms": 33.386000000000074,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 205.65000000223517,
+      "coldExtraWallMs": 530.8499999977648,
+      "coldExtraCpuMs": 1035,
+      "coldExtraWallMsPerGlyph": 0.0797551081727411,
+      "coldExtraCpuMsPerGlyph": 0.15549879807692307,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "background",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048650,
+      "distinctGlyphs": 6653,
+      "sha256": "e4ec32792585bb5664d9961afc26f0440cc006a4879e731331ca3b8e02617750",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 27,
+          "wallMsPerRender": 20,
+          "wallMs": 540,
+          "throughputMiBs": 1.8519825405544703,
+          "totalCpuMs": 1269.9999999999998,
+          "mainThreadTaskMs": 605.094,
+          "rendererCpuMs": 1119.9999999999998,
+          "gpuCpuMs": 140,
+          "droppedFrames": 7,
+          "frameP99Ms": 45.7579999999999,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 97.60000000149012,
+          "wallMs": 97.60000000149012,
+          "throughputMiBs": 10.24662471192772,
+          "totalCpuMs": 240,
+          "mainThreadTaskMs": 128.2150000000001,
+          "rendererCpuMs": 219.99999999999997,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.63999999999996,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 15,
+          "wallMsPerRender": 17.726666666567326,
+          "wallMs": 265.8999999985099,
+          "throughputMiBs": 3.7610777431553912,
+          "totalCpuMs": 710.0000000000001,
+          "mainThreadTaskMs": 321.472,
+          "rendererCpuMs": 630.0000000000001,
+          "gpuCpuMs": 69.99999999999996,
+          "droppedFrames": 1,
+          "frameP99Ms": 30.975999999999956,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 181.75,
+      "coldExtraWallMs": 358.25,
+      "coldExtraCpuMs": 794.9999999999998,
+      "coldExtraWallMsPerGlyph": 0.053847888170750036,
+      "coldExtraCpuMsPerGlyph": 0.11949496467758902,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "background",
+      "styles": 2048,
+      "paced": false,
+      "bytes": 1048905,
+      "distinctGlyphs": 45614,
+      "sha256": "fff281f8bd94c78e3a65306d5f7d4679991294767b66c42f71fd6d40c0646e99",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 26,
+          "wallMsPerRender": 20.457692307921555,
+          "wallMs": 531.9000000059605,
+          "throughputMiBs": 1.8806425246077987,
+          "totalCpuMs": 1270,
+          "mainThreadTaskMs": 594.654,
+          "rendererCpuMs": 1130,
+          "gpuCpuMs": 140.0000000000001,
+          "droppedFrames": 6,
+          "frameP99Ms": 33.37500000000003,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 97.29999999701977,
+          "wallMs": 97.29999999701977,
+          "throughputMiBs": 10.28071694635906,
+          "totalCpuMs": 239.99999999999977,
+          "mainThreadTaskMs": 131.42700000000008,
+          "rendererCpuMs": 219.99999999999997,
+          "gpuCpuMs": 19.999999999999794,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.73199999999987,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 7,
+          "wallMsPerRender": 20.542857142431394,
+          "wallMs": 143.79999999701977,
+          "throughputMiBs": 6.956284832203262,
+          "totalCpuMs": 419.9999999999999,
+          "mainThreadTaskMs": 206.0240000000001,
+          "rendererCpuMs": 379.9999999999999,
+          "gpuCpuMs": 30.00000000000003,
+          "droppedFrames": 2,
+          "frameP99Ms": 33.39399999999987,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 120.54999999701977,
+      "coldExtraWallMs": 411.3500000089407,
+      "coldExtraCpuMs": 940.0000000000002,
+      "coldExtraWallMsPerGlyph": 0.009018064629476491,
+      "coldExtraCpuMsPerGlyph": 0.02060770815977551,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "attributes",
+      "styles": 8,
+      "paced": false,
+      "bytes": 1048725,
+      "distinctGlyphs": 208,
+      "sha256": "3cfa1167b9c38ccc9a1b1a12d759ed84efa0bbc3beda261eb7816029be46d00d",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 16.5,
+          "wallMs": 132,
+          "throughputMiBs": 7.576834071766246,
+          "totalCpuMs": 340,
+          "mainThreadTaskMs": 170.97600000000003,
+          "rendererCpuMs": 309.99999999999994,
+          "gpuCpuMs": 30.00000000000003,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 94.70000000298023,
+          "wallMs": 94.70000000298023,
+          "throughputMiBs": 10.561162591781097,
+          "totalCpuMs": 220.00000000000009,
+          "mainThreadTaskMs": 117.44100000000002,
+          "rendererCpuMs": 190.00000000000006,
+          "gpuCpuMs": 30.00000000000003,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.795000000000176,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 15.650000000372529,
+          "wallMs": 62.600000001490116,
+          "throughputMiBs": 15.976710821874399,
+          "totalCpuMs": 160.00000000000003,
+          "mainThreadTaskMs": 94.21200000000002,
+          "rendererCpuMs": 150.00000000000003,
+          "gpuCpuMs": 10.000000000000009,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.79700000000018,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 78.65000000223517,
+      "coldExtraWallMs": 53.349999997764826,
+      "coldExtraCpuMs": 149.99999999999994,
+      "coldExtraWallMsPerGlyph": 0.2564903846046386,
+      "coldExtraCpuMsPerGlyph": 0.7211538461538459,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "attributes",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048876,
+      "distinctGlyphs": 6656,
+      "sha256": "a1d07228bc0a2d5cdadf24611fedf45350653aa6ec061019e76f2773e4cdc034",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 17,
+          "wallMsPerRender": 21.099999999737037,
+          "wallMs": 358.69999999552965,
+          "throughputMiBs": 2.7886426047041764,
+          "totalCpuMs": 850.0000000000001,
+          "mainThreadTaskMs": 422.91,
+          "rendererCpuMs": 740,
+          "gpuCpuMs": 100.00000000000009,
+          "droppedFrames": 5,
+          "frameP99Ms": 47.243999999999986,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 116.39999999850988,
+          "wallMs": 116.39999999850988,
+          "throughputMiBs": 8.593523215702124,
+          "totalCpuMs": 259.9999999999998,
+          "mainThreadTaskMs": 152.52599999999995,
+          "rendererCpuMs": 229.99999999999997,
+          "gpuCpuMs": 29.999999999999805,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.56499999999988,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 15,
+          "wallMsPerRender": 17.72666666706403,
+          "wallMs": 265.90000000596046,
+          "throughputMiBs": 3.76188831242008,
+          "totalCpuMs": 590,
+          "mainThreadTaskMs": 322.36599999999993,
+          "rendererCpuMs": 520,
+          "gpuCpuMs": 70.00000000000006,
+          "droppedFrames": 1,
+          "frameP99Ms": 30.99000000000014,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 191.15000000223517,
+      "coldExtraWallMs": 167.54999999329448,
+      "coldExtraCpuMs": 425.0000000000002,
+      "coldExtraWallMsPerGlyph": 0.02517277644130025,
+      "coldExtraCpuMsPerGlyph": 0.06385216346153849,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "palette16",
+      "styles": 8,
+      "paced": false,
+      "bytes": 1048821,
+      "distinctGlyphs": 208,
+      "sha256": "77fb30dc8798857b144385916a2ef6fc7759308da6cc88f9320d72a303d8435c",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 11,
+          "wallMsPerRender": 16.33636363595724,
+          "wallMs": 179.69999999552965,
+          "throughputMiBs": 5.566130496563172,
+          "totalCpuMs": 400.0000000000001,
+          "mainThreadTaskMs": 231.03199999999998,
+          "rendererCpuMs": 370.00000000000006,
+          "gpuCpuMs": 30.00000000000003,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 63.599999994039536,
+          "wallMs": 63.599999994039536,
+          "throughputMiBs": 15.72694418712672,
+          "totalCpuMs": 149.99999999999991,
+          "mainThreadTaskMs": 90.52799999999999,
+          "rendererCpuMs": 139.99999999999991,
+          "gpuCpuMs": 10.000000000000009,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 5,
+          "wallMsPerRender": 15.7,
+          "wallMs": 78.5,
+          "throughputMiBs": 12.741829938949293,
+          "totalCpuMs": 200.00000000000009,
+          "mainThreadTaskMs": 122.92600000000003,
+          "rendererCpuMs": 180.00000000000006,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 71.04999999701977,
+      "coldExtraWallMs": 108.64999999850988,
+      "coldExtraCpuMs": 225.0000000000001,
+      "coldExtraWallMsPerGlyph": 0.5223557692236052,
+      "coldExtraCpuMsPerGlyph": 1.0817307692307698,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "brightOnBackground",
+      "styles": 64,
+      "paced": false,
+      "bytes": 1048753,
+      "distinctGlyphs": 1664,
+      "sha256": "8dd935bcc4e9f86c23aa4200f1b58d2db2d4e7f86d64fdbf555273916406ec3a",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 28,
+          "wallMsPerRender": 17.196428571428573,
+          "wallMs": 481.5,
+          "throughputMiBs": 2.0771937702056156,
+          "totalCpuMs": 899.9999999999999,
+          "mainThreadTaskMs": 542.8850000000001,
+          "rendererCpuMs": 780,
+          "gpuCpuMs": 109.99999999999987,
+          "droppedFrames": 1,
+          "frameP99Ms": 28.845000000000105,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 23,
+          "wallMsPerRender": 15.821739130369995,
+          "wallMs": 363.8999999985099,
+          "throughputMiBs": 2.748471559104423,
+          "totalCpuMs": 660,
+          "mainThreadTaskMs": 426.75299999999993,
+          "rendererCpuMs": 579.9999999999999,
+          "gpuCpuMs": 80.00000000000007,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 1,
+          "wallMsPerRender": 149.30000000447035,
+          "wallMs": 149.30000000447035,
+          "throughputMiBs": 6.699054255352021,
+          "totalCpuMs": 290,
+          "mainThreadTaskMs": 185.93300000000013,
+          "rendererCpuMs": 260,
+          "gpuCpuMs": 30.00000000000003,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.791999999999963,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 256.6000000014901,
+      "coldExtraWallMs": 224.89999999850988,
+      "coldExtraCpuMs": 424.9999999999999,
+      "coldExtraWallMsPerGlyph": 0.1351562499991045,
+      "coldExtraCpuMsPerGlyph": 0.2554086538461538,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolorOnBackground",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1049287,
+      "distinctGlyphs": 6648,
+      "sha256": "7807deb448614296750545be0af43f831b72dcb3254282b9afce9c966c8c951c",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 22.549999999813735,
+          "wallMs": 180.39999999850988,
+          "throughputMiBs": 5.546995911570014,
+          "totalCpuMs": 530,
+          "mainThreadTaskMs": 243.339,
+          "rendererCpuMs": 470,
+          "gpuCpuMs": 50.00000000000004,
+          "droppedFrames": 3,
+          "frameP99Ms": 33.30000000000006,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 65.29999999701977,
+          "wallMs": 65.29999999701977,
+          "throughputMiBs": 15.324319486747854,
+          "totalCpuMs": 180.00000000000003,
+          "mainThreadTaskMs": 100.40500000000002,
+          "rendererCpuMs": 170.00000000000003,
+          "gpuCpuMs": 10.000000000000009,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.96799999999996,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 22.03333333383004,
+          "wallMs": 66.10000000149012,
+          "throughputMiBs": 15.138851171201303,
+          "totalCpuMs": 209.99999999999997,
+          "mainThreadTaskMs": 116.10499999999996,
+          "rendererCpuMs": 189.99999999999994,
+          "gpuCpuMs": 20.000000000000018,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.968000000000174,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 65.69999999925494,
+      "coldExtraWallMs": 114.69999999925494,
+      "coldExtraCpuMs": 335,
+      "coldExtraWallMsPerGlyph": 0.017253309265832573,
+      "coldExtraCpuMsPerGlyph": 0.05039109506618532,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "boldUnderline",
+      "styles": 8,
+      "paced": false,
+      "bytes": 1048770,
+      "distinctGlyphs": 208,
+      "sha256": "81a7c0804a78e0945bde4e9bae15a8dc6c883c6a5fe9d606925df83934f76d8b",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 40,
+          "wallMsPerRender": 17.0125,
+          "wallMs": 680.5,
+          "throughputMiBs": 1.4697795926780055,
+          "totalCpuMs": 1320,
+          "mainThreadTaskMs": 747.5690000000001,
+          "rendererCpuMs": 1099.9999999999998,
+          "gpuCpuMs": 200.00000000000017,
+          "droppedFrames": 1,
+          "frameP99Ms": 26.82599999999998,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 196.20000000298023,
+          "wallMs": 196.20000000298023,
+          "throughputMiBs": 5.097782939868452,
+          "totalCpuMs": 420.00000000000017,
+          "mainThreadTaskMs": 243.957,
+          "rendererCpuMs": 350.0000000000001,
+          "gpuCpuMs": 60.00000000000006,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 16,
+          "wallMsPerRender": 16.456249999813735,
+          "wallMs": 263.29999999701977,
+          "throughputMiBs": 3.7986517767896077,
+          "totalCpuMs": 529.9999999999998,
+          "mainThreadTaskMs": 323.2769999999998,
+          "rendererCpuMs": 459.99999999999994,
+          "gpuCpuMs": 69.99999999999984,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000237,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 229.75,
+      "coldExtraWallMs": 450.75,
+      "coldExtraCpuMs": 845,
+      "coldExtraWallMsPerGlyph": 2.1670673076923075,
+      "coldExtraCpuMsPerGlyph": 4.0625,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 0.5,
+      "paced": false,
+      "bytes": 524313,
+      "distinctGlyphs": null,
+      "sha256": "f83febb9e093cd3a4d8db35a19904ce5ebd0f7a16938a4de74e7ab4a70667eb0",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 22.075000000186265,
+          "wallMs": 176.60000000149012,
+          "throughputMiBs": 2.831392082976733,
+          "totalCpuMs": 559.9999999999995,
+          "mainThreadTaskMs": 242.77100000000002,
+          "rendererCpuMs": 520,
+          "gpuCpuMs": 39.99999999999959,
+          "droppedFrames": 3,
+          "frameP99Ms": 33.30000000000006,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 59.100000001490116,
+          "wallMs": 59.100000001490116,
+          "throughputMiBs": 8.46064030195098,
+          "totalCpuMs": 210.0000000000002,
+          "mainThreadTaskMs": 93.48500000000004,
+          "rendererCpuMs": 179.99999999999994,
+          "gpuCpuMs": 30.00000000000025,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.96799999999996,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 11.466666666169962,
+          "wallMs": 34.399999998509884,
+          "throughputMiBs": 14.535576798824703,
+          "totalCpuMs": 139.99999999999966,
+          "mainThreadTaskMs": 72.92999999999999,
+          "rendererCpuMs": 129.9999999999999,
+          "gpuCpuMs": 9.999999999999787,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 46.75,
+      "coldExtraWallMs": 129.85000000149012,
+      "coldExtraCpuMs": 384.9999999999996,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048945,
+      "distinctGlyphs": null,
+      "sha256": "3a558a9a8b69e262b576a8a26da567a04b22ecc785d9df10b2db6358589c9cd7",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 10,
+          "wallMsPerRender": 22.629999999701976,
+          "wallMs": 226.29999999701977,
+          "throughputMiBs": 4.420467988669588,
+          "totalCpuMs": 650.0000000000002,
+          "mainThreadTaskMs": 305.27400000000006,
+          "rendererCpuMs": 590.0000000000001,
+          "gpuCpuMs": 60.00000000000006,
+          "droppedFrames": 4,
+          "frameP99Ms": 33.390999999999984,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 216,
+          "wallMs": 216,
+          "throughputMiBs": 4.63125882325349,
+          "totalCpuMs": 460.00000000000006,
+          "mainThreadTaskMs": 261.228,
+          "rendererCpuMs": 390,
+          "gpuCpuMs": 60.00000000000006,
+          "droppedFrames": 1,
+          "frameP99Ms": 31.473999999999975,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 7,
+          "wallMsPerRender": 16.699999999787128,
+          "wallMs": 116.89999999850988,
+          "throughputMiBs": 8.557330246668137,
+          "totalCpuMs": 369.9999999999999,
+          "mainThreadTaskMs": 175.389,
+          "rendererCpuMs": 329.99999999999983,
+          "gpuCpuMs": 40.000000000000036,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.404000000000075,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 166.44999999925494,
+      "coldExtraWallMs": 59.849999997764826,
+      "coldExtraCpuMs": 235.00000000000023,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 2,
+      "paced": false,
+      "bytes": 2097323,
+      "distinctGlyphs": null,
+      "sha256": "ba35267ad1f18bc87255b3652df7cdc9ea05b2ba76c40211762d5f26147b2f9f",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 34,
+          "wallMsPerRender": 20.558823529411764,
+          "wallMs": 699,
+          "throughputMiBs": 2.861463631342068,
+          "totalCpuMs": 1670,
+          "mainThreadTaskMs": 793.5680000000001,
+          "rendererCpuMs": 1480,
+          "gpuCpuMs": 189.99999999999994,
+          "droppedFrames": 8,
+          "frameP99Ms": 44.58900000000007,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 313.90000000596046,
+          "wallMs": 313.90000000596046,
+          "throughputMiBs": 6.3719754006694025,
+          "totalCpuMs": 619.9999999999999,
+          "mainThreadTaskMs": 358.433,
+          "rendererCpuMs": 520,
+          "gpuCpuMs": 89.99999999999986,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.782000000000156,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 14,
+          "wallMsPerRender": 20.214285714285715,
+          "wallMs": 283,
+          "throughputMiBs": 7.067714057625815,
+          "totalCpuMs": 719.9999999999998,
+          "mainThreadTaskMs": 347.91499999999996,
+          "rendererCpuMs": 639.9999999999997,
+          "gpuCpuMs": 80.00000000000007,
+          "droppedFrames": 3,
+          "frameP99Ms": 33.3870000000001,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 298.45000000298023,
+      "coldExtraWallMs": 400.54999999701977,
+      "coldExtraCpuMs": 1000.0000000000002,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 4,
+      "paced": false,
+      "bytes": 4194697,
+      "distinctGlyphs": null,
+      "sha256": "6aa962243207800844b9ab387eeb741a25cde5d589f06396229f3e070bb74cf5",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 37,
+          "wallMsPerRender": 21.537837837797564,
+          "wallMs": 796.8999999985099,
+          "throughputMiBs": 5.019920685172328,
+          "totalCpuMs": 1870.0000000000002,
+          "mainThreadTaskMs": 865.49,
+          "rendererCpuMs": 1670.0000000000002,
+          "gpuCpuMs": 189.99999999999994,
+          "droppedFrames": 11,
+          "frameP99Ms": 44.06000000000001,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 713.1999999955297,
+          "wallMs": 713.1999999955297,
+          "throughputMiBs": 5.609050468355892,
+          "totalCpuMs": 1520.0000000000002,
+          "mainThreadTaskMs": 770.276,
+          "rendererCpuMs": 1310,
+          "gpuCpuMs": 200.00000000000017,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.79999999999999,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 62,
+          "wallMsPerRender": 18.277419354886778,
+          "wallMs": 1133.2000000029802,
+          "throughputMiBs": 3.5301577779701967,
+          "totalCpuMs": 2670.0000000000005,
+          "mainThreadTaskMs": 1204.062,
+          "rendererCpuMs": 2360.0000000000005,
+          "gpuCpuMs": 299.99999999999983,
+          "droppedFrames": 7,
+          "frameP99Ms": 33.40000000000009,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 923.1999999992549,
+      "coldExtraWallMs": -126.30000000074506,
+      "coldExtraCpuMs": -225.00000000000023,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1048795,
+      "distinctGlyphs": 26,
+      "sha256": "a0960faabd4902e5c2daa5f97711bfba165ff794c7a9cecc9543695745865414",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 16.40757575755318,
+          "wallMs": 1082.8999999985099,
+          "throughputMiBs": 0.9236391676763037,
+          "totalCpuMs": 550,
+          "mainThreadTaskMs": 272.237,
+          "rendererCpuMs": 449.99999999999994,
+          "gpuCpuMs": 80.00000000000007,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999955,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 16.416666666666668,
+          "wallMs": 1083.5,
+          "throughputMiBs": 0.9231276923629839,
+          "totalCpuMs": 360.0000000000001,
+          "mainThreadTaskMs": 199.55900000000005,
+          "rendererCpuMs": 290.00000000000006,
+          "gpuCpuMs": 60.00000000000006,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 16.412121212053478,
+          "wallMs": 1083.1999999955297,
+          "throughputMiBs": 0.923383359194443,
+          "totalCpuMs": 350.0000000000001,
+          "mainThreadTaskMs": 192.3389999999999,
+          "rendererCpuMs": 290.00000000000006,
+          "gpuCpuMs": 60.00000000000006,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1083.3499999977648,
+      "coldExtraWallMs": -0.44999999925494194,
+      "coldExtraCpuMs": 194.9999999999999,
+      "coldExtraWallMsPerGlyph": -0.017307692279036228,
+      "coldExtraCpuMsPerGlyph": 7.499999999999996,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": true,
+      "bytes": 1048860,
+      "distinctGlyphs": 6654,
+      "sha256": "a1f9a09a9c7a1c658b698376d27fb53cec58e3dc9e9e3104bef7194fd1cb1414",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 16.41212121216637,
+          "wallMs": 1083.2000000029802,
+          "throughputMiBs": 0.9234405866904609,
+          "totalCpuMs": 1580.0000000000002,
+          "mainThreadTaskMs": 969.862,
+          "rendererCpuMs": 1390,
+          "gpuCpuMs": 180.00000000000017,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999955,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 16.413636363704097,
+          "wallMs": 1083.3000000044703,
+          "throughputMiBs": 0.9233553433967799,
+          "totalCpuMs": 1479.9999999999998,
+          "mainThreadTaskMs": 958.7840000000001,
+          "rendererCpuMs": 1300,
+          "gpuCpuMs": 159.9999999999997,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000273,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 16.41363636359121,
+          "wallMs": 1083.2999999970198,
+          "throughputMiBs": 0.9233553434031303,
+          "totalCpuMs": 1499.9999999999998,
+          "mainThreadTaskMs": 984.8210000000001,
+          "rendererCpuMs": 1319.9999999999998,
+          "gpuCpuMs": 169.99999999999994,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1083.300000000745,
+      "coldExtraWallMs": -0.09999999776482582,
+      "coldExtraCpuMs": 90.00000000000045,
+      "coldExtraWallMsPerGlyph": -0.00001502855391716649,
+      "coldExtraCpuMsPerGlyph": 0.013525698827772837,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": true,
+      "bytes": 1048926,
+      "distinctGlyphs": 46288,
+      "sha256": "fbe0e24630fe8421e2fd9be52560c93042a5bdd391199c580ff1d6c4638f6472",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 16.413636363704097,
+          "wallMs": 1083.3000000044703,
+          "throughputMiBs": 0.9234134459582888,
+          "totalCpuMs": 1760.0000000000002,
+          "mainThreadTaskMs": 1088.2920000000001,
+          "rendererCpuMs": 1590,
+          "gpuCpuMs": 160.00000000000014,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000033,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 16.446969696969695,
+          "wallMs": 1085.5,
+          "throughputMiBs": 0.9215419493420012,
+          "totalCpuMs": 1649.9999999999998,
+          "mainThreadTaskMs": 1080.484,
+          "rendererCpuMs": 1490.0000000000002,
+          "gpuCpuMs": 149.99999999999946,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 16.454545454545453,
+          "wallMs": 1086,
+          "throughputMiBs": 0.9211176666765581,
+          "totalCpuMs": 1670,
+          "mainThreadTaskMs": 1075.6569999999997,
+          "rendererCpuMs": 1470.0000000000002,
+          "gpuCpuMs": 179.99999999999972,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999887,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1085.75,
+      "coldExtraWallMs": -2.4499999955296516,
+      "coldExtraCpuMs": 100.00000000000023,
+      "coldExtraWallMsPerGlyph": -0.00005292948486712867,
+      "coldExtraCpuMsPerGlyph": 0.0021603871413757394,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1048945,
+      "distinctGlyphs": null,
+      "sha256": "3a558a9a8b69e262b576a8a26da567a04b22ecc785d9df10b2db6358589c9cd7",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 19.696969696969695,
+          "wallMs": 1300,
+          "throughputMiBs": 0.769501466017503,
+          "totalCpuMs": 2879.9999999999995,
+          "mainThreadTaskMs": 1233.394,
+          "rendererCpuMs": 2520,
+          "gpuCpuMs": 349.99999999999966,
+          "droppedFrames": 13,
+          "frameP99Ms": 39.209999999999965,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 1082.8999999985099,
+          "wallMs": 1082.8999999985099,
+          "throughputMiBs": 0.923771267729366,
+          "totalCpuMs": 1590.0000000000002,
+          "mainThreadTaskMs": 946.9880000000002,
+          "rendererCpuMs": 1330.0000000000005,
+          "gpuCpuMs": 259.9999999999998,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.73500000000024,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 19.00606060603803,
+          "wallMs": 1254.3999999985099,
+          "throughputMiBs": 0.7974744147193418,
+          "totalCpuMs": 2770.0000000000005,
+          "mainThreadTaskMs": 1219.9329999999998,
+          "rendererCpuMs": 2450,
+          "gpuCpuMs": 310.0000000000005,
+          "droppedFrames": 10,
+          "frameP99Ms": 33.40000000000025,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1168.6499999985099,
+      "coldExtraWallMs": 131.35000000149012,
+      "coldExtraCpuMs": 699.9999999999991,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 2,
+      "paced": true,
+      "bytes": 2097323,
+      "distinctGlyphs": null,
+      "sha256": "ba35267ad1f18bc87255b3652df7cdc9ea05b2ba76c40211762d5f26147b2f9f",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 130,
+          "wallMsPerRender": 19.1,
+          "wallMs": 2483,
+          "throughputMiBs": 0.8055429232010091,
+          "totalCpuMs": 5560.000000000001,
+          "mainThreadTaskMs": 2346.6209999999996,
+          "rendererCpuMs": 4770.000000000001,
+          "gpuCpuMs": 740.0000000000002,
+          "droppedFrames": 20,
+          "frameP99Ms": 33.40000000000009,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 2166.39999999851,
+          "wallMs": 2166.39999999851,
+          "throughputMiBs": 0.923265822705632,
+          "totalCpuMs": 3119.999999999999,
+          "mainThreadTaskMs": 1871.2009999999996,
+          "rendererCpuMs": 2569.9999999999995,
+          "gpuCpuMs": 549.9999999999998,
+          "droppedFrames": 1,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 130,
+          "wallMsPerRender": 19.48538461539608,
+          "wallMs": 2533.10000000149,
+          "throughputMiBs": 0.7896107845355212,
+          "totalCpuMs": 5479.999999999999,
+          "mainThreadTaskMs": 2365.1169999999997,
+          "rendererCpuMs": 4729.999999999999,
+          "gpuCpuMs": 719.9999999999998,
+          "droppedFrames": 23,
+          "frameP99Ms": 33.400000000000546,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 2349.75,
+      "coldExtraWallMs": 133.25,
+      "coldExtraCpuMs": 1260.0000000000018,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": null
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1049062,
+      "distinctGlyphs": 26,
+      "sha256": "442f86f6c9a88840b40a0b85ecd4d5bfce4558767e1e9a6075559d18c3199945",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 4,
+          "wallMsPerRender": 11.199999999254942,
+          "wallMs": 44.79999999701977,
+          "throughputMiBs": 22.331774236257306,
+          "totalCpuMs": 159.99999999999977,
+          "mainThreadTaskMs": 61.48599999999998,
+          "rendererCpuMs": 149.99999999999997,
+          "gpuCpuMs": 9.999999999999787,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.795999999999957,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 30.599999994039536,
+          "wallMs": 30.599999994039536,
+          "throughputMiBs": 32.694885160544125,
+          "totalCpuMs": 100.00000000000065,
+          "mainThreadTaskMs": 42.55099999999998,
+          "rendererCpuMs": 89.99999999999997,
+          "gpuCpuMs": 10.000000000000675,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699000000000044,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 9.133333332836628,
+          "wallMs": 27.399999998509884,
+          "throughputMiBs": 36.51326590409425,
+          "totalCpuMs": 70.00000000000006,
+          "mainThreadTaskMs": 41.99900000000001,
+          "rendererCpuMs": 70.00000000000006,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 28.99999999627471,
+      "coldExtraWallMs": 15.800000000745058,
+      "coldExtraCpuMs": 74.99999999999942,
+      "coldExtraWallMsPerGlyph": 0.6076923077209637,
+      "coldExtraCpuMsPerGlyph": 2.8846153846153624,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 32,
+      "paced": false,
+      "bytes": 1048989,
+      "distinctGlyphs": 832,
+      "sha256": "4e88f677acbcc9f01643e35ffe691f6b61abc100f9a1624912c84420419b7feb",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 5,
+          "wallMsPerRender": 16.540000000596045,
+          "wallMs": 82.70000000298023,
+          "throughputMiBs": 12.096661033332827,
+          "totalCpuMs": 310.0000000000001,
+          "mainThreadTaskMs": 100.688,
+          "rendererCpuMs": 220.00000000000003,
+          "gpuCpuMs": 80.00000000000007,
+          "droppedFrames": 1,
+          "frameP99Ms": 32.80199999999995,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 30.799999997019768,
+          "wallMs": 30.799999997019768,
+          "throughputMiBs": 32.48032037628165,
+          "totalCpuMs": 100.00000000000065,
+          "mainThreadTaskMs": 44.07,
+          "rendererCpuMs": 89.99999999999997,
+          "gpuCpuMs": 10.000000000000675,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699000000000044,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 8.533333331346512,
+          "wallMs": 25.599999994039536,
+          "throughputMiBs": 39.077885458031176,
+          "totalCpuMs": 79.99999999999996,
+          "mainThreadTaskMs": 40.99999999999998,
+          "rendererCpuMs": 79.99999999999996,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699000000000044,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 28.19999999552965,
+      "coldExtraWallMs": 54.50000000745058,
+      "coldExtraCpuMs": 219.9999999999998,
+      "coldExtraWallMsPerGlyph": 0.06550480770126271,
+      "coldExtraCpuMsPerGlyph": 0.2644230769230767,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048791,
+      "distinctGlyphs": 6655,
+      "sha256": "c4f179e003e6e98701e5c642706ac49c9cabfc2b776304dacd509f2c759b63f5",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 4,
+          "wallMsPerRender": 51.17500000074506,
+          "wallMs": 204.70000000298023,
+          "throughputMiBs": 4.8861995113017365,
+          "totalCpuMs": 719.9999999999998,
+          "mainThreadTaskMs": 362.90200000000004,
+          "rendererCpuMs": 379.99999999999994,
+          "gpuCpuMs": 339.9999999999999,
+          "droppedFrames": 16,
+          "frameP99Ms": 116.69799999999994,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 128,
+            "maxMs": 128
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 48.100000001490116,
+          "wallMs": 48.100000001490116,
+          "throughputMiBs": 20.794283574782565,
+          "totalCpuMs": 200.00000000000074,
+          "mainThreadTaskMs": 60.946999999999974,
+          "rendererCpuMs": 150.00000000000003,
+          "gpuCpuMs": 50.00000000000071,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 11.574999999254942,
+          "wallMs": 46.29999999701977,
+          "throughputMiBs": 21.60270064886411,
+          "totalCpuMs": 179.99999999999872,
+          "mainThreadTaskMs": 61.50800000000001,
+          "rendererCpuMs": 120,
+          "gpuCpuMs": 59.99999999999872,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 47.19999999925494,
+      "coldExtraWallMs": 157.5000000037253,
+      "coldExtraCpuMs": 530,
+      "coldExtraWallMsPerGlyph": 0.023666416228959472,
+      "coldExtraCpuMsPerGlyph": 0.07963936889556725,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": false,
+      "bytes": 1049107,
+      "distinctGlyphs": 46268,
+      "sha256": "317ecfe0c87402d83b06f6933c348e9738555c049bc87eb331b762f581d19269",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 97.65000000037253,
+          "wallMs": 781.2000000029802,
+          "throughputMiBs": 1.280730160084735,
+          "totalCpuMs": 1990.0000000000007,
+          "mainThreadTaskMs": 898.667,
+          "rendererCpuMs": 1000,
+          "gpuCpuMs": 970.0000000000007,
+          "droppedFrames": 51,
+          "frameP99Ms": 198.998,
+          "longTasks": {
+            "n": 6,
+            "totalMs": 633,
+            "maxMs": 184
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 95.69999999552965,
+          "wallMs": 95.69999999552965,
+          "throughputMiBs": 10.454612341784195,
+          "totalCpuMs": 499.9999999999991,
+          "mainThreadTaskMs": 110.93699999999984,
+          "rendererCpuMs": 209.99999999999997,
+          "gpuCpuMs": 289.99999999999915,
+          "droppedFrames": 8,
+          "frameP99Ms": 99.33399999999978,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 68,
+            "maxMs": 68
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 5,
+          "wallMsPerRender": 33.34000000059605,
+          "wallMs": 166.70000000298023,
+          "throughputMiBs": 6.001838038657017,
+          "totalCpuMs": 530.0000000000007,
+          "mainThreadTaskMs": 191.19299999999996,
+          "rendererCpuMs": 310.00000000000006,
+          "gpuCpuMs": 220.00000000000063,
+          "droppedFrames": 8,
+          "frameP99Ms": 82.30100000000016,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 62,
+            "maxMs": 62
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 131.19999999925494,
+      "coldExtraWallMs": 650.0000000037253,
+      "coldExtraCpuMs": 1475.000000000001,
+      "coldExtraWallMsPerGlyph": 0.014048586496146912,
+      "coldExtraCpuMsPerGlyph": 0.031879484741073764,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "indexed",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1049010,
+      "distinctGlyphs": 6656,
+      "sha256": "1c4267eb5cc996dbda210ebcd25b388919301c838ac8e3fae1f73dc7642b99c3",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 11,
+          "wallMsPerRender": 44.472727272320874,
+          "wallMs": 489.19999999552965,
+          "throughputMiBs": 2.0449997846738803,
+          "totalCpuMs": 1079.9999999999998,
+          "mainThreadTaskMs": 523.615,
+          "rendererCpuMs": 560,
+          "gpuCpuMs": 509.9999999999998,
+          "droppedFrames": 20,
+          "frameP99Ms": 145.58200000000002,
+          "longTasks": {
+            "n": 2,
+            "totalMs": 218,
+            "maxMs": 159
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 36.69999999552965,
+          "wallMs": 36.69999999552965,
+          "throughputMiBs": 27.259234190059363,
+          "totalCpuMs": 129.99999999999955,
+          "mainThreadTaskMs": 50.72100000000002,
+          "rendererCpuMs": 109.99999999999999,
+          "gpuCpuMs": 19.999999999999574,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 10.799999999503294,
+          "wallMs": 32.399999998509884,
+          "throughputMiBs": 30.876972058621313,
+          "totalCpuMs": 89.99999999999986,
+          "mainThreadTaskMs": 45.43400000000008,
+          "rendererCpuMs": 80.00000000000007,
+          "gpuCpuMs": 9.999999999999787,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.69799999999982,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 34.54999999701977,
+      "coldExtraWallMs": 454.6499999985099,
+      "coldExtraCpuMs": 970.0000000000001,
+      "coldExtraWallMsPerGlyph": 0.06830679086516074,
+      "coldExtraCpuMsPerGlyph": 0.1457331730769231,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "background",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1049187,
+      "distinctGlyphs": 6655,
+      "sha256": "a4f35db45d254183f9860b5438de12d268909b8c4c5b0cf622ae91a73ee8be04",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 7,
+          "wallMsPerRender": 61.385714286140036,
+          "wallMs": 429.70000000298023,
+          "throughputMiBs": 2.3285610774968224,
+          "totalCpuMs": 900.0000000000013,
+          "mainThreadTaskMs": 467.17699999999996,
+          "rendererCpuMs": 460,
+          "gpuCpuMs": 440.00000000000125,
+          "droppedFrames": 20,
+          "frameP99Ms": 131.73499999999999,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 142,
+            "maxMs": 142
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 46.100000001490116,
+          "wallMs": 46.100000001490116,
+          "throughputMiBs": 21.70461377386078,
+          "totalCpuMs": 149.99999999999937,
+          "mainThreadTaskMs": 61.14399999999998,
+          "rendererCpuMs": 120,
+          "gpuCpuMs": 29.99999999999936,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 11.775000000372529,
+          "wallMs": 47.100000001490116,
+          "throughputMiBs": 21.243793948527994,
+          "totalCpuMs": 139.9999999999997,
+          "mainThreadTaskMs": 62.608,
+          "rendererCpuMs": 120.00000000000011,
+          "gpuCpuMs": 19.999999999999574,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 46.600000001490116,
+      "coldExtraWallMs": 383.1000000014901,
+      "coldExtraCpuMs": 755.0000000000017,
+      "coldExtraWallMsPerGlyph": 0.0575657400453028,
+      "coldExtraCpuMsPerGlyph": 0.1134485349361385,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "background",
+      "styles": 2048,
+      "paced": false,
+      "bytes": 1048689,
+      "distinctGlyphs": 45612,
+      "sha256": "6e9b19506986605b3198f07f2fc302f120fe1d1e568ea8e93e01444d3fec82e1",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 109.98749999981374,
+          "wallMs": 879.8999999985099,
+          "throughputMiBs": 1.136615257642286,
+          "totalCpuMs": 2080,
+          "mainThreadTaskMs": 990.375,
+          "rendererCpuMs": 990,
+          "gpuCpuMs": 1080,
+          "droppedFrames": 57,
+          "frameP99Ms": 231.29599999999994,
+          "longTasks": {
+            "n": 6,
+            "totalMs": 644,
+            "maxMs": 202
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 100.70000000298023,
+          "wallMs": 100.70000000298023,
+          "throughputMiBs": 9.93155675440075,
+          "totalCpuMs": 550.0000000000002,
+          "mainThreadTaskMs": 118.50300000000003,
+          "rendererCpuMs": 229.99999999999997,
+          "gpuCpuMs": 320.0000000000003,
+          "droppedFrames": 6,
+          "frameP99Ms": 66.59999999999991,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 71,
+            "maxMs": 71
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 32,
+          "wallMs": 128,
+          "throughputMiBs": 7.813341915607452,
+          "totalCpuMs": 490.0000000000006,
+          "mainThreadTaskMs": 150.31400000000005,
+          "rendererCpuMs": 270,
+          "gpuCpuMs": 220.00000000000063,
+          "droppedFrames": 9,
+          "frameP99Ms": 115.69800000000026,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 67,
+            "maxMs": 67
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 114.35000000149012,
+      "coldExtraWallMs": 765.5499999970198,
+      "coldExtraCpuMs": 1559.9999999999995,
+      "coldExtraWallMsPerGlyph": 0.016783960361243088,
+      "coldExtraCpuMsPerGlyph": 0.03420152591423309,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "attributes",
+      "styles": 8,
+      "paced": false,
+      "bytes": 1048813,
+      "distinctGlyphs": 208,
+      "sha256": "016700da43dd4794087ee977836eed3b8e7e8c742e7d195c5a43ed757c3d346e",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 6,
+          "wallMsPerRender": 11.800000000745058,
+          "wallMs": 70.80000000447035,
+          "throughputMiBs": 14.12748616878296,
+          "totalCpuMs": 240.00000000000136,
+          "mainThreadTaskMs": 90.363,
+          "rendererCpuMs": 220.00000000000003,
+          "gpuCpuMs": 20.00000000000135,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 39,
+          "wallMs": 39,
+          "throughputMiBs": 25.646821046486878,
+          "totalCpuMs": 149.99999999999957,
+          "mainThreadTaskMs": 54.62500000000001,
+          "rendererCpuMs": 130,
+          "gpuCpuMs": 19.999999999999574,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.796000000000067,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 10.90000000099341,
+          "wallMs": 32.70000000298023,
+          "throughputMiBs": 30.587951704031468,
+          "totalCpuMs": 130,
+          "mainThreadTaskMs": 49.11399999999999,
+          "rendererCpuMs": 109.99999999999999,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699000000000044,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 35.850000001490116,
+      "coldExtraWallMs": 34.95000000298023,
+      "coldExtraCpuMs": 100.00000000000159,
+      "coldExtraWallMsPerGlyph": 0.1680288461681742,
+      "coldExtraCpuMsPerGlyph": 0.48076923076923844,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "attributes",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048939,
+      "distinctGlyphs": 6656,
+      "sha256": "608b925dd4c3771d214c765632dd37bb9acaa3f4436b5b240fe0f46e49dafa73",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 10,
+          "wallMsPerRender": 39.479999999701974,
+          "wallMs": 394.79999999701977,
+          "throughputMiBs": 2.533804923466076,
+          "totalCpuMs": 920.0000000000003,
+          "mainThreadTaskMs": 429.193,
+          "rendererCpuMs": 499.99999999999994,
+          "gpuCpuMs": 400.00000000000034,
+          "droppedFrames": 15,
+          "frameP99Ms": 98.67200000000001,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 113,
+            "maxMs": 113
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 44,
+          "wallMs": 44,
+          "throughputMiBs": 22.73514054038308,
+          "totalCpuMs": 150.00000000000136,
+          "mainThreadTaskMs": 62.20899999999996,
+          "rendererCpuMs": 130,
+          "gpuCpuMs": 20.00000000000135,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 12.375,
+          "wallMs": 49.5,
+          "throughputMiBs": 20.209013813673845,
+          "totalCpuMs": 139.99999999999966,
+          "mainThreadTaskMs": 66.6779999999999,
+          "rendererCpuMs": 129.9999999999999,
+          "gpuCpuMs": 9.999999999999787,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 46.75,
+      "coldExtraWallMs": 348.04999999701977,
+      "coldExtraCpuMs": 774.9999999999998,
+      "coldExtraWallMsPerGlyph": 0.052291165864936866,
+      "coldExtraCpuMsPerGlyph": 0.11643629807692304,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "palette16",
+      "styles": 8,
+      "paced": false,
+      "bytes": 1048625,
+      "distinctGlyphs": 208,
+      "sha256": "a3ee8e2e392d2f4f69afc7546166892d87faf82cc3fddf07e2bcd7e3db6e216a",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 4,
+          "wallMsPerRender": 14.974999999627471,
+          "wallMs": 59.899999998509884,
+          "throughputMiBs": 16.695270952694187,
+          "totalCpuMs": 179.99999999999955,
+          "mainThreadTaskMs": 75.63499999999998,
+          "rendererCpuMs": 159.99999999999997,
+          "gpuCpuMs": 19.999999999999574,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.793999999999958,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 36.70000000298023,
+          "wallMs": 36.70000000298023,
+          "throughputMiBs": 27.249229699190597,
+          "totalCpuMs": 130.00000000000156,
+          "mainThreadTaskMs": 49.694999999999986,
+          "rendererCpuMs": 120,
+          "gpuCpuMs": 10.000000000001563,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000042,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 2,
+          "wallMsPerRender": 16.300000000745058,
+          "wallMs": 32.600000001490116,
+          "throughputMiBs": 30.676280061220634,
+          "totalCpuMs": 89.99999999999997,
+          "mainThreadTaskMs": 46.70400000000002,
+          "rendererCpuMs": 89.99999999999997,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.698999999999934,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 34.650000002235174,
+      "coldExtraWallMs": 25.24999999627471,
+      "coldExtraCpuMs": 69.99999999999878,
+      "coldExtraWallMsPerGlyph": 0.12139423075132072,
+      "coldExtraCpuMsPerGlyph": 0.3365384615384557,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "brightOnBackground",
+      "styles": 64,
+      "paced": false,
+      "bytes": 1048621,
+      "distinctGlyphs": 1664,
+      "sha256": "288a38b1e1870b782beed0ed18646dcdeb91c06c869f3e1d4ad2e781ac5759ca",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 4,
+          "wallMsPerRender": 27.59999999962747,
+          "wallMs": 110.39999999850988,
+          "throughputMiBs": 9.058359740559206,
+          "totalCpuMs": 420.0000000000001,
+          "mainThreadTaskMs": 136.64000000000001,
+          "rendererCpuMs": 259.99999999999994,
+          "gpuCpuMs": 160.00000000000014,
+          "droppedFrames": 5,
+          "frameP99Ms": 49.997,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 55,
+            "maxMs": 55
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 35.600000001490116,
+          "wallMs": 35.600000001490116,
+          "throughputMiBs": 28.091093126471332,
+          "totalCpuMs": 99.99999999999997,
+          "mainThreadTaskMs": 50.47600000000002,
+          "rendererCpuMs": 99.99999999999997,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 2,
+          "wallMsPerRender": 13.5,
+          "wallMs": 27,
+          "throughputMiBs": 37.038626494231046,
+          "totalCpuMs": 99.99999999999953,
+          "mainThreadTaskMs": 38.660000000000025,
+          "rendererCpuMs": 79.99999999999996,
+          "gpuCpuMs": 19.999999999999574,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699000000000048,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 31.300000000745058,
+      "coldExtraWallMs": 79.09999999776483,
+      "coldExtraCpuMs": 320.00000000000034,
+      "coldExtraWallMsPerGlyph": 0.04753605769096444,
+      "coldExtraCpuMsPerGlyph": 0.1923076923076925,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolorOnBackground",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1049367,
+      "distinctGlyphs": 6652,
+      "sha256": "f8fa365f5c0ab770d0caf8bb0edfb16a81161d5b6bf8779ac4f055bff31b4639",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 4,
+          "wallMsPerRender": 54.05000000074506,
+          "wallMs": 216.20000000298023,
+          "throughputMiBs": 4.62883606091805,
+          "totalCpuMs": 750,
+          "mainThreadTaskMs": 369.1599999999999,
+          "rendererCpuMs": 420,
+          "gpuCpuMs": 330.00000000000006,
+          "droppedFrames": 16,
+          "frameP99Ms": 132.96800000000007,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 148,
+            "maxMs": 148
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 53.100000001490116,
+          "wallMs": 53.100000001490116,
+          "throughputMiBs": 18.846598048139242,
+          "totalCpuMs": 210.00000000000028,
+          "mainThreadTaskMs": 68.04500000000002,
+          "rendererCpuMs": 140,
+          "gpuCpuMs": 70.00000000000028,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 5,
+          "wallMsPerRender": 12.740000000596046,
+          "wallMs": 63.70000000298023,
+          "throughputMiBs": 15.710429455847041,
+          "totalCpuMs": 220.00000000000043,
+          "mainThreadTaskMs": 81.22200000000002,
+          "rendererCpuMs": 150.00000000000014,
+          "gpuCpuMs": 70.00000000000028,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 58.400000002235174,
+      "coldExtraWallMs": 157.80000000074506,
+      "coldExtraCpuMs": 534.9999999999997,
+      "coldExtraWallMsPerGlyph": 0.023722188815505873,
+      "coldExtraCpuMsPerGlyph": 0.080426939266386,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "boldUnderline",
+      "styles": 8,
+      "paced": false,
+      "bytes": 1048732,
+      "distinctGlyphs": 208,
+      "sha256": "a3bbfd661e4b1fdba58d197d9bea672825de568b7564d233cb0b148e657c1542",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 6,
+          "wallMsPerRender": 14.983333334326744,
+          "wallMs": 89.90000000596046,
+          "throughputMiBs": 11.125125396296424,
+          "totalCpuMs": 290.0000000000011,
+          "mainThreadTaskMs": 110.33800000000002,
+          "rendererCpuMs": 259.99999999999994,
+          "gpuCpuMs": 30.000000000001137,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 39,
+          "wallMs": 39,
+          "throughputMiBs": 25.644840338291267,
+          "totalCpuMs": 140,
+          "mainThreadTaskMs": 58.76300000000001,
+          "rendererCpuMs": 140,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.697999999999933,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 3,
+          "wallMsPerRender": 12.066666667660078,
+          "wallMs": 36.20000000298023,
+          "throughputMiBs": 27.62841914671327,
+          "totalCpuMs": 109.99999999999999,
+          "mainThreadTaskMs": 52.77500000000002,
+          "rendererCpuMs": 109.99999999999999,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000045,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 37.600000001490116,
+      "coldExtraWallMs": 52.30000000447035,
+      "coldExtraCpuMs": 165.00000000000108,
+      "coldExtraWallMsPerGlyph": 0.2514423077137998,
+      "coldExtraCpuMsPerGlyph": 0.793269230769236,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 0.5,
+      "paced": false,
+      "bytes": 524481,
+      "distinctGlyphs": null,
+      "sha256": "11737cdd40e018500227c702e35e32435b428a4236385af432d701c530eed746",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 9,
+          "wallMsPerRender": 115.22222222222223,
+          "wallMs": 1037,
+          "throughputMiBs": 0.4823375690868529,
+          "totalCpuMs": 2490.0000000000005,
+          "mainThreadTaskMs": 1161.685,
+          "rendererCpuMs": 1260,
+          "gpuCpuMs": 1230.0000000000005,
+          "droppedFrames": 65,
+          "frameP99Ms": 214.26899999999992,
+          "longTasks": {
+            "n": 7,
+            "totalMs": 870,
+            "maxMs": 189
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 118.60000000149012,
+          "wallMs": 118.60000000149012,
+          "throughputMiBs": 4.217403534036948,
+          "totalCpuMs": 609.9999999999999,
+          "mainThreadTaskMs": 145.505,
+          "rendererCpuMs": 279.99999999999983,
+          "gpuCpuMs": 330.00000000000006,
+          "droppedFrames": 5,
+          "frameP99Ms": 81.80000000000017,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 97,
+            "maxMs": 97
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 2,
+          "wallMsPerRender": 8,
+          "wallMs": 16,
+          "throughputMiBs": 31.26150369644165,
+          "totalCpuMs": 110.0000000000001,
+          "mainThreadTaskMs": 37.37199999999996,
+          "rendererCpuMs": 110.0000000000001,
+          "gpuCpuMs": 0,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.699999999999818,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 67.30000000074506,
+      "coldExtraWallMs": 969.6999999992549,
+      "coldExtraCpuMs": 2130.0000000000005,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048994,
+      "distinctGlyphs": null,
+      "sha256": "37e9fb39064d6820e8a85cf03bbc6b5be304ab61823cd99a75e603030c46fb58",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 9,
+          "wallMsPerRender": 107.46666666699781,
+          "wallMs": 967.2000000029802,
+          "throughputMiBs": 1.034324478764656,
+          "totalCpuMs": 2399.999999999999,
+          "mainThreadTaskMs": 1100.799,
+          "rendererCpuMs": 1270,
+          "gpuCpuMs": 1129.999999999999,
+          "droppedFrames": 59,
+          "frameP99Ms": 197.66899999999998,
+          "longTasks": {
+            "n": 7,
+            "totalMs": 865,
+            "maxMs": 207
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 137.80000000447035,
+          "wallMs": 137.80000000447035,
+          "throughputMiBs": 7.259786907342555,
+          "totalCpuMs": 599.999999999998,
+          "mainThreadTaskMs": 161.53600000000012,
+          "rendererCpuMs": 310.00000000000006,
+          "gpuCpuMs": 279.9999999999976,
+          "droppedFrames": 5,
+          "frameP99Ms": 97.40700000000007,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 101,
+            "maxMs": 101
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 4,
+          "wallMsPerRender": 54.92500000074506,
+          "wallMs": 219.70000000298023,
+          "throughputMiBs": 4.553475811791932,
+          "totalCpuMs": 670.0000000000022,
+          "mainThreadTaskMs": 252.88700000000009,
+          "rendererCpuMs": 430.00000000000017,
+          "gpuCpuMs": 240.000000000002,
+          "droppedFrames": 10,
+          "frameP99Ms": 115.93399999999991,
+          "longTasks": {
+            "n": 2,
+            "totalMs": 185,
+            "maxMs": 93
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 178.7500000037253,
+      "coldExtraWallMs": 788.4499999992549,
+      "coldExtraCpuMs": 1764.999999999999,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 2,
+      "paced": false,
+      "bytes": 2097483,
+      "distinctGlyphs": null,
+      "sha256": "ee901b27b5aa1a57236065489b0330341806a523d97c0a67d96a835da9a7442a",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 7,
+          "wallMsPerRender": 120.62857142835855,
+          "wallMs": 844.3999999985099,
+          "throughputMiBs": 2.3689195478473004,
+          "totalCpuMs": 2239.999999999998,
+          "mainThreadTaskMs": 986.7879999999999,
+          "rendererCpuMs": 1230,
+          "gpuCpuMs": 1009.999999999998,
+          "droppedFrames": 53,
+          "frameP99Ms": 199.07499999999987,
+          "longTasks": {
+            "n": 6,
+            "totalMs": 789,
+            "maxMs": 193
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 171.30000000447035,
+          "wallMs": 171.30000000447035,
+          "throughputMiBs": 11.677266002022936,
+          "totalCpuMs": 649.9999999999991,
+          "mainThreadTaskMs": 197.948,
+          "rendererCpuMs": 350.0000000000001,
+          "gpuCpuMs": 289.99999999999915,
+          "droppedFrames": 8,
+          "frameP99Ms": 98.90400000000008,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 108,
+            "maxMs": 108
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 5,
+          "wallMsPerRender": 71.22000000029803,
+          "wallMs": 356.1000000014901,
+          "throughputMiBs": 5.6172863414500425,
+          "totalCpuMs": 1010.000000000002,
+          "mainThreadTaskMs": 396.19899999999996,
+          "rendererCpuMs": 580.0000000000001,
+          "gpuCpuMs": 420.0000000000017,
+          "droppedFrames": 19,
+          "frameP99Ms": 164.69900000000024,
+          "longTasks": {
+            "n": 3,
+            "totalMs": 295,
+            "maxMs": 107
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 263.70000000298023,
+      "coldExtraWallMs": 580.6999999955297,
+      "coldExtraCpuMs": 1409.9999999999977,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 4,
+      "paced": false,
+      "bytes": 4194555,
+      "distinctGlyphs": null,
+      "sha256": "2cd27958a64b5d64726fda4ea7e203ed2d27354058b4854ea7290f5d4fd3d9e0",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 8,
+          "wallMsPerRender": 125.22499999962747,
+          "wallMs": 1001.7999999970198,
+          "throughputMiBs": 3.9930518788833282,
+          "totalCpuMs": 2590.0000000000005,
+          "mainThreadTaskMs": 1133.913,
+          "rendererCpuMs": 1420,
+          "gpuCpuMs": 1160.0000000000002,
+          "droppedFrames": 61,
+          "frameP99Ms": 198.90399999999985,
+          "longTasks": {
+            "n": 7,
+            "totalMs": 860,
+            "maxMs": 186
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 1,
+          "wallMsPerRender": 474.79999999701977,
+          "wallMs": 474.79999999701977,
+          "throughputMiBs": 8.42510398542234,
+          "totalCpuMs": 1690.0000000000014,
+          "mainThreadTaskMs": 617.1719999999998,
+          "rendererCpuMs": 910.0000000000001,
+          "gpuCpuMs": 780.0000000000011,
+          "droppedFrames": 27,
+          "frameP99Ms": 115.69799999999982,
+          "longTasks": {
+            "n": 5,
+            "totalMs": 437,
+            "maxMs": 99
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 5,
+          "wallMsPerRender": 70.5199999988079,
+          "wallMs": 352.59999999403954,
+          "throughputMiBs": 11.344978367331366,
+          "totalCpuMs": 1109.9999999999986,
+          "mainThreadTaskMs": 394.34900000000005,
+          "rendererCpuMs": 620.0000000000001,
+          "gpuCpuMs": 489.9999999999984,
+          "droppedFrames": 17,
+          "frameP99Ms": 132.89600000000007,
+          "longTasks": {
+            "n": 3,
+            "totalMs": 238,
+            "maxMs": 89
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 413.69999999552965,
+      "coldExtraWallMs": 588.1000000014901,
+      "coldExtraCpuMs": 1190.0000000000005,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1049062,
+      "distinctGlyphs": 26,
+      "sha256": "442f86f6c9a88840b40a0b85ecd4d5bfce4558767e1e9a6075559d18c3199945",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 16.416666666666668,
+          "wallMs": 1083.5,
+          "throughputMiBs": 0.9233627002471375,
+          "totalCpuMs": 299.999999999999,
+          "mainThreadTaskMs": 143.231,
+          "rendererCpuMs": 250.00000000000006,
+          "gpuCpuMs": 39.99999999999915,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999955,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 16.40909090909091,
+          "wallMs": 1083,
+          "throughputMiBs": 0.923788998816042,
+          "totalCpuMs": 199.9999999999994,
+          "mainThreadTaskMs": 107.81399999999996,
+          "rendererCpuMs": 150.00000000000003,
+          "gpuCpuMs": 39.99999999999915,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 16.410606060628638,
+          "wallMs": 1083.1000000014901,
+          "throughputMiBs": 0.9237037076136987,
+          "totalCpuMs": 220.00000000000276,
+          "mainThreadTaskMs": 118.085,
+          "rendererCpuMs": 160.00000000000003,
+          "gpuCpuMs": 40.0000000000027,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1083.050000000745,
+      "coldExtraWallMs": 0.44999999925494194,
+      "coldExtraCpuMs": 89.9999999999979,
+      "coldExtraWallMsPerGlyph": 0.017307692279036228,
+      "coldExtraCpuMsPerGlyph": 3.461538461538381,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": true,
+      "bytes": 1048791,
+      "distinctGlyphs": 6655,
+      "sha256": "c4f179e003e6e98701e5c642706ac49c9cabfc2b776304dacd509f2c759b63f5",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 21.71515151519667,
+          "wallMs": 1433.2000000029802,
+          "throughputMiBs": 0.697882389042665,
+          "totalCpuMs": 1260.0000000000027,
+          "mainThreadTaskMs": 626.987,
+          "rendererCpuMs": 620.0000000000001,
+          "gpuCpuMs": 630.0000000000025,
+          "droppedFrames": 21,
+          "frameP99Ms": 105.80999999999992,
+          "longTasks": {
+            "n": 2,
+            "totalMs": 164,
+            "maxMs": 112
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 16.41212121216637,
+          "wallMs": 1083.2000000029802,
+          "throughputMiBs": 0.9233798374956383,
+          "totalCpuMs": 299.9999999999989,
+          "mainThreadTaskMs": 189.23900000000003,
+          "rendererCpuMs": 250,
+          "gpuCpuMs": 39.99999999999915,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.700000000000273,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 16.41363636359121,
+          "wallMs": 1083.2999999970198,
+          "throughputMiBs": 0.923294599816098,
+          "totalCpuMs": 269.9999999999991,
+          "mainThreadTaskMs": 180.23199999999994,
+          "rendererCpuMs": 219.99999999999997,
+          "gpuCpuMs": 39.99999999999915,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1083.25,
+      "coldExtraWallMs": 349.95000000298023,
+      "coldExtraCpuMs": 975.0000000000038,
+      "coldExtraWallMsPerGlyph": 0.05258452291554925,
+      "coldExtraCpuMsPerGlyph": 0.14650638617580822,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": true,
+      "bytes": 1049107,
+      "distinctGlyphs": 46268,
+      "sha256": "317ecfe0c87402d83b06f6933c348e9738555c049bc87eb331b762f581d19269",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 56.69393939389424,
+          "wallMs": 3741.7999999970198,
+          "throughputMiBs": 0.26738639186028346,
+          "totalCpuMs": 6009.999999999998,
+          "mainThreadTaskMs": 1987.814,
+          "rendererCpuMs": 2260,
+          "gpuCpuMs": 3739.9999999999986,
+          "droppedFrames": 159,
+          "frameP99Ms": 184.13499999999982,
+          "longTasks": {
+            "n": 7,
+            "totalMs": 648,
+            "maxMs": 147
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 67,
+          "wallMsPerRender": 16.170149253709102,
+          "wallMs": 1083.3999999985099,
+          "throughputMiBs": 0.9234875402098837,
+          "totalCpuMs": 450.00000000000057,
+          "mainThreadTaskMs": 241.47099999999978,
+          "rendererCpuMs": 389.99999999999966,
+          "gpuCpuMs": 50.00000000000071,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 67,
+          "wallMsPerRender": 16.168656716484634,
+          "wallMs": 1083.3000000044703,
+          "throughputMiBs": 0.9235727878315176,
+          "totalCpuMs": 420.00000000000125,
+          "mainThreadTaskMs": 245.27900000000002,
+          "rendererCpuMs": 370.0000000000001,
+          "gpuCpuMs": 30.000000000001137,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1083.3500000014901,
+      "coldExtraWallMs": 2658.4499999955297,
+      "coldExtraCpuMs": 5574.999999999997,
+      "coldExtraWallMsPerGlyph": 0.057457638108315244,
+      "coldExtraCpuMsPerGlyph": 0.12049364571626173,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1048994,
+      "distinctGlyphs": null,
+      "sha256": "37e9fb39064d6820e8a85cf03bbc6b5be304ab61823cd99a75e603030c46fb58",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 148.75151515153772,
+          "wallMs": 9817.60000000149,
+          "throughputMiBs": 0.10189849208198601,
+          "totalCpuMs": 15900.000000000004,
+          "mainThreadTaskMs": 4874.551,
+          "rendererCpuMs": 6010.000000000001,
+          "gpuCpuMs": 9860.000000000004,
+          "droppedFrames": 529,
+          "frameP99Ms": 205.84499999999983,
+          "longTasks": {
+            "n": 61,
+            "totalMs": 4235,
+            "maxMs": 181
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 17.675757575780153,
+          "wallMs": 1166.6000000014901,
+          "throughputMiBs": 0.8575335469423795,
+          "totalCpuMs": 1059.9999999999952,
+          "mainThreadTaskMs": 389.6960000000007,
+          "rendererCpuMs": 849.9999999999997,
+          "gpuCpuMs": 199.99999999999574,
+          "droppedFrames": 5,
+          "frameP99Ms": 55.90999999999976,
+          "longTasks": {
+            "n": 1,
+            "totalMs": 50,
+            "maxMs": 50
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 16.410606060628638,
+          "wallMs": 1083.1000000014901,
+          "throughputMiBs": 0.9236438333144507,
+          "totalCpuMs": 670.0000000000057,
+          "mainThreadTaskMs": 308.1719999999999,
+          "rendererCpuMs": 610.0000000000013,
+          "gpuCpuMs": 50.00000000000426,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999272,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 1124.8500000014901,
+      "coldExtraWallMs": 8692.75,
+      "coldExtraCpuMs": 15035.000000000004,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 2,
+      "paced": true,
+      "bytes": 2097483,
+      "distinctGlyphs": null,
+      "sha256": "ee901b27b5aa1a57236065489b0330341806a523d97c0a67d96a835da9a7442a",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 130,
+          "wallMsPerRender": 138.4923076923077,
+          "wallMs": 18004,
+          "throughputMiBs": 0.11110395835362866,
+          "totalCpuMs": 29180,
+          "mainThreadTaskMs": 8607.414999999999,
+          "rendererCpuMs": 11180,
+          "gpuCpuMs": 17960,
+          "droppedFrames": 957,
+          "frameP99Ms": 216.67099999999985,
+          "longTasks": {
+            "n": 104,
+            "totalMs": 6591,
+            "maxMs": 187
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 130,
+          "wallMsPerRender": 16.536153846119458,
+          "wallMs": 2149.6999999955297,
+          "throughputMiBs": 0.9305092181248036,
+          "totalCpuMs": 1449.9999999999995,
+          "mainThreadTaskMs": 596.3839999999987,
+          "rendererCpuMs": 1340.0000000000016,
+          "gpuCpuMs": 79.9999999999983,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.799999999999272,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 130,
+          "wallMsPerRender": 16.53538461539608,
+          "wallMs": 2149.60000000149,
+          "throughputMiBs": 0.9305525056742388,
+          "totalCpuMs": 1470.0000000000048,
+          "mainThreadTaskMs": 608.7050000000005,
+          "rendererCpuMs": 1369.9999999999993,
+          "gpuCpuMs": 80.0000000000054,
+          "droppedFrames": 0,
+          "frameP99Ms": 16.800000000001855,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 2149.64999999851,
+      "coldExtraWallMs": 15854.35000000149,
+      "coldExtraCpuMs": 27719.999999999996,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "geometry": {
+        "cols": 152,
+        "rows": 38,
+        "gl": {
+          "vendor": "Google Inc. (AMD)",
+          "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+        }
+      },
+      "project": "desktop"
+    }
+  ],
+  "limits": "Headless Chromium on a desktop host: not an Android WebView. A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached."
+}

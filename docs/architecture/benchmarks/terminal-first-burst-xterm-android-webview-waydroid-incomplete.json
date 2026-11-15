@@ -1,0 +1,1172 @@
+{
+  "schema": 1,
+  "run": "first burst",
+  "mode": "full",
+  "host": {
+    "loadAverageAtEnd": [
+      5.67,
+      6.74,
+      7.31
+    ],
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalCpus": 24,
+    "os": "Linux 7.3.3-1-cachyos",
+    "cpuGovernor": "powersave"
+  },
+  "toolchain": {
+    "node": "26.6.0",
+    "chromium": null,
+    "androidSerial": "192.168.240.112:5555",
+    "device": {
+      "serial": "192.168.240.112:5555",
+      "release": "13",
+      "model": "WayDroid x86_64 Device",
+      "wmSize": "Physical size: 1920x1080\nOverride size: 1080x2400",
+      "wmDensity": "Physical density: 180\nOverride density: 420",
+      "focus": "mCurrentFocus=Window{36e086d u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}"
+    },
+    "xterm": "5.5.0",
+    "webglAddon": "0.18.0"
+  },
+  "source": {
+    "commit": "d61886d94c18ddc398518d0fb992ff1d7cae86f1",
+    "dirty": false
+  },
+  "launchArgs": [],
+  "results": [
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048598,
+      "distinctGlyphs": 26,
+      "sha256": "82fc08615d3bbd20a0aed4199b708d8ada66a7115745342b195f70949fc574a6",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 28,
+          "wallMsPerRender": 4.2892857143389325,
+          "wallMs": 120.10000000149012,
+          "throughputMiBs": 8.326569365716514,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 137.86599999999999,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 1,
+          "frameP99Ms": 7.1470000000000535,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 19,
+          "wallMsPerRender": 4.063157894893696,
+          "wallMs": 77.20000000298023,
+          "throughputMiBs": 12.953639647621193,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 93.94400000000003,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.281999999999971,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 14,
+          "wallMsPerRender": 4,
+          "wallMs": 56,
+          "throughputMiBs": 17.857517514910015,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 72.92900000000002,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.286999999999966,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 66.60000000149012,
+      "coldExtraWallMs": 53.5,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 2.0576923076923075,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048728,
+      "distinctGlyphs": 6656,
+      "sha256": "58c26ef61e1fbe0896574331f55e3ca8fcd5ee27fd466e14606113a7dc92617e",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 8.016666666689245,
+          "wallMs": 529.1000000014901,
+          "throughputMiBs": 1.8902758618281552,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 568.858,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 62,
+          "frameP99Ms": 12.600000000000062,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 64,
+          "wallMsPerRender": 7.8984375,
+          "wallMs": 505.5,
+          "throughputMiBs": 1.9785261295669512,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 541.777,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 60,
+          "frameP99Ms": 12.538000000000052,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 60,
+          "wallMsPerRender": 7.651666666567325,
+          "wallMs": 459.09999999403954,
+          "throughputMiBs": 2.1784904345656253,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 492.761,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 51,
+          "frameP99Ms": 12.5,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 482.29999999701977,
+      "coldExtraWallMs": 46.80000000447035,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.007031250000671627,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": false,
+      "bytes": 1048592,
+      "distinctGlyphs": 46040,
+      "sha256": "e18bbedb99521afb1cbda9162cf8a5e00bc6b9b4a9500d502299091fa139fbc9",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 8.080303030257875,
+          "wallMs": 533.2999999970198,
+          "throughputMiBs": 1.8751458068528988,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 578.2049999999999,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 64,
+          "frameP99Ms": 14,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 64,
+          "wallMsPerRender": 7.557812500046566,
+          "wallMs": 483.70000000298023,
+          "throughputMiBs": 2.0674286929561734,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 522.523,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 54,
+          "frameP99Ms": 12.5,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 60,
+          "wallMsPerRender": 7.443333333358169,
+          "wallMs": 446.6000000014901,
+          "throughputMiBs": 2.23917433673472,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 485.8370000000001,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 49,
+          "frameP99Ms": 12.5,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 465.1500000022352,
+      "coldExtraWallMs": 68.1499999947846,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.0014802345785140008,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048635,
+      "distinctGlyphs": null,
+      "sha256": "15ee5d805b78711e1526bf2852739117bd4167eacc985a3c8b331775ceb73ffe",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 7.830303030370763,
+          "wallMs": 516.8000000044703,
+          "throughputMiBs": 1.93509339546443,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 555.6320000000001,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 59,
+          "frameP99Ms": 13.934999999999985,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 64,
+          "wallMsPerRender": 6.9296875,
+          "wallMs": 443.5,
+          "throughputMiBs": 2.254918301656523,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 486.182,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 43,
+          "frameP99Ms": 9.917000000000048,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 62,
+          "wallMsPerRender": 7.469354838733712,
+          "wallMs": 463.1000000014901,
+          "throughputMiBs": 2.1594823294784065,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 505.3780000000001,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 50,
+          "frameP99Ms": 12.600000000000087,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 453.30000000074506,
+      "coldExtraWallMs": 63.50000000372529,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1048598,
+      "distinctGlyphs": 26,
+      "sha256": "82fc08615d3bbd20a0aed4199b708d8ada66a7115745342b195f70949fc574a6",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 4.162121212166367,
+          "wallMs": 274.70000000298023,
+          "throughputMiBs": 3.640411288038266,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 216.05200000000002,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 1,
+          "frameP99Ms": 6.219999999999981,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 4.106060606060606,
+          "wallMs": 271,
+          "throughputMiBs": 3.6901143204242097,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 191.51000000000002,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.2999999999999545,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 4.100000000022577,
+          "wallMs": 270.6000000014901,
+          "throughputMiBs": 3.695569034846468,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 193.79899999999995,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.535000000000047,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 270.80000000074506,
+      "coldExtraWallMs": 3.900000002235174,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.15000000008596823,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": true,
+      "bytes": 1048728,
+      "distinctGlyphs": 6656,
+      "sha256": "58c26ef61e1fbe0896574331f55e3ca8fcd5ee27fd466e14606113a7dc92617e",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 7.790909090954246,
+          "wallMs": 514.2000000029802,
+          "throughputMiBs": 1.9450504832561202,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 559.172,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 59,
+          "frameP99Ms": 12.535000000000007,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 7.6227272727498505,
+          "wallMs": 503.1000000014901,
+          "throughputMiBs": 1.9879645368577448,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 539.798,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 56,
+          "frameP99Ms": 9.835000000000036,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 7.537878787878788,
+          "wallMs": 497.5,
+          "throughputMiBs": 2.0103416251177766,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 528.769,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 55,
+          "frameP99Ms": 12.534999999999968,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 500.30000000074506,
+      "coldExtraWallMs": 13.900000002235174,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.0020883413464896595,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": true,
+      "bytes": 1048592,
+      "distinctGlyphs": 46040,
+      "sha256": "e18bbedb99521afb1cbda9162cf8a5e00bc6b9b4a9500d502299091fa139fbc9",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 7.762121212188944,
+          "wallMs": 512.3000000044703,
+          "throughputMiBs": 1.9520110458331763,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 555.5680000000001,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 59,
+          "frameP99Ms": 12.600000000000023,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 7.6651515151289376,
+          "wallMs": 505.8999999985099,
+          "throughputMiBs": 1.9767053939355763,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 540.189,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 57,
+          "frameP99Ms": 12.5,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 7.846969696947119,
+          "wallMs": 517.8999999985099,
+          "throughputMiBs": 1.9309041490479624,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 551.388,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 60,
+          "frameP99Ms": 12.5,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 511.8999999985099,
+      "coldExtraWallMs": 0.4000000059604645,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.000008688097436152573,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "dom",
+      "family": "w3",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1048635,
+      "distinctGlyphs": null,
+      "sha256": "15ee5d805b78711e1526bf2852739117bd4167eacc985a3c8b331775ceb73ffe",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 7.771212121189544,
+          "wallMs": 512.8999999985099,
+          "throughputMiBs": 1.9498075000732569,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 550.721,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 58,
+          "frameP99Ms": 13.934999999999985,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 7.178787878742724,
+          "wallMs": 473.79999999701977,
+          "throughputMiBs": 2.110713944261204,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 511.49600000000004,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 49,
+          "frameP99Ms": 12.5,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 7.139393939439095,
+          "wallMs": 471.20000000298023,
+          "throughputMiBs": 2.1223604982562456,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 505.3810000000001,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 49,
+          "frameP99Ms": 12.569999999999935,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 472.5,
+      "coldExtraWallMs": 40.399999998509884,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": null,
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048720,
+      "distinctGlyphs": 26,
+      "sha256": "5744bbc1226be4fda3dd5c36c3fc44f53f86026662b226c50ad181d316fe8d8c",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 16,
+          "wallMsPerRender": 4.3125,
+          "wallMs": 69,
+          "throughputMiBs": 14.494743900022645,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 93.00899999999999,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 1,
+          "frameP99Ms": 7.769999999999985,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 12,
+          "wallMsPerRender": 3.9833333337058625,
+          "wallMs": 47.80000000447035,
+          "throughputMiBs": 20.92337508384995,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 60.468999999999994,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.2000000000000455,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 10,
+          "wallMsPerRender": 4,
+          "wallMs": 40,
+          "throughputMiBs": 25.003433227539062,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 51.842,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.2000000000000455,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 43.900000002235174,
+      "coldExtraWallMs": 25.099999997764826,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.9653846152986472,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.19999999999996,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": {
+          "vendor": "AMD",
+          "renderer": "AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.3-1-cachyos)"
+        },
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 256,
+      "paced": false,
+      "bytes": 1048620,
+      "distinctGlyphs": 6654,
+      "sha256": "6496cda631012ccfd5360c217c0fcec9f000ab297889bedd33a3abb378784a9f",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 39,
+          "wallMsPerRender": 17.71794871794872,
+          "wallMs": 691,
+          "throughputMiBs": 1.4472387289000317,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 712.0529999999999,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 127,
+          "frameP99Ms": 109.15399999999988,
+          "longTasks": {
+            "n": 3,
+            "totalMs": 266,
+            "maxMs": 127
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 13,
+          "wallMsPerRender": 4.076923076923077,
+          "wallMs": 53,
+          "throughputMiBs": 18.868716257923055,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 67.70699999999997,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.375999999999885,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 11,
+          "wallMsPerRender": 4.05454545468092,
+          "wallMs": 44.600000001490116,
+          "throughputMiBs": 22.422465507545063,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 60.254999999999946,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.2000000000000455,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 48.80000000074506,
+      "coldExtraWallMs": 642.1999999992549,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.09651337541317327,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": {
+          "vendor": "AMD",
+          "renderer": "AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.3-1-cachyos)"
+        },
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 2048,
+      "paced": false,
+      "bytes": 1048577,
+      "distinctGlyphs": 46124,
+      "sha256": "f508ddb3e9c3a99977954e7e3d29517b21aa36fcd629719029f6c157c3af1eff",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 45.08484848487106,
+          "wallMs": 2975.60000000149,
+          "throughputMiBs": 0.33606699612643354,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 3013.577,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 649,
+          "frameP99Ms": 128.42499999999984,
+          "longTasks": {
+            "n": 19,
+            "totalMs": 1469,
+            "maxMs": 148
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 11,
+          "wallMsPerRender": 4.127272727137262,
+          "wallMs": 45.399999998509884,
+          "throughputMiBs": 22.026452724826836,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 67.66799999999984,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.2899999999997815,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 10,
+          "wallMsPerRender": 3.9400000005960463,
+          "wallMs": 39.400000005960464,
+          "throughputMiBs": 25.380734860990746,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 63.148999999999674,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.200000000000273,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 42.400000002235174,
+      "coldExtraWallMs": 2933.199999999255,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.06359379065127167,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": {
+          "vendor": "AMD",
+          "renderer": "AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.3-1-cachyos)"
+        },
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "w3",
+      "styles": 1,
+      "paced": false,
+      "bytes": 1048638,
+      "distinctGlyphs": null,
+      "sha256": "a9f40a00799e3a7b91cbb2a03abea4084355e6ccb3341e25dbb264d9970c2e0b",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 59.283333333378486,
+          "wallMs": 3912.7000000029802,
+          "throughputMiBs": 0.25559310138954056,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 3959.6139999999996,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 874,
+          "frameP99Ms": 123.87999999999988,
+          "longTasks": {
+            "n": 41,
+            "totalMs": 2721,
+            "maxMs": 135
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 14,
+          "wallMsPerRender": 4.028571428464992,
+          "wallMs": 56.399999998509884,
+          "throughputMiBs": 17.731544819752468,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 84.03799999999961,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.286999999999462,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 13,
+          "wallMsPerRender": 4.123076923191547,
+          "wallMs": 53.600000001490116,
+          "throughputMiBs": 18.657819548130874,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 79.25300000000047,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.200000000000728,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 55,
+      "coldExtraWallMs": 3857.7000000029802,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": null,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": {
+          "vendor": "AMD",
+          "renderer": "AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.3-1-cachyos)"
+        },
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    },
+    {
+      "renderer": "webgl",
+      "family": "truecolor",
+      "styles": 1,
+      "paced": true,
+      "bytes": 1048720,
+      "distinctGlyphs": 26,
+      "sha256": "5744bbc1226be4fda3dd5c36c3fc44f53f86026662b226c50ad181d316fe8d8c",
+      "passes": [
+        {
+          "pass": 1,
+          "renders": 66,
+          "wallMsPerRender": 4.163636363591209,
+          "wallMs": 274.79999999701977,
+          "throughputMiBs": 3.6395099312678645,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 120.40999999999997,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 1,
+          "frameP99Ms": 6.22499999999998,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 2,
+          "renders": 66,
+          "wallMsPerRender": 4.100000000022577,
+          "wallMs": 270.6000000014901,
+          "throughputMiBs": 3.695998998876774,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 85.87700000000004,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.235000000000093,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        },
+        {
+          "pass": 3,
+          "renders": 66,
+          "wallMsPerRender": 4.104545454522877,
+          "wallMs": 270.8999999985099,
+          "throughputMiBs": 3.6919059767702613,
+          "totalCpuMs": null,
+          "mainThreadTaskMs": 86.84899999999996,
+          "rendererCpuMs": null,
+          "gpuCpuMs": null,
+          "droppedFrames": 0,
+          "frameP99Ms": 4.300000000000182,
+          "longTasks": {
+            "n": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "correct": true
+        }
+      ],
+      "warmWallMs": 270.75,
+      "coldExtraWallMs": 4.049999997019768,
+      "coldExtraCpuMs": null,
+      "coldExtraWallMsPerGlyph": 0.15576923065460646,
+      "coldExtraCpuMsPerGlyph": null,
+      "refreshNominalMs": 4.199999999999989,
+      "geometry": {
+        "cols": 48,
+        "rows": 34,
+        "gl": {
+          "vendor": "AMD",
+          "renderer": "AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.3-1-cachyos)"
+        },
+        "devicePixelRatio": 2.625,
+        "viewport": [
+          411,
+          782
+        ],
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; WayDroid x86_64 Device Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36"
+      },
+      "project": "desktop"
+    }
+  ],
+  "limits": "The Android System WebView of the device with that adb serial, in a fresh process per row; no per-process CPU (the WebView has no process list). A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached."
+}

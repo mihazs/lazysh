@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "candidate": "xterm-webgl",
+  "run": "context loss",
+  "host": {
+    "loadAverageAtEnd": [
+      15.52,
+      16.73,
+      15.33
+    ],
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "os": "Linux 7.3.3-1-cachyos"
+  },
+  "toolchain": {
+    "node": "26.6.0",
+    "xterm": "5.5.0",
+    "webglAddon": "0.18.0",
+    "playwright": "1.64.1"
+  },
+  "source": {
+    "commit": "f44d52df9fa8a74efc6f72370c5c5febb9a5b188",
+    "dirty": false
+  },
+  "launchArgs": [
+    "--use-angle=vulkan",
+    "--enable-features=Vulkan",
+    "--ignore-gpu-blocklist",
+    "--enable-gpu",
+    "--disable-vulkan-surface"
+  ],
+  "restoreWindowMs": 3000,
+  "context": {
+    "geometry": {
+      "cols": 152,
+      "rows": 38,
+      "scrollback": 5000,
+      "cursorBlink": true,
+      "fontSize": 14,
+      "devicePixelRatio": 1,
+      "viewport": [
+        1280,
+        850
+      ],
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36",
+      "hardwareConcurrency": 24,
+      "build": "production",
+      "renderer": "xterm-webgl",
+      "canvases": 2,
+      "gl": {
+        "vendor": "Google Inc. (AMD)",
+        "renderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon RX 5500 XT (RADV NAVI14) (0x00007340)), radv)"
+      },
+      "domNodes": 84
+    },
+    "chromium": "156.0.8078.4"
+  },
+  "results": [
+    {
+      "scenario": "restored quickly",
+      "restoreAfterMs": 300,
+      "identicalWhileLost": false,
+      "pixelsIdenticalAfterRestore": true,
+      "restoreToIdenticalPixelsMsUpperBound": 120,
+      "loseToCanvasLostMs": 3.399999998509884,
+      "restoreToCanvasRestoredMs": 9,
+      "addonGaveUp": 0,
+      "canvasesAfter": 2
+    },
+    {
+      "scenario": "restored just inside the addon grace period",
+      "restoreAfterMs": 2000,
+      "identicalWhileLost": false,
+      "pixelsIdenticalAfterRestore": true,
+      "restoreToIdenticalPixelsMsUpperBound": 102,
+      "loseToCanvasLostMs": 2.2999999970197678,
+      "restoreToCanvasRestoredMs": 6.299999997019768,
+      "addonGaveUp": 0,
+      "canvasesAfter": 2
+    },
+    {
+      "scenario": "output while lost, then restored",
+      "bytesWhileLost": 684,
+      "pixelsIdenticalToNeverLost": true,
+      "restoreToIdenticalPixelsMsUpperBound": 121,
+      "addonGaveUp": 0
+    },
+    {
+      "scenario": "never restored, then WebGL attached again",
+      "loseToAddonGaveUpMs": 3004.89999999851,
+      "fallbackPixelsIdenticalToDomRenderer": true,
+      "fallbackToIdenticalPixelsMsUpperBound": 98,
+      "canvasesAfterFallback": 0,
+      "lateRestoreKeepsDomPixels": true,
+      "bufferKeptAcrossFallback": true,
+      "reattachPixelsIdenticalToWebgl": true,
+      "reattachToIdenticalPixelsMsUpperBound": 142,
+      "canvasesAfterReattach": 2,
+      "addonGaveUpTotal": 1
+    }
+  ],
+  "limits": "Headless Chromium on a desktop host: not an Android WebView, no backgrounding of an app, no GPU process crash; the context is taken away with WEBGL_lose_context. Pixel comparison against a terminal fed the same bytes; times are upper bounds with the resolution of one screenshot unless taken in the page."
+}
