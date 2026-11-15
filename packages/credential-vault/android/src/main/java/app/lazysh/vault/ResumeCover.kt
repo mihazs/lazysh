@@ -89,10 +89,11 @@ internal class ResumeCover(private var activity: Activity) {
     fun resume() { gate.resume(); render(); if (ready) send("foreground") }
     private fun render() {
         relabel()
-        val starting = gate.awaitingPolicy && !failed
+        val covered = gate.covered
+        // A cover held for the reveal keeps its startup look: the lock controls would flash for the frames until the page has painted.
+        val starting = (gate.awaitingPolicy || (!covered && overlay?.visibility == View.VISIBLE)) && !failed
         logo?.visibility = if (starting) View.VISIBLE else View.GONE
         for (view in listOf(title, status, unlock)) view?.visibility = if (starting) View.GONE else View.VISIBLE
-        val covered = gate.covered
         if (gate.protectsContent) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         webview?.apply {

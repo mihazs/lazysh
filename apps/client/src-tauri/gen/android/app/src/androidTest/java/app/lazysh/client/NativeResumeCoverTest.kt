@@ -26,6 +26,12 @@ class NativeResumeCoverTest {
         assertFalse(blank.isEnabled)
         assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, blank.importantForAccessibility)
     }
+    /** A reveal holds the cover until the page has painted; those frames must show the startup logo, not the lock controls of a policy that no longer asks. */
+    private fun assertHeldAsStartup(logo: View, unlock: View, title: View) {
+        assertEquals(View.VISIBLE, logo.visibility)
+        assertEquals("A held reveal must not flash the unlock button", View.GONE, unlock.visibility)
+        assertEquals(View.GONE, title.visibility)
+    }
     @Test fun coverRebindsToRecreatedActivityWithoutReusingOldUnlock() {
         val type = Class.forName("app.lazysh.vault.ResumeCover")
         val load = type.getMethod("load", WebView::class.java, Activity::class.java)
@@ -74,6 +80,7 @@ class NativeResumeCoverTest {
                 assertEquals("A confirmed lock must retain its unlock action", View.VISIBLE, coverView("unlock").visibility)
                 assertEquals(true, apply.invoke(cover, false, true, 2L, 0L))
                 assertEquals(View.VISIBLE, blank.visibility)
+                assertHeldAsStartup(coverView("logo"), coverView("unlock"), coverView("title"))
                 assertTrue("Enabled policy must retain secure-window protection while unlocked",
                     activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
                 (blank.parent as? ViewGroup)?.removeView(blank)
@@ -98,6 +105,7 @@ class NativeResumeCoverTest {
                 assertEquals(true, apply.invoke(cover, true, true, 3L, 1L))
                 assertEquals(true, apply.invoke(cover, false, true, 4L, 1L))
                 assertEquals(View.VISIBLE, blank.visibility)
+                assertHeldAsStartup(logo, unlock, type.getDeclaredField("title").apply { isAccessible = true }.get(cover) as View)
                 assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
                 recreated = blank
             }
