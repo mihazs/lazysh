@@ -5,8 +5,8 @@ name: main-verdict
 # a busy trunk cancels the pending run of every older commit. A merged result that no single pull
 # request exercised (two PRs adding the same i18n key) then reached the release build without a
 # completed type-check. Only the cheap type-check, build and release-tool jobs repeat here; the
-# native matrix stays in `checks`. A version PR merges only after its base commit's verdict is
-# green (CONTRIBUTING.md, "Main verdict").
+# native matrix stays in `checks`. The verdict is evidence for fixing `main` forward and does not
+# gate the version PR (CONTRIBUTING.md, "Main verdict").
 on:
   push:
     branches: [main]
