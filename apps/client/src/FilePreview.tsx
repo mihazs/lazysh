@@ -2,10 +2,11 @@ import {t, useUi} from './i18n/core';
 import {useEffect, useState} from 'react';
 import CodePreview from './CodePreview';
 import {ChatMarkdown} from './ChatInteraction';
-import {previewKind} from './mediaPreview';
+import MediaFrame from './MediaFrame';
+import {previewKind, type MediaClip} from './mediaPreview';
 import './FilePreview.css';
 
-export type FileContent = Readonly<{path: string; text: string} | {path: string; image: string}>;
+export type FileContent = Readonly<{path: string; text: string} | {path: string; image: string} | {path: string; clip: MediaClip} | {path: string; pdf: true}>;
 
 /** An SVG document becomes an image resource: no inline markup, scripts or external loads. */
 function SvgImage({text, alt}: {text: string; alt: string}) {
@@ -18,12 +19,14 @@ function SvgImage({text, alt}: {text: string; alt: string}) {
   return url ? <img className="file-media" src={url} alt={alt}/> : null;
 }
 
-/** Read-only viewer for one host file: raster or SVG images, rendered Markdown, or source. */
+/** Read-only viewer for one host file: raster or SVG images, isolated video or audio, rendered Markdown, or source. */
 export default function FilePreview({content}: {content: FileContent}) {
   useUi();
   const [rendered, setRendered] = useState(true);
   const alt = t('repoPreview', {file: content.path});
   if ('image' in content) return <img className="file-media" src={content.image} alt={alt}/>;
+  if ('clip' in content) return <MediaFrame clip={content.clip} label={alt}/>;
+  if ('pdf' in content) return <p className="file-note">{t('filesPdfExternal')}</p>;
   const kind = previewKind(content.path);
   if (kind !== 'svg' && kind !== 'markdown') return <CodePreview path={content.path} text={content.text}/>;
   return <>
