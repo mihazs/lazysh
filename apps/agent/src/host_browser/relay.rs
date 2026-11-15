@@ -661,6 +661,20 @@ mod tests {
     }
 
     #[test]
+    fn a_write_to_a_browser_that_has_gone_reports_the_browser_exiting() {
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        let mut cdp = Cdp {
+            to_browser: Box::new(writer),
+            next: 0,
+        };
+        assert!(matches!(
+            cdp.send("Page.reload", json!({}), Some("s")),
+            Err(Error::Browser("BrowserExited"))
+        ));
+    }
+
+    #[test]
     fn page_text_is_cut_on_a_character_boundary() {
         assert_eq!(bounded("héllo", 2), "hé");
         assert_eq!(bounded("ab", 10), "ab");
