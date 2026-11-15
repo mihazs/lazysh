@@ -257,7 +257,10 @@ pub(crate) async fn prepare_default_entry(
     .await
 }
 
-fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<PersistentSession>> {
+pub(crate) fn persistent_sessions(
+    kind: MultiplexerKind,
+    output: &str,
+) -> Result<Vec<PersistentSession>> {
     let names: Vec<String> = match kind {
         MultiplexerKind::Herdr => {
             #[derive(Deserialize)]
@@ -365,7 +368,14 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
         // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
         MultiplexerKind::Zellij => (
             "zellij",
-            &["tree", "close", "resize", "launch", "confirmedInput"],
+            &[
+                "tree",
+                "rename",
+                "close",
+                "resize",
+                "launch",
+                "confirmedInput",
+            ],
         ),
         MultiplexerKind::Herdr => (
             "herdr",

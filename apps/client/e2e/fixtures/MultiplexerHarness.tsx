@@ -14,9 +14,13 @@ export function mountMultiplexerHarness() {
     if(command==='tmux_action')throw remoteMuxError;
     throw new Error(`Unexpected fixture command: ${command}`);
   }}});
+  renderMuxPanel();
+  return {calls,finish:()=>complete?.()};
+}
+/** The panel alone on an empty page, for a fixture that answers the host's commands itself. */
+export function renderMuxPanel() {
   const container=document.createElement('div');document.body.replaceChildren(container);
   createRoot(container).render(<main className="tool-panel">
     <MuxPanel sessionId="browser-control" onAttach={async()=>{throw new Error('No automatic attach');}}/>
   </main>);
-  return {calls,finish:()=>complete?.()};
 }

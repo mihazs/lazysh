@@ -325,6 +325,24 @@ without inheriting its documented multi-digit chord timing dependency. It does
 not establish current tabs, exact-client binding, automatic restoration, or physical
 device/runtime acceptance. Hiding/persisting this row remains separate work.
 
+### Panes and sessions
+
+On a Zellij the version gate calls supported (0.45.1), the Zellij panel also renames and closes the session and reads, renames, resizes and closes its panes. **Read Zellij panes** runs `zellij action list-panes --json --all` (`zellij_panes`) and lists each terminal pane with its number, running command, tab, size in columns and rows and title; plugin panes such as the bars are not listed. Every pane action addresses the pane by its number, never the focused one, through the typed `zellij_action`:
+
+| Action | Command |
+| --- | --- |
+| Rename pane | `zellij --session=<S> action rename-pane --pane-id terminal_<N> -- <name>` |
+| Move a divider | `zellij --session=<S> action resize increase <left\|right\|up\|down> --pane-id terminal_<N>`; Zellij resizes by a fixed step and has no cell count, so `amount` repeats the step (the panel sends one) |
+| Close pane | `zellij --session=<S> action close-pane --pane-id terminal_<N>` |
+| Rename session | `zellij --session=<S> action rename-session -- <name>` |
+| Close session | `zellij delete-session --force -- <S>` |
+
+Close asks first, in a confirmation that names the pane or the session and says that programs running in it will end, and sends one typed action only on **Confirm close**; Cancel sends nothing. A pane that went since the list was read is not guessed at: Zellij ignores its number. Names reach Zellij as one quoted word after `--`, so a name that starts with a dash or holds `'`, `$(…)` or `;` stays a name. After a pane action the list that is on screen is read again; after a session rename the session list and the open panel follow the new name, and after a close they drop the session. **Rename Zellij session** is not offered for the session this terminal is attached to, because the saved attachment (and a reconnect) would keep asking for the old name; rename it from a terminal that is not attached to it.
+
+Close session uses `delete-session --force`, not `kill-session`: `kill-session` stops a session but, once Zellij has serialized it (about a minute after it was created), keeps listing it as EXITED so it comes back in the session list and `attach` resurrects it. `delete-session --force` stops a running session and removes that record too.
+
+These actions show only where the capability record allows them: on a Zellij other than 0.45.1 the record lists `rename`, `close` and `resize` as missing, and the panel shows neither the pane list nor the session actions.
+
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
 
 ## Launch an agent in a tmux window or a Zellij pane
@@ -402,7 +420,7 @@ The Sessions panel shows each multiplexer's version and a **Supported** or **Lim
 | Multiplexer | Version read from | Supported | Otherwise (Limited) | Notice | CI pins |
 | --- | --- | --- | --- | --- | --- |
 | tmux | `tmux -V` | 3.4 or newer (a patch letter is accepted, and `next-3.6` development builds count as 3.6) | No Jump To and no confirmed Chat input | "Jump To and Chat input need tmux 3.4 or newer." | 3.2a (distribution; the degraded case), 3.4 (source, sha256) and 3.8, the newest (source, sha256) |
-| Zellij | `zellij --version` | 0.45.1 only | No workspace tree, close, resize, agent launch or confirmed input | "The workspace tree, close, resize and agent launch need Zellij 0.45.1." | 0.45.1 (release asset, sha256) |
+| Zellij | `zellij --version` | 0.45.1 only | No workspace tree, rename, close, resize, agent launch or confirmed input | "The workspace tree, rename, close, resize and agent launch need Zellij 0.45.1." | 0.45.1 (release asset, sha256) |
 | Herdr | `herdr --version` | 0.9.3 to 0.9.5 | Navigation only: no create, launch, rename, confirmed input or restore | "Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5." | Stock and guarded 0.9.5 built from the pinned source; 0.9.3 runs locally |
 | rmux | `rmux capabilities --json` (not `-V`, which prints rmux branding) | Not available in a released client | Not available | Not available | Not available |
 
@@ -461,7 +479,7 @@ branch. Zellij runs against the pinned 0.45.1; the same case also passed on 0.46
 waits for rmux support (#1679, after #1140). The plan builders have platform-neutral unit tests that also
 run on macOS and Windows.
 
-These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
+These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom, and (Zellij) the pane list, a pane rename, a divider move read back as the pane's width, a pane close, a session rename and a session close. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 
 The client workspace handles saved tmux/Herdr attachment intents separately from these controls. Zellij restoration remains manual, matching the documented initial-attach boundary. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
 

@@ -318,6 +318,7 @@ pub fn run() {
                 herdr_create::herdr_repository,
                 zellij::zellij_action,
                 zellij::zellij_tabs,
+                zellij::zellij_panes,
                 multiplexer::multiplexer_sessions,
                 multiplexer::tmux_action,
                 ssh::attach_multiplexer,
