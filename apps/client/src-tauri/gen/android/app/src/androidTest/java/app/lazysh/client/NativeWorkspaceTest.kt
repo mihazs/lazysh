@@ -6765,6 +6765,74 @@ class NativeWorkspaceTest {
             assertTrue("Soft Enter key press is consumed by the terminal, not inserted into the editor [$seen]",
                 facts.none { it.getString("kind") in listOf("line-break", "other-input") })
         }
+        /**
+         * A CJK input method in the Chat composer: the kana reading grows as a composing region, one commit replaces it with
+         * the word, Stage hands the draft to the terminal composer and the terminal's own Send delivers it. The host then
+         * compares every byte the original receiver got (OwnedImeService spells the same reading and word in escapes).
+         */
+        fun chatComposerCjk(previousGeneration: Long) {
+            val reading = "\u306b\u307b\u3093\u3054"
+            val word = "\u65e5\u672c\u8a9e"
+            val area = "document.querySelector('form.chat-composer textarea')"
+            val key = JSONObject.quote("__lazyshOwnedChatIme_$nonce")
+            sessionView(scenario, "Transcript")
+            awaitDocument(scenario, "empty editable Chat composer", "(()=>{const area=$area;return Boolean(area) && area.value==='' && !area.readOnly && !area.disabled;})()")
+            // Counts only; the observer never records editor text.
+            val observing = evaluate(scenario, """
+                (()=>{const key=$key,area=$area;if(!area||Object.hasOwn(window,key))return false;
+                  const types=['compositionstart','compositionupdate','compositionend'],counts={compositionstart:0,compositionupdate:0,compositionend:0};
+                  const listener=event=>{if(event.target===area)counts[event.type]++;};
+                  for(const type of types)area.addEventListener(type,listener,true);
+                  Object.defineProperty(window,key,{configurable:true,value:{counts,stop(){
+                    for(const type of types)area.removeEventListener(type,listener,true);delete window[key];return counts;}}});
+                  return true;})()
+            """) == "true"
+            assertTrue("Chat composer composition observer installed", observing)
+            var observed: JSONObject? = null
+            var chatFailure: Throwable? = null
+            try {
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "form.chat-composer textarea")).perform(webScrollIntoView())
+                tapAt(JSONArray(evaluate(scenario, """
+                    (()=>{const area=$area,rect=area.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+                      if(document.elementFromPoint(x,y)!==area)throw Error('Owned Chat composer hit target required');
+                      return [x,y,innerWidth];})()
+                """)))
+                awaitDocument(scenario, "Chat composer owns DOM focus", "document.activeElement===$area")
+                val editor = ime.awaitIme("Chat composer remote editor required") {
+                    it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("remoteProxy") && it.getLong("generation") > previousGeneration
+                }
+                assertTrue("Actual IME remote proxy required for the Chat composer", editor.getBoolean("remoteProxy"))
+                ime.call("capture")
+                val preedit = ime.call("cjkPreedit")
+                assertTrue("Fixed native CJK preedit accepted", preedit.getBoolean("accepted"))
+                assertTrue("Fixed native CJK preedit read barrier returned", preedit.getBoolean("readReturned"))
+                awaitDocument(scenario, "CJK preedit is the composing text of the Chat composer", """
+                    (()=>{const area=$area,seen=window[$key].counts;return document.activeElement===area && area.value===${JSONObject.quote(reading)} &&
+                      seen.compositionstart===1 && seen.compositionupdate>=2 && seen.compositionend===0;})()
+                """)
+                val commit = ime.call("cjkCommit")
+                assertTrue("Fixed native CJK commit accepted", commit.getBoolean("accepted"))
+                assertTrue("Fixed native CJK commit readback", commit.getBoolean("readMatched"))
+                awaitDocument(scenario, "CJK commit replaces the preedit once", """
+                    (()=>{const area=$area,seen=window[$key].counts;return area.value===${JSONObject.quote(word)} && area.selectionStart===${word.length} &&
+                      area.selectionEnd===${word.length} && seen.compositionstart===1 && seen.compositionend===1;})()
+                """)
+            } catch (failure: Throwable) { chatFailure = failure; throw failure }
+            finally {
+                try { observed = JSONObject(evaluate(scenario, "window[$key]?.stop() ?? {}")) }
+                catch (cleanup: Throwable) { if (chatFailure != null) chatFailure!!.addSuppressed(cleanup) else throw cleanup }
+            }
+            assertEquals("One composition in the Chat composer", 1, checkNotNull(observed).getInt("compositionstart"))
+            assertEquals("The composition ended once", 1, observed!!.getInt("compositionend"))
+            clickOwnedButton("Stage in terminal")
+            awaitDocument(scenario, "Chat composer draft staged", "Array.from(document.querySelectorAll('form.chat-composer [role=status]')).some(x=>x.textContent==='Review this draft in the terminal before pasting it.')")
+            sessionView(scenario, "Terminal")
+            awaitDocument(scenario, "staged draft is the committed word once in the terminal composer", "document.querySelector('.terminal-compose textarea')?.value===${JSONObject.quote(word)}")
+            raw.clickIcon("Send")
+            awaitDocument(scenario, "actual receiver received the Chat composer text", raw.proof("IME_${nonce}_CHAT") +
+                " && !document.querySelector('.terminal-compose textarea') && document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')")
+            android.util.Log.i("lazysh-ime-ssh-owned", "chatComposer=true preedit=true commitOnce=true staged=true receiverAck=true")
+        }
         var primary: Throwable? = null
         try {
             toolbarPreferences()
@@ -6861,6 +6929,7 @@ class NativeWorkspaceTest {
             }
             ime.editor(restored); terminalEditor()
             android.util.Log.i("lazysh-ime-ssh-owned", "privateKeyboard=true setupOn=true setupOff=true receiverAck=true")
+            chatComposerCjk(restored.getLong("generation"))
         } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
             finishImeOrder(primary)

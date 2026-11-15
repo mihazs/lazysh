@@ -170,6 +170,27 @@ public final class OwnedImeService extends InputMethodService {
                     : "eraseOne".equals(method) ? "thetheowned swipe tan" : "thetheowned swipe tanweb ";
             result.putBoolean("readMatched", read != null && expected.contentEquals(read));
         }
+        // A Japanese kana input method in the Chat composer: the reading grows one kana at a time as the composing
+        // region (the preedit), then the chosen candidate replaces the whole reading in one commit. Unicode escapes
+        // keep the source ASCII: the reading is U+306B U+307B U+3093 U+3054 and the word is U+65E5 U+672C U+8A9E.
+        if ("cjkPreedit".equals(method) || "cjkCommit".equals(method)) {
+            InputConnection connection = capturedConnection(active);
+            boolean accepted = true;
+            String text;
+            if ("cjkPreedit".equals(method)) {
+                text = "\u306b\u307b\u3093\u3054";
+                for (String reading : new String[] {"\u306b", "\u306b\u307b", "\u306b\u307b\u3093", text})
+                    accepted &= connection.setComposingText(reading, 1);
+            } else {
+                text = "\u65e5\u672c\u8a9e";
+                accepted &= connection.commitText(text, 1);
+            }
+            result.putBoolean("accepted", accepted);
+            // The remote read orders the composition; the page's own editor state is the oracle for what it holds.
+            CharSequence read = connection.getTextBeforeCursor(256, 0);
+            result.putBoolean("readReturned", read != null);
+            result.putBoolean("readMatched", read != null && text.contentEquals(read));
+        }
         if ("lineBreak".equals(method)) {
             Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
             // The WebView input connection delivers this exact commit as a synthetic soft Enter key press.
@@ -200,7 +221,7 @@ public final class OwnedImeService extends InputMethodService {
                     || "eraseTail".equals(method) || "repeatWord".equals(method) || "restoreTail".equals(method)
                     || "predictWord".equals(method) || "swipeWord".equals(method) || "composingBackspace".equals(method)
                     || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)
-                    || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "private".equals(method) || "release".equals(method)))
+                    || "preedit".equals(method) || "cjkPreedit".equals(method) || "cjkCommit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "private".equals(method) || "release".equals(method)))
                 throw new IllegalStateException("Owned IME operation rejected");
             CountDownLatch completed = new CountDownLatch(1);
             AtomicReference<Bundle> result = new AtomicReference<>();

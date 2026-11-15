@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE,IME_CHAT_WIRE} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {TmuxFixture} from './support/androidTmux';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
@@ -487,6 +487,11 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         expect(client.stdout.includes(privateText)).toBe(false);
         client.child.stdin!.write(typed.subarray(wire.length));
         await wait('private',()=>client!.stdout.includes(privateText));
+        // The Chat composer's committed CJK text and its Enter come last; the receiver acknowledges them only as the full wire.
+        const staged=Buffer.concat([typed,Buffer.from(IME_CHAT_WIRE)]),chatText=`IME_${fixture.nonce}_CHAT`;
+        expect(client.stdout.includes(chatText)).toBe(false);
+        client.child.stdin!.write(staged.subarray(typed.length));
+        await wait('chat',()=>client!.stdout.includes(chatText));
         expect((await identity(saved!.pid))?.start===saved!.start).toBe(true);
         const admitted=await checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash);
         expect(admitted).toEqual(saved);
@@ -506,7 +511,7 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         await expect(checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash)).rejects.toThrow('not observed');
         expect(await checkRawReceiverIdentity(saved,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
         expect(await checkRawReceiverIdentity(undefined,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
-        expect((await readFile(join(output,'received-bytes'))).equals(typed)).toBe(true);
+        expect((await readFile(join(output,'received-bytes'))).equals(staged)).toBe(true);
       }
     } catch(error){primary=error;}
     finally {
