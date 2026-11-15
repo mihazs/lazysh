@@ -91,9 +91,9 @@ fn the_bundled_companion_wins_over_the_path_and_a_relative_path_entry_is_never_s
     let path = std::env::join_paths([root.join("empty"), root.join("listed")]).unwrap();
     assert_eq!(
         find(Some(&root.join("app")), None, &path),
-        Some(bundled.clone())
+        Some((bundled.clone(), Source::Bundled))
     );
-    assert_eq!(find(None, None, &path), Some(listed));
+    assert_eq!(find(None, None, &path), Some((listed, Source::Path)));
     // A companion in the working directory is not one the user put on the PATH.
     assert_eq!(find(None, None, OsStr::new("")), None);
     assert_eq!(find(None, None, OsStr::new("relative:.")), None);
@@ -114,20 +114,37 @@ fn the_managed_copy_comes_after_the_bundle_and_before_the_path_and_must_be_the_u
     );
     let path = std::env::join_paths([root.join("listed")]).unwrap();
     let find = || find(Some(&root.join("app")), Some(&root.join("data")), &path);
-    assert_eq!(find(), Some(bundled.clone()));
+    let on_path = Some((listed.clone(), Source::Path));
+    assert_eq!(find(), Some((bundled.clone(), Source::Bundled)));
     fs::remove_file(&bundled).unwrap();
-    assert_eq!(find(), Some(managed.clone()));
+    assert_eq!(find(), Some((managed.clone(), Source::Managed)));
     // Anyone else able to write the file could change what this account runs.
     fs::set_permissions(&managed, fs::Permissions::from_mode(0o770)).unwrap();
-    assert_eq!(find(), Some(listed.clone()));
+    assert_eq!(find(), on_path);
     fs::set_permissions(&managed, fs::Permissions::from_mode(0o600)).unwrap();
-    assert_eq!(find(), Some(listed.clone()), "not executable");
+    assert_eq!(find(), on_path, "not executable");
     fs::remove_file(&managed).unwrap();
     symlink(&listed, &managed).unwrap();
-    assert_eq!(find(), Some(listed.clone()), "a link is not a managed copy");
+    assert_eq!(find(), on_path, "a link is not a managed copy");
     // The PATH keeps working for a user-installed companion, and a plain file is skipped.
     fs::set_permissions(&listed, fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(find(), None);
+}
+
+/// The capability the panel reads: the source is named exactly when a companion resolved.
+#[cfg(desktop)]
+async fn companion_tools() -> Value {
+    let capability = serde_json::to_value(crate::local::local_capability().await).unwrap();
+    capability["targets"][0]["tools"].clone()
+}
+
+#[cfg(desktop)]
+#[tokio::test]
+async fn the_local_capability_names_the_companion_source_exactly_when_it_has_one() {
+    let tools = companion_tools().await;
+    let source = &tools["companionSource"];
+    assert_eq!(tools["companion"], json!(!source.is_null()));
+    assert!(source.is_null() || ["bundled", "managed", "path"].contains(&source.as_str().unwrap()));
 }
 
 // ---- A real companion serving a local session.
@@ -207,6 +224,12 @@ async fn transcript(app: &App<MockRuntime>, id: &str, path: &Path) -> Result<Val
 #[ignore = "requires the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell() {
     bundle();
+    // Placed beside the app executable, it resolves as the bundled companion.
+    let tools = companion_tools().await;
+    assert_eq!(
+        (&tools["companion"], &tools["companionSource"]),
+        (&json!(true), &json!("bundled"))
+    );
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let recorded = home.join(".claude/projects/project/recorded.jsonl");

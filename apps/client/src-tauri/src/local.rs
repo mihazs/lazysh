@@ -23,18 +23,22 @@ pub struct Target {
     tools: Tools,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(not(desktop), allow(dead_code))]
 pub struct Tools {
     files: bool,
     repository: bool,
     /// A `lazysh-agent` is bundled, managed or on the PATH: the Agents board and approvals work.
     companion: bool,
+    /// Which of those it is, for the companion panel; `None` exactly when `companion` is false.
+    companion_source: Option<crate::companion::local::Source>,
 }
 #[tauri::command]
 pub async fn local_capability() -> Capability {
     #[cfg(desktop)]
     {
         let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
+        let companion_source = crate::companion::local::source().await;
         Capability {
             available: true,
             reason: "Local shell runs on this desktop device.",
@@ -47,7 +51,8 @@ pub async fn local_capability() -> Capability {
                 tools: Tools {
                     files: true,
                     repository: crate::host::local_program("git").await,
-                    companion: crate::companion::local::available().await,
+                    companion: companion_source.is_some(),
+                    companion_source,
                 },
             }],
         }

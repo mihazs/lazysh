@@ -1004,3 +1004,10 @@ it('tells a local session to place lazysh-agent on this device instead of offeri
   expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
   expect(screen.queryByText(t('agentsSetup'))).toBeNull();
 });
+it.each([['bundled','Bundled'],['managed','Managed copy'],['path','On PATH']] as const)('names the %s companion a local session runs',async(source,label)=>{
+  const {invoke}=await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockResolvedValue({schemaVersion:1,sessions:[]});
+  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local companionSource={source}/>);
+  expect(await screen.findByText(`The companion runs on this device, with no SSH install. Source: ${label}.`)).toBeTruthy();
+  expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
+});

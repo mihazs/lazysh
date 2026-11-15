@@ -9,9 +9,9 @@ const report={sessionId:'claude-1',agent:'Claude Code',project:'/home/dev/lazysh
 const companionCommands=['agent_snapshot','agent_approvals','get_companion_settings','notify_agent_attention'];
 
 /** A local target whose reported tools are `companion`; the bridge records every companion call with the session it names. */
-async function openLocal(page:Page,companion:boolean|undefined,inbox:{monitoring:boolean;notifications:boolean}={monitoring:false,notifications:false}) {
+async function openLocal(page:Page,companion:boolean|undefined,inbox:{monitoring:boolean;notifications:boolean}={monitoring:false,notifications:false},source:string|null=companion?'bundled':null) {
   await installNativeBridge(page);
-  await page.addInitScript(({tabs,companion,report,settings,inbox,companionCommands})=>{
+  await page.addInitScript(({tabs,companion,source,report,settings,inbox,companionCommands})=>{
     window.companionCalls=[];
     window.localConnects=0;
     window.reportedEvents=1;
@@ -20,7 +20,7 @@ async function openLocal(page:Page,companion:boolean|undefined,inbox:{monitoring
     localStorage.setItem('lazysh.inbox.v1',JSON.stringify({version:1,...inbox,rows:[],latest:{}}));
     window.nativeFixtureInvoke=async(command,args)=>{
       if(command==='list_hosts')return [];
-      if(command==='local_capability')return {available:true,reason:'Synthetic local fixture; no shell runs.',targets:[{id:'default',label:'bash',kind:'posix',tools:{files:false,repository:false,...(companion===undefined?{}:{companion})}}]};
+      if(command==='local_capability')return {available:true,reason:'Synthetic local fixture; no shell runs.',targets:[{id:'default',label:'bash',kind:'posix',tools:{files:false,repository:false,...(companion===undefined?{}:{companion,companionSource:source})}}]};
       if(command==='local_connect')return {sessionId:tabs[window.localConnects++]};
       if(command.startsWith('plugin:')||['local_resize','local_ack','local_write','local_disconnect','notification_test'].includes(command))return;
       if(command==='account_usage')return {schemaVersion:1,state:'unavailable',source:null,report:null};
@@ -34,7 +34,7 @@ async function openLocal(page:Page,companion:boolean|undefined,inbox:{monitoring
       }
       throw new Error(`Unexpected local fixture command: ${command}`);
     };
-  },{tabs,companion,report,settings:companionSettings,inbox,companionCommands});
+  },{tabs,companion,source,report,settings:companionSettings,inbox,companionCommands});
   await page.goto('/');
   await openTab(page,1);
 }
@@ -59,9 +59,17 @@ test('a local session with the companion shows its Agents board under This devic
   expect((await calls(page,'agent_approvals')).length).toBeGreaterThan(0);
 });
 
+for(const [source,label] of [['bundled','Bundled'],['managed','Managed copy'],['path','On PATH']])
+test(`the Agents setup of a local session names its ${source} companion`,async({page})=>{
+  await openLocal(page,true,undefined,source);
+  await (await workspaceControl(page,'Agents')).click();
+  await page.getByRole('button',{name:'Setup',exact:true}).click();
+  await expect(page.getByText(`The companion runs on this device, with no SSH install. Source: ${label}.`)).toBeVisible();
+});
+
 test('a local target without the companion hides the views and says why',async({page})=>{
   await openLocal(page,false);
-  await expect(page.locator('.security-note')).toContainText('need lazysh-agent, which was not found on this device');
+  await expect(page.locator('.security-note')).toContainText('need lazysh-agent, which was not found on this device: put it beside the lazysh app, install a managed copy or add it to your PATH');
   await workspaceControl(page,'Dictate');
   for(const name of ['Agents','Transcript','Apple status'])await expect(page.getByRole('button',{name,exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>window.companionCalls)).toEqual([]);

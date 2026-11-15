@@ -2,6 +2,7 @@
 //! split back into argv and run on the executable found here, never through a shell.
 use super::{error, Result};
 use crate::host::Cmd;
+use serde::Serialize;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -95,36 +96,49 @@ fn managed_dir() -> Option<PathBuf> {
     };
     Some(data.join("lazysh/companion"))
 }
+/// Where the resolved companion came from, as the companion panel names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Source {
+    Bundled,
+    Managed,
+    Path,
+}
 /// Bundled beside the app executable, then the managed copy, then the PATH.
-fn find(exe_dir: Option<&Path>, managed_dir: Option<&Path>, path: &OsStr) -> Option<PathBuf> {
+fn find(
+    exe_dir: Option<&Path>,
+    managed_dir: Option<&Path>,
+    path: &OsStr,
+) -> Option<(PathBuf, Source)> {
     let bundled = exe_dir
         .map(|dir| dir.join(NAME))
-        .filter(|file| runnable(file));
+        .filter(|file| runnable(file))
+        .map(|file| (file, Source::Bundled));
     let managed = managed_dir
         .map(|dir| dir.join(NAME))
-        .filter(|file| owned_managed(file));
+        .filter(|file| owned_managed(file))
+        .map(|file| (file, Source::Managed));
     bundled.or(managed).or_else(|| {
         std::env::split_paths(path)
             .filter(|dir| dir.is_absolute())
             .map(|dir| dir.join(NAME))
             .find(|file| runnable(file))
+            .map(|file| (file, Source::Path))
     })
 }
-async fn program() -> Option<String> {
+async fn resolve() -> Option<(String, Source)> {
     let path = crate::host::login_path()
         .await
         .cloned()
         .or_else(|| std::env::var_os("PATH"))
         .unwrap_or_default();
     let exe = std::env::current_exe().ok()?;
-    find(exe.parent(), managed_dir().as_deref(), &path)?
-        .into_os_string()
-        .into_string()
-        .ok()
+    let (file, source) = find(exe.parent(), managed_dir().as_deref(), &path)?;
+    Some((file.into_os_string().into_string().ok()?, source))
 }
-/// Whether a local session can run the companion at all.
-pub(crate) async fn available() -> bool {
-    program().await.is_some()
+/// Which companion a local session would run, or `None` when it cannot run one at all.
+pub(crate) async fn source() -> Option<Source> {
+    resolve().await.map(|(_, source)| source)
 }
 /// The argv of a companion command line with the program resolved to an absolute path.
 pub(crate) async fn command(line: &str) -> Result<Cmd> {
@@ -132,7 +146,7 @@ pub(crate) async fn command(line: &str) -> Result<Cmd> {
     if words.next().as_deref() != Some("lazysh-agent") {
         return Err(error("companion_command", "Invalid companion command"));
     }
-    let program = program().await.ok_or_else(|| {
+    let (program, _) = resolve().await.ok_or_else(|| {
         error(
             "remote_command_failed",
             "lazysh-agent is not available on this device",

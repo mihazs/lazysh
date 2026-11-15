@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, 
 import { Archive, ArchiveRestore, ArrowLeft, Bot, ChevronRight, RefreshCw, Search, Settings2 } from 'lucide-react';
 import {StatusRing,agentKind,reportedTones} from './AgentStatus';
 import {formatRelativeTime,pathBasename,useNow} from './relativeTime';
+import {companionSourceLabels,type CompanionSource} from './localHost';
 import ApprovalPanel from './ApprovalPanel';
 import HerdrAgentsPanel from './HerdrAgentsPanel';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
@@ -84,7 +85,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,hostKey,hostLabel,local,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;local?:boolean;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,hostKey,hostLabel,local,companionSource,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;local?:boolean;companionSource?:CompanionSource;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const historyVisibility=useRef(activityVisible);historyVisibility.current=activityVisible;
@@ -243,7 +244,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,local,herdrSession,onUs
       <h3>{t('agentsSetupAction')}</h3>
       <p className="agent-note">{t('agentsReportedHint')}</p>
       <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
-      {local?<p className="agent-note">{t('companionLocalNote')}</p>:<CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>}
+      {local?<p className="agent-note" data-companion-source={companionSource}>{companionSource?t('companionLocalSource',{source:t(companionSourceLabels[companionSource])}):t('companionLocalNote')}</p>:<CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>}
       <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
       {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
     </section>
