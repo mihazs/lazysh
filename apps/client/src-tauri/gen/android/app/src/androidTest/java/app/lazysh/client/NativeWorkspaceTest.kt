@@ -1468,6 +1468,95 @@ class NativeWorkspaceTest {
         assertTrue(!denied.complete(0)) // An already-denied permission does not prove a Deny click.
     }
 
+    // The first real choice of a case fixes the sheet's system owner; every later choice must come from the same package.
+    private var cameraPermissionOwner: String? = null
+
+    /** Clicks one real choice ("permission_deny_button" or "permission_allow_foreground_only_button") of the system camera permission sheet and waits for its effect. */
+    private fun chooseOwnedCameraPermission(id: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val expected = when (id) {
+            "permission_deny_button" -> PackageManager.PERMISSION_DENIED
+            "permission_allow_foreground_only_button" -> PackageManager.PERMISSION_GRANTED
+            else -> throw AssertionError("Unsupported owned camera permission choice")
+        }
+        val progress = QrPermissionProgress(System.nanoTime(), expected)
+        val selector = cameraPermissionOwner?.let { By.res(it, id) }
+            ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
+        val device = UiDevice.getInstance(instrumentation)
+        try {
+            assertTrue("Owned permission choice requires default-display window observations", Build.VERSION.SDK_INT >= 30)
+            val lookup = progress.remaining(System.nanoTime())
+            assertTrue("Expected real owned camera permission choice: $id", lookup > 0 && device.wait(Until.hasObject(selector), lookup))
+            val choices = device.findObjects(selector)
+            assertEquals("Permission choice must be unambiguous", 1, choices.size)
+            val owner = requireNotNull(choices.single().applicationPackage) { "Permission owner unavailable" }
+            val info = context.packageManager.getApplicationInfo(owner, 0)
+            assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
+            if (cameraPermissionOwner == null) cameraPermissionOwner = owner
+            assertEquals("Permission choices must retain the same system owner", cameraPermissionOwner, owner)
+            // The preceding UiAutomator query configures interactive-window reporting.
+            // Use the same connection flags, without another implicit idle wait.
+            val automation = instrumentation.getUiAutomation(Configurator.getInstance().uiAutomationFlags)
+            var selected: Pair<Int, Point>? = null
+            progress.phase = QrPermissionPhase.WINDOW
+            while (progress.remaining(System.nanoTime()) > 0 && selected == null) {
+                val windows = automation.windows
+                progress.windows = windows.size
+                try {
+                    assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
+                    val candidates = windows.filter { it.displayId == Display.DEFAULT_DISPLAY && it.isActive && it.isFocused }
+                    val matches = mutableListOf<Pair<Int, Point>>()
+                    progress.choices = 0
+                    for (window in candidates) {
+                        val root = window.root ?: continue
+                        try {
+                            if (root.packageName?.toString() != owner) continue
+                            val nodes = root.findAccessibilityNodeInfosByViewId("$owner:id/$id")
+                            progress.choices = (progress.choices ?: 0) + nodes.size
+                            try {
+                                assertTrue("Owned permission choice must remain unambiguous", progress.choices!! <= 1)
+                                for (node in nodes) {
+                                    val bounds = Rect(); node.getBoundsInScreen(bounds)
+                                    val windowBounds = Rect(); window.getBoundsInScreen(windowBounds)
+                                    if (node.windowId == window.id && node.isEnabled && node.isClickable && node.isVisibleToUser &&
+                                        !bounds.isEmpty && windowBounds.contains(bounds) && bounds.left >= 0 && bounds.top >= 0 &&
+                                        bounds.right <= device.displayWidth && bounds.bottom <= device.displayHeight) {
+                                        matches.add(window.id to Point(bounds.centerX(), bounds.centerY()))
+                                    }
+                                }
+                            } finally { nodes.forEach { it.recycle() } }
+                        } finally { root.recycle() }
+                    }
+                    assertTrue("Owned permission focused window must be unique", matches.size <= 1)
+                    selected = matches.singleOrNull()
+                } finally { windows.forEach { it.recycle() } }
+                if (selected == null) Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
+            }
+            progress.ready = selected != null
+            progress.permissionBefore = context.checkSelfPermission(android.Manifest.permission.CAMERA)
+            assertTrue("Owned permission choice must be input-ready within its original budget", progress.admit(System.nanoTime()))
+            val (windowId, point) = requireNotNull(selected)
+            progress.delivered(device.click(point.x, point.y))
+            assertTrue("Owned permission click delivery must succeed", progress.delivery == true)
+            while (progress.remaining(System.nanoTime()) > 0) {
+                progress.permissionAfter = context.checkSelfPermission(android.Manifest.permission.CAMERA)
+                val windows = automation.windows
+                try {
+                    progress.windows = windows.size
+                    assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
+                    progress.dismissed = windows.none { it.id == windowId }
+                } finally { windows.forEach { it.recycle() } }
+                if (progress.complete(System.nanoTime())) { progress.phase = QrPermissionPhase.COMPLETE; return }
+                Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
+            }
+            assertTrue("Owned permission effect must settle within its original budget", progress.complete(System.nanoTime()))
+        } finally {
+            // Only finite metadata leaves this helper; never UI text or raw framework errors.
+            try { println("lazysh camera permission: ${progress.report(System.nanoTime())}") } catch (_: Throwable) { }
+        }
+    }
+
     // Dedicated invocation with an owned emulator imagefile camera; no mocked frames or IPC.
     @Test fun ownedQrCameraRequiresPermissionAndExplicitPreview() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -1503,89 +1592,7 @@ class NativeWorkspaceTest {
         val frameGate = QrFrameGate()
         val draftSelector = "[aria-label='Theme JSON or share code']"
         val draft = "manual owned QR draft stays literal"
-        var permissionController: String? = null
-        fun permission(id: String) {
-            val expected = when (id) {
-                "permission_deny_button" -> PackageManager.PERMISSION_DENIED
-                "permission_allow_foreground_only_button" -> PackageManager.PERMISSION_GRANTED
-                else -> throw AssertionError("Unsupported owned camera permission choice")
-            }
-            val progress = QrPermissionProgress(System.nanoTime(), expected)
-            val selector = permissionController?.let { By.res(it, id) }
-                ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
-            val device = UiDevice.getInstance(instrumentation)
-            try {
-                assertTrue("Owned permission choice requires default-display window observations", Build.VERSION.SDK_INT >= 30)
-                val lookup = progress.remaining(System.nanoTime())
-                assertTrue("Expected real owned camera permission choice: $id", lookup > 0 && device.wait(Until.hasObject(selector), lookup))
-                val choices = device.findObjects(selector)
-                assertEquals("Permission choice must be unambiguous", 1, choices.size)
-                val owner = requireNotNull(choices.single().applicationPackage) { "Permission owner unavailable" }
-                val info = context.packageManager.getApplicationInfo(owner, 0)
-                assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
-                if (permissionController == null) permissionController = owner
-                assertEquals("Permission choices must retain the same system owner", permissionController, owner)
-                // The preceding UiAutomator query configures interactive-window reporting.
-                // Use the same connection flags, without another implicit idle wait.
-                val automation = instrumentation.getUiAutomation(Configurator.getInstance().uiAutomationFlags)
-                var selected: Pair<Int, Point>? = null
-                progress.phase = QrPermissionPhase.WINDOW
-                while (progress.remaining(System.nanoTime()) > 0 && selected == null) {
-                    val windows = automation.windows
-                    progress.windows = windows.size
-                    try {
-                        assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
-                        val candidates = windows.filter { it.displayId == Display.DEFAULT_DISPLAY && it.isActive && it.isFocused }
-                        val matches = mutableListOf<Pair<Int, Point>>()
-                        progress.choices = 0
-                        for (window in candidates) {
-                            val root = window.root ?: continue
-                            try {
-                                if (root.packageName?.toString() != owner) continue
-                                val nodes = root.findAccessibilityNodeInfosByViewId("$owner:id/$id")
-                                progress.choices = (progress.choices ?: 0) + nodes.size
-                                try {
-                                    assertTrue("Owned permission choice must remain unambiguous", progress.choices!! <= 1)
-                                    for (node in nodes) {
-                                        val bounds = Rect(); node.getBoundsInScreen(bounds)
-                                        val windowBounds = Rect(); window.getBoundsInScreen(windowBounds)
-                                        if (node.windowId == window.id && node.isEnabled && node.isClickable && node.isVisibleToUser &&
-                                            !bounds.isEmpty && windowBounds.contains(bounds) && bounds.left >= 0 && bounds.top >= 0 &&
-                                            bounds.right <= device.displayWidth && bounds.bottom <= device.displayHeight) {
-                                            matches.add(window.id to Point(bounds.centerX(), bounds.centerY()))
-                                        }
-                                    }
-                                } finally { nodes.forEach { it.recycle() } }
-                            } finally { root.recycle() }
-                        }
-                        assertTrue("Owned permission focused window must be unique", matches.size <= 1)
-                        selected = matches.singleOrNull()
-                    } finally { windows.forEach { it.recycle() } }
-                    if (selected == null) Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
-                }
-                progress.ready = selected != null
-                progress.permissionBefore = context.checkSelfPermission(android.Manifest.permission.CAMERA)
-                assertTrue("Owned permission choice must be input-ready within its original budget", progress.admit(System.nanoTime()))
-                val (windowId, point) = requireNotNull(selected)
-                progress.delivered(device.click(point.x, point.y))
-                assertTrue("Owned permission click delivery must succeed", progress.delivery == true)
-                while (progress.remaining(System.nanoTime()) > 0) {
-                    progress.permissionAfter = context.checkSelfPermission(android.Manifest.permission.CAMERA)
-                    val windows = automation.windows
-                    try {
-                        progress.windows = windows.size
-                        assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
-                        progress.dismissed = windows.none { it.id == windowId }
-                    } finally { windows.forEach { it.recycle() } }
-                    if (progress.complete(System.nanoTime())) { progress.phase = QrPermissionPhase.COMPLETE; return }
-                    Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
-                }
-                assertTrue("Owned permission effect must settle within its original budget", progress.complete(System.nanoTime()))
-            } finally {
-                // Only finite metadata leaves this helper; never UI text or raw framework errors.
-                try { println("lazysh QR permission: ${progress.report(System.nanoTime())}") } catch (_: Throwable) { }
-            }
-        }
+        fun permission(id: String) = chooseOwnedCameraPermission(id)
         var primary: Throwable? = null
         var propagating = false
         try {
@@ -1665,7 +1672,7 @@ class NativeWorkspaceTest {
             cleanup { evaluateIfPresent(scenario, frameGate.restore) }
             cleanup {
                 val device = UiDevice.getInstance(instrumentation)
-                permissionController?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
+                cameraPermissionOwner?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
             }
             cleanup { observation?.let { camera.unregisterAvailabilityCallback(it) } }
@@ -3637,6 +3644,120 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** One real finger tap at a point of the WebView given as [x, y, innerWidth] in CSS pixels. */
+    private fun tapWebViewAt(point: JSONArray) {
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+            val location = IntArray(2); view.getLocationOnScreen(location)
+            val scale = view.width / point.getDouble(2)
+            val x = point.getDouble(0) * scale; val y = point.getDouble(1) * scale
+            require(x > 0 && x < view.width && y > 0 && y < view.height) { "Owned tap outside WebView" }
+            floatArrayOf((location[0] + x).toFloat(), (location[1] + y).toFloat())
+        }, Press.FINGER))
+    }
+
+    /**
+     * One real finger tap on the one enabled, hit-testable control. A WebView file chooser needs a trusted user activation,
+     * which a scripted click does not give.
+     */
+    private fun tapOwnedControl(scenario: ActivityScenario<MainActivity>, selector: String) {
+        // Centered, so a sticky bar or the navigation cannot cover the target.
+        evaluate(scenario, "(()=>{document.querySelector(${JSONObject.quote(selector)})?.scrollIntoView({block:'center',behavior:'instant'});return true;})()")
+        val css = JSONArray(evaluate(scenario, """
+            (()=>{const matches=document.querySelectorAll(${JSONObject.quote(selector)});
+              if(matches.length!==1)throw Error('Owned tap target must be unique');
+              const element=matches[0],rect=element.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+              if(element.disabled||document.elementFromPoint(x,y)!==element)throw Error('Owned tap target must be enabled and hit-testable');
+              return [x,y,innerWidth];})()
+        """))
+        tapWebViewAt(css)
+    }
+
+    /**
+     * Installed Wry asks for the declared CAMERA permission before the explicit Photo action opens a camera, and answers the
+     * file chooser with null when it is denied. Over a staged draft this denies the real system sheet and proves that no
+     * camera opens and the draft is unchanged, then proves the ordinary Choose file input still reaches a system chooser that
+     * Back leaves unchanged. Selecting a file inside the chooser (#1752) and the Allow branch are not exercised.
+     */
+    private fun verifyAttachmentPhotoDenied(scenario: ActivityScenario<MainActivity>, panel: String, destination: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val device = UiDevice.getInstance(instrumentation)
+        val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameras = camera.cameraIdList.toSet()
+        assertTrue("Owned emulator camera must exist so an unwanted capture is observable", cameras.isNotEmpty())
+        assertEquals("Camera permission must start ungranted", PackageManager.PERMISSION_DENIED,
+            context.checkSelfPermission(android.Manifest.permission.CAMERA))
+        // An earlier denial may have set Don't ask again, which would hide the real sheet.
+        device.executeShellCommand("pm clear-permission-flags ${context.packageName} android.permission.CAMERA user-set user-fixed")
+        val sources = "$panel .attachment-sources"
+        val photo = "$sources input[capture]"
+        val chooser = "$sources input[type=file]:not([capture])"
+        val draft = """
+            (()=>{const panel=document.querySelector(${JSONObject.quote(panel)});
+              return {selected:panel.querySelector('.attachment-selected > summary')?.textContent??null,
+                destination:document.querySelector(${JSONObject.quote(destination)})?.value??null,
+                checkboxes:panel.querySelectorAll('input[type=checkbox]').length,uploaded:panel.querySelectorAll('input[readonly]').length,
+                alerts:panel.querySelectorAll('[role=alert]').length,
+                files:Array.from(panel.querySelectorAll('.attachment-sources input[type=file]')).map(x=>x.files.length)};})()
+        """
+        // Staging a draft closes the sources group; open it with an ordinary click.
+        if (evaluate(scenario, "document.querySelector(${JSONObject.quote(sources)})?.open===true") != "true")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$sources > summary")).perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "attachment sources open over the staged draft", "document.querySelector(${JSONObject.quote(sources)})?.open===true")
+        val before = evaluate(scenario, draft)
+        val staged = JSONObject(before)
+        assertTrue("A staged draft needs its selection and exact destination", !staged.isNull("selected") && staged.getString("destination").startsWith("./"))
+        assertEquals("The draft must start without an upload or an error", 0, staged.getInt("uploaded") + staged.getInt("alerts"))
+        assertEquals("The draft must start without a chosen file", "[0,0]", staged.getJSONArray("files").toString())
+        val observer = HandlerThread("owned-attachment-camera-observer").apply { start() }
+        val observation = QrCameraObservation(cameras)
+        camera.registerAvailabilityCallback(observation, Handler(observer.looper))
+        try {
+            assertTrue("Cameras must be idle before the explicit Photo action", observation.idle.await(5, TimeUnit.SECONDS))
+            observation.arm()
+            tapOwnedControl(scenario, photo)
+            chooseOwnedCameraPermission("permission_deny_button")
+            awaitDocument(scenario, "attachment panel after the denied camera sheet", "Boolean(document.querySelector(${JSONObject.quote(photo)}))")
+            assertEquals("Denied choice must leave camera permission ungranted", PackageManager.PERMISSION_DENIED,
+                context.checkSelfPermission(android.Manifest.permission.CAMERA))
+            assertEquals("A denied Photo action must leave the attachment draft unchanged", before, evaluate(scenario, draft))
+            // Absence is observed over a bounded window: Wry answers the chooser with null and launches nothing.
+            val settled = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            do {
+                assertEquals("No other app may take the foreground after a denied Photo action", context.packageName, device.currentPackageName)
+                assertTrue("A denied Photo action must not open any camera", !observation.openedAny())
+                Thread.sleep(200)
+            } while (System.nanoTime() < settled)
+            println("lazysh attachment photo: real CAMERA sheet denied; permission still denied; no camera opened; draft unchanged")
+            tapOwnedControl(scenario, chooser)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+            var owner = context.packageName
+            while (owner == context.packageName && System.nanoTime() < deadline) {
+                Thread.sleep(200)
+                owner = device.currentPackageName ?: context.packageName
+            }
+            assertTrue("Choose file must open a chooser window", owner != context.packageName)
+            require(Regex("[A-Za-z0-9_.]{1,255}").matches(owner)) { "Owned chooser package invalid" }
+            assertTrue("The chooser window must belong to a system package",
+                device.executeShellCommand("pm list packages -s $owner").lineSequence().any { it.trim() == "package:$owner" } &&
+                    owner != "android" && owner != "com.android.systemui")
+            // A picker may consume one Back to close its own drawer or selection before it finishes.
+            repeat(3) {
+                if (device.currentPackageName == owner) {
+                    assertTrue("Back must reach the system chooser", device.pressBack())
+                    device.wait(Until.gone(By.pkg(owner)), 5_000)
+                }
+            }
+            assertTrue("Back must return from the system chooser to the app", device.wait(Until.hasObject(By.pkg(context.packageName)), 10_000) == true)
+            awaitDocument(scenario, "attachment panel after the system chooser", "Boolean(document.querySelector(${JSONObject.quote(chooser)}))")
+            assertEquals("Leaving the system chooser must leave the attachment draft unchanged", before, evaluate(scenario, draft))
+            println("lazysh attachment chooser: Choose file opened a chooser from system package $owner; Back left the draft unchanged; no file was selected in it")
+        } finally {
+            camera.unregisterAvailabilityCallback(observation)
+            observer.quitSafely(); observer.join(5_000)
+        }
+    }
+
     private fun verifyManualAttachmentUpload(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -3678,7 +3799,7 @@ class NativeWorkspaceTest {
         fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
             "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
             .perform(webScrollIntoView()).perform(webClick())
-        fun stage(name: String, upload: Boolean = true) {
+        fun stage(name: String, upload: Boolean = true, beforeUpload: () -> Unit = {}) {
             sessionView(scenario, "Attach")
             awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
             instrumentation.runOnMainSync {clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))}
@@ -3688,6 +3809,7 @@ class NativeWorkspaceTest {
             closeSoftKeyboard()
             assertEquals("Exact owned relative upload path", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && !document.querySelector('$panel [role=alert]')"))
+            beforeUpload()
             assertEquals("One enabled manual upload action", "true", evaluate(scenario,
                 "Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Upload attachment'&&!x.disabled).length===1"))
             if (upload) click("Upload attachment")
@@ -3698,7 +3820,8 @@ class NativeWorkspaceTest {
               !document.querySelector('$panel [role=alert]') &&
               document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
         """
-        stage(owned.getString("newName"))
+        // The first staged draft also carries the Photo denial and ordinary chooser checks; the upload below proves it survived them.
+        stage(owned.getString("newName")) { verifyAttachmentPhotoDenied(scenario, panel, destination) }
         awaitDocument(scenario, "manual large image upload completed", uploadedTo(owned.getString("newName")))
         sessionView(scenario, "Terminal")
         awaitDocument(scenario, "successful upload panel retired", "!document.querySelector('$panel')")
@@ -7532,15 +7655,7 @@ class NativeWorkspaceTest {
         }
         val addedToolbarKeys=mutableListOf<String>()
         var originalToolbarOrder:String?=null
-        fun tapAt(bounds:JSONArray) {
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                val location = IntArray(2); view.getLocationOnScreen(location)
-                val scale = view.width / bounds.getDouble(2)
-                val x = bounds.getDouble(0) * scale; val y = bounds.getDouble(1) * scale
-                require(x>0 && x<view.width && y>0 && y<view.height) { "Owned tap outside WebView" }
-                floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
-            }, Press.FINGER))
-        }
+        fun tapAt(bounds:JSONArray)=tapWebViewAt(bounds)
         fun tapToolbar(name:String) {
             raw.original()
             onWebView().withElement(findElement(Locator.XPATH,"//*[contains(concat(' ',normalize-space(@class),' '),' terminal-keys ')]//button[normalize-space(.)='$name']")).perform(webScrollIntoView())
