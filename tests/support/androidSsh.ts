@@ -673,6 +673,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(tmux) {
       await tmux.verifyDetachedAndReattached();
       console.log('Owned packaged tmux: discovery, numbered window, Jump To, detach and reattach verified against the original server and pane processes');
+      if(tmux.metadata().chat) {
+        await tmux.verifyChatInput();
+        console.log('Owned packaged tmux Chat: the confirmed draft reached the original pane once, with no extra display client');
+      }
     }
     if(sharedHerdr)await herdr!.expectNavigationBytes();
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}

@@ -1,8 +1,8 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation} from './support/androidTmux';
-import {listening,OwnedProcess} from './support/androidSsh';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation} from './support/androidTmux';
+import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
   const row=(index:number,name:string,active:number,dead=0)=>`@${index+1}|${index}|${name}|${active}|%${index}|${100+index}|${dead}`;
@@ -21,6 +21,21 @@ test('tmux host readback admits only the owned two-window topology and display c
   for(const invalid of ['0\n','12a\n','1\n'.repeat(9),'/dev/pts/1\n'])expect(()=>tmuxClientCount(invalid)).toThrow('Owned tmux client readback invalid');
   expect(tmuxAttachHistoryVerified([0,1,0,1,0])).toBe(true);
   for(const history of [[0,1,0],[0,1,0,1],[0,1,2,1,0],[1,0,1,0],[0,1,0,1,0,1,0]])expect(tmuxAttachHistoryVerified(history)).toBe(false);
+});
+
+test('tmux Chat readback admits one delivery in the original pane and nothing else',()=>{
+  const draft="tmux chat 1: it's $HOME",pane=(paneId:string,text='')=>({paneId,text});
+  tmuxChatDeliveredOnce([pane('%0',`marker\n${draft}\n`),pane('%1','marker\n')],draft,'%0');
+  const rejected='Owned tmux Chat input did not reach exactly the original pane once';
+  for(const captures of [[pane('%0','marker'),pane('%1','marker')],[pane('%0','marker'),pane('%1',draft)],[pane('%0',draft),pane('%1',draft)],[pane('%0',draft+draft),pane('%1')]])
+    expect(()=>tmuxChatDeliveredOnce(captures,draft,'%0')).toThrow(rejected);
+  for(const [captures,expected,text] of [[[pane('%0',draft)],'%1',draft],[[pane('%0',draft),pane('%0',draft)],'%0',draft],[[pane('%0',draft)],'%0','']] as const)
+    expect(()=>tmuxChatDeliveredOnce(captures,expected,text)).toThrow('Owned tmux Chat readback invalid');
+});
+
+test('the companion joins only the pinned tmux fixture and only by an absolute path',async()=>{
+  await expect(SshFixture.start(undefined,{agentBinary:'/usr/bin/true'})).rejects.toThrow('Owned agent binary requires the pinned tmux fixture');
+  await expect(TmuxFixture.start('/usr/bin/tmux','lazysh-agent')).rejects.toThrow('Explicit current-source companion required');
 });
 
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
@@ -128,6 +143,56 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     expect(client.child.signalCode).toBe('SIGKILL');
   } finally {
     await client.stop();
+    await owned.stop();
+  }
+},60_000);
+
+// The real companion and tmux run under the fixture's own SSH environment, exactly as the app reaches them.
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !process.env.LAZYSH_TEST_AGENT_BIN)('owned tmux Chat readback requires the confirmed draft in the original pane once',async()=>{
+  const owned=await TmuxFixture.start(undefined,process.env.LAZYSH_TEST_AGENT_BIN);
+  try {
+    const {chat,windows}=owned.metadata();
+    expect(chat).toBeDefined();
+    const [alpha,beta]=windows;
+    const type=async(window:number,text:string)=>{
+      const shell=await owned.ssh.client(true,`tmux -L default send-keys -l -t '=owned-tmux:${window}' '${text.replaceAll("'","'\\''")}' && tmux -L default send-keys -t '=owned-tmux:${window}' Enter`);
+      await shell.finish('owned tmux Chat keys',5000);
+    };
+    const settled=async(window:number,text:string)=>{
+      const deadline=performance.now()+5000;
+      for(;;) {
+        const capture=await owned.ssh.client(true,`tmux -L default capture-pane -p -J -t '=owned-tmux:${window}'`);
+        if((await capture.finish('owned tmux Chat capture',5000)).includes(text))return;
+        expect(performance.now()).toBeLessThan(deadline);
+        await Bun.sleep(25);
+      }
+    };
+    const rejected='Owned tmux Chat input did not reach exactly the original pane once';
+    // The companion in the fixture's environment reads the synthetic record the app will open.
+    const read=await owned.ssh.client(true,`lazysh-agent transcript --agent claude --path '${chat!.transcript}' --offset 0 --limit 50`);
+    expect(await read.finish('owned tmux companion read',5000)).toContain(chat!.record);
+    await expect(owned.verifyChatInput()).rejects.toThrow(rejected);
+    await type(beta.index,chat!.draft);await settled(beta.index,chat!.draft);
+    await expect(owned.verifyChatInput()).rejects.toThrow(rejected);
+    await type(alpha.index,chat!.draft);await settled(alpha.index,chat!.draft);
+    await expect(owned.verifyChatInput()).rejects.toThrow(rejected);
+  } finally {
+    await owned.stop();
+  }
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !process.env.LAZYSH_TEST_AGENT_BIN)('owned tmux Chat readback accepts the draft in the original pane alone',async()=>{
+  const owned=await TmuxFixture.start(undefined,process.env.LAZYSH_TEST_AGENT_BIN);
+  try {
+    const {chat,windows}=owned.metadata();
+    const shell=await owned.ssh.client(true,`tmux -L default send-keys -l -t '=owned-tmux:${windows[0].index}' '${chat!.draft.replaceAll("'","'\\''")}' && tmux -L default send-keys -t '=owned-tmux:${windows[0].index}' Enter`);
+    await shell.finish('owned tmux Chat keys',5000);
+    const deadline=performance.now()+5000;
+    for(;;) {
+      try{await owned.verifyChatInput();break;}
+      catch(error){if(performance.now()>=deadline)throw error;await Bun.sleep(25);}
+    }
+  } finally {
     await owned.stop();
   }
 },60_000);
