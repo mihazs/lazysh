@@ -33,7 +33,7 @@ tasks:
     command: 'cargo test --locked openssh_et_bootstrap_and_control_interoperability -- --ignored'
   test-multiplexers:
     type: test
-    command: 'cargo test --locked --lib -- --ignored multiplexer::tests::real_ herdr::tests::real_ herdr_create::tests::real_ zellij::tests::real_ zellij_input::tests::real_'
+    command: 'cargo test --locked --lib -- --ignored multiplexer::tests::real_ herdr::tests::real_ herdr_create::tests::real_ zellij::tests::real_ zellij_input::tests::real_ local::attach_tests::runtime::real_'
   test-connection-loss:
     type: test
     command: 'cargo test --locked --lib ssh::tests::connection_loss_fixture::openssh_ -- --ignored --nocapture'

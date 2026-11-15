@@ -290,6 +290,7 @@ pub(super) async fn run_with(
     route: Route,
 ) -> std::result::Result<Installed, InstallFailure> {
     let permit = session
+        .bindings
         .companion_install
         .clone()
         .try_acquire_owned()
@@ -442,6 +443,7 @@ mod tests {
                 Arc::new(
                     fixture
                         .session
+                        .bindings
                         .companion_install
                         .clone()
                         .try_acquire_owned()
@@ -482,6 +484,7 @@ mod tests {
                 assert!(
                     fixture
                         .session
+                        .bindings
                         .companion_install
                         .clone()
                         .try_acquire_owned()
@@ -495,6 +498,7 @@ mod tests {
                 loop {
                     if fixture
                         .session
+                        .bindings
                         .companion_install
                         .clone()
                         .try_acquire_owned()

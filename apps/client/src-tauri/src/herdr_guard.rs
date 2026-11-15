@@ -1116,6 +1116,7 @@ pub(crate) async fn retire_for_view(
     lease: &AccessLease,
 ) -> Result<Option<Arc<Permit>>> {
     let binding = session
+        .bindings
         .herdr
         .lock()
         .map_err(|_| Fault::Unavailable.error())?
@@ -1148,6 +1149,7 @@ pub async fn herdr_chat(
             action.validate().map_err(Fault::error)?;
             let session = state.session(&session_id).await?;
             let binding = session
+                .bindings
                 .herdr
                 .lock()
                 .map_err(|_| Fault::Unavailable.error())?

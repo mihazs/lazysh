@@ -356,8 +356,12 @@ impl EntryStartup {
                             .ok_or_else(entry_failed)?;
                     startup_stage!("tmux-control-ok");
                     lease.check()?;
-                    *child.tmux_server.lock().map_err(|_| entry_failed())? = Some(server.clone());
-                    *child.tmux.lock().map_err(|_| entry_failed())? =
+                    *child
+                        .bindings
+                        .tmux_server
+                        .lock()
+                        .map_err(|_| entry_failed())? = Some(server.clone());
+                    *child.bindings.tmux.lock().map_err(|_| entry_failed())? =
                         Some(crate::tmux_jump::start(control, child.cancel.subscribe()));
                 }
                 EntryBinding::Herdr { name } => {
@@ -374,7 +378,7 @@ impl EntryStartup {
                     startup_stage!("herdr-receipt-ok");
                     self.bytes = Zeroizing::new(rest);
                     lease.check()?;
-                    *child.herdr.lock().map_err(|_| entry_failed())? =
+                    *child.bindings.herdr.lock().map_err(|_| entry_failed())? =
                         Some(crate::herdr_guard::start(
                             startup,
                             child.handle.clone(),
@@ -773,8 +777,8 @@ mod tests {
                 .bind(&fixture.session, &fixture.session, &lease)
                 .await;
             assert_eq!(result.is_ok(), accepted, "receipt admission mismatch");
-            assert!(fixture.session.tmux.lock().unwrap().is_none());
-            assert!(fixture.session.herdr.lock().unwrap().is_none());
+            assert!(fixture.session.bindings.tmux.lock().unwrap().is_none());
+            assert!(fixture.session.bindings.herdr.lock().unwrap().is_none());
             assert_eq!(fixture.private_execs(), 0);
             fixture.closed().await;
         }

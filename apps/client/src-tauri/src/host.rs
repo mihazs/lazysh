@@ -356,7 +356,7 @@ pub(crate) struct LocalHost {
 }
 /// Multiplexer and shell start-up variables a lazysh started inside a multiplexer would leak.
 #[cfg(desktop)]
-const INHERITED: [&str; 7] = [
+pub(crate) const INHERITED: [&str; 7] = [
     "TMUX",
     "ZELLIJ",
     "ZELLIJ_SESSION_NAME",
@@ -520,6 +520,23 @@ async fn probe_login_path() -> Option<std::ffi::OsString> {
         .rev()
         .find_map(|line| line.strip_prefix(MARKER))?;
     (!path.is_empty() && !path.contains(&0)).then(|| std::ffi::OsString::from_vec(path.to_vec()))
+}
+/// A command for a long-lived local child with the environment host commands get: the login
+/// PATH, the home directory as working directory, and none of the multiplexer variables a
+/// lazysh started inside a multiplexer would leak.
+#[cfg(desktop)]
+pub(crate) async fn local_command(program: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(program);
+    for name in INHERITED {
+        command.env_remove(name);
+    }
+    if let Some(path) = login_path().await {
+        command.env("PATH", path);
+    }
+    if let Some(home) = crate::local::home_dir() {
+        command.current_dir(home);
+    }
+    command
 }
 /// Whether `program` resolves on the PATH local commands receive.
 #[cfg(desktop)]
