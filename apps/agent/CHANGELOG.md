@@ -1,5 +1,28 @@
 # @lazysh/agent
 
+## 1.63.0
+
+### Minor Changes
+
+- a12aac2: Read Gemini CLI conversations in the Agent view.
+- ea81e09: Show a Grok Build plan as the shared plan card in its conversation view: with the updated host companion, a Grok ACP `plan` update is one plan card with its steps and their state instead of a block of labeled text.
+- 9095894: Make `lazysh-agent update`, `update --dry-run` and `update --rollback` work on Windows: the running `lazysh-agent.exe` is renamed aside and the verified file placed under its name, with the previous copy kept for rollback.
+- 936a012: Add `lazysh-agent update`, `update --dry-run` and `update --rollback` for Linux and macOS hosts: the host downloads the release itself, verifies its size and SHA-256 against the release metadata, self-tests the new binary, replaces the managed companion atomically and keeps the previous one for rollback.
+- 6aa52f7: Add `lazysh-agent listeners [--port N]... [--json] [--watch]`, which lists the TCP listeners on loopback or a wildcard address with their owner process id, name, user and start time (Linux `/proc`, macOS and other Unix `lsof`, Windows `Get-NetTCPConnection`) and prints `listen` and `close` events with `--watch`. The app uses it to confirm that the `http://localhost:PORT` a sign-in command printed is served by the host's own process. It reads no arguments or environment and tunnels nothing.
+- 9023f4d: Answer Codex's permission prompts remotely through Codex's own `PermissionRequest` hook decision. `lazysh-agent approval-request` and `approval-config` take `--agent codex`; the request is the same immutable, hash-bound record as Claude Code's, listed with `"agent":"codex"`, and an allow or a deny with a message goes back on the hook's stdout, never as keys. A request nobody answers gives no decision, so Codex shows its own prompt in the terminal.
+- 5864e88: Add the opt-in host browser shim: `lazysh-agent browser-shim install|status|uninstall` and the `browser-open` and `browser-watch --protocol 1` commands, so a link a host program opens (`xdg-open`, `open`, `$BROWSER`, Python `webbrowser`) can be handed to the lazysh app over a companion channel and otherwise goes to the real opener unchanged. Off until installed; with the shim installed, tools that fall back to a device code when the host has no browser launcher start their browser flow instead.
+
+### Patch Changes
+
+- 3087124: Add the closed list of browser protocol methods and page addresses that the host browser relay may send (`host_browser::allow`): cookies and storage, script and DOM access, downloads and file choosers, permissions and the clipboard, and every address but `http`, `https` and `about:blank` are refused, as is any method that is not named. The hidden developer launcher applies the same address rule to its first page. Nothing changes for users: the relay that uses the list ships with the Chrome viewer.
+- 7f4fe74: List in the agent-hook guide what each provider CLI was observed to do natively, including interactive Claude Code 2.1.322 and Codex 0.167.0 tool and permission runs, what no run has established and what needs an account. Documentation only: no behavior change.
+- 194935f: Record Kimi Code 2.4.1 native hook loading, real turn, approval, interrupt, failure and sub-agent payloads from a repeatable network-less run against a synthetic endpoint, and document which events can and cannot identify the root agent. No behavior change.
+- Updated dependencies [272304e]
+  - @lazysh/common@1.63.0
+  - @lazysh/companion-release@1.63.0
+  - @lazysh/notification-client@1.63.0
+  - @lazysh/account-usage@1.63.0
+
 ## 1.62.0
 
 ### Minor Changes

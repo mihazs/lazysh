@@ -1,5 +1,14 @@
 # @lazysh/notification-service
 
+## 1.63.0
+
+### Patch Changes
+
+- d36510c: Run the notification relay against the pinned official Gotify 3.1.1 server in the Linux runtimes CI job.
+- Updated dependencies [272304e]
+  - @lazysh/common@1.63.0
+  - @lazysh/notification-client@1.63.0
+
 ## 1.62.0
 
 ### Patch Changes

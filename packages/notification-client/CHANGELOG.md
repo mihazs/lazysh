@@ -1,5 +1,12 @@
 # @lazysh/notification-client
 
+## 1.63.0
+
+### Patch Changes
+
+- Updated dependencies [272304e]
+  - @lazysh/common@1.63.0
+
 ## 1.62.0
 
 ### Patch Changes
