@@ -18,7 +18,7 @@ fn line(uuid: &str, parent: Option<&str>, kind: &str) -> String {
 }
 
 /// Events reach the test in the order the companion sent them.
-fn collector() -> (Channel<WatchEvent>, Arc<Mutex<Vec<Value>>>) {
+pub(super) fn collector() -> (Channel<WatchEvent>, Arc<Mutex<Vec<Value>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = seen.clone();
     let channel = Channel::new(move |body| {
@@ -34,7 +34,7 @@ fn collector() -> (Channel<WatchEvent>, Arc<Mutex<Vec<Value>>>) {
     (channel, seen)
 }
 
-async fn until(
+pub(super) async fn until(
     seen: &Arc<Mutex<Vec<Value>>>,
     wanted: impl Fn(&Value) -> bool,
 ) -> (Value, Duration) {
@@ -54,7 +54,7 @@ async fn until(
     .expect("the expected live event did not arrive")
 }
 
-fn frame_of(kind: &'static str) -> impl Fn(&Value) -> bool {
+pub(super) fn frame_of(kind: &'static str) -> impl Fn(&Value) -> bool {
     move |event| event["type"] == "frame" && event["frame"]["type"] == kind
 }
 
@@ -144,7 +144,16 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     app.state::<TranscriptWatches>().cancel_for_lock().await;
     until(&seen, |event| event["type"] == "closed").await;
 
-    // A companion that predates the subcommand answers with a usage error, which the client reports once.
+    old_companion(app, id, directory, target).await;
+}
+
+/// A companion that predates the subcommand answers with a usage error, which the client reports once.
+pub(super) async fn old_companion(
+    app: &App,
+    id: &str,
+    directory: &Path,
+    target: impl Fn() -> WatchTarget,
+) {
     let executable = directory.join("bin/lazysh-agent");
     let held = directory.join("bin/held-companion");
     fs::rename(&executable, &held).unwrap();
@@ -152,7 +161,18 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let (events, seen) = collector();
-    start(events).await.unwrap().into_inner().unwrap();
+    agent_watch_start(
+        access_lease(),
+        app.state(),
+        app.state(),
+        id.into(),
+        target(),
+        events,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
     let (unavailable, _) = until(&seen, |event| event["type"] == "unavailable").await;
     assert_eq!(unavailable["reason"], "companion_required");
     fs::remove_file(&executable).unwrap();
