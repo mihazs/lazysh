@@ -376,8 +376,14 @@ impl Cdp {
         bytes.push(0);
         // shortcut: a browser that stays alive but stops reading its pipe blocks this write, and the relay
         // with it, until the browser dies; the channel closing still kills it at the host's side.
-        self.to_browser.write_all(&bytes)?;
-        self.to_browser.flush()?;
+        self.to_browser
+            .write_all(&bytes)
+            .and_then(|()| self.to_browser.flush())
+            // The read end is closed: the browser exited between its last message and this command.
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::BrokenPipe => Error::Browser("BrowserExited"),
+                _ => error.into(),
+            })?;
         Ok(self.next)
     }
 }
@@ -651,6 +657,19 @@ mod tests {
     fn page_text_is_cut_on_a_character_boundary() {
         assert_eq!(bounded("héllo", 2), "hé");
         assert_eq!(bounded("ab", 10), "ab");
+    }
+
+    #[test]
+    fn a_command_to_a_browser_that_has_exited_says_so() {
+        // A pipe whose read end is gone, as the browser's is once it has exited.
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        let mut cdp = Cdp {
+            to_browser: Box::new(writer),
+            next: 0,
+        };
+        let error = cdp.send("Page.reload", json!({}), Some("s")).unwrap_err();
+        assert_eq!(error.class(), "BrowserExited");
     }
 
     #[test]
