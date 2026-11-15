@@ -1198,8 +1198,12 @@ panes. Both views share one reader for the selected Herdr server. Opening a targ
 reuses the active matching terminal or explicitly attaches that exact server.
 Herdr workspace and tab focus use the stock CLI. Exact shell and agent pane focus
 requires the companion's `herdr-focus-pane` command, which sends only `pane.focus`
-to the selected running server's Unix socket. Install/update the companion from
-Agents when the app offers setup. No Herdr replacement or configuration change is
+to the selected running server's Unix socket, or on a Windows host to the named pipe
+Herdr (0.8.2 or newer) listens on, `\\.\pipe\<session socket path>`. The companion
+refuses a session whose reported path is not a drive path or a `\\.\pipe\` name, or
+that has an empty, `.` or `..` component, so the request can only reach a Herdr pipe.
+Herdr grants that pipe to the user who runs the server only. Install/update the companion
+from Agents when the app offers setup. No Herdr replacement or configuration change is
 required for view navigation.
 
 Focus is shared: other connections to that server may move too. The app labels

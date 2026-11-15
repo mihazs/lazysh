@@ -160,7 +160,7 @@ sessions get a stable host key and label (`local:<target>`, **This device** or
 | Files view and file reads | yes | yes (`C:\…`; WSL files via `\\wsl.localhost\<distro>\…`) | yes | #1130 |
 | Repository and diff review | yes (git) | yes (`git.exe`) | yes (git in the distro) | #1130 |
 | tmux discovery, attach, Jump To, navigation, create | yes | n/a: no native tmux; offered through a WSL target | yes | #1131 |
-| Herdr tree, navigation, workspaces, guarded input | yes | yes, Herdr ≥ 0.8.2 native (named pipe); focus needs a named-pipe branch in the companion | yes | #1131 |
+| Herdr tree, navigation, workspaces, guarded input | yes | yes, Herdr ≥ 0.8.2 native (named pipe); the companion's `herdr-focus-pane` focuses a pane through that pipe | yes | #1131 |
 | Zellij discovery, attach, actions | yes | yes, Zellij ≥ 0.44 native | yes | #1131 |
 | Companion: Agents board, approvals, settings, transcripts, Chat, usage reports | yes | yes (`windows-agent-x64`); managed hook writes depend on [#490](https://github.com/mihazs/lazysh/issues/490), until then Herdr agent detection supplies state | yes (Linux companion) | #1132 |
 | Agent hooks install | yes | templates only until #490 | yes | #1132 |

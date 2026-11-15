@@ -739,6 +739,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   occupy those slots until it responds or the last local transport owner closes.
 
 - Concurrent companion initialization rechecks a removed SQLite journal, WAL or
+- Let the host companion focus a Herdr pane on a Windows host (#1663, part of #1131). `lazysh-agent herdr-focus-pane` used to fail with `HerdrFocusPlatformUnsupported` on Windows; it now sends the same single `pane.focus` request over the named pipe Herdr 0.8.2 or newer listens on there (`\\.\pipe\<session socket path>`, the path `herdr session list --json` reports for the running session). The companion refuses a reported path that is not a drive path or a `\\.\pipe\` name, or that has an empty, `.` or `..` component, and keeps the same 3 second budget, size limit and error classes (`HerdrFocusMissing`, `HerdrFocusInvalid`, `HerdrFocusCancelled`) as on Linux and macOS. Unix hosts are unchanged. The Windows path is exercised against an owned named pipe in the `native-desktop` Windows job, not yet against a real Windows Herdr; the app does not call it for local Windows sessions yet. No defaults change.
   shared-memory entry instead of rejecting its stale zero-link metadata. Rechecks
   are bounded, replacements must pass the original file protections, and bootstrap
   locks still fail closed. Separate SQLite contention failures remain under review.
