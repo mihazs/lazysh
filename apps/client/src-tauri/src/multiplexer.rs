@@ -407,7 +407,8 @@ struct RmuxCapabilities {
 struct RmuxControlMode {
     entrypoint: String,
 }
-// shortcut: rmux stays Limited until its Jump To control client and confirmed input are verified on a real rmux (#1675).
+// The control-client and confirmed-input paths are verified on rmux 0.10.x only (#1675); another version admitted by its
+// capability record stays degraded until it is checked.
 const RMUX_MISSING: &[&str] = &["jump", "confirmedInput"];
 /// Admission from the binary contract and control mode, not from `rmux -V`; `daemon` is `stale` when the running
 /// daemon refused this client's protocol, which only a daemon restart fixes.
@@ -438,11 +439,19 @@ fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
     if daemon == "stale" {
         return unsupported(version, "daemonWire");
     }
+    let full = version
+        .as_deref()
+        .and_then(numbers)
+        .is_some_and(|v| v.len() == 3 && v[..2] == [0, 10]);
     Tool {
         kind: MultiplexerKind::Rmux,
         version,
-        support: Support::Degraded,
-        missing: RMUX_MISSING,
+        support: if full {
+            Support::Full
+        } else {
+            Support::Degraded
+        },
+        missing: if full { &[] } else { RMUX_MISSING },
         reason: None,
     }
 }
@@ -1150,8 +1159,12 @@ mod tests {
             "\"binary_contract_version\":2",
         );
         let not_a_control_client = RMUX_CAPABILITIES.replace("rmux -C", "rmux");
+        let rmux_other = RMUX_CAPABILITIES.replace("0.10.0", "0.11.0");
+        let rmux_short = RMUX_CAPABILITIES.replace("0.10.0", "0.10");
         for (capabilities, daemon, support, version, reason) in [
-            (RMUX_CAPABILITIES, "ok", Degraded, Some("0.10.0"), None),
+            (RMUX_CAPABILITIES, "ok", Full, Some("0.10.0"), None),
+            (rmux_other.as_str(), "ok", Degraded, Some("0.11.0"), None),
+            (rmux_short.as_str(), "ok", Degraded, Some("0.10"), None),
             (
                 RMUX_CAPABILITIES,
                 "stale",
@@ -1199,7 +1212,7 @@ mod tests {
             );
             assert_eq!(
                 tool.missing.is_empty(),
-                support == Unsupported,
+                matches!(support, Unsupported | Full),
                 "{capabilities} {daemon}"
             );
         }
@@ -1219,7 +1232,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             serde_json::to_value(&tree).unwrap()["tools"],
-            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"degraded","missing":["jump","confirmedInput"]}])
+            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"full","missing":[]}])
         );
     }
     #[cfg(unix)]
@@ -1267,7 +1280,7 @@ esac
             (&tree["tmuxAvailable"], &tree["rmuxAvailable"]),
             (&serde_json::json!(false), &serde_json::json!(true))
         );
-        assert_eq!(tree["tools"][0]["support"], "degraded");
+        assert_eq!(tree["tools"][0]["support"], "full");
         assert_eq!(tree["sessions"][0]["windows"][0]["panes"][0]["id"], "%0");
         // Browsing a tmux server still probes rmux, in its default namespace.
         let tree = discover(&crate::tmux_server::TmuxServer::default());
@@ -1457,7 +1470,7 @@ esac
                     .iter()
                     .find(|tool| tool["kind"] == "rmux")
                     .unwrap();
-                assert_eq!(rmux["support"], "degraded", "{rmux}");
+                assert_eq!(rmux["support"], "full", "{rmux}");
             }
             tree
         };

@@ -16,6 +16,8 @@ mod agent_session;
 mod multiline;
 #[path = "tmux_retirement_fixture.rs"]
 mod retirement;
+#[path = "tmux_rmux_fixture.rs"]
+mod rmux;
 #[cfg(target_os = "linux")]
 #[path = "tmux_shutdown_fixture.rs"]
 mod shutdown;
@@ -460,6 +462,26 @@ impl Fixture {
         .await
         .unwrap();
         Display { channel, identity }
+    }
+    /// The product's own control client on this fixture's tmux, as the actor attaches it.
+    async fn product_control(
+        &self,
+        identity: crate::tmux_jump::Identity,
+        session: &str,
+        lease: &AccessLease,
+    ) -> Option<crate::tmux_jump::Control> {
+        crate::tmux_jump::prepare_command(
+            self.handle(),
+            identity,
+            crate::tmux_server::Binary::Tmux,
+            format!(
+                "{} -C attach-session -f no-output,ignore-size -t {}",
+                self.prefix(),
+                quote(session)
+            ),
+            lease,
+        )
+        .await
     }
     async fn control(&self, session: &str) -> Control {
         let mut channel = self.handle().channel_open_session().await.unwrap();
@@ -957,18 +979,10 @@ async fn product_actor_probe() {
     assert!(String::from_utf8_lossy(&initial).contains("owned startup banner"));
     assert!(!String::from_utf8_lossy(&initial).contains(&marker));
     let (access, lease) = unlocked_authority();
-    let control = crate::tmux_jump::prepare_command(
-        f.handle(),
-        identity.clone(),
-        format!(
-            "{} -C attach-session -f no-output,ignore-size -t {}",
-            f.prefix(),
-            quote(&a)
-        ),
-        &lease,
-    )
-    .await
-    .unwrap();
+    let control = f
+        .product_control(identity.clone(), &a, &lease)
+        .await
+        .unwrap();
     let (cancel, mut cancellation) = watch::channel(false);
     let (binding, queued) = crate::tmux_jump::start_with_revoked_queue_fixture(
         control,
@@ -1050,18 +1064,10 @@ async fn product_actor_probe() {
     .await
     .expect("retired actor must close its remote control client while SSH stays connected");
 
-    let retained = crate::tmux_jump::prepare_command(
-        f.handle(),
-        identity.clone(),
-        format!(
-            "{} -C attach-session -f no-output,ignore-size -t {}",
-            f.prefix(),
-            quote(&a)
-        ),
-        &fresh,
-    )
-    .await
-    .unwrap();
+    let retained = f
+        .product_control(identity.clone(), &a, &fresh)
+        .await
+        .unwrap();
     let (_epoch_cancel, mut epoch_cancel) = watch::channel(false);
     let retained = crate::tmux_jump::start(retained, epoch_cancel.clone());
     let prior = serde_json::to_value(
@@ -1159,17 +1165,7 @@ async fn real_tmux_unsupported_client_loops_keep_terminal_without_binding() {
         assert_eq!(f.local(&["display-message", "-p", "#{L:#{?0,1,}}"]), "L:");
         assert_eq!(f.local(&["display-message", "-p", &identity.guard()]), "0");
         let lease = AccessState::disabled().lease(None).unwrap();
-        let control = crate::tmux_jump::prepare_command(
-            f.handle(),
-            identity,
-            format!(
-                "{} -C attach-session -f no-output,ignore-size -t {}",
-                f.prefix(),
-                quote(&session)
-            ),
-            &lease,
-        )
-        .await;
+        let control = f.product_control(identity, &session, &lease).await;
         assert!(
             control.is_none(),
             "unsupported loops must not publish navigation or Chat authority"
@@ -1969,23 +1965,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         .iter()
         .find(|row| row["name"] == "destination")
         .unwrap();
-    let jumped = crate::tmux_jump::tmux_jump(
-        lease.clone(),
-        app.state(),
-        app.state(),
-        child.session_id.clone(),
-        navigation["generation"].as_str().unwrap().into(),
-        destination["id"].as_str().unwrap().into(),
-        destination["windows"][0]["id"].as_str().unwrap().into(),
-    )
-    .await
-    .unwrap()
-    .into_inner()
-    .unwrap();
-    assert_eq!(
-        serde_json::to_value(jumped).unwrap()["current"]["sessionId"],
-        destination["id"]
-    );
+    jump_to_first_window(&app, &lease, &child.session_id, &navigation, destination).await;
     assert_eq!(
         servers
             .direct("other", &["list-windows", "-a", "-F", "#{window_id}"])
@@ -2072,6 +2052,32 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     );
 }
 
+/// Jumps the bound client to a destination's first window and checks that the product reports it as current.
+async fn jump_to_first_window(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    snapshot: &serde_json::Value,
+    destination: &serde_json::Value,
+) {
+    let jumped = crate::tmux_jump::tmux_jump(
+        lease.clone(),
+        app.state(),
+        app.state(),
+        session.into(),
+        snapshot["generation"].as_str().unwrap().into(),
+        destination["id"].as_str().unwrap().into(),
+        destination["windows"][0]["id"].as_str().unwrap().into(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(jumped).unwrap()["current"]["sessionId"],
+        destination["id"]
+    );
+}
 async fn chat_fixture_call(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
@@ -2088,6 +2094,23 @@ async fn chat_fixture_call(
     .map_err(|error| format!("{:?}", error.into_inner()))
     .and_then(|reply| reply.into_inner().map_err(|error| format!("{error:?}")))
     .map(|reply| serde_json::to_value(reply).unwrap())
+}
+/// One Shift+Tab: the reply carries the next operation and the permission mode the status line showed afterwards.
+async fn chat_fixture_cycled(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    request: serde_json::Value,
+    next: u32,
+    mode: &str,
+) {
+    let reply = chat_fixture_call(app, lease, session, request)
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        serde_json::json!({"kind":"delivered","nextOperation":next,"mode":mode})
+    );
 }
 fn chat_fixture_app(
     config: std::path::PathBuf,
@@ -2448,33 +2471,12 @@ async fn chat_input_probe() {
     let draw = |text: &str| std::fs::write(&tty, text).unwrap();
     let current = chat_fixture_bind(&app, &lease, &child, &source).await;
     draw("\x1b[2J\x1b[Hauto mode on\r\n\r\n  \u{23f5}\u{23f5} accept edits on (shift+tab to cycle)\r\n");
-    let cycled = chat_fixture_call(
-        &app,
-        &lease,
-        &child,
-        send(&current["receipt"], 1, json!({"kind":"cycle_mode"})),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        cycled,
-        json!({"kind":"delivered","nextOperation":2,"mode":"acceptEdits"})
-    );
+    let cycle = |operation| send(&current["receipt"], operation, json!({"kind":"cycle_mode"}));
+    chat_fixture_cycled(&app, &lease, &child, cycle(1), 2, "acceptEdits").await;
     expected.extend_from_slice(b"\x1b[Z");
     chat_fixture_bytes(&outputs[0], &expected).await;
     draw("\x1b[2J\x1b[H  ? for shortcuts\r\n");
-    let unknown = chat_fixture_call(
-        &app,
-        &lease,
-        &child,
-        send(&current["receipt"], 2, json!({"kind":"cycle_mode"})),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        unknown,
-        json!({"kind":"delivered","nextOperation":3,"mode":"unconfirmed"})
-    );
+    chat_fixture_cycled(&app, &lease, &child, cycle(2), 3, "unconfirmed").await;
     expected.extend_from_slice(b"\x1b[Z");
     chat_fixture_bytes(&outputs[0], &expected).await;
     chat_fixture_workload_unchanged(&servers, &outputs[1..], &original_process).await;
@@ -3829,33 +3831,17 @@ async fn rmux_tree(
 #[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_RMUX binary"]
 async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
     use crate::multiplexer::{tmux_action, MultiplexerKind, MultiplexerKind::Rmux, TmuxAction};
-    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_RMUX").unwrap());
-    assert!(binary.is_absolute());
-    let tools = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(&binary, tools.path().join("rmux")).unwrap();
-    // The owned sshd takes its environment from plain `SetEnv` tokens.
-    let sockets = tempfile::tempdir_in("/tmp").unwrap();
-    let f = Fixture::with_environment(
-        None,
-        false,
-        false,
-        vec![
-            ("PATH", tools.path().display().to_string()),
-            ("RMUX_TMPDIR", sockets.path().display().to_string()),
-        ],
-    )
-    .await;
-    // An empty .zshrc keeps zsh's first-run wizard from taking the typed input in the pane.
-    fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+    let lab = rmux::Lab::new().await;
+    let (f, sockets) = (&lab.fixture, lab.sockets.path());
     let label = "owned lab";
     let server = RmuxServer {
-        binary,
-        sockets: sockets.path().to_owned(),
+        binary: lab.binary.clone(),
+        sockets: sockets.to_owned(),
         label,
     };
     let (_authority, lease) = unlocked_authority();
-    let (app, state) = herdr_native_app(&f);
-    let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let (app, state) = herdr_native_app(f);
+    let (source, _) = herdr_echo_source(f, &state, &lease).await;
     let source_id = source.session_id.clone();
     // Probing a host with no rmux daemon admits rmux by capabilities and leaves no daemon or socket behind.
     let absent = rmux_tree(&app, &lease, &source_id, Some(label)).await;
@@ -3869,13 +3855,10 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         .unwrap();
     assert_eq!(
         (&tool["support"], &tool["missing"]),
-        (
-            &serde_json::json!("degraded"),
-            &serde_json::json!(["jump", "confirmedInput"])
-        )
+        (&serde_json::json!("full"), &serde_json::json!([]))
     );
     assert!(
-        !socket_named(sockets.path(), label),
+        !socket_named(sockets, label),
         "discovery started an rmux daemon"
     );
     let directory = f.dir.path().to_str().unwrap().to_owned();
@@ -3951,8 +3934,8 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         )
     );
     assert!(
-        native.bindings.tmux.lock().unwrap().is_none(),
-        "no Jump To control client before it is verified"
+        native.bindings.tmux.lock().unwrap().is_some(),
+        "the Jump To control client is bound on rmux"
     );
     // Typed before the rmux client takes over the terminal, the line is echoed by the SSH tty and never reaches the pane.
     owned_terminal_output(&app, &child.session_id, &mut output, b"\x1b[?1049h").await;
@@ -4006,14 +3989,23 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         .unwrap()
         .len();
     assert_eq!(windows, 2);
-    assert!(crate::tmux_jump::tmux_jump_snapshot(
+    let current = crate::tmux_jump::tmux_jump_snapshot(
         lease.clone(),
         app.state(),
         app.state(),
-        child.session_id.clone()
+        child.session_id.clone(),
     )
     .await
-    .is_err());
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(current).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     // Closing the tab leaves the durable session behind.
     disconnect_inner(&state, child.session_id.clone())
         .await

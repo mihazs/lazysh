@@ -3,6 +3,7 @@
 use crate::{
     app_lock::AccessLease,
     ssh::{self, AccessResult, AppState, Result, SshError, SshHandle},
+    tmux_server::Binary,
 };
 use futures_util::future::BoxFuture;
 use russh::{client, ChannelMsg};
@@ -17,6 +18,9 @@ pub(crate) mod chat;
 const LIMIT: usize = 1024 * 1024;
 const ROWS: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(3);
+/// rmux cannot be told to stop streaming pane output (`attach-session -f no-output` is refused for control clients), so
+/// `%output` lines arrive unsolicited and inside command blocks. A raw burst of 16 KiB escapes to about 66 KB; this bounds one.
+const OUTPUT_LINE: usize = 256 * 1024;
 /// tmux before 3.8 never releases a control client whose stdout closes while
 /// output is queued (tmux/tmux#5444): the client and its server linger forever.
 /// Retirement therefore ends control mode on a still-read channel first, so
@@ -70,6 +74,34 @@ impl Identity {
             "{}\t#{{==:#{{S:#{{L:#{{?{condition},1,}}}}}},1}}",
             self.guard()
         )
+    }
+}
+/// What `if-shell -F` decides on. tmux reads every session with `#{S:}` and every client with `#{L:}`; rmux 0.10 cannot nest
+/// the two and its `#{L:}` sees only the issuing client, so an rmux guard reads one named session's current window and pane.
+pub(crate) struct Guard {
+    session: Option<String>,
+    pub(crate) format: String,
+}
+impl Guard {
+    pub(crate) fn new(format: impl Into<String>) -> Self {
+        Self {
+            session: None,
+            format: format.into(),
+        }
+    }
+    pub(crate) fn in_session(session: &str, format: impl Into<String>) -> Self {
+        Self {
+            session: Some(session.to_owned()),
+            format: format.into(),
+        }
+    }
+    /// The words after `if-shell -F`.
+    pub(crate) fn operands(&self) -> String {
+        let format = ssh::quote(&self.format);
+        match &self.session {
+            Some(session) => format!("-t {} {format}", ssh::quote(session)),
+            None => format,
+        }
     }
 }
 #[derive(Clone)]
@@ -295,6 +327,7 @@ pub(crate) struct Control {
     bytes: Vec<u8>,
     identity: Identity,
     generation: String,
+    binary: Binary,
     chat: Option<chat::Receipt>,
     /// A command write may have been interrupted, leaving a partial line.
     partial: bool,
@@ -302,12 +335,13 @@ pub(crate) struct Control {
     chat_before_dispatch: Option<chat::Gate>,
 }
 impl Control {
-    fn new(wire: Box<dyn Wire>, identity: Identity) -> Self {
+    fn new(wire: Box<dyn Wire>, identity: Identity, binary: Binary) -> Self {
         Self {
             wire,
             bytes: Vec::new(),
             identity,
             generation: uuid::Uuid::new_v4().to_string(),
+            binary,
             chat: None,
             partial: false,
             #[cfg(test)]
@@ -352,9 +386,20 @@ impl Control {
         .await;
         let _ = tokio::time::timeout(RETIREMENT - DETACH, self.wire.close()).await;
     }
+    /// rmux's unsolicited pane output: dropped unread and never charged to a budget, so a busy pane cannot retire navigation.
+    fn pane_output(&self) -> bool {
+        self.binary == Binary::Rmux && self.bytes.starts_with(b"%output ")
+    }
     async fn line(&mut self, budget: &mut usize) -> Result<String> {
         loop {
             if let Some(end) = self.bytes.iter().position(|b| *b == b'\n') {
+                if self.pane_output() {
+                    if end > OUTPUT_LINE {
+                        return Err(protocol());
+                    }
+                    self.bytes.drain(..=end);
+                    continue;
+                }
                 if end > 64 * 1024 || *budget < end + 1 {
                     return Err(protocol());
                 }
@@ -362,7 +407,13 @@ impl Control {
                 let line = self.bytes.drain(..=end).collect::<Vec<_>>();
                 return String::from_utf8(line[..line.len() - 1].to_vec()).map_err(|_| protocol());
             }
-            if self.bytes.len() > 64 * 1024 {
+            if self.bytes.len()
+                > if self.pane_output() {
+                    OUTPUT_LINE
+                } else {
+                    64 * 1024
+                }
+            {
                 return Err(protocol());
             }
             match self.wire.read().await {
@@ -386,7 +437,7 @@ impl Control {
                 }
                 break rest.to_owned();
             }
-            notification(&line)?;
+            self.notice(&line)?;
         };
         let mut rows = Vec::new();
         loop {
@@ -410,6 +461,41 @@ impl Control {
         self.write(command).await?;
         self.block(budget).await
     }
+    /// A bounded notification is ignored, except that on rmux the display client's own departure ends the binding: rmux's
+    /// guards cannot name that client, so a later client on the reused tty must never inherit this one's authority.
+    fn notice(&self, line: &str) -> Result<()> {
+        notification(line)?;
+        if self.binary == Binary::Rmux
+            && line.strip_prefix("%client-detached ") == Some(self.identity.tty.as_str())
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+    /// The window and pane a session shows. rmux's `list-clients` leaves a client's own window and pane empty, so they are
+    /// read from the session the client is attached to.
+    async fn session_view(
+        &mut self,
+        session_id: &str,
+        budget: &mut usize,
+    ) -> Result<(String, String)> {
+        let rows = self
+            .command(
+                &format!(
+                    "display-message -p -t {} '#{{window_id}}|#{{pane_id}}'",
+                    ssh::quote(session_id)
+                ),
+                budget,
+            )
+            .await?;
+        match rows.as_slice() {
+            [row] => row
+                .split_once('|')
+                .map(|(window, pane)| (window.to_owned(), pane.to_owned()))
+                .ok_or_else(protocol),
+            _ => Err(protocol()),
+        }
+    }
     async fn current(&mut self, budget: &mut usize) -> Result<Option<Current>> {
         let rows=self.command("list-clients -F '#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{client_control_mode}'",budget).await?;
         let mut found = None;
@@ -419,12 +505,19 @@ impl Control {
                 return Err(protocol());
             }
             if f[0] == self.identity.pid.to_string() && f[1] == self.identity.tty && f[4] == "0" {
-                if found.is_some() || !id(f[2], b'$') || !id(f[3], b'@') {
+                if found.is_some() || !id(f[2], b'$') {
+                    return Err(protocol());
+                }
+                let window = match self.binary {
+                    Binary::Tmux => f[3].to_owned(),
+                    Binary::Rmux => self.session_view(f[2], budget).await?.0,
+                };
+                if !id(&window, b'@') {
                     return Err(protocol());
                 }
                 found = Some(Current {
                     session_id: f[2].into(),
-                    window_id: f[3].into(),
+                    window_id: window,
                 });
             }
         }
@@ -448,7 +541,16 @@ impl Control {
         })
     }
     async fn jump(&mut self, session: &str, window: &str, budget: &mut usize) -> Result<()> {
-        let guard = self.identity.guard();
+        let guard = match self.binary {
+            Binary::Tmux => Guard::new(self.identity.guard()),
+            // shortcut: rmux's `#{L:}` cannot name the display client, so it is confirmed by a read just before the switch
+            // rather than inside the same command; its departure notice (`notice`) retires the binding. Upgrade when rmux
+            // loops over every client.
+            Binary::Rmux => {
+                self.current(budget).await?.ok_or_else(unavailable)?;
+                Guard::new("1")
+            }
+        };
         let marker = format!("LAZYSH_JUMP_{}", uuid::Uuid::new_v4().simple());
         let action = format!(
             "switch-client -E -c {} -t {}",
@@ -464,14 +566,14 @@ impl Control {
     /// A negative owned marker is distinct from a malformed/partial stream.
     async fn marked_command(
         &mut self,
-        guard: &str,
+        guard: &Guard,
         action: &str,
         marker: &str,
         budget: &mut usize,
     ) -> Result<bool> {
         let command = format!(
             "if-shell -F {} {{ {action}; display-message -p {} }} {{ display-message -p {} }}",
-            ssh::quote(guard),
+            guard.operands(),
             ssh::quote(&format!("{marker}:ok")),
             ssh::quote(&format!("{marker}:gone"))
         );
@@ -630,11 +732,17 @@ pub(crate) async fn prepare(
     server: &crate::tmux_server::TmuxServer,
     lease: &AccessLease,
 ) -> Option<Control> {
+    // rmux refuses client flags on a control client, and one without a size does not constrain the display's window.
+    let flags = match server.binary() {
+        Binary::Tmux => " -f no-output,ignore-size",
+        Binary::Rmux => "",
+    };
     prepare_command(
         handle,
         identity,
+        server.binary(),
         format!(
-            "{} -C attach-session -f no-output,ignore-size -t {}",
+            "{} -C attach-session{flags} -t {}",
             server.prefix(),
             crate::multiplexer::tmux_arg(&format!("={name}"))
         ),
@@ -645,6 +753,7 @@ pub(crate) async fn prepare(
 pub(crate) async fn prepare_command(
     handle: &Arc<SshHandle>,
     identity: Identity,
+    binary: Binary,
     command: String,
     lease: &AccessLease,
 ) -> Option<Control> {
@@ -656,7 +765,12 @@ pub(crate) async fn prepare_command(
         channel,
         command: Some(command),
     };
-    establish(Control::new(Box::new(wire), identity), lease, deadline).await
+    establish(
+        Control::new(Box::new(wire), identity, binary),
+        lease,
+        deadline,
+    )
+    .await
 }
 /// A control client that is up and has proven the displayed client is the one it manages.
 async fn establish(
@@ -668,20 +782,35 @@ async fn establish(
         control.bytes = control.wire.start().await?;
         let mut budget = LIMIT;
         control.block(&mut budget).await?;
-        loop {
-            if control.current(&mut budget).await?.is_some() {
-                break;
+        let current = loop {
+            if let Some(current) = control.current(&mut budget).await? {
+                break current;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let admission = control.identity.admission();
-        let rows = control
-            .command(
-                &format!("display-message -p {}", ssh::quote(&admission)),
-                &mut budget,
-            )
-            .await?;
-        if rows != ["1\t1"] {
+        };
+        let (admission, expected) = match control.binary {
+            Binary::Tmux => (
+                format!(
+                    "display-message -p {}",
+                    ssh::quote(&control.identity.admission())
+                ),
+                "1\t1",
+            ),
+            // rmux's loops do not nest, so admission proves what its guards use: a session-scoped format context.
+            Binary::Rmux => (
+                format!(
+                    "display-message -p -t {} {}",
+                    ssh::quote(&current.session_id),
+                    ssh::quote(&format!(
+                        "#{{&&:#{{==:#{{session_id}},{}}},#{{==:#{{window_id}},{}}}}}",
+                        current.session_id, current.window_id
+                    ))
+                ),
+                "1",
+            ),
+        };
+        let rows = control.command(&admission, &mut budget).await?;
+        if rows != [expected] {
             return Err(unavailable());
         }
         Ok::<_, SshError>(())
@@ -716,7 +845,7 @@ fn spawn_actor(
             }
             // Drain and validate notifications while idle, detecting server EOF
             // without allowing unbounded unsolicited output or stale responses.
-            let request = tokio::select! {biased; _=cancellation.changed()=>break, request=rx.recv()=>match request {Some(r)=>r,None=>break}, line=control.line(&mut idle_budget)=>{match line {Ok(line) if notification(&line).is_ok()=>continue,_=>break}}};
+            let request = tokio::select! {biased; _=cancellation.changed()=>break, request=rx.recv()=>match request {Some(r)=>r,None=>break}, line=control.line(&mut idle_budget)=>{match line {Ok(line) if control.notice(&line).is_ok()=>continue,_=>break}}};
             if request.lease.check().is_err() || request.reply.is_closed() {
                 if let Action::Chat(action) = &request.action {
                     control.chat_abandoned(action);
@@ -999,7 +1128,12 @@ pub(crate) async fn prepare_local(
         child,
         _tree: tree,
     };
-    establish(Control::new(Box::new(wire), identity), lease, deadline).await
+    establish(
+        Control::new(Box::new(wire), identity, Binary::Tmux),
+        lease,
+        deadline,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1008,7 +1142,7 @@ pub(crate) fn fixture_control(channel: russh::Channel<client::Msg>, identity: Id
         channel: channel.into(),
         command: None,
     };
-    Control::new(Box::new(wire), identity)
+    Control::new(Box::new(wire), identity, Binary::Tmux)
 }
 #[tauri::command]
 pub async fn tmux_jump_snapshot(

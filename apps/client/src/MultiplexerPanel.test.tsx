@@ -183,20 +183,20 @@ it('explains why a requested limited Herdr session cannot be attached', async ()
   expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
 });
 
-const rmuxTool = {kind:'rmux',version:'0.10.0',support:'degraded',missing:['jump','confirmedInput']};
+const rmuxTool = {kind:'rmux',version:'0.11.0',support:'degraded',missing:['jump','confirmedInput']};
 const rmuxTree = {...tree,tmuxAvailable:false,rmuxAvailable:true,sessions:[{...tree.sessions[0],name:'rmux work'}]};
 it('browses, labels and attaches rmux sessions on their own server and lists no Jump To',async()=>{
   vi.mocked(invoke).mockImplementation(async (command,args)=>command==='multiplexer_tree'
     ? (args as {kind?:string}).kind==='rmux' ? {...rmuxTree,tools:[rmuxTool]} : {...tree,rmuxAvailable:true,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]},rmuxTool]} : undefined);
   const attach=vi.fn().mockResolvedValue(undefined);
   render(<MuxPanel sessionId="ssh1" onAttach={attach}/>);
-  expect(await screen.findByText('tmux 3.4 (Supported) · rmux 0.10.0 (Limited) · Herdr not installed · Zellij not installed')).toBeTruthy();
+  expect(await screen.findByText('tmux 3.4 (Supported) · rmux 0.11.0 (Limited) · Herdr not installed · Zellij not installed')).toBeTruthy();
   fireEvent.click(screen.getByRole('button',{name:'Browse rmux sessions'}));
   fireEvent.click(await screen.findByRole('button',{name:'Attach rmux work'}));
   await waitFor(()=>expect(attach).toHaveBeenCalledWith('rmux work','rmux',undefined));
   expect(screen.getByText('rmux: rmux work', {exact:false})).toBeTruthy();
   expect(screen.getByText('rmux server')).toBeTruthy();
-  expect(screen.getByRole('note').textContent).toContain('Jump To and Chat input are not available for rmux yet.');
+  expect(screen.getByRole('note').textContent).toContain('Jump To and Chat input are verified only on rmux 0.10.x.');
   expect(invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'ssh1',kind:'rmux'},expect.anything());
   fireEvent.click(screen.getByRole('button',{name:'Select %9'}));
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('tmux_action',{sessionId:'ssh1',action:{type:'selectPane',target:'%9'},kind:'rmux'},expect.anything()));

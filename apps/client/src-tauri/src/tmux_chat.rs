@@ -230,6 +230,12 @@ impl Input {
         }
         Ok(())
     }
+    fn text(&self) -> Option<&str> {
+        match self {
+            Self::Send { text } | Self::SendLong { text } => Some(text),
+            _ => None,
+        }
+    }
     fn paste_text(&self) -> Option<&str> {
         match self {
             Self::Send { text } if text.contains(['\n', '\t']) => Some(text),
@@ -291,6 +297,37 @@ fn pasted<'a>(agent: &Agent, input: &'a Input) -> Option<&'a str> {
 fn octal(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("\\{b:03o}")).collect()
 }
+/// The payload as one double-quoted command word. rmux 0.10 reads each `\ooo` as a character, not a byte, so a multi-byte
+/// character would arrive double-encoded: ASCII stays octal and anything else is a `\u`/`\U` code point.
+fn escaped(bytes: &[u8], binary: Binary) -> String {
+    match (binary, std::str::from_utf8(bytes)) {
+        (Binary::Rmux, Ok(text)) => text
+            .chars()
+            .map(|c| match u32::from(c) {
+                code if c.is_ascii() => format!("\\{code:03o}"),
+                code if code <= 0xffff => format!("\\u{code:04x}"),
+                code => format!("\\U{code:08x}"),
+            })
+            .collect(),
+        _ => octal(bytes),
+    }
+}
+/// One buffer append per chunk. rmux decodes whole characters, so its chunks end on a character boundary.
+fn chunks(text: &str, binary: Binary) -> Vec<&[u8]> {
+    if binary == Binary::Tmux {
+        return text.as_bytes().chunks(CHUNK).collect();
+    }
+    let (mut parts, mut start) = (Vec::new(), 0);
+    while start < text.len() {
+        let mut end = (start + CHUNK).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        parts.push(&text.as_bytes()[start..end]);
+        start = end;
+    }
+    parts
+}
 fn report(marker: &str, state: &str) -> String {
     format!(
         "display-message -p {}",
@@ -305,8 +342,8 @@ fn bounded(command: String) -> Result<String> {
     Ok(command)
 }
 /// Paste the named buffer, then Enter. Both buffer hooks can change context: recheck before paste AND before CR.
-fn paste_stage(guard: &str, pane: &str, buffer: &str, marker: &str) -> String {
-    let (guard, pane) = (ssh::quote(guard), ssh::quote(pane));
+fn paste_stage(guard: &Guard, pane: &str, buffer: &str, marker: &str) -> String {
+    let (guard, pane) = (guard.operands(), ssh::quote(pane));
     let submit = format!(
         "if-shell -F {guard} {{ send-keys -t {pane} -H 0d; {} }} {{ {} }}",
         report(marker, "ok"),
@@ -318,16 +355,17 @@ fn paste_stage(guard: &str, pane: &str, buffer: &str, marker: &str) -> String {
     )
 }
 fn paste_command(
-    guard: &str,
+    guard: &Guard,
     pane: &str,
     text: &str,
     buffer: &str,
     marker: &str,
+    binary: Binary,
 ) -> Result<String> {
     bounded(format!(
         "if-shell -F {} {{ set-buffer -b {buffer} -- \"{}\"; {} }} {{ {} }}",
-        ssh::quote(guard),
-        octal(text.as_bytes()),
+        guard.operands(),
+        escaped(text.as_bytes(), binary),
         paste_stage(guard, pane, buffer, marker),
         report(marker, "gone")
     ))
@@ -335,11 +373,12 @@ fn paste_command(
 /// One step of a long prompt: add a chunk to the private buffer while the context still matches. Once the buffer exists a
 /// changed context deletes it, so nothing of the prompt stays behind when the terminal is no longer the destination.
 fn append_command(
-    guard: &str,
+    guard: &Guard,
     buffer: &str,
     chunk: &[u8],
     marker: &str,
     existing: bool,
+    binary: Binary,
 ) -> Result<String> {
     let gone = if existing {
         format!("delete-buffer -b {buffer}; {}", report(marker, "gone"))
@@ -348,9 +387,9 @@ fn append_command(
     };
     bounded(format!(
         "if-shell -F {} {{ set-buffer {}-b {buffer} -- \"{}\"; {} }} {{ {gone} }}",
-        ssh::quote(guard),
+        guard.operands(),
         if existing { "-a " } else { "" },
-        octal(chunk),
+        escaped(chunk, binary),
         report(marker, "ok")
     ))
 }
@@ -478,11 +517,17 @@ impl Control {
                 {
                     return Err(stale());
                 }
+                // rmux leaves a client's window and pane empty: they are those its session shows.
+                let (window_id, pane_id) = match self.binary {
+                    Binary::Tmux => (f[4].to_owned(), f[5].to_owned()),
+                    Binary::Rmux if id(f[3], b'$') => self.session_view(f[3], budget).await?,
+                    Binary::Rmux => return Err(protocol()),
+                };
                 let target = Destination {
                     generation: self.generation.clone(),
                     session_id: f[3].into(),
-                    window_id: f[4].into(),
-                    pane_id: f[5].into(),
+                    window_id,
+                    pane_id,
                 };
                 target.validate()?;
                 found = Some(target);
@@ -577,15 +622,23 @@ impl Control {
         // L then matches the original client, including its actual session name
         // against that same live session (names are unique within one server).
         // User labels are format values, never embedded into format syntax.
-        let guard =
-            format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}");
+        let guard = match self.binary {
+            Binary::Tmux => Guard::new(format!(
+                "#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}"
+            )),
+            // shortcut: rmux's `#{L:}` sees only the issuing client, so the guard is the session's current window and pane
+            // (atomic) and the display client was confirmed by `chat_ready` just before; its departure notice retires the
+            // binding. Upgrade when rmux loops over every client.
+            Binary::Rmux => Guard::in_session(&target.session_id, pane_condition),
+        };
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
         input.validate()?;
         let delivered = if let Some(text) = pasted(agent, input) {
             self.paste_long(&guard, &target.pane_id, text, budget).await
         } else if let Some(text) = input.paste_text() {
             let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
-            let command = paste_command(&guard, &target.pane_id, text, &buffer, &marker)?;
+            let command =
+                paste_command(&guard, &target.pane_id, text, &buffer, &marker, self.binary)?;
             // Partial/error/cancelled streams still retire; never resync to clean a buffer.
             self.marked_dispatch(&command, &marker, budget).await
         } else {
@@ -598,15 +651,15 @@ impl Control {
     /// `false` means a step found the destination changed and nothing was pasted.
     async fn paste_long(
         &mut self,
-        guard: &str,
+        guard: &Guard,
         pane: &str,
         text: &str,
         budget: &mut usize,
     ) -> Result<bool> {
         let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
-        for (index, chunk) in text.as_bytes().chunks(CHUNK).enumerate() {
+        for (index, chunk) in chunks(text, self.binary).into_iter().enumerate() {
             let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
-            let command = append_command(guard, &buffer, chunk, &marker, index > 0)?;
+            let command = append_command(guard, &buffer, chunk, &marker, index > 0, self.binary)?;
             if !self.marked_dispatch(&command, &marker, budget).await? {
                 return Ok(false);
             }
@@ -696,6 +749,12 @@ impl Control {
                 }
                 bound.owner.check().map_err(|_| stale())?;
                 input.validate_for(&bound.source)?;
+                // rmux 0.10 pastes a TAB as the two characters `\t`; refuse rather than deliver other text than was sent.
+                if self.binary == Binary::Rmux
+                    && input.text().is_some_and(|text| text.contains('\t'))
+                {
+                    return Err(invalid());
+                }
                 self.chat_ready(&bound.destination, budget).await?;
                 bound.owner.check().map_err(|_| stale())?;
                 lease.check()?;
@@ -1191,7 +1250,7 @@ mod tests {
         );
         // Every command that carries payload stays one ASCII line below the 32 KiB command bound, even with the
         // longest guard the format condition can reach, and only the later chunks append.
-        let guard = "g".repeat(2000);
+        let guard = Guard::new("g".repeat(2000));
         let hard = "\u{ff}".repeat(2048);
         let first = append_command(
             &guard,
@@ -1199,6 +1258,7 @@ mod tests {
             &hard.as_bytes()[..CHUNK],
             "OWNED_MARKER",
             false,
+            Binary::Tmux,
         )
         .unwrap();
         let next = append_command(
@@ -1207,6 +1267,7 @@ mod tests {
             &hard.as_bytes()[..CHUNK],
             "OWNED_MARKER",
             true,
+            Binary::Tmux,
         )
         .unwrap();
         assert!(first.len() < 32 * 1024 && next.len() < 32 * 1024 && first.is_ascii());
@@ -1216,10 +1277,16 @@ mod tests {
                 && next.contains("delete-buffer -b lazysh-owned")
         );
         assert!(!first.contains("delete-buffer"));
-        assert_eq!(first.matches(&guard).count(), 1);
-        assert!(
-            append_command(&guard, "lazysh-owned", &[0xff; 9000], "OWNED_MARKER", true).is_err()
-        );
+        assert_eq!(first.matches(&guard.format).count(), 1);
+        assert!(append_command(
+            &guard,
+            "lazysh-owned",
+            &[0xff; 9000],
+            "OWNED_MARKER",
+            true,
+            Binary::Tmux
+        )
+        .is_err());
     }
     #[test]
     fn multiline_paste_is_one_bounded_octal_line_with_three_context_guards() {
@@ -1228,11 +1295,12 @@ mod tests {
         input.validate().unwrap();
         assert_eq!(input.paste_text(), Some(text));
         let command = paste_command(
-            "original-context",
+            &Guard::new("original-context"),
             "%12",
             text,
             "lazysh-owned",
             "OWNED_MARKER",
+            Binary::Tmux,
         )
         .unwrap();
         assert!(command.is_ascii());
@@ -1253,22 +1321,24 @@ mod tests {
         .is_ok());
         assert!(
             paste_command(
-                "bounded-guard",
+                &Guard::new("bounded-guard"),
                 "%12",
                 &maximum,
                 "lazysh-owned",
-                "OWNED_MARKER"
+                "OWNED_MARKER",
+                Binary::Tmux
             )
             .unwrap()
             .len()
                 < 32 * 1024
         );
         assert!(paste_command(
-            &"g".repeat(11000),
+            &Guard::new("g".repeat(11000)),
             "%12",
             "one\ntwo",
             "lazysh-owned",
-            "OWNED_MARKER"
+            "OWNED_MARKER",
+            Binary::Tmux
         )
         .is_err());
         assert!(Input::Send {
@@ -1276,6 +1346,43 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+    #[test]
+    fn rmux_payload_is_decoded_per_character_and_chunked_on_character_boundaries() {
+        // rmux 0.10 reads `\303\251` as two characters (U+00C3 U+00A9); a code point survives intact as `\u`/`\U`.
+        assert_eq!(
+            escaped("aé界😀".as_bytes(), Binary::Rmux),
+            "\\141\\u00e9\\u754c\\U0001f600"
+        );
+        assert_eq!(escaped("é".as_bytes(), Binary::Tmux), "\\303\\251");
+        assert_eq!(escaped(&[0xff], Binary::Rmux), "\\377");
+        let text = "😀".repeat(CHUNK);
+        for binary in [Binary::Tmux, Binary::Rmux] {
+            let parts = chunks(&text, binary);
+            assert_eq!(parts.concat(), text.as_bytes());
+            assert!(parts.iter().all(|part| part.len() <= CHUNK));
+            assert!(parts
+                .iter()
+                .all(|part| binary == Binary::Tmux || std::str::from_utf8(part).is_ok()));
+        }
+        let rmux = Guard::in_session("$3", "#{==:#{pane_id},%0}");
+        assert_eq!(rmux.operands(), "-t '$3' '#{==:#{pane_id},%0}'");
+        let command = paste_command(
+            &rmux,
+            "%0",
+            "é\nx",
+            "lazysh-owned",
+            "OWNED_MARKER",
+            Binary::Rmux,
+        )
+        .unwrap();
+        assert!(command.is_ascii() && command.contains("\\u00e9\\012\\170"));
+        assert_eq!(
+            command
+                .matches("if-shell -F -t '$3' '#{==:#{pane_id},%0}'")
+                .count(),
+            3
+        );
     }
     #[test]
     fn every_native_reader_has_a_closed_records_context() {

@@ -276,18 +276,18 @@ The real-runtime cases are `#[ignore]` Rust tests (`bun run test:tmux`, `bun run
 
 ### rmux
 
-rmux 0.10.0 is discovered, attached, browsed and acted on through the tmux code (#1140, slice 1) and is Limited: Jump To and confirmed Chat input are #1675. Its real-rmux cases run in `NLR` against the pinned 0.10.0 release installed with its `install.sh`; none has run on `main` yet, so every row is `implemented`. Playwright, Linux GUI and Android cases are #1676, the Mosh entry and vanished-session restore are #1677. Local sessions on Linux and Windows are #1148.
+rmux 0.10.0 is discovered, attached, browsed and acted on through the tmux code (#1140, slice 1) and, with Jump To and confirmed Chat input (#1675), 0.10.x is Supported (another version stays Limited). Its real-rmux cases run in `NLR` against the pinned 0.10.0 release installed with its `install.sh`; none has run on `main` yet, so every row is `implemented`. Playwright, Linux GUI and Android cases are #1676, the Mosh entry and vanished-session restore are #1677. Local sessions on Linux and Windows are #1148.
 
 | Capability | Android | Linux | Windows | Evidence, or what is missing |
 | --- | --- | --- | --- | --- |
 | Discovery | implemented | implemented | implemented | L: `NLR` `multiplexer::tests::real_rmux_lifecycle_and_literal_names` (the parsed tree equals `rmux list-panes -a`) and `ssh::tmux_jump_fixture::real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` (a probe leaves no daemon or socket behind). Unit tests cover capability parsing and the `-N` probe. Android and Windows run the same Rust code; no case drives them. |
 | Attach and reattach | implemented | implemented | implemented | L: `NLR` `real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` attaches a labelled server over OpenSSH and closing the tab leaves the session. Android case: #1676. |
-| Navigation, Jump To, current marker | missing | missing | missing | #1675. |
+| Navigation, Jump To, current marker | implemented | implemented | implemented | L: `NLR` `ssh::tmux_jump_fixture::rmux::real_rmux_jump_moves_the_bound_client_detaches_cleanly_and_isolates_labels`: Jump To moves the bound display client, a busy pane's `%output` does not retire navigation, closing the terminal leaves no client in `list-clients`, two labels with colliding ids stay isolated and a replaced daemon is not followed. Android and Windows run the same Rust code; no case drives them (#1676). |
 | Create | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` creates sessions and windows with names containing spaces, quotes, `#` and a trailing `;`. A new Git worktree: #1141. |
 | Agent launch | missing | missing | missing | #1141. |
 | Layout actions | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` renames, splits, zooms and selects. Close and resize: #1144. |
 | History and clipboard | missing | missing | missing | #1147. |
-| Confirmed input | missing | missing | missing | #1675. |
+| Confirmed input | implemented | implemented | implemented | L: `NLR` `ssh::tmux_jump_fixture::rmux::real_rmux_chat_input_reaches_only_the_confirmed_pane_and_is_refused_after_a_daemon_restart`: multi-byte keys, bracketed paste and a long prompt reach only the confirmed pane; a send after the display client moved or the daemon restarted is refused; an input with a TAB is refused. Binding a pane from a hook's `RMUX_PANE`: #1421 and #1693. |
 | Agent state and notifications | missing | missing | missing | #1146 (PR #1693 records the rmux server label). |
 | Restore | implemented | implemented | implemented | Reattach while the daemon lives is the saved-workspace path (`workspace.test.ts`, `App.test.tsx`). Recreate a vanished session: #1677. After a host reboot: `n/a`, the rmux daemon keeps state in memory and exits with its last session. |
 | Version detection | implemented | implemented | implemented | L: `NLR` `real_ssh_discovery_reports_multiplexer_versions_and_support` with `rmux=degraded`; admission uses `rmux capabilities --json`, not `-V`. |

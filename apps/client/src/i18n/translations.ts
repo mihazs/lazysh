@@ -679,7 +679,7 @@ const translations = {
   muxLimitedTmux: ["Ir para e a entrada do Chat exigem tmux 3.4 ou mais recente.", "Ir a y la entrada del Chat requieren tmux 3.4 o posterior."],
   muxLimitedZellij: ["A árvore de áreas de trabalho, fechar, redimensionar e iniciar agentes exigem Zellij 0.45.1.", "El árbol de espacios de trabajo, cerrar, redimensionar e iniciar agentes requieren Zellij 0.45.1."],
   muxLimitedHerdr: ["Somente a navegação está disponível. O suporte completo exige Herdr 0.9.3 a 0.9.5.", "Solo la navegación está disponible. El soporte completo requiere Herdr 0.9.3 a 0.9.5."],
-  muxLimitedRmux: ["As sessões rmux abrem como um terminal com ações de janela e painel. Ir para e a entrada do Chat ainda não estão disponíveis para rmux.", "Las sesiones rmux se abren como un terminal con acciones de ventana y panel. Ir a y la entrada del Chat aún no están disponibles para rmux."],
+  muxLimitedRmux: ["Esta versão do rmux abre como um terminal com ações de janela e painel. Ir para e a entrada do Chat são verificados apenas no rmux 0.10.x.", "Esta versión de rmux se abre como un terminal con acciones de ventana y panel. Ir a y la entrada del Chat solo están verificados en rmux 0.10.x."],
   muxUnsupported: ["Sem suporte", "No compatible"],
   muxUnsupportedRmux: ["Este rmux não é compatível. Ele precisa informar o contrato binário 1, a versão de protocolo 8 e o modo de controle (rmux 0.10.x).", "Este rmux no es compatible. Debe informar el contrato binario 1, la versión de protocolo 8 y el modo de control (rmux 0.10.x)."],
   muxUnsupportedRmuxDaemon: ["Reinicie o daemon do rmux após atualizar.", "Reinicia el daemon de rmux tras actualizar."],
