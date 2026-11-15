@@ -1,24 +1,24 @@
 import {expect,it} from 'vitest';
 import {NativeGui} from './fixture';
-import {SshFixture} from '../../../tests/support/sshFixture';
 import {OwnedSshRelay} from './sshRelay';
 import {openOwnedRememberedSsh,ownedSshGui} from './sshUi';
-import {paneIdentity,probePane,tmuxClients} from './tmuxPane';
+import {probePane} from './tmuxPane';
+import {muxKits} from './muxKits';
 
 const fixture=ownedSshGui();
 
-it('detects a lost SSH route, retries while it is down and reattaches the same tmux pane when it returns',async()=>{
+it.each(muxKits)('detects a lost SSH route, retries while it is down and reattaches the same $kind pane when it returns',async kit=>{
   fixture.captureSafe=false;
-  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmux:true});
+  const ssh=fixture.ssh=await kit.start();
   const relay=await OwnedSshRelay.start(ssh.port);
   const gui=fixture.gui=await NativeGui.startWithDisposableVault();
   try {
     const name=`lost-${ssh.nonce.slice(0,12)}`;
-    const clients=()=>tmuxClients(ssh);
-    const {browser,terminal,owner}=await openOwnedRememberedSsh(gui,ssh,{kind:'tmux',name},relay.port);
+    const clients=()=>kit.clients(ssh,name);
+    const {browser,terminal,owner}=await openOwnedRememberedSsh(gui,ssh,{kind:kit.kind,name},relay.port);
     await gui.assertDisposableCredential('saved');
-    gui.stage='owned tmux pane identity before the route is cut';
-    const before=await probePane(browser,terminal,'BEFORE','Owned tmux pane identity was not observed');
+    gui.stage=`owned ${kit.kind} pane identity before the route is cut`;
+    const before=await probePane(browser,terminal,'BEFORE',`Owned ${kit.kind} pane identity was not observed`,kit.probe);
     expect(await clients()).toBe(1);
 
     gui.stage='owned SSH route cut';
@@ -27,8 +27,8 @@ it('detects a lost SSH route, retries while it is down and reattaches the same t
     const banner=await browser.$(`//section[h2[normalize-space()=${JSON.stringify(`Connection lost for Owned SSH GUI host / ${name}`)}]]`);
     await banner.waitForDisplayed({timeout:60_000,timeoutMsg:'Lost-connection banner was not shown'});
     expect(await banner.getText()).toContain('Connection lost.');
-    // The tmux client went with the route; the pane itself keeps running on the host.
-    await browser.waitUntil(async()=>await clients()===0,{timeout:20_000,timeoutMsg:'Cut route left its tmux client attached'});
+    // The multiplexer client went with the route; the pane itself keeps running on the host.
+    await browser.waitUntil(async()=>await clients()===0,{timeout:20_000,timeoutMsg:`Cut route left its ${kit.kind} client attached`});
 
     gui.stage='owned automatic retry while the route is down';
     await browser.waitUntil(async()=>relay.refused>0,{timeout:45_000,interval:250,timeoutMsg:'No reconnect attempt reached the blocked route'});
@@ -39,9 +39,9 @@ it('detects a lost SSH route, retries while it is down and reattaches the same t
     await banner.waitForDisplayed({reverse:true,timeout:75_000,timeoutMsg:'Automatic reconnect did not finish after the route returned'});
     const restored=await browser.$(`.terminal-canvas[aria-label=${JSON.stringify(`Terminal for Owned SSH GUI host / ${name}`)}] .xterm-screen`);
     await restored.waitForDisplayed({timeout:20_000});
-    // tmux redraws the surviving pane, including the output written before the loss.
-    await browser.waitUntil(async()=>paneIdentity(await restored.getText(),'BEFORE')===before,{timeout:20_000,timeoutMsg:'Reconnected display did not show the original pane output'});
-    expect(await probePane(browser,restored,'AFTER','Reconnected pane identity was not observed')).toBe(before);
+    // The multiplexer redraws the surviving pane, including the output written before the loss.
+    await browser.waitUntil(async()=>kit.probe.identity(await restored.getText(),'BEFORE')===before,{timeout:20_000,timeoutMsg:'Reconnected display did not show the original pane output'});
+    expect(await probePane(browser,restored,'AFTER','Reconnected pane identity was not observed',kit.probe)).toBe(before);
     expect(await clients()).toBe(1);
     // Saved credentials were reused; nothing new was stored and nothing prompted.
     await gui.assertDisposableCredential('unchanged');
