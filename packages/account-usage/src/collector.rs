@@ -598,6 +598,12 @@ mod tests {
                 false,
             ),
             (
+                "directory-store",
+                true,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@data")],
+                false,
+            ),
+            (
                 "malformed-selected",
                 true,
                 vec![("CLINE_PROVIDER_SETTINGS_PATH", "@malformed")],
@@ -658,15 +664,6 @@ mod tests {
             if cfg!(windows) && matches!(case, "blank-default" | "canonical-environment-path") {
                 continue;
             }
-            let expected = expected
-                && (!cfg!(windows)
-                    || matches!(
-                        case,
-                        "blank-default"
-                            | "canonical-environment-path"
-                            | "explicit-path"
-                            | "inline-key"
-                    ));
             let cached = case.starts_with("cache-") || case == "mixed-cache";
             if cached && !cfg!(target_os = "linux") {
                 continue;

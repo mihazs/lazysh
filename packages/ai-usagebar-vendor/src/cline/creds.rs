@@ -66,12 +66,6 @@ pub fn default_paths() -> Result<Vec<PathBuf>> {
     } else {
         home_dir()?.join(AUTH_FILE)
     };
-    #[cfg(windows)]
-    if path != home_dir()?.join(AUTH_FILE) {
-        return Err(AppError::Credentials(
-            "Cline profile environment overrides are unavailable on Windows; configure explicit auth_paths or an API key".into(),
-        ));
-    }
     if path.as_os_str().len() > 4096 {
         return Err(AppError::Credentials(
             "Cline credential store path is invalid".into(),

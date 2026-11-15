@@ -81,11 +81,18 @@ values outside that pinned schema, such as a new enum value in any provider
 entry, is treated as unavailable rather than partially read, including through
 `auth_paths`; an explicit API key still works until the pinned schema is updated.
 Stores must resolve to regular files and fit within 1 MiB. Ordinary symlinks to regular stores are supported. Unix opens are
-nonblocking to reject a FIFO replacement without hanging. Nondefault environment
-store overrides are unavailable on Windows until a bounded Windows reader is
-qualified; existing explicit `auth_paths`, canonical store and API keys retain
-precedence. Windows explicit/default paths keep their prior synchronous-open race
-limitation and have not received native acceptance in this change. OAuth store tokens and
+nonblocking to reject a FIFO replacement without hanging. Windows has no
+nonblocking open, so every Windows store read (the canonical store, `auth_paths`
+and an environment-selected store) runs on its own reader thread: the check waits
+3 seconds, asks Windows to cancel the pending read and reports the store as
+unavailable, at most four such readers are alive at once, and the opened handle
+must be a disk file, so a pipe or device in place of the store is refused.
+Cancellation is best effort; it bounds the check and its resources, not the
+Windows request itself. Windows follows the same three environment variables with
+the same precedence, trimming and no-fallback rule as Linux and macOS, so a
+Windows host that sets one reads that store instead of reporting it unavailable.
+The Windows read and its environment selection are exercised only by the hosted
+Windows CI job; they have not been run on Windows hardware. OAuth store tokens and
 explicit usage/environment API keys are supported; stored manual `settings.apiKey`
 or `auth.apiKey` credentials are not discovered. This does not establish a valid
 subscription or successful quota request. An owned 892-case differential corpus
