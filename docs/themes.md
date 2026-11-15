@@ -57,8 +57,10 @@ See [terminal bold colors](reference/theme-rendering.md#terminal-bold-colors) fo
 Export theme link produces selectable `lazysh://theme?data=BASE64URL` text. It
 contains the same bounded UTF-8 theme document as a share code; no service is
 contacted, URL fetched or clipboard changed. The unpadded base64url alphabet is
-required, and the canonical URI is limited to 16 KiB. Actual credentials, ports,
-fragments, extra paths, duplicate `data` keys and unknown authorities are rejected.
+required, and the canonical URI is limited to 16 KiB. A slash right after the host
+(`lazysh://theme/?data=`) is accepted too, because Windows and browsers add it when
+they hand a link to the installed app. Actual credentials, ports, fragments, other
+paths, duplicate `data` keys and unknown authorities are rejected.
 CLI and Android string ingress also enforce a 16 KiB raw input bound. Apple OS
 callbacks already contain parsed URLs: equivalent spelling such as empty userinfo
 or outer whitespace may have normalized away before lazysh receives the URI.

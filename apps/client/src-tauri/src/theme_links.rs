@@ -11,7 +11,12 @@ fn theme_code(url: &str) -> Result<String, &'static str> {
     if url.len() > LIMIT {
         return Err(INVALID);
     }
-    let data = url.strip_prefix("lazysh://theme?data=").ok_or(INVALID)?;
+    // Windows canonicalizes the URL it hands a protocol handler and adds a slash after the host
+    // (`lazysh://theme/?data=`); browsers do the same. Both spellings name the same route.
+    let data = url
+        .strip_prefix("lazysh://theme?data=")
+        .or_else(|| url.strip_prefix("lazysh://theme/?data="))
+        .ok_or(INVALID)?;
     if data.is_empty()
         || data.len() % 4 == 1
         || !data
@@ -235,16 +240,19 @@ mod tests {
     }
     #[test]
     fn accepts_only_the_bounded_canonical_theme_route() {
-        assert_eq!(
-            theme_code("lazysh://theme?data=YWJj").unwrap(),
-            "lazysh-theme:YWJj"
-        );
+        for value in ["lazysh://theme?data=YWJj", "lazysh://theme/?data=YWJj"] {
+            assert_eq!(theme_code(value).unwrap(), "lazysh-theme:YWJj");
+        }
         for value in [
             "https://theme?data=YWJj",
             "lazysh://agents/id",
             "lazysh://@theme?data=YWJj",
             "lazysh://theme:80?data=YWJj",
-            "lazysh://theme/?data=YWJj",
+            "lazysh://theme//?data=YWJj",
+            "lazysh://theme/x?data=YWJj",
+            "lazysh://theme/?data=YWJj#",
+            "lazysh://theme/?data=YWJj&data=YWJj",
+            "lazysh://theme/?data=",
             "lazysh://theme?data=YWJj#",
             "lazysh://theme?data=YWJj&data=YWJj",
             "lazysh://theme?data=YWJj&x=y",
@@ -266,7 +274,7 @@ mod tests {
             "lazysh://:password@theme?data=YWJj",
             "lazysh://theme:80?data=YWJj",
             "lazysh://other?data=YWJj",
-            "lazysh://theme/?data=YWJj",
+            "lazysh://theme/x?data=YWJj",
             "lazysh://theme?data=YWJj#fragment",
             "lazysh://theme?data=YWJj&data=YWJj",
         ] {
@@ -276,7 +284,12 @@ mod tests {
         }
         // Apple RunEvent::Opened already contains parsed URLs. Original empty
         // userinfo/outer whitespace spelling may no longer exist at this boundary.
-        for value in ["lazysh://@theme?data=YWJj", " lazysh://theme?data=YWJj "] {
+        // The slash Windows and browsers add after the host is the same route.
+        for value in [
+            "lazysh://@theme?data=YWJj",
+            " lazysh://theme?data=YWJj ",
+            "lazysh://theme/?data=YWJj",
+        ] {
             let parsed = reqwest::Url::parse(value).unwrap();
             assert_eq!(theme_code(parsed.as_str()).unwrap(), "lazysh-theme:YWJj");
         }
