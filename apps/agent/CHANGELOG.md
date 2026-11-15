@@ -1,5 +1,20 @@
 # @lazysh/agent
 
+## 1.64.0
+
+### Minor Changes
+
+- 4d0df4d: Add the host browser switch, off by default, in its own `host-browser.json` (`lazysh-agent settings host-browser show|update`), so that `settings.json` keeps the five fields a released client reads. The hidden browser launcher fails before it starts a process while the switch is off, keeps its profile in a private directory with a pid marker, removes it when it stops or at the next start after a crash, and offers `--keep-profile` and `host-browser --clear-data`.
+- 6afbdeb: Focus a Herdr pane from the host companion on a Windows host: `lazysh-agent herdr-focus-pane` sends its single `pane.focus` request over the named pipe Herdr listens on instead of reporting the platform as unsupported, after validating the reported path.
+
+### Patch Changes
+
+- 4e3f098: Record the design for opt-in background usage collection and a host switch for account quota reads (ADR 0005, #1588). Documentation only: no behavior change.
+- @lazysh/account-usage@1.64.0
+  - @lazysh/common@1.64.0
+  - @lazysh/companion-release@1.64.0
+  - @lazysh/notification-client@1.64.0
+
 ## 1.63.0
 
 ### Minor Changes
