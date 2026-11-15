@@ -23,13 +23,30 @@ jobs:
       - name: The agent's Windows case for the host browser relay
         shell: bash
         run: cargo test --locked -p lazysh-agent --lib host_browser::relay::tests::a_windows_host_has_no_browser_pipe_and_says_so -- --exact
-      - name: Run the owned Windows sshd cases
+      - name: Exercise the app against an owned Windows OpenSSH server under cmd.exe and Windows PowerShell
+        if: ${{ !cancelled() }}
         shell: bash
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
         run: |
-          for case_name in ssh::tests::windows_openssh_fixture::default_shell_returns_the_machines_own_value_or_its_absence_on_every_exit_path ssh::tests::windows_openssh_fixture::windows_openssh_under_cmd_exe_identifies_the_host_and_runs_the_companion ssh::tests::windows_openssh_fixture::windows_openssh_under_windows_powershell_identifies_the_host_and_runs_the_companion; do
-            echo "=========== $case_name"
-            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test" || echo "NOT LISTED"
-            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact --nocapture || echo "CASE FAILED: $case_name"
+          bad=0
+          for one in registry_values_return_to_the_machines_own_or_to_their_absence_on_every_exit_path windows_openssh_under_cmd_exe_identifies_the_host_and_runs_the_companion windows_openssh_under_windows_powershell_identifies_the_host_and_runs_the_companion; do
+            full=ssh::tests::windows_openssh_fixture::$one
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$full" -- --list --ignored --exact | grep -Fx -- "$full: test" || { echo "::error::$one is not an ignored case of the client"; bad=1; continue; }
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$full" -- --ignored --exact || { echo "::error::$one bad"; bad=1; }
           done
+          exit $bad
+      - name: Mutation, a runner that runs the other shell must fail naming Windows PowerShell
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
+        run: |
+          file=apps/client/src-tauri/src/ssh/tests/windows_openssh_fixture.rs
+          sed -i 's#system.join(r"WindowsPowerShell\\v1.0\\powershell.exe")#system.join("cmd.exe")#' $file
+          grep -n 'Shell::PowerShell => system.join("cmd.exe")' $file
+          if cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::windows_openssh_fixture::windows_openssh_under_windows_powershell_identifies_the_host_and_runs_the_companion -- --ignored --exact > mutant.log 2>&1; then
+            echo "MUTANT SURVIVED"; exit 1
+          fi
+          grep -n "panicked\|Windows PowerShell: sshd ran the command under another shell" mutant.log
+          grep -F "Windows PowerShell: sshd ran the command under another shell than DefaultShell names" mutant.log
