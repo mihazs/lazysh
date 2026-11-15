@@ -96,12 +96,15 @@ test('the WebDriver client searches below an element, types into controls and se
     driver.session = 's';
     expect(await driver.find(".//button[normalize-space()='Cancel']", 'e1', 'xpath')).toBe('e2');
     await driver.type('e2', 'secret');
+    await driver.replace('e2', 'other');
     expect(await driver.property('e2', 'value')).toBe('secret');
     expect(await driver.displayed('e2')).toBe(true);
     await driver.keys('c\uE007');
     expect(calls.map(({ method, url, body }) => ({ method, url, body }))).toEqual([
       { method: 'POST', url: '/session/s/element/e1/element', body: { using: 'xpath', value: ".//button[normalize-space()='Cancel']" } },
       { method: 'POST', url: '/session/s/element/e2/value', body: { text: 'secret' } },
+      { method: 'POST', url: '/session/s/element/e2/clear', body: {} },
+      { method: 'POST', url: '/session/s/element/e2/value', body: { text: 'other' } },
       { method: 'GET', url: '/session/s/element/e2/property/value', body: undefined },
       { method: 'GET', url: '/session/s/element/e2/displayed', body: undefined },
       { method: 'POST', url: '/session/s/actions', body: { actions: [{ type: 'key', id: 'keyboard', actions: [
@@ -363,11 +366,13 @@ actual('actual Windows installed GUI saves a host, trusts the exact host key of 
       const editor = await until('host editor', () => browser.find('[role="dialog"][aria-label="Add a host"]'));
       await browser.type(await need('input[placeholder="Home workstation"]', editor), name);
       await browser.type(await need('input[placeholder="workstation.local"]', editor), '127.0.0.1');
-      await browser.type(await need('label.port-field input', editor), String(server.port));
+      await browser.replace(await need('label.port-field input', editor), String(server.port));
       await browser.type(await need('input[placeholder="Your SSH username"]', editor), server.username);
       await browser.click(await need(".//label[contains(., 'Preferred transport')]//option[@value='ssh']", editor, 'xpath'));
       await browser.click(await need(button('Save host'), editor, 'xpath'));
-      await until('host editor closed', async () => (await browser.find('[role="dialog"][aria-label="Add a host"]')) ? undefined : true);
+      await until('host editor closed', async () => (await browser.find('[role="dialog"][aria-label="Add a host"]')) ? undefined : true).catch(async error => {
+        throw new Error(`${error.message}: ${JSON.stringify(await browser.script("return Array.from(document.querySelectorAll('[role=dialog] input,[role=dialog] select')).map(e=>({p:e.placeholder||e.type,v:e.value,invalid:!e.checkValidity()}))"))}`);
+      });
 
       // The key is typed by the user into the connection dialog; it is never remembered.
       await browser.click(await until('saved host', () => browser.find(`button[aria-label="Connect to ${name}"]`)));
