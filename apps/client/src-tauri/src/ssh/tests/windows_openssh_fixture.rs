@@ -3,21 +3,22 @@
 use super::*;
 use std::{path::Path, process::Command};
 
-const KEY: &str = r"HKLM\SOFTWARE\OpenSSH";
-/// Two cases write one machine-wide registry value, so they never overlap in a process.
+const SSH: &str = r"HKLM\SOFTWARE\OpenSSH";
+const USER: &str = r"HKCU\Environment";
+/// Two cases write the same machine-wide registry values, so they never overlap in a process.
 static MACHINE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn reg(arguments: &[&str]) -> std::process::Output {
     Command::new("reg.exe").args(arguments).output().unwrap()
 }
 
-/// `DefaultShell` under `key` as `reg query` reports it: its type and its data.
-fn registered(key: &str) -> Option<(String, String)> {
-    let query = reg(&["query", key, "/v", "DefaultShell"]);
+/// The value `name` under `key` as `reg query` reports it: its type and its data.
+fn registered(key: &str, name: &str) -> Option<(String, String)> {
+    let query = reg(&["query", key, "/v", name]);
     let text = String::from_utf8_lossy(&query.stdout);
     let line = text
         .lines()
-        .find_map(|line| line.trim().strip_prefix("DefaultShell"))?;
+        .find_map(|line| line.trim().strip_prefix(name))?;
     let (kind, data) = line.trim_start().split_once(char::is_whitespace)?;
     query
         .status
@@ -25,55 +26,48 @@ fn registered(key: &str) -> Option<(String, String)> {
         .then(|| (kind.into(), data.trim().into()))
 }
 
-/// `DefaultShell` for as long as this lives; dropping it, also while unwinding, puts back the value it replaced or removes its own.
-struct DefaultShell {
+/// A registry value for as long as this lives; dropping it, also while unwinding, puts back the value it replaced or removes its own.
+struct Registry {
     key: String,
+    name: String,
     previous: Option<(String, String)>,
 }
-impl DefaultShell {
-    fn set(key: &str, program: &Path) -> Self {
-        let previous = registered(key);
-        let added = reg(&[
-            "add",
-            key,
-            "/v",
-            "DefaultShell",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &program.display().to_string(),
-            "/f",
-        ]);
+impl Registry {
+    fn set(key: &str, name: &str, kind: &str, data: &str) -> Self {
+        let previous = registered(key, name);
+        let added = reg(&["add", key, "/v", name, "/t", kind, "/d", data, "/f"]);
         assert!(
             added.status.success(),
-            "DefaultShell was not set (writing HKLM needs administrator rights): {}",
+            "{name} under {key} was not set (HKLM needs administrator rights): {}",
             String::from_utf8_lossy(&added.stderr)
         );
         Self {
             key: key.into(),
+            name: name.into(),
             previous,
         }
     }
+    /// `directory` first on the user's `PATH`, in the type the user's value already has.
+    fn path_with(directory: &Path) -> Self {
+        let (kind, old) =
+            registered(USER, "Path").unwrap_or(("REG_EXPAND_SZ".into(), String::new()));
+        let path = [directory.display().to_string(), old]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(";");
+        Self::set(USER, "Path", &kind, &path)
+    }
 }
-impl Drop for DefaultShell {
+impl Drop for Registry {
     fn drop(&mut self) {
+        let (key, name) = (&self.key, &self.name);
         let restored = match &self.previous {
-            Some((kind, data)) => reg(&[
-                "add",
-                &self.key,
-                "/v",
-                "DefaultShell",
-                "/t",
-                kind,
-                "/d",
-                data,
-                "/f",
-            ]),
-            None => reg(&["delete", &self.key, "/v", "DefaultShell", "/f"]),
+            Some((kind, data)) => reg(&["add", key, "/v", name, "/t", kind, "/d", data, "/f"]),
+            None => reg(&["delete", key, "/v", name, "/f"]),
         };
         let message = format!(
-            "DefaultShell under {} was not restored: {}",
-            self.key,
+            "{name} under {key} was not restored: {}",
             String::from_utf8_lossy(&restored.stderr)
         );
         // Panicking while another panic unwinds would abort the run and hide the first failure.
@@ -106,7 +100,8 @@ impl Shell {
             Shell::PowerShell => system.join(r"WindowsPowerShell\v1.0\powershell.exe"),
         }
     }
-    /// What `echo %OS% $PSVersionTable.PSVersion.Major` prints: only `cmd.exe` expands `%OS%`, only PowerShell the variable.
+    /// What `echo %OS% $PSVersionTable.PSVersion.Major` prints, words only: `cmd.exe` expands `%OS%`, PowerShell the variable
+    /// (and prints one word to a line).
     fn echo(self) -> &'static str {
         match self {
             Shell::Cmd => "Windows_NT $PSVersionTable.PSVersion.Major",
@@ -165,37 +160,40 @@ async fn verify(shell: Shell) {
         bin.join("lazysh-agent.exe"),
     )
     .unwrap();
-    let before = registered(KEY);
-    let default_shell = DefaultShell::set(KEY, &shell.program());
+    let touched = || {
+        [
+            (SSH, "DefaultShell"),
+            (USER, "Path"),
+            (USER, "LAZYSH_STATE_DIR"),
+        ]
+        .map(|(key, name)| registered(key, name))
+    };
+    let before = touched();
+    let program = shell.program().display().to_string();
+    let default_shell = Registry::set(SSH, "DefaultShell", "REG_SZ", &program);
     assert_eq!(
-        registered(KEY),
-        Some(("REG_SZ".into(), shell.program().display().to_string())),
+        registered(SSH, "DefaultShell"),
+        Some(("REG_SZ".into(), program)),
         "{name}: the registry does not hold the default shell this case runs under"
+    );
+    // The host's own environment, which is where sshd takes a session's from: the companion on the user's PATH, and a state
+    // directory that is not the user's.
+    let environment = (
+        Registry::path_with(&bin),
+        Registry::set(
+            USER,
+            "LAZYSH_STATE_DIR",
+            "REG_SZ",
+            &state_dir.display().to_string(),
+        ),
     );
     let (host_key, user_key) = (ed25519_key(), ed25519_key());
     let authorized = directory.path().join("authorized_keys");
+    // sshd splits `AuthorizedKeysFile` on blanks.
+    assert!(!authorized.to_str().unwrap().contains(char::is_whitespace));
     fs::write(&authorized, user_key.public_key().to_openssh().unwrap()).unwrap();
     let port = owned_sshd::free_port();
-    // A host with nothing but Windows and the companion on its PATH: the runner's own PATH (Git's `sh.exe`, for one) is not the host's.
-    // sshd splits `SetEnv` on blanks, and the Windows build does not apply a quoted value, so the directories have none.
-    let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
-    let path = [
-        bin.clone(),
-        system.join("System32"),
-        system.clone(),
-        system.join(r"System32\WindowsPowerShell\v1.0"),
-    ]
-    .map(|directory| directory.display().to_string())
-    .join(";");
-    let state = state_dir.display().to_string();
-    assert!(
-        !path.contains(char::is_whitespace) && !state.contains(char::is_whitespace),
-        "{name}: SetEnv splits on blanks, so the fixture directories must have none: {path} {state}"
-    );
-    let settings = format!(
-        "AuthorizedKeysFile {}\nSetEnv PATH={path} LAZYSH_STATE_DIR={state}\n",
-        owned_sshd::slashes(&authorized)
-    );
+    let settings = format!("AuthorizedKeysFile {}\n", owned_sshd::slashes(&authorized));
     let sshd =
         owned_sshd::OwnedSshd::start(directory.path(), port, &host_key, &settings, &[]).await;
     let app_state = AppState::new(directory.path().join("config")).unwrap();
@@ -227,7 +225,7 @@ async fn verify(shell: Shell) {
     // The shell sshd really started: a runner that ignores DefaultShell prints the other shell's answer and fails here.
     let echoed = run("echo %OS% $PSVersionTable.PSVersion.Major").await;
     assert_eq!(
-        echoed.stdout,
+        echoed.stdout.split_whitespace().collect::<Vec<_>>().join(" "),
         shell.echo(),
         "{name}: sshd ran the command under another shell than DefaultShell names ({:?}, stderr {:?})\n{}",
         echoed.status,
@@ -292,12 +290,8 @@ async fn verify(shell: Shell) {
             .is_err(),
         "{name}: the owned sshd still accepts connections"
     );
-    drop(default_shell);
-    assert_eq!(
-        registered(KEY),
-        before,
-        "{name}: DefaultShell was not restored"
-    );
+    drop((default_shell, environment));
+    assert_eq!(touched(), before, "{name}: the registry was not restored");
 }
 
 #[tokio::test]
@@ -314,39 +308,45 @@ async fn windows_openssh_under_windows_powershell_identifies_the_host_and_runs_t
 
 #[test]
 #[ignore = "writes the Windows registry; run explicitly"]
-fn default_shell_returns_the_machines_own_value_or_its_absence_on_every_exit_path() {
-    let key = format!(
-        r"HKCU\Software\lazysh-test-default-shell-{}",
-        std::process::id()
-    );
-    let program = Path::new(r"C:\Windows\System32\cmd.exe");
-    let value = |data: &str| ("REG_SZ".to_string(), data.to_string());
-    assert_eq!(registered(&key), None);
+fn registry_values_return_to_the_machines_own_or_to_their_absence_on_every_exit_path() {
+    let key = format!(r"HKCU\Software\lazysh-test-registry-{}", std::process::id());
+    let value = |data: &str| Some(("REG_SZ".to_string(), data.to_string()));
+    assert_eq!(registered(&key, "Value"), None);
     // Absent before: the value is gone afterwards, also when the case panics while it holds it.
     let unwound = std::panic::catch_unwind(|| {
-        let _held = DefaultShell::set(&key, program);
+        let _held = Registry::set(&key, "Value", "REG_SZ", r"C:\Windows\System32\cmd.exe");
         assert_eq!(
-            registered(&key),
-            Some(value(&program.display().to_string()))
+            registered(&key, "Value"),
+            value(r"C:\Windows\System32\cmd.exe")
         );
         panic!("a failing assertion");
     });
     assert!(unwound.is_err());
-    assert_eq!(registered(&key), None);
-    // Present before: the value is the one it was, not the one the case set.
-    let machine = reg(&[
+    assert_eq!(registered(&key, "Value"), None);
+    // Present before: the value is the one it was, in the type it had, not the one the case set.
+    let own = r"%SystemRoot%\own er\shell.exe";
+    assert!(reg(&[
         "add",
         &key,
         "/v",
-        "DefaultShell",
+        "Value",
         "/t",
-        "REG_SZ",
+        "REG_EXPAND_SZ",
         "/d",
-        r"C:\own er\shell.exe",
-        "/f",
-    ]);
-    assert!(machine.status.success());
-    drop(DefaultShell::set(&key, program));
-    assert_eq!(registered(&key), Some(value(r"C:\own er\shell.exe")));
+        own,
+        "/f"
+    ])
+    .status
+    .success());
+    drop(Registry::set(
+        &key,
+        "Value",
+        "REG_SZ",
+        r"C:\Windows\System32\cmd.exe",
+    ));
+    assert_eq!(
+        registered(&key, "Value"),
+        Some(("REG_EXPAND_SZ".to_string(), own.to_string()))
+    );
     assert!(reg(&["delete", &key, "/f"]).status.success());
 }
