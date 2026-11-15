@@ -874,7 +874,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion_settings::get_host_browser_settings, crate::companion_settings::update_host_browser_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -909,6 +909,15 @@ mod tests {
             update.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}}),
             );
+            let mut browser = request(nonce);
+            browser.cmd = "get_host_browser_settings".into();
+            browser.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
+            let mut browser_update = request(nonce);
+            browser_update.cmd = "update_host_browser_settings".into();
+            browser_update.body = tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"hostBrowserEnabled":false}}),
+            );
             let mut installer = request(nonce);
             installer.cmd = "install_companion".into();
             installer.body = tauri::ipc::InvokeBody::Json(
@@ -926,7 +935,16 @@ mod tests {
             discovery.cmd = "companion_hook_discovery".into();
             discovery.body =
                 tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
-            [read, update, installer, fallback, hooks, discovery]
+            [
+                read,
+                update,
+                browser,
+                browser_update,
+                installer,
+                fallback,
+                hooks,
+                discovery,
+            ]
         };
         let rejected = |nonce: Option<&str>| {
             for request in protected_requests(nonce) {

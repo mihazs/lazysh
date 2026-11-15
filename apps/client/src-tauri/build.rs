@@ -190,6 +190,8 @@ fn main() {
         "companion_hook_discovery",
         "get_companion_settings",
         "update_companion_settings",
+        "get_host_browser_settings",
+        "update_host_browser_settings",
         "agent_transcript",
         "agent_usage",
         "account_usage",

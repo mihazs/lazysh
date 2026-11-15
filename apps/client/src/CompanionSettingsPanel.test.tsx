@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import CompanionSettingsPanel, { parseCompanionSettings } from "./CompanionSettingsPanel";
+import { answer, calls } from "./test/routedInvoke";
 vi.mock("@tauri-apps/api/core",async original=>({...await original<typeof import("@tauri-apps/api/core")>(),invoke:vi.fn()}));
 afterEach(()=>{cleanup();vi.clearAllMocks();});
 const settings={schemaVersion:1 as const,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
@@ -11,7 +12,7 @@ it("requires exact bounded versioned settings rather than coercing malformed hos
   for(const value of [null,{...settings,schemaVersion:2},{...settings,revision:-1},{...settings,revision:Number.MAX_SAFE_INTEGER+1},{...settings,recordedUsageEnabled:"true"},{...settings,extra:1}])expect(()=>parseCompanionSettings(value)).toThrow();
 });
 it("saves actual host settings with the fetched revision and explicit booleans",async()=>{
-  vi.mocked(invoke).mockResolvedValueOnce(settings).mockResolvedValueOnce({...settings,revision:1,recordedUsageEnabled:false});
+  answer({get_companion_settings:[settings],update_companion_settings:[{...settings,revision:1,recordedUsageEnabled:false}]});
   render(<CompanionSettingsPanel sessionId="host-a"/>);
   const usage=await screen.findByLabelText("Recorded usage inspection");fireEvent.click(usage);fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
   await screen.findByText("Host settings saved for new operations.");
@@ -20,48 +21,50 @@ it("saves actual host settings with the fetched revision and explicit booleans",
   expect(screen.getByText(/Port discovery is a separate SSH feature/)).toBeTruthy();
 });
 it("does not show actionable switches for an unsupported host companion",async()=>{
-  vi.mocked(invoke).mockRejectedValue({message:"unknown subcommand settings"});render(<CompanionSettingsPanel sessionId="old"/>);
-  await screen.findByRole("alert");expect(screen.queryByRole("checkbox")).toBeNull();expect(screen.queryByRole("button",{name:"Save host settings"})).toBeNull();
+  answer({get_companion_settings:[()=>Promise.reject({message:"unknown subcommand settings"})],get_host_browser_settings:[()=>Promise.reject({kind:"host_browser_companion_required",message:"Update the host companion"})]});render(<CompanionSettingsPanel sessionId="old"/>);
+  await screen.findByRole("alert");await screen.findByText(/cannot change the host browser setting/);
+  for(const checkbox of screen.queryAllByRole("checkbox"))expect(checkbox.matches(":disabled")).toBe(true);
+  expect(screen.queryByRole("button",{name:/^Save host/})).toBeNull();
 });
 it("reports update conflicts and keeps settings unacknowledged until refreshed",async()=>{
-  vi.mocked(invoke).mockResolvedValueOnce(settings).mockRejectedValueOnce({message:"SettingsConflict"});render(<CompanionSettingsPanel sessionId="host-a"/>);
+  answer({get_companion_settings:[settings],update_companion_settings:[()=>Promise.reject({message:"SettingsConflict"})]});render(<CompanionSettingsPanel sessionId="host-a"/>);
   fireEvent.click(await screen.findByLabelText("Device tools"));fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
   await screen.findByText(/Refresh host settings before retrying/);expect(screen.queryByText("Host settings saved for new operations.")).toBeNull();
 });
 it("discards settings arriving after the selected SSH session changes",async()=>{
   let resolve!:(value:unknown)=>void;
-  vi.mocked(invoke).mockReturnValueOnce(new Promise(result=>{resolve=result;})).mockResolvedValueOnce({...settings,revision:9,recordedUsageEnabled:false});
+  answer({get_companion_settings:[()=>new Promise(result=>{resolve=result;}),{...settings,revision:9,recordedUsageEnabled:false}]});
   const {rerender}=render(<CompanionSettingsPanel sessionId="old"/>);rerender(<CompanionSettingsPanel sessionId="new"/>);
   await screen.findByLabelText("Recorded usage inspection");resolve(settings);
   await waitFor(()=>expect((screen.getByLabelText("Recorded usage inspection") as HTMLInputElement).checked).toBe(false));
-  expect(invoke).toHaveBeenLastCalledWith("get_companion_settings",{sessionId:"new"}, { headers: { "X-Lazysh-Access": expect.any(String) } });
+  expect(calls("get_companion_settings").at(-1)).toEqual(["get_companion_settings",{sessionId:"new"}, { headers: { "X-Lazysh-Access": expect.any(String) } }]);
 });
 
 it('preserves the loaded settings draft across hide/reopen without another host read',async()=>{
-  vi.mocked(invoke).mockResolvedValue(settings);const view=render(<CompanionSettingsPanel sessionId="draft-owner"/>);
+  answer({get_companion_settings:[settings],update_companion_settings:[settings]});const view=render(<CompanionSettingsPanel sessionId="draft-owner"/>);
   const usage=await screen.findByLabelText('Recorded usage inspection');fireEvent.click(usage);
-  view.rerender(<CompanionSettingsPanel sessionId="draft-owner" visible={false}/>);fireEvent.submit(usage.closest('form')!);expect(invoke).toHaveBeenCalledTimes(1);
+  view.rerender(<CompanionSettingsPanel sessionId="draft-owner" visible={false}/>);fireEvent.submit(usage.closest('form')!);expect(vi.mocked(invoke)).toHaveBeenCalledTimes(2);
   view.rerender(<CompanionSettingsPanel sessionId="draft-owner"/>);
-  expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(invoke).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button',{name:'Save host settings'}));await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(2));
-  expect(vi.mocked(invoke).mock.lastCall?.[1]).toMatchObject({sessionId:'draft-owner',settings:{expectedRevision:0,recordedUsageEnabled:false}});
+  expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(calls('get_companion_settings')).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button',{name:'Save host settings'}));await waitFor(()=>expect(calls('update_companion_settings')).toHaveLength(1));
+  expect(calls('update_companion_settings')[0][1]).toMatchObject({sessionId:'draft-owner',settings:{expectedRevision:0,recordedUsageEnabled:false}});
 });
 it('keeps initial hidden settings unread and retires a held load across a hidden source change',async()=>{
   let finish!:(value:unknown)=>void;
-  vi.mocked(invoke).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockResolvedValue({...settings,revision:9,recordedUsageEnabled:false});
+  answer({get_companion_settings:[()=>new Promise(resolve=>{finish=resolve;}),{...settings,revision:9,recordedUsageEnabled:false}]});
   const view=render(<CompanionSettingsPanel sessionId="old-source" visible={false}/>);expect(invoke).not.toHaveBeenCalled();
-  view.rerender(<CompanionSettingsPanel sessionId="old-source"/>);expect(invoke).toHaveBeenCalledTimes(1);
-  view.rerender(<CompanionSettingsPanel sessionId="new-source" visible={false}/>);await act(async()=>finish(settings));expect(invoke).toHaveBeenCalledTimes(1);
+  view.rerender(<CompanionSettingsPanel sessionId="old-source"/>);expect(calls('get_companion_settings')).toHaveLength(1);
+  view.rerender(<CompanionSettingsPanel sessionId="new-source" visible={false}/>);await act(async()=>finish(settings));expect(calls('get_companion_settings')).toHaveLength(1);
   view.rerender(<CompanionSettingsPanel sessionId="new-source"/>);
-  expect(await screen.findByLabelText('Recorded usage inspection')).toHaveProperty('checked',false);expect(vi.mocked(invoke).mock.lastCall?.[1]).toEqual({sessionId:'new-source'});
+  expect(await screen.findByLabelText('Recorded usage inspection')).toHaveProperty('checked',false);expect(calls('get_companion_settings').at(-1)?.[1]).toEqual({sessionId:'new-source'});
 });
 it.each(['success','error'])('does not apply a held settings save %s after hiding, retaining the original draft',async outcome=>{
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
-  vi.mocked(invoke).mockResolvedValueOnce(settings).mockImplementationOnce(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));
+  answer({get_companion_settings:[settings],update_companion_settings:[()=>new Promise((yes,no)=>{finish=yes;fail=no;})]});
   const view=render(<CompanionSettingsPanel sessionId="pending-settings"/>);const usage=await screen.findByLabelText('Recorded usage inspection');fireEvent.click(usage);
   fireEvent.click(screen.getByRole('button',{name:'Save host settings'}));view.rerender(<CompanionSettingsPanel sessionId="pending-settings" visible={false}/>);
   await act(async()=>{if(outcome==='success')finish({...settings,revision:1});else fail('obsolete settings result');});
   view.rerender(<CompanionSettingsPanel sessionId="pending-settings"/>);
   expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);
-  expect(screen.queryByText('Host settings saved for new operations.')).toBeNull();expect(screen.queryByText('obsolete settings result')).toBeNull();expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText('Host settings saved for new operations.')).toBeNull();expect(screen.queryByText('obsolete settings result')).toBeNull();expect(invoke).toHaveBeenCalledTimes(3);
 });

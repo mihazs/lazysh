@@ -463,6 +463,8 @@ input[type="search"] {
 .preferences-content [data-settings-page] fieldset, .agent-panel .agent-configuration fieldset { border: 0; border-radius: var(--ui-radius); background: var(--ui-row); padding: 12px 16px; }
 .agent-panel .agent-configuration fieldset { background: var(--ui-row-pressed); }
 .preferences-content [data-settings-page] fieldset > legend, .agent-panel .agent-configuration fieldset > legend { float: left; width: 100%; margin: 0 0 8px; padding: 0; color: var(--theme-muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+/* The full-width floated legend would otherwise squeeze the first flex label beside it to nothing. */
+.agent-panel .agent-configuration fieldset > legend + * { clear: both; }
 .preferences-content [data-settings-page] fieldset > legend + * { clear: both; }
 .preferences-content [data-settings-page] > details > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-weight: 500; }
 .preferences-content [data-settings-page] > ul { padding: 4px 16px; border-radius: var(--ui-radius); background: var(--ui-row); list-style: none; }
