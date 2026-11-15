@@ -6,8 +6,11 @@ use crate::{
 };
 use reqwest::{
     header::{ETAG, IF_MATCH, IF_NONE_MATCH},
-    Certificate, Client, ClientBuilder, StatusCode, Url,
+    Client, StatusCode, Url,
 };
+// Only the loopback trust hook (tests and the owned emulator build) names these.
+#[cfg(any(test, feature = "sync-tls-acceptance"))]
+use reqwest::{Certificate, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::{
