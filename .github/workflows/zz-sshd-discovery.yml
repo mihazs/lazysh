@@ -3,13 +3,6 @@ on:
   push:
     branches: [chore/windows-sshd-shell-discovery]
 jobs:
-  setenv:
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - shell: powershell
-        run: ./.github/workflows/zz-sshd-discovery.ps1
   trial:
     runs-on: windows-latest
     timeout-minutes: 75
