@@ -102,7 +102,7 @@ mod runtime {
     };
     use crate::{
         ssh::AppState,
-        tmux_jump::{request, Identity},
+        tmux_jump::{request, Identity, Target},
     };
     use std::{os::unix::fs::PermissionsExt, process::Command, time::Duration};
 
@@ -284,10 +284,11 @@ mod runtime {
         let tty = desktop::display_identity(&state, &id).unwrap().tty;
         let displayed = || tmux(&["display-message", "-p", "-c", &tty, "#{session_name}"]);
         assert_eq!(displayed(), first);
-        let after = snapshot(Some((
+        let after = snapshot(Some(Target::new(
             before["generation"].as_str().unwrap().to_owned(),
             beta.clone(),
             window,
+            None,
         )))
         .await
         .unwrap();

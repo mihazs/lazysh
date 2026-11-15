@@ -11,6 +11,15 @@ it('passes typed Mosh entry separately from transport options on the owned nativ
   await api.connectMosh('entry-parent',{},()=>{},entry);
   expect(invoke).toHaveBeenLastCalledWith('connect_mosh',{sessionId:'entry-parent',options:{},cols:100,rows:30,events:expect.any(Object),entry},expect.anything());
 });
+it('sends a pane id with a Jump To request only when a pane row was chosen',async()=>{
+  const generation='g'.repeat(36);
+  await api.tmuxJump('display',generation,'$1','@2');
+  await api.tmuxJump('display',generation,'$1','@2','%3');
+  expect(invoke.mock.calls.map(([command,args])=>[command,args])).toEqual([
+    ['tmux_jump',{sessionId:'display',generation,targetSessionId:'$1',windowId:'@2'}],
+    ['tmux_jump',{sessionId:'display',generation,targetSessionId:'$1',windowId:'@2',paneId:'%3'}],
+  ]);
+});
 it('asks the native side to inspect and open a sign-in page, which checks the tunnel itself',async()=>{
   invoke.mockResolvedValueOnce({host:'idp.example',warnings:[],callbackPorts:[8085]}).mockResolvedValueOnce('notified');
   expect(await api.inspectAuthUrl('https://idp.example/a')).toEqual({host:'idp.example',warnings:[],callbackPorts:[8085]});

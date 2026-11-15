@@ -1,13 +1,12 @@
 import {useEffect,useState} from 'react';
 import {bindProtectedInvoke,captureAccess,useAccessSnapshot} from './access';
 import {parseSnapshot} from './AgentPanel';
+import {paneAgent} from './agentPaneIdentity';
 import {parseTerminalSnapshot} from './ChatTerminalInput';
 import {focusedPane} from './herdrPaneLink';
 import {useHerdrNavigation} from './useHerdrNavigation';
 
 const INTERVAL=5000;
-/** The companion writes this summary when an agent's session ends, so the pane no longer runs it. */
-const SESSION_ENDED='Session ended';
 
 /** The agent in the tmux pane the terminal is attached to: the newest companion hook report carrying that pane's `TMUX_PANE`. `undefined` until the first read. */
 function useTmuxPaneAgent(sessionId:string|null) {
@@ -25,8 +24,7 @@ function useTmuxPaneAgent(sessionId:string|null) {
       try {
         const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
         const pane=parseTerminalSnapshot(await invoke('tmux_chat',{sessionId,action:{kind:'snapshot'}})).destination.paneId;
-        const newest=reports.find(row=>row.paneId===pane);
-        agent=newest&&newest.summary!==SESSION_ENDED?newest.agent:null;
+        agent=paneAgent(reports,pane);
       } catch { /* An old companion or a pane that cannot be read means no agent is known, so the default account shows. */ }
       finally {flight=false;}
       if(live&&lease.current())setFound({sessionId,agent});
