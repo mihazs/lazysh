@@ -527,11 +527,7 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
                 return Err(Error::InvalidArgument);
             }
             let png = match platform {
-                Platform::Android => runner.output(
-                    Tool::Adb,
-                    &args(&["-s", id, "exec-out", "screencap", "-p"]),
-                    MAX_PNG,
-                )?,
+                Platform::Android => screencap(runner, id)?,
                 Platform::Ios => {
                     let directory = tempfile::tempdir()?;
                     let path = directory.path().join("screenshot.png");
@@ -707,6 +703,24 @@ fn coordinates(values: &[u32]) -> Result<()> {
     } else {
         Ok(())
     }
+}
+/// The PNG `adb exec-out screencap -p` wrote. A guest can print a warning line to stdout before
+/// it (the Waydroid guest names a missing GPU-library file), so the image starts at its signature,
+/// looked for in the first KiB only: anything else stays an invalid image.
+fn screencap(runner: &mut impl Runner, id: &str) -> Result<Vec<u8>> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let mut bytes = runner.output(
+        Tool::Adb,
+        &args(&["-s", id, "exec-out", "screencap", "-p"]),
+        MAX_PNG,
+    )?;
+    let start = bytes
+        .windows(SIGNATURE.len())
+        .take(1024)
+        .position(|window| window == SIGNATURE)
+        .unwrap_or(0);
+    bytes.drain(..start);
+    Ok(bytes)
 }
 fn frame(platform: Platform, id: &str, png: &[u8]) -> Result<Value> {
     if png.len() > MAX_PNG

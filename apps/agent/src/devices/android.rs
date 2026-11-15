@@ -40,7 +40,8 @@ fn ffmpeg_args() -> Vec<String> {
         "-filter_threads",
         "1",
         "-vf",
-        "fps=8",
+        // Full range: ffmpeg's MJPEG encoder refuses the limited-range YUV that some AVC encoders tag (Waydroid's).
+        "fps=8,format=yuvj420p",
         "-threads",
         "1",
         "-c:v",
@@ -82,9 +83,9 @@ fn probe(runner: &mut impl Runner, id: &str) -> Result<(u32, u32)> {
         return Err(Error::InvalidArgument);
     }
     let features = runner.output(Tool::Adb, &args(&["-s", id, "features"]), MAX_SDK_TEXT)?;
+    // adb prints the list comma-separated or one feature per line, by version and client.
     if !String::from_utf8_lossy(&features)
-        .trim()
-        .split(',')
+        .split(|c: char| c == ',' || c.is_whitespace())
         .any(|feature| feature == "shell_v2")
     {
         return Err(Error::Device("AndroidShellV2Unavailable"));
@@ -125,12 +126,7 @@ fn probe(runner: &mut impl Runner, id: &str) -> Result<(u32, u32)> {
             return Err(Error::Device("FfmpegCapabilityUnavailable"));
         }
     }
-    let png = runner.output(
-        Tool::Adb,
-        &args(&["-s", id, "exec-out", "screencap", "-p"]),
-        MAX_PNG,
-    )?;
-    let screenshot = frame(Platform::Android, id, &png)?;
+    let screenshot = frame(Platform::Android, id, &screencap(runner, id)?)?;
     Ok(bounded_size(
         screenshot["width"].as_u64().unwrap() as u32,
         screenshot["height"].as_u64().unwrap() as u32,
@@ -403,6 +399,10 @@ mod tests {
         assert!(ffmpeg_args()
             .windows(2)
             .any(|p| p == ["-max_pixels", "1638400"]));
+        // The decoded range is converted before the MJPEG encoder, which refuses limited-range YUV.
+        assert!(ffmpeg_args()
+            .windows(2)
+            .any(|p| p == ["-vf", "fps=8,format=yuvj420p"]));
     }
     #[test]
     fn cancelled_video_does_not_dispatch_either_process() {
