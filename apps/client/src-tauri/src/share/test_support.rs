@@ -13,6 +13,7 @@ pub(crate) struct TlsFront {
     pub address: SocketAddr,
     pub origin: String,
     pub root: reqwest::Certificate,
+    pub root_pem: String,
     pub acceptor: TlsAcceptor,
 }
 pub(crate) async fn tls_front() -> TlsFront {
@@ -44,6 +45,7 @@ pub(crate) async fn tls_front_for(names: Vec<String>) -> TlsFront {
         address,
         origin,
         root,
+        root_pem: certificate.cert.pem(),
         acceptor,
     }
 }
