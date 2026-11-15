@@ -71,6 +71,10 @@ export function tmuxPassthroughSupported(version:string) {
   const parts=/^tmux ([0-9]+)[.]([0-9]+)[a-z]?$/.exec(version);
   return !!parts && (Number(parts[1])>3 || (Number(parts[1])===3 && Number(parts[2])>=3));
 }
+/** Compressed `pane_in_mode` history of the first window's pane: out of a mode, in copy mode, out again. */
+export function tmuxCopyModeVerified(history:readonly number[]) {
+  return history.length===3 && [0,1,0].every((mode,index)=>history[index]===mode);
+}
 
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
   'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown','Owned tmux server exited uncleanly',
@@ -118,6 +122,7 @@ export class TmuxFixture {
   private history:number[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
   private extraPanes=0;
+  private modes:number[]=[];
   private constructor(readonly ssh:SshFixture) {}
   static async start(binary=process.env.LAZYSH_TEST_TMUX) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
@@ -138,6 +143,8 @@ export class TmuxFixture {
       }
       // The pinned server forwards a DCS-wrapped escape sequence from a pane to its attached clients, as tmux 3.3 added.
       await owned.run(['set-option','-g','allow-passthrough','on']);
+      // Copy mode takes plain keys (k, V, Enter) whatever the host's EDITOR would have chosen.
+      await owned.run(['set-option','-gw','mode-keys','vi']);
       for(const [index,name] of [[0,'alpha'],[1,'beta']] as const) {
         // beta stays an interactive shell, so the app can print a passthrough sequence there; alpha only waits.
         const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec ${name==='beta'?'/bin/sh -i':'sleep 3600'}`;
@@ -208,6 +215,12 @@ export class TmuxFixture {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
       this.history.push(count);
     }
+    const mode=(await this.run(['display-message','-p','-t',this.windows[0].paneId,'#{pane_in_mode}'])).trim();
+    if(mode!=='0' && mode!=='1')throw new Error('Owned tmux pane mode readback invalid');
+    if(this.modes.at(-1)!==Number(mode)) {
+      if(this.modes.length>=8)throw new Error('Owned tmux pane mode history exceeded');
+      this.modes.push(Number(mode));
+    }
     return count;
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
@@ -248,6 +261,13 @@ export class TmuxFixture {
     if(!original || !added || original.pid!==beta.pane.pid || added.pid===beta.pane.pid || rows.some(row=>row.zoomed))throw new Error('Owned tmux split and zoom were not observed');
     if(await realpath(added.path)!==await realpath(this.ssh.directory))throw new Error('Owned tmux split directory differs');
     this.extraPanes=1;
+  }
+  /** The first window's pane entered copy mode and left it, and tmux's newest buffer is exactly the line the app copied. */
+  async verifyCopied() {
+    await this.observe();
+    if(!tmuxCopyModeVerified(this.modes))throw new Error('Owned tmux copy mode was not entered and left');
+    // A selected line carries its newline.
+    if(await this.run(['show-buffer'])!==`${this.windows[0].marker}\n`)throw new Error('Owned tmux copied line differs');
   }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');

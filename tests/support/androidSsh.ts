@@ -697,8 +697,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(tmux) {
       await tmux.verifyWindowLifecycle();
       await tmux.verifySplitAndZoom();
+      await tmux.verifyCopied();
       await tmux.verifyDetachedAndReattached();
-      console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, split, zoom, detach and reattach verified against the original server and pane processes');
+      console.log('Owned packaged tmux: discovery, numbered window, Jump To, copy mode and copied line, a created, renamed and closed window, split, zoom, detach and reattach verified against the original server and pane processes');
     }
     if(sharedHerdr){
       await herdr!.verifyPanelActions('ANDROID_CREATED_'+fixture.nonce,'ANDROID_RENAMED_'+fixture.nonce);
