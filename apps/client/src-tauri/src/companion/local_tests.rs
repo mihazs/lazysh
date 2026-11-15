@@ -130,6 +130,103 @@ fn the_managed_copy_comes_after_the_bundle_and_before_the_path_and_must_be_the_u
     assert_eq!(find(), None);
 }
 
+/// A stand-in executable that reports `version` the way the companion does.
+#[cfg(unix)]
+fn reporting(path: &Path, version: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        format!("#!/bin/sh\nprintf 'lazysh-agent {version}\\n'\n"),
+    )
+    .unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_bundled_companion_is_copied_privately_and_only_replaced_by_a_newer_one() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let bundled = temp.path().join("mount/usr/bin/lazysh-agent");
+    let target = temp.path().join("data/lazysh/companion/lazysh-agent");
+    let run = |path: &Path| {
+        let output = std::process::Command::new(path).output().unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    reporting(&bundled, "1.4.0");
+    ensure_copy(&bundled, &target).await.unwrap();
+    assert_eq!(run(&target), "lazysh-agent 1.4.0\n");
+    let meta = fs::metadata(&target).unwrap();
+    assert_eq!(
+        (meta.mode() & 0o777, meta.nlink()),
+        (0o700, 1),
+        "owner-only, not a link"
+    );
+    assert_eq!(
+        fs::metadata(target.parent().unwrap()).unwrap().mode() & 0o077,
+        0
+    );
+    // The same version is kept: the file is not rewritten under a hook that runs it.
+    let inode = meta.ino();
+    ensure_copy(&bundled, &target).await.unwrap();
+    assert_eq!(fs::metadata(&target).unwrap().ino(), inode);
+    // An older copy gives way to the bundle; a newer one (an update that ran in place) stays.
+    reporting(&bundled, "1.5.0");
+    ensure_copy(&bundled, &target).await.unwrap();
+    assert_eq!(run(&target), "lazysh-agent 1.5.0\n");
+    reporting(&target, "2.0.0");
+    ensure_copy(&bundled, &target).await.unwrap();
+    assert_eq!(run(&target), "lazysh-agent 2.0.0\n");
+    // A copy another account could change is not trusted, even at the right version.
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o770)).unwrap();
+    ensure_copy(&bundled, &target).await.unwrap();
+    assert_eq!(run(&target), "lazysh-agent 1.5.0\n");
+    assert_eq!(fs::metadata(&target).unwrap().mode() & 0o777, 0o700);
+    // No staging file is left beside it.
+    let names = fs::read_dir(target.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["lazysh-agent"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn nothing_is_copied_from_a_bundle_that_does_not_run_or_into_a_shared_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("data/lazysh/companion/lazysh-agent");
+    let bundled = agent_in(&temp.path().join("mount"));
+    // A file that is not the companion prints no version.
+    assert_eq!(
+        ensure_copy(&bundled, &target).await.unwrap_err().kind(),
+        "remote_command_failed"
+    );
+    assert!(!target.exists());
+    reporting(&bundled, "1.4.0");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::set_permissions(target.parent().unwrap(), fs::Permissions::from_mode(0o777)).unwrap();
+    assert_eq!(
+        ensure_copy(&bundled, &target).await.unwrap_err().kind(),
+        "remote_command_failed"
+    );
+    assert!(!target.exists(), "a directory others can write is refused");
+}
+
+#[test]
+fn an_installed_companion_stands_in_for_the_bundle_only_when_it_is_not_older() {
+    for (installed, bundled, kept) in [
+        ("1.4.0", "1.4.0", true),
+        ("1.10.0", "1.9.0", true),
+        ("1.3.9", "1.4.0", false),
+        ("1.4.0-dev", "1.4.0-dev", true),
+        ("1.4.0-dev", "1.4.0", false),
+    ] {
+        assert_eq!(at_least(installed, bundled), kept, "{installed} {bundled}");
+    }
+}
+
 // ---- A real companion serving a local session.
 
 /// The companion this build produced, placed beside the test executable the way the desktop
@@ -332,18 +429,26 @@ async fn real_local_hooks_report_to_the_board_and_a_permission_request_is_answer
     let settings =
         crate::companion::hooks::install_keeping_foreign_settings(&app, &id, &profile, &lease())
             .await;
-    // The profile now runs the bundled companion by its absolute path.
+    // The profile runs a private copy in the managed folder, not the bundle, which an AppImage
+    // runs from a mount that is gone once the app exits.
     let command = words(
         settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(command[0], companion.to_str().unwrap());
+    let managed = home.join("data/lazysh/companion").join(NAME);
+    assert_eq!(command[0], managed.to_str().unwrap());
+    assert_ne!(managed, companion);
+    assert_eq!(
+        fs::read(&managed).unwrap(),
+        fs::read(&companion).unwrap(),
+        "the same executable the app bundles"
+    );
 
     let prompt = json!({"hook_event_name": "UserPromptSubmit", "session_id": "local-one",
         "cwd": "/work/local", "prompt": "hello"});
-    let reported = hook(&companion, &command[1..], home, &prompt)
+    let reported = hook(&managed, &command[1..], home, &prompt)
         .await
         .wait_with_output()
         .await
@@ -371,7 +476,7 @@ async fn real_local_hooks_report_to_the_board_and_a_permission_request_is_answer
     let permission = json!({"hook_event_name": "PermissionRequest", "session_id": "local-two",
         "cwd": "/work/local", "tool_name": "Bash", "tool_input": {"command": "echo hi"}});
     let waiting = hook(
-        &companion,
+        &managed,
         &[
             "approval-request",
             "--agent",

@@ -108,7 +108,8 @@ pub(crate) async fn execute(
     access: &AccessLease,
 ) -> Result<serde_json::Value> {
     let command = request.command()?;
-    execute_command(host, &command, access).await
+    // The plan a status prints covers the executable's own path, so every action runs from one.
+    execute_command(host, &command, access, true).await
 }
 #[tauri::command]
 pub async fn companion_hook_discovery(
@@ -121,14 +122,20 @@ pub async fn companion_hook_discovery(
     dispatch(state, local, session_id, access, None, schema_version).await
 }
 pub(crate) async fn discover(host: &Host, access: &AccessLease) -> Result<serde_json::Value> {
-    execute_command(host, discovery_command(None)?, access).await
+    execute_command(host, discovery_command(None)?, access, false).await
 }
 pub(crate) async fn discover_version(
     host: &Host,
     access: &AccessLease,
     schema_version: u8,
 ) -> Result<serde_json::Value> {
-    execute_command(host, discovery_command(Some(schema_version))?, access).await
+    execute_command(
+        host,
+        discovery_command(Some(schema_version))?,
+        access,
+        false,
+    )
+    .await
 }
 fn discovery_command(schema_version: Option<u8>) -> Result<&'static str> {
     match schema_version {
@@ -145,6 +152,7 @@ async fn execute_command(
     host: &Host,
     command: &str,
     access: &AccessLease,
+    lasting: bool,
 ) -> Result<serde_json::Value> {
     let text = match host {
         Host::Remote(session) => {
@@ -158,7 +166,7 @@ async fn execute_command(
         }
         // The companion itself says what this platform supports (templates only on Windows).
         #[cfg(desktop)]
-        Host::Local(_) => host.companion(access, command.into()).await?,
+        Host::Local(_) => host.companion_at(access, command.into(), lasting).await?,
     };
     parse_response(&text)
 }

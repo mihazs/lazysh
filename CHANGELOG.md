@@ -867,6 +867,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   archive-specific export guard remains; upstream cached artifacts are unchanged.
 
 - Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects
+- Bind local agent hooks to a lasting copy of the bundled companion (#1666, part of #1132). Hook setup in a local session first places an owner-only copy of the `lazysh-agent` beside the app in the managed directory (`<data>/lazysh/companion/`, written to a new file and renamed into place) and runs from there, so the hooks it writes keep working after the app exits; an AppImage runs the bundled companion from a mount that disappears with the app. A managed copy that is the user's own and at least as new as the bundled version is kept, an older or unsafe one is replaced, and the plan a status shows is for the copy the install then uses. Discovery and every other command keep running the bundled companion, a companion at the managed path or on the `PATH` is used as it is, and Windows (template-only hook setup) is unchanged. No defaults change, and no desktop package bundles a companion yet, so nothing changes for an install today.
   every detected clone, including pre-existing duplication; the previous baseline
   allowance is removed. Refactor with DRY until the scan reports zero clones.
   This instruction prints after successful and failed hook runs without changing
