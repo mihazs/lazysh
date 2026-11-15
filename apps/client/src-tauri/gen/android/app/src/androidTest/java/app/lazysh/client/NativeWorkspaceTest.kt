@@ -3563,6 +3563,8 @@ class NativeWorkspaceTest {
         val dialog = "[role=dialog][aria-label='Reconnect uploads to ${fixture.getString("name")}']"
         val key = JSONObject.quote("__lazyshOwnedRecovery_$nonce")
         val token = JSONObject.quote(UUID.randomUUID().toString())
+        // Send reopens the soft keyboard, which resizes the Mosh screen, and mosh-server drops the bottom rows of a
+        // shrink that a shell cannot redraw. Each proof is printed after a pause so it lands once that has settled.
         fun typed(command: String, proof: String) {
             sendOwnedCommand(scenario, command, label)
             awaitDocument(scenario, "owned Mosh terminal printed its recovery proof", terminalScreenContains(proof))
@@ -3574,7 +3576,7 @@ class NativeWorkspaceTest {
               window[$key]={token:$token,screen,tabs:document.querySelectorAll('[role=tab]').length};return true;})()
         """))
         // The host answers this receipt by closing exactly the app's SSH stream, then releases the shell.
-        typed(hostReceipt(directory, "upload-control") + "printf 'CONTROL_%s_CLOSED\\n' '$nonce'", "CONTROL_${nonce}_CLOSED")
+        typed(hostReceipt(directory, "upload-control") + "sleep 5; printf 'CONTROL_%s_CLOSED\\n' '$nonce'", "CONTROL_${nonce}_CLOSED")
         stage(name, false)
         val draft = "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && " +
             "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]')"
@@ -3613,7 +3615,7 @@ class NativeWorkspaceTest {
         """)
         sessionView(scenario, "Terminal")
         awaitDocument(scenario, "original Mosh terminal and tab retained", "(()=>{const owned=window[$key];return !!owned && ${same()};})()")
-        typed("printf 'CONTROL_%s_RECOVERED\\n' '$nonce'", "CONTROL_${nonce}_RECOVERED")
+        typed("sleep 5; printf 'CONTROL_%s_RECOVERED\\n' '$nonce'", "CONTROL_${nonce}_RECOVERED")
     }
 
     private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
