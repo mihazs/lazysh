@@ -3000,7 +3000,7 @@ pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
 pub(crate) struct ExecOutput {
     pub(crate) status: Option<u32>,
     pub(crate) stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 impl ExecOutput {
     /// The output of a command that had to succeed.

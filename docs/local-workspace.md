@@ -51,8 +51,9 @@ like `account_usage` does today. The `Local` arm takes its cancel receiver from 
 local registry (`local::usage_session`: adopted, not cancelled, renderer alive), so a
 closed local session cancels its tools exactly as a dropped SSH session does. Tauri
 commands move from `state.session()` to `Host::resolve()` one at a time; each
-`Remote` arm calls today's function unchanged. `herdr_create.rs`'s `trait Remote` is
-folded into this enum rather than kept as a second abstraction.
+`Remote` arm calls today's function unchanged. `herdr_create.rs` runs its steps on this
+enum (`OnHost`), which replaced its SSH-only implementation of `trait Remote`; the trait
+stays only as the seam its scripted-host tests put a fake behind.
 
 `Host` offers five operations, each a `match` whose remote arm is the existing code:
 

@@ -41,6 +41,24 @@ impl Cmd {
         self.argv.push(arg.to_owned());
         self
     }
+    /// Runs on an SSH session: a Herdr command first resolves its owner-checked user install.
+    pub(crate) async fn exec_ssh(
+        &self,
+        session: &ssh::Session,
+        lease: &AccessLease,
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<String> {
+        let line = if self.herdr {
+            crate::herdr_path::select(
+                &self.render(),
+                crate::herdr_path::admit(session, lease).await?,
+            )
+        } else {
+            self.render()
+        };
+        ssh::exec_bounded(session, line, lease, deadline, limit, None).await
+    }
     /// The POSIX command line sent over SSH; every argument is one shell word.
     pub(crate) fn render(&self) -> String {
         self.env
@@ -164,17 +182,7 @@ impl Host {
         limit: usize,
     ) -> Result<String> {
         match self {
-            Self::Remote(session) => {
-                let line = if cmd.herdr {
-                    crate::herdr_path::select(
-                        &cmd.render(),
-                        crate::herdr_path::admit(session, lease).await?,
-                    )
-                } else {
-                    cmd.render()
-                };
-                ssh::exec_bounded(session, line, lease, deadline, limit, None).await
-            }
+            Self::Remote(session) => cmd.exec_ssh(session, lease, deadline, limit).await,
             #[cfg(desktop)]
             Self::Local(host) => ssh::command_text(host.exec(lease, cmd, deadline, limit).await?),
         }
@@ -205,6 +213,38 @@ impl Host {
                     ssh::command_text(
                         host.exec(lease, &cmd, OP_TIMEOUT, FILE_LIMIT as usize)
                             .await?,
+                    )
+                })
+                .await
+            }
+        }
+    }
+    /// A companion command line whose answer is `marker` when the companion is missing or too
+    /// old to know it (exit status 2, 126 or 127), the way the SSH `required_command` wrapper
+    /// answers, so a caller tells "update the companion" from a real failure.
+    pub(crate) async fn companion_required(
+        &self,
+        lease: &AccessLease,
+        line: String,
+        marker: &str,
+    ) -> Result<String> {
+        match self {
+            Self::Remote(session) => {
+                let command =
+                    crate::companion::required_command(session, line, marker, lease).await?;
+                ssh::exec_for_access(session, command, lease).await
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                Box::pin(async {
+                    if !crate::companion::local::available().await {
+                        return Ok(marker.to_owned());
+                    }
+                    let cmd = crate::companion::local::command(&line).await?;
+                    companion_answer(
+                        host.exec_status(lease, &cmd, OP_TIMEOUT, FILE_LIMIT as usize)
+                            .await?,
+                        marker,
                     )
                 })
                 .await
@@ -355,6 +395,16 @@ impl Host {
         }
     }
 }
+/// What a local companion run answers: `marker` for the statuses the SSH wrapper maps to it
+/// (not executable, not found, usage error of an older companion), stdout on success.
+#[cfg(desktop)]
+fn companion_answer(output: ssh::ExecOutput, marker: &str) -> Result<String> {
+    if matches!(output.status, Some(2 | 126 | 127)) {
+        return Ok(marker.to_owned());
+    }
+    ssh::check_exit(output.status, &output.stderr)?;
+    ssh::command_text(output.stdout)
+}
 fn kind(attributes: &russh_sftp::protocol::FileAttributes) -> Kind {
     if attributes.is_dir() {
         Kind::Directory
@@ -417,6 +467,19 @@ impl LocalHost {
         deadline: Duration,
         limit: usize,
     ) -> Result<Vec<u8>> {
+        let output = self.exec_status(lease, cmd, deadline, limit).await?;
+        ssh::check_exit(output.status, &output.stderr)?;
+        Ok(output.stdout)
+    }
+    /// Runs `cmd` and reports how it ended: a non-zero exit is data here, as in
+    /// `ssh::exec_status`, for callers that read the status themselves.
+    pub(crate) async fn exec_status(
+        &self,
+        lease: &AccessLease,
+        cmd: &Cmd,
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<ssh::ExecOutput> {
         use std::process::Stdio;
         let (program, args) = cmd
             .argv
@@ -432,8 +495,6 @@ impl LocalHost {
         for name in INHERITED {
             command.env_remove(name);
         }
-        #[cfg(test)]
-        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         lease
             .check()
             .map_err(|_| SshError::new("app_locked", "App access changed"))?;
@@ -454,6 +515,9 @@ impl LocalHost {
         if let Some(path) = path {
             command.env("PATH", path);
         }
+        // A test's own variables win, `PATH` included: a login shell drops what a CI runner adds to it.
+        #[cfg(test)]
+        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         // Relative paths mean the home directory, as they do over SSH.
         if let Some(home) = crate::local::home_dir() {
             command.current_dir(home);
@@ -500,8 +564,11 @@ impl LocalHost {
                     ssh::check_output_budget(bytes.len() + error.len(), limit)?;
                 }
                 let status = child.wait().await?;
-                ssh::check_exit(status.code().map(|code| code as u32), &error)?;
-                Ok(bytes)
+                Ok(ssh::ExecOutput {
+                    status: status.code().map(|code| code as u32),
+                    stdout: bytes,
+                    stderr: error,
+                })
             })
             .await
             .map_err(|_| SshError::new("timeout", "Local command timed out"))?
