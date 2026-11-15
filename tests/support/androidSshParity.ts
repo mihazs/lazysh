@@ -6,6 +6,7 @@ import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess,androidSshCleanup,nativeReportCases,ownedSoftwareKeyboard} from './androidSsh';
 import {availablePort,sshCommand} from './sshFixture';
+import {writeFilesFixture} from './androidFilesFixture';
 
 /** The owned SSH parity instrumentation cases (#985), run together in one Gradle invocation. */
 export const sshParityCases=[
@@ -15,12 +16,13 @@ export const sshParityCases=[
   'ownedSshBastionRouteThroughRealUi',
   'ownedSshAgentForwardingThroughRealUi',
   'ownedSshPreviewForwardsAndTearsDownThroughRealUi',
+  'ownedSshFilesAndRepositoryReviewThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
-type ParityServer='primary'|'bastion'|'rotated'|'preview';
-/** The password sshds every case shares; the preview sshd runs commands and is started apart. */
+type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files';
+/** The password sshds every case shares; the preview and files sshds run commands and are started apart. */
 const servers:readonly ParityServer[]=['primary','bastion','rotated'];
-const observed:readonly ParityServer[]=[...servers,'preview'];
+const observed:readonly ParityServer[]=[...servers,'preview','files'];
 
 /** Closed facts from an owned sshd DEBUG1 log; no raw log text leaves this function. */
 export function sshdLogFacts(text:string) {
@@ -33,6 +35,8 @@ export function sshdLogFacts(text:string) {
     acceptedPassword:count(/Accepted password for /),
     failedPassword:count(/Failed password for /),
     acceptedPublickey:captured(/Accepted publickey for \S+ from 127\.0\.0\.1 port [0-9]+ ssh2: \S+ (SHA256:[A-Za-z0-9+/]{43})/),
+    sftpSubsystems:count(/subsystem: exec\(\)/),
+    execRequests:count(/session_input_channel_req: session [0-9]+ req exec/),
     directTcpipTargets:captured(/direct_tcpip: originator \S+ port [0-9]+, target 127\.0\.0\.1 port ([0-9]+)/).map(Number),
   };
 }
@@ -46,7 +50,7 @@ export function validateSshParityReport(text:string) {
   return names.length;
 }
 
-type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture;preview?:SshFixture};
+type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture;preview?:SshFixture;files?:SshFixture};
 type PreviewFacts={requests:number;iframeLoads:number};
 type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
 /**
@@ -143,6 +147,9 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     const nonce=fixtures.primary.nonce;
     const proof=`PREVIEW_${nonce}`;
     listener=await previewListener(proof);
+    // Keys only; SFTP serves Files and exec serves the repository's Git commands. A longer shell outlives the default 90 s.
+    started.push(fixtures.files=await SshFixture.start(undefined,{log:true,sftp:true,shellSeconds:300}));
+    const files=await writeFilesFixture(fixtures.files.directory,nonce);
     // The rotation case pins this device port to the primary key, then the host repoints it.
     const pinned={port:await availablePort()};
     const reverse=async(device_:number,host:number,rebind=false)=>{
@@ -151,7 +158,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     };
     const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),listener));
     control=channel.server;
-    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,channel.port])await reverse(port,port);
+    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,fixtures.files.port,channel.port])await reverse(port,port);
     await reverse(pinned.port,fixtures.primary.port);
     keyboard=await ownedSoftwareKeyboard(adb,serial,5000,'aosp-latin');
     remote=`/data/local/tmp/lazysh-ui-ssh-${nonce}`;
@@ -162,7 +169,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     await writeFile(data,JSON.stringify({nonce,username:fixtures.primary.username,controlPort:channel.port,password,passphrase,
       privateKey:fixtures.primary.privateKey,encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
       challenge:fixtures.primary.challenge,expected:fixtures.primary.expected,
-      primary:server(fixtures.primary),bastion:server(fixtures.bastion),preview:{...server(fixtures.preview),privateKey:fixtures.preview.privateKey,listener:listener.port,proof},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
+      primary:server(fixtures.primary),bastion:server(fixtures.bastion),preview:{...server(fixtures.preview),privateKey:fixtures.preview.privateKey,listener:listener.port,proof},files:{...server(fixtures.files),privateKey:fixtures.files.privateKey,...files},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
     if((await stat(data)).size>16*1024)throw new Error('Owned Android parity fixture exceeds native bound');
     await device(['push',data,`${remote}/fixture.json`]);
     await device(['shell','chmod','600',`${remote}/fixture.json`]);
