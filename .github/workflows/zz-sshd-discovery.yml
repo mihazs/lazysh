@@ -3,10 +3,37 @@ on:
   push:
     branches: [chore/windows-sshd-shell-discovery]
 jobs:
-  probe:
+  setenv:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - shell: powershell
         run: ./.github/workflows/zz-sshd-discovery.ps1
+  trial:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: A stub frontend, so the client crate's tests compile without building the application
+        shell: bash
+        run: |
+          mkdir -p apps/client/dist
+          echo '<!doctype html>' > apps/client/dist/index.html
+      - name: Build the companion this checkout produces
+        shell: bash
+        run: cargo build --locked -p lazysh-agent --bin lazysh-agent
+      - name: Run the owned Windows sshd cases
+        shell: bash
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
+        run: |
+          for case_name in ssh::tests::windows_openssh_fixture::default_shell_returns_the_machines_own_value_or_its_absence_on_every_exit_path ssh::tests::windows_openssh_fixture::windows_openssh_under_cmd_exe_identifies_the_host_and_runs_the_companion ssh::tests::windows_openssh_fixture::windows_openssh_under_windows_powershell_identifies_the_host_and_runs_the_companion; do
+            echo "=========== $case_name"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test" || echo "NOT LISTED"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact --nocapture || echo "CASE FAILED: $case_name"
+          done

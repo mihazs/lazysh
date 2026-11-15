@@ -1051,9 +1051,10 @@ settings, database contents or running agents.
 Windows inspect returns `supported: false` and
 `reason: "windowsInstallerUnsupported"`; install rejects before filesystem
 inspection or mutation. Windows binary downloads and normal CLI/storage checks
-remain supported. Busy-executable replacement and a Windows OpenSSH shell
-adapter remain tracked in issue #490; the complete in-app installer remains
-issue #476.
+remain supported. Busy-executable replacement and the in-app Windows installer
+remain tracked in issue #490; the complete in-app installer remains issue #476.
+The Windows OpenSSH probe and command adapter are described under
+[Windows OpenSSH hosts](#windows-openssh-hosts).
 
 Issue #490 starts with the check Windows installation will rely on, which is not
 used by any command yet: `lazysh_common::windows_acl` decides from an object's
@@ -1070,6 +1071,18 @@ point. The decision is a pure function over the owner and the entries, tested on
 every platform; the Windows reader and the decisions on real files and `icacls`
 grants run in the hosted Windows desktop job. No Windows host was available to
 the author, so that job is the first execution of the reader.
+
+## Windows OpenSSH hosts
+
+The app can run a `lazysh-agent.exe` that is on the `PATH` of a Windows host reached over OpenSSH (#1725, part of #490). The host's default shell is `cmd.exe`, Windows PowerShell or something else, and each unquotes differently, so the app never relies on it.
+
+**Identification.** The POSIX probe runs first, as before. Only when it exits non-zero (a Windows host has no `sh`; the shell's message is localized and is not matched) does the app run one more probe, `powershell.exe -NoProfile -NonInteractive -InputFormat None -EncodedCommand <base64 of the UTF-16LE script>`. A line made only of fixed words and base64 reaches the script unchanged through `cmd.exe`, PowerShell and POSIX quoting alike. The script prints a fixed marker, the architecture (`AMD64` or `ARM64`, read from `PROCESSOR_ARCHITEW6432` first so an emulated shell does not hide it), the user's SID and `%LOCALAPPDATA%` as base64 of UTF-8, so a profile path with non-ASCII characters survives the console code page. Any other answer (no marker, `x86`, a malformed SID, a relative or UNC path, a banner or extra lines) leaves the host unidentified. A positive or negative answer is remembered for the SSH connection, like the Unix one; a probe that failed or timed out is asked again. A host that answers the POSIX probe never sees the second one. Changed default: a host that exits non-zero for the POSIX probe and for this one (a restricted exec-only shell) now costs one more failing exec each time it is asked.
+
+**Commands.** Every `lazysh-agent ...` command the app builds (POSIX-quoted text, as for a Unix host) is turned into the same encoded form: one PowerShell script that finds the first `lazysh-agent` program on the `PATH` (PowerShell never runs one from the current directory, which `cmd.exe` would), calls it with each argument as a single-quoted literal and exits with its status. A missing companion exits 127 with `lazysh-agent: command not found` (a server whose default shell is Windows PowerShell, which runs `powershell.exe -Command <line>`, reports every non-zero status of the command as 1; the app treats any non-zero status as a failure and the required marker is printed with status 0 either way); a command the app asks for as *required* (`account-usage`, `transcript-watch`, the Herdr conversation) answers its marker instead where a POSIX host exits 2, 126 or 127, and drops the companion's stderr as the POSIX form does. Windows PowerShell 5.1 builds a native command's line itself, so an argument it cannot pass as written is refused with `companion_command` instead of guessed: an empty one, one with a double quote (also the typographic ones), one with a control character, and one that contains a blank and ends in a backslash. A command whose encoded line passes about 8,090 characters is refused as well, which keeps it inside the 8,191 characters `cmd.exe` accepts for the whole line with the server's own prefix; a path of about 2,600 characters still fits. Output is relayed by PowerShell, so every line ends with CR LF and the companion's stderr may be wrapped in PowerShell's error text; the app's readers ignore the carriage return.
+
+**What stays Unix-only.** The in-app installation and update (`installation` still reports `windowsInstallerUnsupported` and the app reports `companion_install_unsupported` for a Windows host), hook setup and the Herdr user-install lookup. The managed `%LOCALAPPDATA%\lazysh\companion\lazysh-agent.exe` is not looked for before the `PATH` yet: that needs the SID, DACL and reparse-point admission of the managed namespace (#1724) and is tracked as a follow-up slice of #1725.
+
+**What is verified.** The probe parser, the encoding, the argument rules and the length limit run on every platform (`companion::powershell`). The fixture SSH server answers the POSIX probe as `cmd.exe` does and the probe and commands as PowerShell would, which verifies the order, the single probe per connection and that no POSIX text is sent. The hosted Windows desktop job runs the probe and the adapter through real `cmd.exe /c` and `powershell.exe -Command`, with a stdin that stays open as an SSH exec channel's does, against the SID and local application data of the runner and the prepared `lazysh-agent.exe`: the version, an argument with spaces, quotes, shell syntax and non-ASCII text echoed by `reported-history`, the exit status 2 of an unknown command, the required marker and the missing companion. Not verified: a real OpenSSH server for Windows with either default shell (#1726), PowerShell 7 or another shell as the default, Windows on ARM and 32-bit hosts, and the output fidelity of very large or long-lived streams under a non-UTF-8 console code page.
 
 ## Listening ports for sign-in callbacks
 
