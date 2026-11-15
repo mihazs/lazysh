@@ -23,6 +23,10 @@ Record reviewed changes and their release impact together. Refs #215.
 - [ ] Relevant moon, Bun frontend, browser, and native platform checks pass, or reviewer records their scope.
 - [ ] Manual test: review generated versions/changelogs and migration notes; this review does not replace installer or device acceptance.
 
+## Regression test
+
+Not a bug fix: this is generated version-only automation, so the `regression-test` check passes with both boxes unticked.
+
 ## Commit attribution
 
 - [ ] Verify automated commits are attributed to GitHub Actions and any human commits retain the intended author.
