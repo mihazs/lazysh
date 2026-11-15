@@ -148,12 +148,9 @@ pub(crate) async fn deliver(
     )
     .await
     .map_err(before_send)?;
-    let command = crate::herdr_path::select(
-        &command,
-        crate::herdr_path::admit(session, lease)
-            .await
-            .map_err(before_send)?,
-    );
+    let command = crate::herdr_backend::resolve(session, lease, &command)
+        .await
+        .map_err(before_send)?;
     ssh::exec_for_access(session, command, lease)
         .await
         .map(drop)
@@ -614,5 +611,15 @@ mod tests {
             before_send(SshError::new("disconnected", "x")).kind(),
             "disconnected"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delivery_runs_the_chosen_herdr_and_never_the_other() {
+        let commands: Vec<String> = [Input::Send { text: "hi".into() }, Input::RequestStop]
+            .iter()
+            .map(|input| command(&target(), input).unwrap())
+            .collect();
+        crate::herdr_backend::sandbox::assert_both_backends(&commands);
     }
 }

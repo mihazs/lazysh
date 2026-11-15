@@ -56,7 +56,7 @@ export type Credentials = {
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
 /** Discovery's per-host version gate: `missing` names capabilities this version lacks. */
 export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; support: 'full' | 'degraded'; missing: string[] };
-export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean};
+export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean;/** Herdr only: the backend the connection captures, so a restored entry names the one it ran on. */backend?:'system'|'managed'};
 export type HerdrNavigationTarget =
   | {kind:'workspace';workspace:string}
   | {kind:'tab';workspace:string;tab:string}

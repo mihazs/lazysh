@@ -234,11 +234,18 @@ fn command(name: &str, guarded_attach: bool) -> String {
 pub(crate) fn attach_command(name: &str) -> String {
     command(name, true)
 }
-pub(crate) fn attach_receipt(name: &str) -> String {
-    crate::herdr_path::with_path(&format!(
-        "herdr --session {} --guarded-attach --startup-fd 3",
-        ssh::quote(name)
-    ))
+/// The Mosh startup command, for a host the caller already identified as POSIX.
+pub(crate) fn attach_receipt(
+    backend: crate::herdr_backend::HerdrBackend,
+    name: &str,
+) -> Result<String> {
+    backend.wrap(
+        &format!(
+            "herdr --session {} --guarded-attach --startup-fd 3",
+            ssh::quote(name)
+        ),
+        true,
+    )
 }
 fn startup_fd_capability(output: &str) -> bool {
     #[derive(Deserialize)]
@@ -254,7 +261,8 @@ fn startup_fd_capability(output: &str) -> bool {
 pub(crate) async fn require_startup_fd(session: &ssh::Session, lease: &AccessLease) -> Result<()> {
     let output = ssh::exec_bounded(
         session,
-        crate::herdr_path::with_path("herdr --guarded-attach-capabilities"),
+        crate::herdr_backend::captured(&session.handle)
+            .wrap("herdr --guarded-attach-capabilities", true)?,
         lease,
         DEADLINE,
         256,
@@ -308,6 +316,9 @@ async fn rpc<T: Serialize>(
         return Err(Fault::Unavailable);
     }
     let deadline = tokio::time::Instant::now() + DEADLINE;
+    // The connection's captured Herdr, never another one, runs every owned RPC.
+    let command = crate::herdr_backend::resolve_cached(handle, &command(name, false))
+        .map_err(|_| Fault::Unavailable)?;
     let body = Zeroizing::new(
         serde_json::to_vec(&Request {
             id: "guard",
@@ -327,13 +338,7 @@ async fn rpc<T: Serialize>(
     let work = async {
         lease.check().map_err(|_| Fault::Stale)?;
         channel
-            .exec(
-                true,
-                crate::herdr_path::select(
-                    &command(name, false),
-                    crate::herdr_path::cached(handle) == Some(true),
-                ),
-            )
+            .exec(true, command)
             .await
             .map_err(|_| Fault::Unavailable)?;
         lease.check().map_err(|_| Fault::Stale)?;

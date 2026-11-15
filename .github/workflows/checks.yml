@@ -818,6 +818,10 @@ jobs:
           timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
+          managed=ssh::tmux_jump_fixture::real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_executable
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$managed" -- --list --ignored --exact | grep -Fx -- "$managed: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$managed" -- --ignored --exact
           printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
       # The two published companions that real hosts still run. The owned SSH case updates a host that has each one.
       - name: Fetch the pinned published 1.28.0 and 1.33.4 companions for the owned update hosts
@@ -1764,6 +1768,13 @@ jobs:
         shell: bash
         env:
           CASE_NAME: ssh::tmux_jump_fixture::real_ssh_user_installed_herdr_discovers_and_attaches_exact_default
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: *exact-ignored-case
+      - name: Exercise a managed Herdr, with a failing system Herdr in its place, over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one
           LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
         run: *exact-ignored-case
       - name: Report tmux 3.4, Zellij 0.45.1 and stock Herdr versions as supported through product discovery over owned OpenSSH

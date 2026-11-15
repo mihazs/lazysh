@@ -28,7 +28,7 @@ impl<F: Fn(&mut Command)> Remote for Local<F> {
         let output = command
             .args(&self.login[1..])
             .arg("-c")
-            .arg(script(argv))
+            .arg(script("", argv))
             .output()?;
         assert!(
             output.status.success(),
@@ -222,6 +222,50 @@ fn wrapper_preserves_literal_argv_and_status_through_real_sh() {
     assert_eq!((out.status, out.text.as_str()), (3, "bad\n"));
     assert!(!dir.path().join("nope").exists());
     assert!(parse_status("no marker").is_err());
+}
+
+#[test]
+fn every_step_runs_as_the_connections_herdr_under_each_login_shell() {
+    use crate::herdr_backend::{
+        sandbox::Sandbox,
+        HerdrBackend::{Managed, System},
+    };
+    let step = |sandbox: &Sandbox, login: &[String], backend, prelude: &str| {
+        let mut command = Command::new(&login[0]);
+        sandbox.configure(&mut command);
+        let argv = args(&["herdr", "--session", "it's", "workspace", "create"]);
+        let output = command
+            .args(&login[1..])
+            .arg("-c")
+            .arg(script(prelude, &argv))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{login:?} {backend:?}");
+        parse_status(&String::from_utf8(output.stdout).unwrap()).unwrap()
+    };
+    for login in login_shells() {
+        for (backend, name) in [(System, "system"), (Managed, "managed")] {
+            let sandbox = Sandbox::new(true);
+            let prelude = prelude(backend, true).unwrap();
+            let out = step(&sandbox, &login, backend, &prelude);
+            assert_eq!(
+                (out.status, out.text),
+                (0, format!("{name} --session it's workspace create\n")),
+                "{login:?}"
+            );
+        }
+        // The managed Herdr is missing: the step fails with a message and the system Herdr never runs.
+        let sandbox = Sandbox::new(false);
+        let out = step(&sandbox, &login, Managed, &prelude(Managed, true).unwrap());
+        assert_eq!(out.status, 127, "{login:?}");
+        assert!(out.text.contains("not installed"), "{login:?} {}", out.text);
+        assert!(sandbox.invocations().is_empty(), "{login:?}");
+    }
+    assert_eq!(prelude(System, false).unwrap(), "");
+    assert_eq!(
+        prelude(Managed, false).unwrap_err().kind(),
+        "herdr_managed_unsupported_host"
+    );
 }
 
 /// Values a hostile host directory name, branch or prompt could carry. The

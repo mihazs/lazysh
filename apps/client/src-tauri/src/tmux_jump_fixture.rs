@@ -1373,6 +1373,7 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
         name: "must-not-create".into(),
         tmux_server: Some("absent-mosh".into()),
         create_if_missing: true,
+        backend: None,
     };
     let error = crate::mosh::bootstrap_entry(&parent, &lease, options, entry)
         .await
@@ -1443,6 +1444,7 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 name: "owned-direct-mosh".into(),
                 tmux_server: None,
                 create_if_missing,
+                backend: None,
             };
             let (display, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
             if matches!(kind, MultiplexerKind::Herdr) {
@@ -1531,6 +1533,7 @@ async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_boo
         name: name.into(),
         tmux_server: Some(server.into()),
         create_if_missing: create,
+        backend: None,
     };
     for create in [true, false] {
         let (source, _) = herdr_echo_source(&f, &state, &lease).await;
@@ -2950,7 +2953,14 @@ struct HerdrServers<'a> {
     binary: &'a std::path::Path,
     processes: Vec<(&'static str, Process)>,
 }
-impl HerdrServers<'_> {
+impl<'a> HerdrServers<'a> {
+    fn new(fixture: &'a Fixture, binary: &'a std::path::Path) -> Self {
+        Self {
+            fixture,
+            binary,
+            processes: Vec::new(),
+        }
+    }
     fn command(&self, name: &str) -> Command {
         let mut command = Command::new(self.binary);
         command
@@ -3289,6 +3299,7 @@ async fn multiplexer_child(
         24,
         events,
         Some(default_entry),
+        None,
     )
     .await
     .unwrap()
@@ -3628,6 +3639,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         24,
         super::test_support::counting_events(&calls),
         None,
+        None,
     )
     .await
     .is_err());
@@ -3685,7 +3697,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
 #[tokio::test]
 #[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR_STOCK binary"]
 async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
-    use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
+    use crate::multiplexer::MultiplexerKind;
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap());
     let f = Fixture::with_mosh_mode_and_user_install(Some(&binary), false, true).await;
     owned_herdr_shell_config(&f);
@@ -3714,28 +3726,10 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
     let parent = state.session(&source.session_id).await.unwrap();
     assert_eq!(crate::herdr_path::cached(&parent.handle), None);
-    let discovery = discover(&app, &source.session_id, &lease).await;
-    assert_eq!(
-        serde_json::to_value(discovery).unwrap()["herdrAvailable"],
-        true
-    );
-    let rows = multiplexer_sessions(
-        app.state(),
-        app.state(),
-        source.session_id.clone(),
-        MultiplexerKind::Herdr,
-        lease.clone(),
-    )
-    .await
-    .unwrap()
-    .into_inner()
-    .unwrap();
-    assert!(serde_json::to_value(rows)
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["name"] == "owned-default"));
+    assert!(herdr_discovery_reports_herdr(&app, &lease, &source).await);
+    assert!(herdr_server_names(&app, &lease, &source)
+        .await
+        .contains(&"owned-default".to_owned()));
     let (child, mut events) = multiplexer_child(
         &app,
         &lease,
@@ -3774,6 +3768,219 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     .await
     .is_err());
     herdr_retired(&state, &source.session_id, &parent, false).await;
+    servers.stop().await;
+}
+
+async fn herdr_discovery_reports_herdr(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+) -> bool {
+    let discovery = discover(app, &source.session_id, lease).await;
+    serde_json::to_value(discovery).unwrap()["herdrAvailable"] == true
+}
+async fn herdr_server_names(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+) -> Vec<String> {
+    let rows = crate::multiplexer::multiplexer_sessions(
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+        crate::multiplexer::MultiplexerKind::Herdr,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let rows = serde_json::to_value(rows).unwrap();
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+/// A user-install fixture whose `~/.local/bin/herdr` is a decoy that records its use and fails. With `install`, the
+/// real binary is at the managed path instead; without it, no managed Herdr exists on the host.
+async fn managed_herdr_fixture(binary: &std::path::Path, install: bool) -> (Fixture, PathBuf) {
+    let f = Fixture::with_mosh_mode_and_user_install(Some(binary), false, true).await;
+    owned_herdr_shell_config(&f);
+    let system = f.dir.path().join(".local/bin/herdr");
+    if install {
+        let managed = f.dir.path().join(crate::herdr_path::MANAGED_EXECUTABLE);
+        fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        fs::set_permissions(managed.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::rename(&system, &managed).unwrap();
+    }
+    let used = f.dir.path().join("system-herdr-used");
+    let decoy = format!("#!/bin/sh\necho \"$@\" >> {}\nexit 99\n", used.display());
+    fs::write(&system, decoy).unwrap();
+    fs::set_permissions(&system, fs::Permissions::from_mode(0o700)).unwrap();
+    (f, used)
+}
+/// Starts the named server with one workspace whose label the attached terminal shows.
+async fn start_labeled_server(servers: &mut HerdrServers<'_>, name: &'static str, label: &str) {
+    servers.start(name).await;
+    let directory = servers.fixture.dir.path().to_str().unwrap().to_owned();
+    let create = [
+        "workspace",
+        "create",
+        "--no-focus",
+        "--label",
+        label,
+        "--cwd",
+    ];
+    servers
+        .json(name, &[&create[..], &[&directory]].concat())
+        .await;
+}
+/// A native app on the fixture with one connection that has captured the managed Herdr.
+async fn managed_herdr_source(
+    fixture: &Fixture,
+    lease: &AccessLease,
+) -> (tauri::App<tauri::test::MockRuntime>, Connected) {
+    let (app, state) = herdr_native_app(fixture);
+    let (source, _) = herdr_echo_source(fixture, &state, lease).await;
+    let selected = crate::herdr_backend::herdr_backend_select(
+        app.state(),
+        source.session_id.clone(),
+        crate::herdr_backend::HerdrBackend::Managed,
+        lease.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        selected.into_inner().unwrap(),
+        crate::herdr_backend::HerdrBackend::Managed
+    );
+    (app, source)
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR_STOCK binary"]
+async fn real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one() {
+    use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap());
+    let (_authority, lease) = unlocked_authority();
+    {
+        let (f, system_used) = managed_herdr_fixture(&binary, true).await;
+        let mut servers = HerdrServers::new(&f, &binary);
+        start_labeled_server(&mut servers, "owned-managed", "OWNED_MANAGED").await;
+        let (app, source) = managed_herdr_source(&f, &lease).await;
+        assert!(herdr_discovery_reports_herdr(&app, &lease, &source).await);
+        assert!(herdr_server_names(&app, &lease, &source)
+            .await
+            .contains(&"owned-managed".to_owned()));
+        let tree = crate::herdr::herdr_tree(
+            app.state(),
+            source.session_id.clone(),
+            "owned-managed".into(),
+            lease.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        let action = crate::herdr::HerdrAction::FocusWorkspace {
+            target: tree.workspaces[0].workspace_id.clone(),
+        };
+        crate::herdr::herdr_action(
+            app.state(),
+            source.session_id.clone(),
+            "owned-managed".into(),
+            action,
+            lease.clone(),
+        )
+        .await
+        .unwrap();
+        let (child, mut events) = multiplexer_child(
+            &app,
+            &lease,
+            &source,
+            "owned-managed",
+            MultiplexerKind::Herdr,
+            true,
+        )
+        .await;
+        owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_MANAGED").await;
+        // The connection keeps the Herdr it captured.
+        let other = crate::herdr_backend::herdr_backend_select(
+            app.state(),
+            source.session_id.clone(),
+            crate::herdr_backend::HerdrBackend::System,
+            lease.clone(),
+        )
+        .await;
+        assert_eq!(
+            other.err().unwrap().into_inner().unwrap().kind(),
+            "herdr_backend_captured"
+        );
+        assert!(
+            !system_used.exists(),
+            "the host's own Herdr ran: {:?}",
+            fs::read_to_string(&system_used)
+        );
+        servers.stop().await;
+    }
+    // No managed Herdr on the host: it reads as absent, every call fails, and the host's own Herdr is never run in its place.
+    let (f, system_used) = managed_herdr_fixture(&binary, false).await;
+    let (app, source) = managed_herdr_source(&f, &lease).await;
+    assert!(!herdr_discovery_reports_herdr(&app, &lease, &source).await);
+    assert!(crate::herdr::herdr_tree(
+        app.state(),
+        source.session_id.clone(),
+        "owned-managed".into(),
+        lease.clone()
+    )
+    .await
+    .is_err());
+    assert!(multiplexer_sessions(
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+        MultiplexerKind::Herdr,
+        lease.clone()
+    )
+    .await
+    .is_err());
+    assert!(
+        !system_used.exists(),
+        "the host's own Herdr ran: {:?}",
+        fs::read_to_string(&system_used)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR guarded binary (Herdr 0.9.3 to 0.9.5)"]
+async fn real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_executable() {
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
+    let (_authority, lease) = unlocked_authority();
+    let (f, system_used) = managed_herdr_fixture(&binary, true).await;
+    let mut servers = HerdrServers::new(&f, &binary);
+    start_labeled_server(&mut servers, "owned-guarded", "OWNED_GUARDED").await;
+    let (app, source) = managed_herdr_source(&f, &lease).await;
+    let state = app.state::<AppState>();
+    let parent = state.session(&source.session_id).await.unwrap();
+    assert!(crate::herdr_guard::available(&parent, "owned-guarded", &lease).await);
+    let (child, mut events) = multiplexer_child(
+        &app,
+        &lease,
+        &source,
+        "owned-guarded",
+        crate::multiplexer::MultiplexerKind::Herdr,
+        false,
+    )
+    .await;
+    owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_GUARDED").await;
+    let display = state.session(&child.session_id).await.unwrap();
+    assert!(display.bindings.herdr.lock().unwrap().is_some());
+    assert!(
+        !system_used.exists(),
+        "the host's own Herdr ran: {:?}",
+        fs::read_to_string(&system_used)
+    );
     servers.stop().await;
 }
 

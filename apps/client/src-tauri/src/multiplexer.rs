@@ -28,6 +28,8 @@ pub(crate) fn tmux_arg(value: &str) -> String {
     quote(&tmux_word(value))
 }
 
+const HERDR_SESSIONS: &str = "herdr session list --json";
+
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {
     text(value, 200)?;
     Ok(match kind {
@@ -61,6 +63,9 @@ pub struct Entry {
     pub tmux_server: Option<String>,
     #[serde(default)]
     pub create_if_missing: bool,
+    /// Herdr only: the backend this connection captures; unset keeps whatever it already captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<crate::herdr_backend::HerdrBackend>,
 }
 impl Entry {
     pub(crate) fn server(&self) -> Result<crate::tmux_server::TmuxServer> {
@@ -75,6 +80,14 @@ impl Entry {
     pub(crate) fn validate(&self) -> Result<()> {
         attach_command(self.kind, &self.name)?;
         self.server()?;
+        if self.backend.is_some_and(|backend| !backend.is_system())
+            && !matches!(self.kind, MultiplexerKind::Herdr)
+        {
+            return Err(SshError::new(
+                "invalid_target",
+                "Only Herdr has a managed backend",
+            ));
+        }
         if self.name.trim().is_empty() {
             return Err(SshError::new(
                 "invalid_target",
@@ -96,6 +109,12 @@ impl Entry {
     /// The attach command as argv, for a local PTY to execute with no shell in between.
     pub(crate) fn argv(&self) -> Result<Vec<String>> {
         self.validate()?;
+        if self.backend.is_some_and(|backend| !backend.is_system()) {
+            return Err(SshError::new(
+                "invalid_target",
+                "A local session runs the system Herdr",
+            ));
+        }
         let server = self.server()?;
         let (name, target) = (tmux_word(&self.name), tmux_word(&format!("={}", self.name)));
         let words = match (self.kind, self.create_if_missing) {
@@ -143,7 +162,11 @@ impl Entry {
             _ => attach_command(self.kind, &self.name),
         }
     }
-    fn preflight_command(&self, positive_unix: bool) -> Result<String> {
+    fn preflight_command(
+        &self,
+        backend: crate::herdr_backend::HerdrBackend,
+        positive_unix: bool,
+    ) -> Result<String> {
         self.validate()?;
         let (tool, version) = match self.kind {
             MultiplexerKind::Tmux => ("tmux", "-V"),
@@ -176,8 +199,10 @@ impl Entry {
             }
         }
         Ok(
-            if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
-                crate::herdr_path::with_path(&command)
+            if matches!(self.kind, MultiplexerKind::Herdr)
+                && (positive_unix || !backend.is_system())
+            {
+                backend.wrap(&command, positive_unix)?
             } else {
                 format!("sh -c {}", quote(&command))
             },
@@ -191,30 +216,36 @@ impl Entry {
         let unavailable = || {
             SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
         };
-        let positive_unix = if matches!(self.kind, MultiplexerKind::Herdr) {
-            crate::herdr_path::admit(session, lease).await?
+        let herdr = matches!(self.kind, MultiplexerKind::Herdr);
+        let backend = if herdr {
+            crate::herdr_backend::choose(&session.handle, self.backend)?
         } else {
-            false
+            Default::default()
         };
-        crate::ssh::exec_for_access(session, self.preflight_command(positive_unix)?, lease)
-            .await
-            .map_err(|error| {
-                if error.kind() == "remote_command_failed" {
-                    unavailable()
-                } else {
-                    error
-                }
-            })?;
+        let positive_unix = herdr && crate::herdr_path::admit(session, lease).await?;
+        crate::ssh::exec_for_access(
+            session,
+            self.preflight_command(backend, positive_unix)?,
+            lease,
+        )
+        .await
+        .map_err(|error| {
+            if error.kind() == "remote_command_failed" {
+                unavailable()
+            } else {
+                error
+            }
+        })?;
         if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
             let command = match self.kind {
-                MultiplexerKind::Herdr => "herdr session list --json",
+                MultiplexerKind::Herdr => HERDR_SESSIONS,
                 MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
                 MultiplexerKind::Tmux => unreachable!(),
             };
             let output = crate::ssh::exec_for_access(
                 session,
-                if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
-                    crate::herdr_path::with_path(command)
+                if herdr {
+                    backend.wrap(command, positive_unix)?
                 } else {
                     command.into()
                 },
@@ -238,8 +269,9 @@ pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Resul
         name: value.into(),
         tmux_server: None,
         create_if_missing: true,
+        backend: None,
     }
-    .preflight_command(false)
+    .preflight_command(Default::default(), false)
 }
 pub(crate) async fn prepare_default_entry(
     session: &crate::ssh::Session,
@@ -252,6 +284,7 @@ pub(crate) async fn prepare_default_entry(
         name: value.into(),
         tmux_server: None,
         create_if_missing: true,
+        backend: None,
     }
     .prepare(session, lease)
     .await
@@ -476,14 +509,28 @@ fn name(value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn discovery_command(server: &crate::tmux_server::TmuxServer, positive_unix: bool) -> String {
+// Version commands only print; none of them starts a server.
+fn probe(tool: &str, version: &str) -> String {
+    format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
+}
+/// The chosen Herdr's probe. A managed Herdr that cannot run here reads as absent, never as the system one.
+fn herdr_probe(backend: crate::herdr_backend::HerdrBackend, positive_unix: bool) -> String {
+    let absent = "printf 'herdr\\t0\\n'";
+    backend
+        .wrap_or(
+            &probe("herdr", "--version"),
+            positive_unix,
+            &format!("{absent}; exit 0"),
+        )
+        .unwrap_or_else(|_| absent.into())
+}
+fn discovery_command(
+    server: &crate::tmux_server::TmuxServer,
+    backend: crate::herdr_backend::HerdrBackend,
+    positive_unix: bool,
+) -> String {
     let tmux = server.prefix();
-    // Version commands only print; none of them starts a server.
-    let probe = |tool: &str, version: &str| {
-        format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
-    };
-    let herdr = crate::herdr_path::select(&probe("herdr", "--version"), positive_unix);
-    format!("{}; {herdr}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), probe("zellij", "--version"), quote(PANE_FORMAT))
+    format!("{}; {}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), herdr_probe(backend, positive_unix), probe("zellij", "--version"), quote(PANE_FORMAT))
 }
 
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
@@ -839,7 +886,11 @@ pub async fn multiplexer_tree(
             let output = match &host {
                 Host::Remote(session) => crate::ssh::exec_for_access(
                     session,
-                    discovery_command(&server, crate::herdr_path::admit(session, &access).await?),
+                    discovery_command(
+                        &server,
+                        crate::herdr_backend::captured(&session.handle),
+                        crate::herdr_path::admit(session, &access).await?,
+                    ),
                     &access,
                 )
                 .await
@@ -884,11 +935,11 @@ mod tests {
         let command = entry.command().unwrap();
         assert!(command.contains("tmux -u -L 'named '\\''server'"));
         assert!(entry
-            .preflight_command(false)
+            .preflight_command(Default::default(), false)
             .unwrap()
             .contains("has-session"));
         assert!(!entry
-            .preflight_command(false)
+            .preflight_command(Default::default(), false)
             .unwrap()
             .contains("new-session"));
         let zellij: Entry =
@@ -1054,7 +1105,11 @@ mod tests {
         let output = Command::new("/bin/sh")
             .args([
                 "-c",
-                &discovery_command(&crate::tmux_server::TmuxServer::Default, false),
+                &discovery_command(
+                    &crate::tmux_server::TmuxServer::Default,
+                    Default::default(),
+                    false,
+                ),
             ])
             .env_clear()
             .env("PATH", tools.path())
@@ -1414,5 +1469,50 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_chosen_herdr_answers_discovery_preflight_and_listing_and_never_the_other() {
+        use crate::herdr_backend::{
+            sandbox::Sandbox,
+            HerdrBackend::{Managed, System},
+        };
+        let sandbox = Sandbox::new(true);
+        let entry: Entry =
+            serde_json::from_value(serde_json::json!({"kind":"herdr","name":"work"})).unwrap();
+        for (backend, name) in [(System, "system"), (Managed, "managed")] {
+            sandbox.assert_ran(backend, &[entry.preflight_command(backend, true).unwrap()]);
+            sandbox.assert_reaches(backend, &[HERDR_SESSIONS]);
+            assert_eq!(
+                sandbox.run_wrapped(&herdr_probe(backend, true)),
+                (format!("herdr\t1\t{name} --version\n"), true)
+            );
+        }
+        // A managed Herdr that is not installed is absent, however good the system one is.
+        assert_eq!(
+            Sandbox::new(false).run_wrapped(&herdr_probe(Managed, true)),
+            ("herdr\t0\n".into(), true)
+        );
+        assert_eq!(herdr_probe(Managed, false), "printf 'herdr\\t0\\n'");
+    }
+
+    #[test]
+    fn a_managed_entry_belongs_to_herdr_and_to_ssh_hosts() {
+        let entry = |value: serde_json::Value| serde_json::from_value::<Entry>(value).unwrap();
+        let managed = entry(serde_json::json!({"kind":"herdr","name":"work","backend":"managed"}));
+        assert!(managed.validate().is_ok());
+        assert_eq!(managed.argv().unwrap_err().kind(), "invalid_target");
+        assert!(
+            entry(serde_json::json!({"kind":"herdr","name":"work","backend":"system"}))
+                .argv()
+                .is_ok()
+        );
+        for kind in ["tmux", "zellij"] {
+            let wrong = entry(serde_json::json!({"kind":kind,"name":"work","backend":"managed"}));
+            assert_eq!(wrong.validate().unwrap_err().kind(), "invalid_target");
+        }
+        let path = serde_json::json!({"kind":"herdr","name":"work","backend":"/opt/herdr"});
+        assert!(serde_json::from_value::<Entry>(path).is_err());
     }
 }
