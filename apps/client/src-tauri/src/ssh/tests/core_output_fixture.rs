@@ -206,9 +206,11 @@ async fn attached(
 /// byte stream, so the check is that the final screen arrives: a marker only the command's output
 /// (never its echo) contains, printed after the whole workload, with the window credited back.
 async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
-    // The shell computes the 42, so the typed command line (which a frame may also carry) never
-    // contains the marker.
-    const DONE: &str = "FIN_42";
+    // The shell computes the OK, so the typed command line (which a frame may also carry) never
+    // contains the marker. A Mosh frame is a diff of cells: a cell that already holds the right
+    // character is skipped, which splits a marker that shares characters with the screen it
+    // replaces. The workload only prints digits, so a marker of letters is always written whole.
+    const DONE: &str = "FIN_OK";
     let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
     drop(udp);
@@ -233,7 +235,7 @@ async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
     .await;
     // The first write only starts the Mosh input path; the second is the workload.
     write(app, &id, None).await;
-    let workload = format!("seq 1 {MOSH_LINES}; echo FIN_$((40 + 2))");
+    let workload = format!("seq 1 {MOSH_LINES}; echo FIN_$(echo OK)");
     write(app, &id, command_line(workload)).await;
     let peak = settle(&core, &session, DONE).await;
     let received = core.seen.lock().unwrap().len();
