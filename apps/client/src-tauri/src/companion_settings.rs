@@ -225,6 +225,13 @@ mod tests {
             r#"{"schemaVersion":1,"revision":0,"hostBrowserEnabled":false}"#
         )
         .is_ok());
+        // Verbatim stdout of `settings host-browser show|update` (keys in the order the companion prints them).
+        for printed in [
+            r#"{"hostBrowserEnabled":false,"revision":0,"schemaVersion":1}"#,
+            r#"{"hostBrowserEnabled":true,"revision":1,"schemaVersion":1}"#,
+        ] {
+            assert!(parse_host_browser(printed).is_ok(), "{printed}");
+        }
         for text in [
             r#"{"schemaVersion":2,"revision":0,"hostBrowserEnabled":false}"#,
             r#"{"schemaVersion":1,"revision":9007199254740992,"hostBrowserEnabled":false}"#,
