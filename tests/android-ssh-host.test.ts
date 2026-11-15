@@ -6,6 +6,7 @@ import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess
 import {HerdrFixture,herdrPanelRows,herdrTools} from './support/androidHerdr';
 import {prepareAgentBoardHooks} from './support/androidAgentBoard';
 import {TmuxFixture} from './support/androidTmux';
+import {ZellijFixture} from './support/androidZellij';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {sshCommand,receiverProbeErrors} from './support/sshFixture';
@@ -223,7 +224,7 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app i
 },610_000);
 
 // The owned fixture stops after the acceptance; a cleanup failure never replaces its original error.
-async function ownedAndroidAcceptance(stage:'Herdr'|'tmux',owned:{stop():Promise<void>},run:()=>Promise<void>) {
+async function ownedAndroidAcceptance(stage:'Herdr'|'tmux'|'Zellij',owned:{stop():Promise<void>},run:()=>Promise<void>) {
   let primary=false;
   try {await run();}
   catch(error){primary=true;throw error;}
@@ -409,6 +410,12 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Androi
 test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
   const owned=await TmuxFixture.start();
   await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
+},610_000);
+
+// Separate CI owner: only the pinned Zellij fixture and packaged UI decide this verdict.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_ZELLIJ!=='1')('actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes',async()=>{
+  const owned=await ZellijFixture.start();
+  await ownedAndroidAcceptance('Zellij',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,undefined,false,owned));
 },610_000);
 
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{

@@ -155,6 +155,13 @@ tasks:
     env: {LAZYSH_ANDROID_UI_TMUX: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal
+  test-android-zellij:
+    type: test
+    command: bun test ../../tests/android-zellij.test.ts ../../tests/android-ssh-host.test.ts --test-name-pattern
+    args: ['^(owned Zellij session follows a real attach, tab switches and detaches and is gone with its fixture|actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes)$']
+    env: {LAZYSH_ANDROID_UI_ZELLIJ: '1'}
+    deps: [~:build-android-emulator]
+    options: *envLocal
   test-android-herdr-navigation:
     type: test
     command: bun test ../../tests/android-ssh-host.test.ts --test-name-pattern
