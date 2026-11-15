@@ -23,6 +23,24 @@ fn run(directory: &Path, args: &[&str], input: &[u8]) -> Output {
 fn payload() -> Value {
     json!({"hook_event_name":"PermissionRequest","session_id":"session-one","cwd":"/work/project","tool_name":"Bash","tool_input":{"command":"echo PRIVATE_APPROVAL_TOOL_INPUT_MARKER"}})
 }
+/// What Codex 0.167.0 sends a `PermissionRequest` hook for a shell command: the Claude fields plus its own.
+fn codex_payload() -> Value {
+    let mut request = payload();
+    request["turn_id"] = json!("01a1dbb4-4d22-7680-b65d-781eb7bcc66a");
+    request["transcript_path"] = json!("/home/user/.codex/sessions/2026/11/14/rollout.jsonl");
+    request["model"] = json!("gpt-5");
+    request["permission_mode"] = json!("default");
+    request["tool_input"]["description"] = json!("Create the marker file?");
+    request
+}
+const AGENTS: [&str; 2] = ["claude", "codex"];
+fn payload_for(agent: &str) -> Value {
+    if agent == "codex" {
+        codex_payload()
+    } else {
+        payload()
+    }
+}
 struct Hook(Option<Child>);
 impl Drop for Hook {
     fn drop(&mut self) {
@@ -41,11 +59,14 @@ fn start(directory: &Path, timeout: &str) -> Hook {
     start_with(directory, timeout, &payload())
 }
 fn start_with(directory: &Path, timeout: &str, payload: &Value) -> Hook {
+    start_agent(directory, "claude", timeout, payload)
+}
+fn start_agent(directory: &Path, agent: &str, timeout: &str, payload: &Value) -> Hook {
     let mut child = command(directory)
         .args([
             "approval-request",
             "--agent",
-            "claude",
+            agent,
             "--timeout-seconds",
             timeout,
         ])
@@ -85,6 +106,27 @@ fn pending(directory: &Path) -> Value {
         thread::sleep(Duration::from_millis(20));
     }
 }
+/// The listed request of `agent` (the oldest one when the agent has several).
+fn pending_of(directory: &Path, agent: &str, count: usize) -> Vec<Value> {
+    let started = Instant::now();
+    loop {
+        let found: Vec<Value> = list(directory)["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| request["agent"] == agent)
+            .cloned()
+            .collect();
+        if found.len() >= count {
+            return found;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "hook did not publish a request"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
 fn resolve(directory: &Path, request: &Value, decision: &str) -> Output {
     resolve_with(directory, request, decision, &[])
 }
@@ -114,10 +156,16 @@ fn decision(hook: Hook) -> Value {
 
 #[test]
 fn exact_request_resolves_once_and_does_not_copy_tool_input_to_event_summaries() {
+    for agent in AGENTS {
+        an_exact_request_resolves_once(agent);
+    }
+}
+fn an_exact_request_resolves_once(agent: &str) {
     let dir = tempfile::tempdir().unwrap();
-    let hook = start(dir.path(), "10");
+    let hook = start_agent(dir.path(), agent, "10", &payload_for(agent));
     let request = pending(dir.path());
-    assert_eq!(request["toolInput"], payload()["tool_input"]);
+    assert_eq!(request["agent"], agent);
+    assert_eq!(request["toolInput"], payload_for(agent)["tool_input"]);
     assert_eq!(request["paneId"], "%7");
     assert_eq!(request["expectedHash"].as_str().unwrap().len(), 64);
     for (field, wrong) in [
@@ -160,8 +208,13 @@ fn exact_request_resolves_once_and_does_not_copy_tool_input_to_event_summaries()
 
 #[test]
 fn concurrent_remote_decisions_have_one_winner() {
+    for agent in AGENTS {
+        decisions_have_one_winner(agent);
+    }
+}
+fn decisions_have_one_winner(agent: &str) {
     let dir = tempfile::tempdir().unwrap();
-    let hook = start(dir.path(), "10");
+    let hook = start_agent(dir.path(), agent, "10", &payload_for(agent));
     let request = pending(dir.path());
     let jobs: Vec<_> = (0..8)
         .map(|index| {
@@ -190,14 +243,19 @@ fn concurrent_remote_decisions_have_one_winner() {
 
 #[test]
 fn cancelled_hooks_release_their_lease_and_tokens_never_target_a_new_hook() {
+    for agent in AGENTS {
+        a_cancelled_hook_cannot_be_answered(agent);
+    }
+}
+fn a_cancelled_hook_cannot_be_answered(agent: &str) {
     let dir = tempfile::tempdir().unwrap();
-    let mut hook = start(dir.path(), "10");
+    let mut hook = start_agent(dir.path(), agent, "10", &payload_for(agent));
     let old = pending(dir.path());
     hook.0.as_mut().unwrap().kill().unwrap();
     hook.0.as_mut().unwrap().wait().unwrap();
     assert_eq!(list(dir.path())["requests"], json!([]));
     assert!(!resolve(dir.path(), &old, "allow").status.success());
-    let hook = start(dir.path(), "10");
+    let hook = start_agent(dir.path(), agent, "10", &payload_for(agent));
     let fresh = pending(dir.path());
     assert_ne!(old["id"], fresh["id"]);
     assert_ne!(old["expectedHash"], fresh["expectedHash"]);
@@ -305,14 +363,55 @@ fn expired_tokens_are_rejected_even_while_the_originating_lease_is_held() {
 
 #[test]
 fn config_is_an_opt_in_fragment_with_no_settings_mutation() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("unused");
-    let output = run(&path, &["approval-config"], b"");
-    assert!(output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(value["hooks"]["PermissionRequest"].is_array());
-    assert!(value["hooks"]["PreToolUse"].is_null());
-    assert!(!path.exists());
+    for agent in AGENTS {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unused");
+        let output = run(&path, &["approval-config", "--agent", agent], b"");
+        assert!(output.status.success());
+        assert!(!path.exists());
+        let fragment: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(fragment["hooks"]["PreToolUse"].is_null());
+        // Run the pasted command the way the agent does (a shell with the payload on stdin): it must wait for the
+        // request of that agent and outlive its own deadline.
+        let hook = &fragment["hooks"]["PermissionRequest"][0]["hooks"][0];
+        let command = hook["command"].as_str().unwrap();
+        let seconds: u64 = command
+            .split_once("--timeout-seconds ")
+            .unwrap()
+            .1
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(hook["timeout"].as_u64().unwrap() > seconds);
+        let binary = Path::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+            .parent()
+            .unwrap();
+        let path_var = format!("{}:{}", binary.display(), std::env::var("PATH").unwrap());
+        let mut child = command_in_shell(dir.path(), command, &path_var);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&payload_for(agent)).unwrap())
+            .unwrap();
+        let hook = Hook(Some(child));
+        let request = pending(dir.path());
+        assert_eq!(request["agent"], agent);
+        assert!(resolve(dir.path(), &request, "deny").status.success());
+        assert_eq!(decision(hook)["behavior"], "deny");
+    }
+}
+fn command_in_shell(directory: &Path, command: &str, path: &str) -> Child {
+    Command::new("sh")
+        .args(["-c", command])
+        .env("LAZYSH_STATE_DIR", directory)
+        .env("TMUX_PANE", "%7")
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
 }
 
 #[test]
@@ -436,17 +535,100 @@ fn requests_stored_by_an_older_companion_still_resolve() {
     let database = rusqlite::Connection::open(dir.path().join("approvals/events.sqlite3")).unwrap();
     database
         .execute_batch(
-            "ALTER TABLE approvals DROP COLUMN options; ALTER TABLE approvals DROP COLUMN option; ALTER TABLE approvals DROP COLUMN message;",
+            "ALTER TABLE approvals DROP COLUMN options; ALTER TABLE approvals DROP COLUMN option; ALTER TABLE approvals DROP COLUMN message; ALTER TABLE approvals DROP COLUMN agent;",
         )
         .unwrap();
     drop(database);
     let hook = start_with(dir.path(), "10", &suggested());
     let request = pending(dir.path());
     assert_eq!(request["options"].as_array().unwrap().len(), 3);
+    assert_eq!(request["agent"], "claude");
     assert!(
         resolve_with(dir.path(), &request, "allow", &["--option", "0"])
             .status
             .success()
     );
     assert_eq!(decision(hook)["updatedPermissions"][0]["type"], "addRules");
+}
+
+#[test]
+fn a_codex_decision_carries_only_what_codex_accepts() {
+    let dir = tempfile::tempdir().unwrap();
+    // Claude's suggestions in a Codex payload are not offered, and Codex fails closed on `updatedPermissions`.
+    let mut codex = codex_payload();
+    codex["permission_suggestions"] = suggested()["permission_suggestions"].clone();
+    let hook = start_agent(dir.path(), "codex", "10", &codex);
+    let request = pending(dir.path());
+    assert_eq!(request["options"], json!([]));
+    assert!(
+        !resolve_with(dir.path(), &request, "allow", &["--option", "0"])
+            .status
+            .success()
+    );
+    assert!(resolve(dir.path(), &request, "allow").status.success());
+    assert_eq!(decision(hook), json!({"behavior":"allow"}));
+    let hook = start_agent(dir.path(), "codex", "10", &codex_payload());
+    let request = pending(dir.path());
+    assert!(resolve_with(
+        dir.path(),
+        &request,
+        "deny",
+        &["--message", "Use the staging database"]
+    )
+    .status
+    .success());
+    assert_eq!(
+        decision(hook),
+        json!({"behavior":"deny","message":"Use the staging database"})
+    );
+}
+
+#[test]
+fn prompts_of_both_agents_pending_together_are_each_answered_by_their_own_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = start(dir.path(), "10");
+    let first = start_agent(dir.path(), "codex", "10", &codex_payload());
+    let second = start_agent(dir.path(), "codex", "10", &codex_payload());
+    let claude_request = pending_of(dir.path(), "claude", 1).remove(0);
+    let codex_requests = pending_of(dir.path(), "codex", 2);
+    // The same session, pane and tool input still make three different requests.
+    let ids: std::collections::HashSet<_> = codex_requests
+        .iter()
+        .chain([&claude_request])
+        .map(|request| request["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids.len(), 3);
+    // One agent's hash never answers another agent's request, even with the other's id.
+    let mut crossed = codex_requests[0].clone();
+    crossed["expectedHash"] = claude_request["expectedHash"].clone();
+    assert!(!resolve(dir.path(), &crossed, "allow").status.success());
+    assert!(resolve(dir.path(), &codex_requests[1], "deny")
+        .status
+        .success());
+    assert_eq!(list(dir.path())["requests"].as_array().unwrap().len(), 2);
+    assert!(resolve(dir.path(), &claude_request, "allow")
+        .status
+        .success());
+    assert!(resolve(dir.path(), &codex_requests[0], "allow")
+        .status
+        .success());
+    assert_eq!(decision(claude)["behavior"], "allow");
+    // The two Codex hooks cannot be told apart, but each gets exactly one answer.
+    let mut answers = [
+        decision(first)["behavior"].clone(),
+        decision(second)["behavior"].clone(),
+    ];
+    answers.sort_by_key(Value::to_string);
+    assert_eq!(answers, [json!("allow"), json!("deny")]);
+}
+
+#[test]
+fn an_expired_codex_request_gives_no_decision_so_codex_asks_in_its_own_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let output = start_agent(dir.path(), "codex", "1", &codex_payload()).finish();
+    assert!(started.elapsed() >= Duration::from_millis(900));
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert_eq!(list(dir.path())["requests"], json!([]));
 }

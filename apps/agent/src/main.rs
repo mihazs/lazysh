@@ -114,7 +114,7 @@ enum Command {
         #[command(subcommand)]
         command: lazysh_agent::devices::DeviceCommand,
     },
-    /// Wait for a decision for this exact originating Claude permission hook.
+    /// Wait for a decision for this exact originating Claude or Codex permission hook.
     ApprovalRequest {
         #[arg(long, value_enum)]
         agent: lazysh_agent::approvals::ApprovalAgent,
@@ -163,8 +163,11 @@ enum Command {
         #[arg(long)]
         message: Option<String>,
     },
-    /// Print an opt-in configuration fragment; never changes Claude settings.
-    ApprovalConfig,
+    /// Print an opt-in configuration fragment; never changes the agent's settings.
+    ApprovalConfig {
+        #[arg(long, value_enum, default_value = "claude")]
+        agent: lazysh_agent::approvals::ApprovalAgent,
+    },
     /// Read one lifecycle event from stdin.
     Ingest {
         #[arg(long, value_enum)]
@@ -442,17 +445,17 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             None
         }
         Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
-        Command::ApprovalConfig => Some(lazysh_agent::approvals::config()),
+        Command::ApprovalConfig { agent } => Some(lazysh_agent::approvals::config(agent)),
         Command::ApprovalRequest {
             agent,
             timeout_seconds,
-        } => Some(lazysh_agent::approvals::request(
+        } => lazysh_agent::approvals::request(
             &lazysh_agent::state_directory()?,
             io::stdin().lock(),
             agent,
             std::env::var("TMUX_PANE").ok().as_deref(),
             timeout_seconds,
-        )?),
+        )?,
         Command::ApprovalList { limit } => Some(lazysh_agent::approvals::list(
             &lazysh_agent::state_directory()?,
             limit,
