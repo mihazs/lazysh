@@ -95,14 +95,14 @@ for (const [name, sourceManifest] of [
 test('CI seals guarded bytes before compiling independently admitted original stock source',async()=>{
   const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
   const producer=workflow.jobs['herdr-native'],steps=producer.steps;
-  expect(producer['timeout-minutes']).toBe(30);
+  expect(producer['timeout-minutes']).toBe(45);
   expect(producer.outputs['stock-sha256']).toBe('${{ steps.stock-artifact.outputs.sha256 }}');
   const index=(id:string)=>steps.findIndex((step:any)=>step.id===id);
   const guardedUpload=steps.findIndex((step:any)=>step.with?.name==='guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
   expect(index('guarded-artifact')).toBeLessThan(guardedUpload);
   expect(guardedUpload).toBeLessThan(index('stock-source-download'));
-  // The managed-feature build overwrites target/debug/herdr, so it must come after the guarded artifact is sealed.
-  expect(guardedUpload).toBeLessThan(index('managed-namespace'));
+  // The managed release build has its own target profile, but it still starts after the guarded artifact is sealed.
+  expect(guardedUpload).toBeLessThan(index('managed-build'));
   expect(index('stock-source')).toBeLessThan(index('stock-build'));
   expect(index('stock-build')).toBeLessThan(index('stock-artifact'));
   const download=steps[index('stock-source-download')];
