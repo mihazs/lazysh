@@ -46,14 +46,6 @@ fn valid_origin(origin: &str) -> bool {
     })
 }
 
-/// The same schemes a person may type in the product address bar: no file:, chrome:, javascript: or data:.
-fn valid_url(url: &str) -> bool {
-    url == "about:blank"
-        || ((url.starts_with("http://") || url.starts_with("https://"))
-            && url.len() <= 2048
-            && url.chars().all(|c| c.is_ascii_graphic()))
-}
-
 fn find_binary(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return path
@@ -94,9 +86,7 @@ pub fn run(launch: &Launch) -> Result<()> {
         return Err(Error::Browser("BrowserOriginInvalid"));
     }
     let url = launch.url.unwrap_or("about:blank");
-    if !valid_url(url) {
-        return Err(Error::Browser("BrowserUrlInvalid"));
-    }
+    allow::address(url).map_err(|_| Error::Browser("BrowserUrlInvalid"))?;
     let binary = find_binary(launch.binary)?;
     // Removed on drop, on every exit path below. The browser keeps cookies and sessions here, so it is private.
     let profile = private_profile()?;
@@ -216,6 +206,8 @@ fn terminate(child: &mut Child) {
     let _ = child.wait();
 }
 
+pub mod allow;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,28 +233,6 @@ mod tests {
             "localhost",
         ] {
             assert!(!valid_origin(bad), "{bad}");
-        }
-    }
-
-    #[test]
-    fn first_page_is_web_or_blank() {
-        for good in [
-            "about:blank",
-            "http://127.0.0.1:3000/a?b=1",
-            "https://example.com",
-        ] {
-            assert!(valid_url(good), "{good}");
-        }
-        for bad in [
-            "file:///etc/passwd",
-            "chrome://settings",
-            "javascript:alert(1)",
-            "data:text/html,x",
-            "http://a b",
-            "--no-sandbox",
-            "",
-        ] {
-            assert!(!valid_url(bad), "{bad}");
         }
     }
 

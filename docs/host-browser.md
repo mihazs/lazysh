@@ -170,6 +170,27 @@ header (sequence, width, height, scroll offset, timestamp), so the client never 
 
 Everything else is dropped with a counter, and the browser's protocol is not otherwise reachable.
 
+### What the relay may send to the browser
+
+The relay maps its own fixed messages onto a closed list of protocol methods and asks the list before it sends
+each one (`apps/agent/src/host_browser/allow.rs`, slice C of [#1258](https://github.com/mihazs/lazysh/issues/1258)).
+A method that is not on the list is refused, so a method that a later browser version adds is never reachable by
+accident. A refusal names a class, never the page, and is counted; it is not written with a URL, a title or text.
+
+| Refused class | Examples (not exhaustive) |
+| --- | --- |
+| Cookies and page storage | `Network.getCookies`, `Network.setCookie`, `Storage.*`, `DOMStorage.*`, `IndexedDB.*`, `Fetch.*` |
+| Script and DOM from the phone | `Runtime.evaluate`, `Runtime.callFunctionOn`, `Page.addScriptToEvaluateOnNewDocument`, `Debugger.*`, `DOM.*` |
+| Downloads and files | `Browser.setDownloadBehavior` with anything but `deny`, `Page.setInterceptFileChooserDialog` that is not `enabled: true`, `DOM.setFileInputFiles` |
+| Permissions and clipboard | `Browser.grantPermissions`, `Browser.setPermission`, geolocation overrides, a key event that carries a `copy`, `cut` or `paste` editing command |
+| Addresses | `file:`, `chrome:`, `view-source:`, `javascript:`, `data:`, `blob:` and any scheme but `http`, `https` and `about:blank`, in `Page.navigate` and `Target.createTarget`, and a first URL |
+| Everything else | `Browser.close`, `Target.setAutoAttach`, `Security.*`, `Page.setBypassCSP`, any unknown method |
+
+The relay, which ships with the Chrome viewer ([#1254](https://github.com/mihazs/lazysh/issues/1254)), sets the
+download behavior to `deny` and intercepts the file chooser (the browser reports it, no file is supplied) when it
+starts a browser, which is how those two are "denied and reported once". Today only the list and the address rule
+exist, and the hidden developer launcher applies the address rule to its first page.
+
 ### Adapters and capabilities
 
 | Capability | Chrome / Chromium adapter | Firefox adapter |
