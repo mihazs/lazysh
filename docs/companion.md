@@ -888,7 +888,7 @@ The Agent view follows the Grok Build session of a tmux pane when a hook of that
 hooks from `~/.grok/hooks/*.json` (and, unless disabled, from `~/.claude/settings.json`) with the event as JSON on stdin; its
 input carries `session_id`, `cwd`, Claude's PascalCase `hook_event_name` and, once the file exists, `transcript_path`, the
 session's `updates.jsonl`. Print the fragment, review it and save it as `~/.grok/hooks/lazysh.json` (the companion never
-writes Grok's configuration; managed setup for Grok is not part of this change):
+writes Grok's configuration; managed setup for Grok is [#1843](https://github.com/mihazs/lazysh/issues/1843)):
 
 ```sh
 lazysh-agent grok-config --reported-history
@@ -923,11 +923,11 @@ The Agent view reads the reported file with `--view conversation` and polls it a
 tool calls with their output and status (the ACP tool title is the card's name, so every tool is an ordinary tool card) and
 the plan card. The log records no model, usage, sub-agent or background-job shape that was verified, so the header has no
 pills for it. The reconstruction limits above apply: a session past 10,000 records or 16 MiB shows the error and leaves the
-terminal. Verified against synthetic fixtures built from the pinned source (`apps/agent/tests/grok_hooks.rs` drives the real
+terminal ([#1844](https://github.com/mihazs/lazysh/issues/1844)). Verified against synthetic fixtures built from the pinned source (`apps/agent/tests/grok_hooks.rs` drives the real
 executable from a hook report to the conversation and the state) and the pinned hook event definitions
 (`xai-grok-hooks/src/event.rs` and `xai-grok-shell/src/session/compaction.rs`, `get_transcript_path`, same commit). No real
 Grok Build binary or account was available: the real-agent runtime case remains open on
-[#1657](https://github.com/mihazs/lazysh/issues/1657).
+[#1842](https://github.com/mihazs/lazysh/issues/1842).
 
 Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx moon run agent:test-rust agent:test-hooks`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
 
