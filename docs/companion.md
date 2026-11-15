@@ -492,6 +492,8 @@ These formats use the normal byte-cursor record paging contract:
 | `qoder-ide` | `~/.qoder/projects` | `<project>/transcript/<session-id>.jsonl` |
 | `kimi` | `$KIMI_SHARE_DIR/sessions`, otherwise `~/.kimi/sessions` | `<workdir-key>/<session-id>/context.jsonl` |
 
+`discover` names the session (`sessionId`) for `copilot` (the `<session-id>` directory), `kimi` (the same) and `droid` (the UUID file name), the three whose path carries the id the agent's hooks report; the Agent view uses it to tie a hook-reported session to its records and shows them read-only. Other file-based adapters leave `sessionId` out, because nothing in their path names the session. This needs an updated companion; an older one lists the files without it and the Agent view then shows the last reported state only.
+
 Copilot support follows the official generated event schema associated with CLI `1.0.104-3`. It reads persisted user/assistant messages, completed thinking, executed tool calls and results. Ephemeral streaming deltas, subagent events carrying a parent tool-call identity, and hidden skill/inter-agent user-message sources are omitted. Tool requests embedded in assistant messages are not duplicated as additional executed tools. Only explicitly stored output-token counts are shown; the full usage event is ephemeral and is not guaranteed in the persisted log. Alternate configuration directories require an explicit discovery root.
 
 Qoder support is specifically the **IDE transcript format** published in its hook documentation: user/assistant messages, text, tool calls and tool results. Its record adapter does not establish Qoder CLI storage compatibility, native chat resumption, provider quotas, or safe approval targeting.

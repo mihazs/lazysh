@@ -2267,6 +2267,7 @@ const translations = {
   agentViewNoConversation: ["Nenhuma conversa de agente para este terminal.", "No hay ninguna conversación de agente para este terminal."],
   agentViewPartial: ["O último relato de {{agent}} indica este painel, mas a conversa não está disponível. Ative o histórico informado no companion para acompanhá-la aqui.", "El último informe de {{agent}} señala este panel, pero su conversación no está disponible. Activa el historial notificado en el companion para seguirla aquí."],
   agentViewPartialState: ["Esta visão mostra apenas o último estado informado de {{agent}}. A conversa fica no terminal.", "Esta vista solo muestra el último estado notificado de {{agent}}. Su conversación se queda en el terminal."],
+  agentViewPartialRecords: ["Parcial: estes são os registros que {{agent}} gravou para este painel, somente leitura, então podem atrasar em relação ao terminal e omitir o que ele não grava. Responda no terminal.", "Parcial: estos son los registros que {{agent}} escribió para este panel, de solo lectura, así que pueden ir por detrás del terminal y omitir lo que no registra. Responde en el terminal."],
   agentViewShowTerminal: ["Mostrar terminal", "Mostrar terminal"],
   agentComposerTitle: ["Compositor de mensagem", "Compositor de mensajes"],
   agentComposerLabel: ["Mensagem para o agente", "Mensaje para el agente"],

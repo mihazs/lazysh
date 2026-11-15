@@ -8,7 +8,7 @@ import {shellPath} from './attachment';
 import {zellijPane} from './agentPaneIdentity';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseSnapshot,type ReportedHistorySource} from './AgentPanel';
-import {conversationSource,type ConversationAgent} from './agentConversationSource';
+import {conversationSource,isRecordsAgent,type ConversationAgent,type RecordsAgent} from './agentConversationSource';
 import {formatDate, formatNumber, t, useUi} from './i18n/core';
 import {formatCountdown,formatRelativeTime,useNow} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
@@ -230,10 +230,12 @@ const NO_HISTORY = {paging: false, older: false, newer: false};
 
 /** A conversation the Agent view found for its pane from hook reports. */
 export type BoundConversation = Readonly<{agent: ConversationAgent; path: string; /** OpenCode keeps every session in one database: the id picks the session. */transcriptSessionId?: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
+/** The records of a records-only adapter for the session a hook reported: read-only, never a conversation the view takes input for. */
+export type BoundRecords = Readonly<Omit<BoundConversation, 'agent'> & {agent: RecordsAgent}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation|BoundRecords;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -253,7 +255,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [atLatest, setAtLatest] = useState(true);
   const [agent, setAgent] = useState<string>(bound?.agent ?? "claude");
   const [path, setPath] = useState(bound?.path ?? initialReported?.path ?? "");
-  const [view, setView] = useState(bound ? "conversation" : "records");
+  // A records-only adapter has no conversation view: the Agent view shows its records.
+  const [view, setView] = useState(bound && !isRecordsAgent(bound.agent) ? "conversation" : "records");
   // A bound conversation (the Agent view) takes the caller's choice; the picker's own checkbox decides otherwise.
   const [pickedImages,setInlineImages]=useState(false);
   // A Herdr conversation is resolved from the agent's own data root, which has no named file to read previews from.
@@ -359,7 +362,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const request = useRef(0);
   const conversation = ['claude','opencode','codex','gemini'].includes(opened?.agent??'') && opened?.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
-  const followable = conversation || recorded;
+  // Records of a records-only adapter have no stream: the Agent view reads on, from the cursor, every few seconds.
+  const recordsBound = !!bound && isRecordsAgent(bound.agent) && opened?.agent === bound.agent;
+  const followable = conversation || recorded || recordsBound;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
   const selectedPath=reportedMatches || path===bound?.path?path:path.trim();
   const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && selectedPath===opened.path && (!['hermes','opencode'].includes(agent) || transcriptSessionId===opened.transcriptSessionId) && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
@@ -467,9 +472,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [updated,setUpdated] = useState(Date.now);
   useEffect(() => {
     if (!following || !canFollow || busy || !visible || !shown || watch.live || history.newer || !access.current()) return;
-    const timer = setTimeout(() => autoRead.current(),2000);
+    // Pages of a long session follow each other at once; once caught up, the host is asked again every few seconds.
+    const timer = setTimeout(() => autoRead.current(),recordsBound ? (more ? 0 : 5000) : 2000);
     return () => clearTimeout(timer);
-  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access]);
+  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access,recordsBound,more]);
   const lagging = !!watchTarget && following && (watch.state === 'delayed' || watch.state === 'stale');
   const now = useNow(1000, lagging);
   async function discover() {
