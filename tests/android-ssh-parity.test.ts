@@ -6,6 +6,9 @@ import {SshFixture,OwnedProcess} from './support/androidSsh';
 import {androidSshParityAcceptance,etBinary,etTerminalCount,moshRanges,parityControl,previewListener,sshdLogFacts,startOwnedEt,startOwnedMosh,validateSshParityReport,sshParityCases} from './support/androidSshParity';
 import {sshCommand} from './support/sshFixture';
 import {sftpListingNames,writeFilesFixture} from './support/androidFilesFixture';
+import {ShareService} from './support/androidShare';
+import {request as tlsRequest} from 'node:https';
+import {createHash} from 'node:crypto';
 
 const parity=process.env.LAZYSH_ANDROID_UI_SSH_PARITY==='1';
 
@@ -207,6 +210,55 @@ test.skipIf(!parity || !process.env.LAZYSH_TEST_AGENT_BIN)('owned agent sshd lis
       capabilities:{screenshot:true,tap:true,swipe:true,key:true,boot:false,shutdown:true,reboot:true}}]);
   } finally {await fixture.stop();await rm(sdk,{recursive:true,force:true});}
 },40_000);
+
+/** One TLS request to the share service's front, trusting only its throwaway certificate, the way the app's debug client does. */
+function viaFront(service:ShareService,method:string,path:string,options:{body?:Uint8Array;type?:string}={}) {
+  return new Promise<{status:number;body:string}>((done,fail)=>{
+    const headers:Record<string,string>={authorization:`Bearer ${service.token}`};
+    if(options.type)headers['content-type']=options.type;
+    const call=tlsRequest(`${service.origin}${path}`,{method,ca:service.certificate,headers},reply=>{
+      const chunks:Buffer[]=[];
+      reply.on('data',chunk=>chunks.push(chunk));
+      reply.on('end',()=>done({status:reply.statusCode??0,body:Buffer.concat(chunks).toString('utf8')}));
+    });
+    call.on('error',fail);call.end(options.body);
+  });
+}
+
+test.skipIf(!parity)('owned share service keeps an upload over TLS and reports its state, its link and its deletion',async()=>{
+  const service=await ShareService.start();
+  try {
+    expect(await service.facts()).toEqual({shares:[],gone:[],requests:{upload:0,history:0,download:0,delete:0}});
+    // A 1x1 PNG: the real service checks the declared type against the file's own signature.
+    const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg==','base64');
+    const sha=createHash('sha256').update(png).digest('hex');
+    const created=await viaFront(service,'POST','/v1/shares?filename=swatch.png&ttlSeconds=3600',{body:png,type:'image/png'});
+    expect(created.status).toBe(201);
+    const url=(JSON.parse(created.body) as {share:{url:string}}).share.url;
+    expect(url.startsWith(`${service.origin}/s/`)).toBe(true);
+    expect(await service.facts()).toEqual({shares:[{name:'swatch.png',mime:'image/png',size:png.length,sha256:sha,ttl:3600,url}],gone:[],requests:{upload:1,history:0,download:0,delete:0}});
+    expect(await service.open(url)).toMatchObject({status:200,size:png.length,sha256:sha});
+    // Only the link of this service opens, and the host's own probes are not the app's traffic.
+    await expect(service.open('https://example.com/s/'+'a'.repeat(64))).rejects.toThrow('url');
+    expect((await service.facts()).requests.download).toBe(0);
+    const id=url.slice(-64);
+    expect((await viaFront(service,'DELETE',`/v1/shares/${id}`)).status).toBe(204);
+    expect(await service.facts()).toEqual({shares:[],gone:[404],requests:{upload:1,history:0,download:0,delete:1}});
+    expect(await service.open(url)).toMatchObject({status:404});
+  } finally {await service.stop();}
+},900_000);
+
+test('owned parity control relays the share service only to its nonce and only when one exists',async()=>{
+  const calls:unknown[]=[];
+  const share={facts:async()=>({shares:[],gone:[],requests:{upload:0,history:0,download:0,delete:0}}),open:async(url:unknown)=>{calls.push(url);return {status:200,size:1,sha256:'x',type:'image/png'};}};
+  const fixtures={} as Parameters<typeof parityControl>[0];
+  const control=parityControl(fixtures,'n',async()=>{},undefined,undefined,undefined,share);
+  expect(await control.reply({nonce:'n',action:'share'})).toMatchObject({gone:[]});
+  expect(await control.reply({nonce:'n',action:'open',url:'https://127.0.0.1:1/s/x'})).toMatchObject({status:200});
+  expect(calls).toEqual(['https://127.0.0.1:1/s/x']);
+  await expect(control.reply({nonce:'foreign',action:'share'})).rejects.toThrow('nonce');
+  await expect(parityControl(fixtures,'n',async()=>{}).reply({nonce:'n',action:'share'})).rejects.toThrow('action');
+});
 
 test('parity report counts only every expected native case passing exactly once',()=>{
   const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;

@@ -11,8 +11,9 @@ import {descendants,identity,sameIdentity} from './ownedProcess';
 import {availablePort,sshCommand} from './sshFixture';
 import {writeFilesFixture} from './androidFilesFixture';
 import {setTimeout as delay} from 'node:timers/promises';
+import {ShareService} from './androidShare';
 
-/** The owned SSH parity instrumentation cases (#985, #1642), run together in one Gradle invocation. */
+/** The owned parity instrumentation cases (#985, #1642, #1738), run together in one Gradle invocation; the last needs no SSH, only the host's share service. */
 export const sshParityCases=[
   'ownedSshPasswordLoginThroughRealUi',
   'ownedSshEncryptedKeyLoginThroughRealUi',
@@ -28,6 +29,7 @@ export const sshParityCases=[
   'ownedSshClientEnvironmentThroughRealUi',
   'ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi',
   'ownedSshTerminalSelectionCopyReachesTheSystemClipboardThroughRealUi',
+  'ownedShareServiceThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files'|'devices';
@@ -78,13 +80,13 @@ export function nonceControl(nonce:string,actions:Record<string,()=>Record<strin
  * The instrumentation's only host channel. Requests carry the case nonce and one closed
  * action; replies are closed facts. `rotate` points the pinned device port at a second sshd.
  */
-export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>,listener?:{seen:PreviewFacts},etSessions:()=>Promise<number>=async()=>0,mosh:()=>Promise<Record<string,unknown>>=async()=>({})):Control {
+export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>,listener?:{seen:PreviewFacts},etSessions:()=>Promise<number>=async()=>0,mosh:()=>Promise<Record<string,unknown>>=async()=>({}),share?:Pick<ShareService,'facts'|'open'>):Control {
   const marks=new Map<ParityServer,number>(observed.map(name=>[name,0]));
   const log=(name:ParityServer)=>{const fixture=fixtures[name];if(!fixture)throw new Error('server');return readFile(join(fixture.directory,'sshd.log'));};
   const mark=async(name:ParityServer)=>{marks.set(name,(await log(name)).length);};
   return {reply:async request=>{
     if(!request || typeof request!=='object')throw new Error('request');
-    const {nonce:owner,action,server}=request as Record<string,unknown>;
+    const {nonce:owner,action,server,url}=request as Record<string,unknown>;
     if(owner!==nonce)throw new Error('nonce');
     const name=observed.find(value=>value===server);
     if(action==='mark' && name){await mark(name);return {};}
@@ -93,6 +95,8 @@ export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<
     if(action==='preview' && listener)return {...listener.seen};
     if(action==='et')return {sessions:await etSessions()};
     if(action==='mosh')return mosh();
+    if(action==='share' && share)return share.facts();
+    if(action==='open' && share)return share.open(url);
     throw new Error('action');
   }};
 }
@@ -238,7 +242,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
   const password=randomBytes(16).toString('hex'),passphrase=randomBytes(12).toString('hex');
   const started:SshFixture[]=[];
   const reverses:number[]=[];
-  let remote:string|undefined,keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined,control:Server|undefined,listener:Awaited<ReturnType<typeof previewListener>>|undefined,et:Awaited<ReturnType<typeof startOwnedEt>>|undefined;
+  let remote:string|undefined,keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined,control:Server|undefined,listener:Awaited<ReturnType<typeof previewListener>>|undefined,et:Awaited<ReturnType<typeof startOwnedEt>>|undefined,share:ShareService|undefined;
   let primary=false;
   try {
     const etServer=etBinary('ET_SERVER_BIN'),etTerminal=etBinary('ET_TERMINAL_BIN');
@@ -267,9 +271,11 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
       await device(['reverse',...(rebind?[]:['--no-rebind']),`tcp:${device_}`,`tcp:${host}`]);
       if(!reverses.includes(device_))reverses.push(device_);
     };
-    const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),listener,et.sessions,mosh.facts));
+    // The real share service behind a throwaway-certificate TLS front; the debug app is told to trust that one root.
+    share=await ShareService.start(root);
+    const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),listener,et.sessions,mosh.facts,share));
     control=channel.server;
-    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,fixtures.files.port,fixtures.devices.port,channel.port,transport.port,et.port])await reverse(port,port);
+    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,fixtures.files.port,fixtures.devices.port,channel.port,transport.port,et.port,share.port])await reverse(port,port);
     await reverse(pinned.port,fixtures.primary.port);
     keyboard=await ownedSoftwareKeyboard(adb,serial,5000,'aosp-latin');
     remote=`/data/local/tmp/lazysh-ui-ssh-${nonce}`;
@@ -280,7 +286,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     await writeFile(data,JSON.stringify({nonce,username:fixtures.primary.username,controlPort:channel.port,password,passphrase,
       privateKey:fixtures.primary.privateKey,encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
       challenge:fixtures.primary.challenge,expected:fixtures.primary.expected,
-      primary:server(fixtures.primary),bastion:server(fixtures.bastion),preview:{...server(fixtures.preview),privateKey:fixtures.preview.privateKey,listener:listener.port,proof},files:{...server(fixtures.files),privateKey:fixtures.files.privateKey,...files},transport:{...server(transport),privateKey:transport.privateKey},et:{port:et.port,terminal:etTerminal},
+      primary:server(fixtures.primary),bastion:server(fixtures.bastion),preview:{...server(fixtures.preview),privateKey:fixtures.preview.privateKey,listener:listener.port,proof},files:{...server(fixtures.files),privateKey:fixtures.files.privateKey,...files},transport:{...server(transport),privateKey:transport.privateKey},share:{origin:share.origin,token:share.token,certificate:share.certificate},et:{port:et.port,terminal:etTerminal},
       mosh:{...server(mosh.ssh),privateKey:mosh.ssh.privateKey,host:'10.0.2.2',serverPath:mosh.wrapper,udpPort:mosh.udpPort},devices:{...server(fixtures.devices),privateKey:fixtures.devices.privateKey,serial},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
     if((await stat(data)).size>16*1024)throw new Error('Owned Android parity fixture exceeds native bound');
     await device(['push',data,`${remote}/fixture.json`]);
@@ -302,6 +308,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
       ['control',()=>control?close(control):Promise.resolve()],
       ['preview-listener',()=>listener?close(listener.server):Promise.resolve()],
       ['ET',()=>et?.stop()??Promise.resolve()],
+      ['share-service',()=>share?.stop()??Promise.resolve()],
       ...started.map(fixture=>['SSH',()=>fixture.stop()] as const),
     ]);
   }
