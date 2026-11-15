@@ -1,4 +1,6 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::host::Host;
+use crate::local::LocalState;
 use crate::ssh::{AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -48,14 +50,16 @@ fn update_command(settings: &Update) -> Result<String> {
 #[tauri::command]
 pub async fn get_companion_settings(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     access: AccessLease,
 ) -> std::result::Result<Guarded<Settings>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             parse(
-                &crate::companion::exec(&session, "lazysh-agent settings show".into(), &access)
+                &host
+                    .companion(&access, "lazysh-agent settings show".into())
                     .await?,
             )
         })
@@ -64,6 +68,7 @@ pub async fn get_companion_settings(
 #[tauri::command]
 pub async fn update_companion_settings(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     settings: Update,
     access: AccessLease,
@@ -71,8 +76,8 @@ pub async fn update_companion_settings(
     access
         .run(async {
             let command = update_command(&settings)?;
-            let session = state.session(&session_id).await?;
-            parse(&crate::companion::exec(&session, command, &access).await?)
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            parse(&host.companion(&access, command).await?)
         })
         .await
 }

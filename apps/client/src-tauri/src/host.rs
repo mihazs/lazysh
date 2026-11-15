@@ -107,7 +107,13 @@ impl Host {
         if id.starts_with("local:") {
             #[cfg(desktop)]
             return crate::local::usage_session(local, id, lease)
-                .map(|cancel| Self::Local(LocalHost { cancel }))
+                .map(|cancel| {
+                    Self::Local(LocalHost {
+                        cancel,
+                        #[cfg(test)]
+                        env: local.test_env(),
+                    })
+                })
                 .map_err(|error| SshError::new("disconnected", error));
             #[cfg(not(desktop))]
             {
@@ -155,6 +161,25 @@ impl Host {
             }
             #[cfg(desktop)]
             Self::Local(host) => ssh::command_text(host.exec(lease, cmd, deadline, limit).await?),
+        }
+    }
+    /// One `lazysh-agent …` command line, as the companion builders write it, on this host's
+    /// companion: resolved over SSH, or run as argv on this device.
+    pub(crate) async fn companion(&self, lease: &AccessLease, line: String) -> Result<String> {
+        match self {
+            Self::Remote(session) => crate::companion::exec(session, line, lease).await,
+            // Boxed: the local arm's buffers would otherwise grow every remote caller's future.
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                Box::pin(async {
+                    let cmd = crate::companion::local::command(&line).await?;
+                    ssh::command_text(
+                        host.exec(lease, &cmd, OP_TIMEOUT, FILE_LIMIT as usize)
+                            .await?,
+                    )
+                })
+                .await
+            }
         }
     }
     /// Raw stdout bytes of a one-shot command with the default bounds.
@@ -326,6 +351,8 @@ fn not_regular() -> SshError {
 #[cfg(desktop)]
 pub(crate) struct LocalHost {
     cancel: tokio::sync::watch::Receiver<bool>,
+    #[cfg(test)]
+    env: Vec<(String, String)>,
 }
 /// Multiplexer and shell start-up variables a lazysh started inside a multiplexer would leak.
 #[cfg(desktop)]
@@ -362,6 +389,8 @@ impl LocalHost {
         for name in INHERITED {
             command.env_remove(name);
         }
+        #[cfg(test)]
+        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         lease
             .check()
             .map_err(|_| SshError::new("app_locked", "App access changed"))?;
@@ -454,7 +483,7 @@ impl LocalHost {
 /// The login shell's PATH, probed once with a constant command: a GUI start often
 /// lacks the user-level tool directories a terminal has. Windows keeps its PATH.
 #[cfg(desktop)]
-async fn login_path() -> Option<&'static std::ffi::OsString> {
+pub(crate) async fn login_path() -> Option<&'static std::ffi::OsString> {
     #[cfg(unix)]
     {
         static PATH: tokio::sync::OnceCell<Option<std::ffi::OsString>> =

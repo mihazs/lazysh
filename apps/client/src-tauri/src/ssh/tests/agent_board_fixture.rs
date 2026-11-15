@@ -17,7 +17,7 @@ pub(super) fn environment(directory: &Path) -> String {
 type App = tauri::App<tauri::test::MockRuntime>;
 
 async fn board(app: &App, id: &str) -> Vec<Value> {
-    let snapshot = agent_snapshot(access_lease(), app.state(), id.into())
+    let snapshot = agent_snapshot(access_lease(), app.state(), app.state(), id.into())
         .await
         .unwrap()
         .into_inner()
@@ -36,11 +36,12 @@ fn row<'a>(rows: &'a [Value], session: &str) -> &'a Value {
 }
 
 async fn approvals(app: &App, id: &str) -> Vec<Value> {
-    let listed = crate::approvals::agent_approvals(app.state(), id.into(), access_lease())
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let listed =
+        crate::approvals::agent_approvals(app.state(), app.state(), id.into(), access_lease())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
     assert_eq!(listed["schemaVersion"], 1);
     listed["requests"].as_array().unwrap().clone()
 }
@@ -66,6 +67,7 @@ async fn decide_with(
     (decision, option, message): (&str, Option<u8>, Option<&str>),
 ) -> std::result::Result<Value, String> {
     crate::approvals::resolve_agent_approval(
+        app.state(),
         app.state(),
         id.into(),
         request["id"].as_str().unwrap().into(),
@@ -205,26 +207,16 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
 
     // Managed Claude setup from the client writes the hook commands the agent will run.
     let profile = directory.join(".claude");
-    fs::create_dir(&profile).unwrap();
-    fs::write(profile.join("settings.json"), "{\"theme\": \"dark\"}").unwrap();
+    let host = crate::host::Host::Remote(session.clone());
     let invoke = |action: &str, plan: Option<&str>| {
         let request = serde_json::from_value(
             json!({"agent":"claude","action":action,"profileRoot":profile,"expectedPlan":plan}),
         )
         .unwrap();
-        crate::companion::hooks::execute(&session, request, &lease)
+        crate::companion::hooks::execute(&host, request, &lease)
     };
-    let status = invoke("status", None).await.unwrap();
-    let configured = invoke("install", status["installPlan"].as_str())
-        .await
-        .unwrap();
-    assert_eq!(configured["outcome"]["status"], "configured");
-    let settings: Value =
-        serde_json::from_slice(&fs::read(profile.join("settings.json")).unwrap()).unwrap();
-    assert_eq!(
-        settings["theme"], "dark",
-        "managed setup keeps other settings"
-    );
+    let settings =
+        crate::companion::hooks::install_keeping_foreign_settings(app, id, &profile, &lease).await;
     let command = |event: &str| {
         let groups = settings["hooks"][event].as_array().unwrap();
         assert_eq!(groups.len(), 1);

@@ -3155,14 +3155,15 @@ pub async fn agent_snapshot(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let session = state.session(&session_id).await?;
-            let text =
-                crate::companion::exec(&session, "lazysh-agent snapshot --limit 50".into(), &lease)
-                    .await?;
+            let host = crate::host::Host::resolve(&state, &local, &session_id, &lease).await?;
+            let text = host
+                .companion(&lease, "lazysh-agent snapshot --limit 50".into())
+                .await?;
             Ok(serde_json::from_str(&text)?)
         })
         .await
@@ -3376,6 +3377,7 @@ fn transcript_request_command(
 async fn transcript_result(
     lease: &AccessLease,
     state: &AppState,
+    local: &crate::local::LocalState,
     session_id: &str,
     mut command: String,
     transcript_session_id: Option<String>,
@@ -3389,17 +3391,19 @@ async fn transcript_result(
         }
         command.push_str(&format!(" --session-id={}", quote(&id)));
     }
-    let session = state.session(session_id).await?;
+    let host = crate::host::Host::resolve(state, local, session_id, lease).await?;
     Ok(serde_json::from_str(
-        &crate::companion::exec(&session, command, lease).await?,
+        &host.companion(lease, command).await?,
     )?)
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_usage(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     agent: String,
     path: String,
@@ -3413,7 +3417,15 @@ pub async fn agent_usage(
                 "lazysh-agent usage --agent {agent} --path={} --offset {offset}",
                 quote(&path)
             );
-            transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
+            transcript_result(
+                &lease,
+                &state,
+                &local,
+                &session_id,
+                command,
+                transcript_session_id,
+            )
+            .await
         })
         .await
 }
@@ -3424,6 +3436,7 @@ pub async fn agent_transcript(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     agent: String,
     path: String,
@@ -3457,7 +3470,15 @@ pub async fn agent_transcript(
                 ));
             }
             command.push_str(&flags);
-            transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
+            transcript_result(
+                &lease,
+                &state,
+                &local,
+                &session_id,
+                command,
+                transcript_session_id,
+            )
+            .await
         })
         .await
 }
@@ -3483,13 +3504,14 @@ fn reported_history_command(agent_session_id: &str) -> Result<String> {
 pub async fn agent_reported_history(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     agent_session_id: String,
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
             let command = reported_history_command(&agent_session_id)?;
-            transcript_result(&lease, &state, &session_id, command, None).await
+            transcript_result(&lease, &state, &local, &session_id, command, None).await
         })
         .await
 }
@@ -3499,6 +3521,7 @@ pub async fn agent_transcripts(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     agent: String,
 ) -> AccessResult<serde_json::Value> {
@@ -3535,14 +3558,14 @@ pub async fn agent_transcripts(
                     "Unsupported transcript adapter",
                 ));
             }
-            let session = state.session(&session_id).await?;
+            let host = crate::host::Host::resolve(&state, &local, &session_id, &lease).await?;
             Ok(serde_json::from_str(
-                &crate::companion::exec(
-                    &session,
-                    format!("lazysh-agent discover --agent {agent} --limit 50"),
-                    &lease,
-                )
-                .await?,
+                &host
+                    .companion(
+                        &lease,
+                        format!("lazysh-agent discover --agent {agent} --limit 50"),
+                    )
+                    .await?,
             )?)
         })
         .await
@@ -3568,6 +3591,7 @@ fn history_command(agent: &str, folder: &str) -> Result<String> {
 pub async fn agent_history(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     agent: String,
     folder: String,
@@ -3575,7 +3599,7 @@ pub async fn agent_history(
     lease
         .run(async {
             let command = history_command(&agent, &folder)?;
-            transcript_result(&lease, &state, &session_id, command, None).await
+            transcript_result(&lease, &state, &local, &session_id, command, None).await
         })
         .await
 }
@@ -6734,6 +6758,7 @@ mod tests {
             .build(context)
             .unwrap();
         app.manage(AppState::new(dir.path().into()).unwrap());
+        app.manage(crate::local::LocalState::default());
         app.vault()
             .access()
             .initialize(false, false, "test".into())

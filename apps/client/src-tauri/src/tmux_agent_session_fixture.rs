@@ -166,12 +166,16 @@ async fn session() {
     );
     let request = timeout(BOUND, async {
         loop {
-            let listed =
-                crate::approvals::agent_approvals(app.state(), child.clone(), lease.clone())
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .unwrap();
+            let listed = crate::approvals::agent_approvals(
+                app.state(),
+                app.state(),
+                child.clone(),
+                lease.clone(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
             if let Some(request) = listed["requests"].as_array().and_then(|rows| rows.first()) {
                 return request.clone();
             }
@@ -188,6 +192,7 @@ async fn session() {
     );
     let decide = |pane: &str, decision: &str| {
         crate::approvals::resolve_agent_approval(
+            app.state(),
             app.state(),
             child.clone(),
             request["id"].as_str().unwrap().into(),
