@@ -1,6 +1,6 @@
 {
   "name": "lazysh",
-  "version": "1.64.2",
+  "version": "1.65.0",
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": [
