@@ -6,6 +6,7 @@ import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inact
 /** Real board with synthetic host records and deliberately held native decisions. */
 export function mountAgentBoard(host?:{key:string;label:string}){
   const calls:{command:string;args:unknown}[]=[];
+  let hostBrowser={schemaVersion:1,revision:0,hostBrowserEnabled:false};
   let reports=[agentBoardRecord];
   let update:{state:string;from:string;to:string;reason?:string}|undefined;
   const approval=agentApproval();let decided=false;let finish!:(value:unknown)=>void;
@@ -17,6 +18,8 @@ export function mountAgentBoard(host?:{key:string;label:string}){
     if(command==='agent_approvals')return {schemaVersion:1,requests:decided?[]:[approval]};
     if(command==='get_companion_settings')return companionSettings;
     if(command==='update_companion_settings'){const {expectedRevision:_,...settings}=(args as {settings:typeof companionSettings & {expectedRevision:number}}).settings;return {...companionSettings,...settings,revision:8};}
+    if(command==='get_host_browser_settings')return hostBrowser;
+    if(command==='update_host_browser_settings'){const {hostBrowserEnabled}=(args as {settings:{hostBrowserEnabled:boolean}}).settings;hostBrowser={...hostBrowser,revision:hostBrowser.revision+1,hostBrowserEnabled};return hostBrowser;}
     if(command==='resolve_agent_approval')return new Promise(resolve=>{finish=resolve;});
     if(command==='board_keep_awake_status')return inactiveBoardDisplay;
     throw new Error('Unexpected agent board fixture command');

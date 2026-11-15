@@ -79,3 +79,7 @@
 @media (max-width: 600px) {
   .agent-panel[data-activity-detail] > .agent-archived { display: none; }
 }
+.agent-panel .host-browser-confirm { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--theme-panel); overflow-wrap: anywhere; }
+.agent-panel .host-browser-confirm ul { margin: 0; padding-inline-start: 20px; }
+.agent-panel .host-browser-confirm > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-panel .host-browser-confirm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

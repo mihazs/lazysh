@@ -171,6 +171,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
       }
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+      if(command==='get_host_browser_settings')return {schemaVersion:1,revision:0,hostBrowserEnabled:false};
       if(command==='board_keep_awake_status')return {available:geometry,active:false,reason:'Synthetic keep-awake unavailable',epoch:'0/11111111-1111-4111-8111-111111111111',ticket:1};
       if(command==='apple_status_capability')return {available:false,reason:'Synthetic status unavailable'};
       if(['cancel_credential_auth','adopt_session','resize','ack_output','disconnect'].includes(command)||command.startsWith('plugin:event|'))return;

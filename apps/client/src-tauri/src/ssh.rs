@@ -7159,6 +7159,8 @@ mod tests {
             "host_file_deliver",
             "get_companion_settings",
             "update_companion_settings",
+            "get_host_browser_settings",
+            "update_host_browser_settings",
         ] {
             let policy = context.runtime_authority_mut();
             assert!(policy.resolve_access(command, "main", "main", &tauri::ipc::Origin::Local).is_some(), "the documented command must be admitted by the generated local-main policy: {command}");
@@ -7190,6 +7192,8 @@ mod tests {
                 crate::host_clipboard::host_clipboard_copy,
                 crate::companion_settings::get_companion_settings,
                 crate::companion_settings::update_companion_settings,
+                crate::companion_settings::get_host_browser_settings,
+                crate::companion_settings::update_host_browser_settings,
                 crate::companion::install_companion,
                 crate::companion::install_companion_from_device,
                 crate::companion::check_companion_update
@@ -7311,9 +7315,13 @@ mod tests {
 
         let settings = serde_json::json!({"sessionId":"not-connected"});
         let update = serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}});
+        let browser = serde_json::json!({"sessionId":"not-connected"});
+        let browser_update = serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"hostBrowserEnabled":false}});
         for (command, body) in [
             ("get_companion_settings", settings.clone()),
             ("update_companion_settings", update.clone()),
+            ("get_host_browser_settings", browser.clone()),
+            ("update_host_browser_settings", browser_update.clone()),
         ] {
             let error = tauri::test::get_ipc_response(&main, request(local_url, command, body))
                 .unwrap_err();
@@ -7328,6 +7336,8 @@ mod tests {
             ("check_companion_update", checked.clone()),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
+            ("get_host_browser_settings", browser),
+            ("update_host_browser_settings", browser_update),
             ("list_hosts", serde_json::json!({})),
             ("clipboard_read", clipboard_read),
             ("clipboard_cancel", clipboard_cancel),
