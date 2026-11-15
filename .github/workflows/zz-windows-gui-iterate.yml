@@ -16,6 +16,10 @@ jobs:
         with:
           cache-on-failure: true
       - run: bun install --frozen-lockfile
+      # The key is computed before the build: the build writes into src-tauri, so a key computed afterwards never matches.
+      - id: key
+        shell: bash
+        run: echo "value=zz-gui-bundle-${{ hashFiles('apps/client/src/**', 'apps/client/src-tauri/**', 'apps/client/package.json', 'Cargo.lock', 'bun.lock') }}" >> "$GITHUB_OUTPUT"
       - id: bundle
         uses: actions/cache/restore@v4
         with: &bundle
@@ -23,7 +27,7 @@ jobs:
             target/release/lazysh.exe
             target/release/bundle/nsis
             target/release/bundle-revision.txt
-          key: zz-gui-bundle-${{ hashFiles('apps/client/src/**', 'apps/client/src-tauri/**', 'apps/client/package.json', 'Cargo.lock', 'bun.lock') }}
+          key: ${{ steps.key.outputs.value }}
       - if: steps.bundle.outputs.cache-hit != 'true'
         shell: bash
         run: |
