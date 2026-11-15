@@ -166,13 +166,26 @@ impl Host {
     /// One `lazysh-agent …` command line, as the companion builders write it, on this host's
     /// companion: resolved over SSH, or run as argv on this device.
     pub(crate) async fn companion(&self, lease: &AccessLease, line: String) -> Result<String> {
+        self.companion_at(lease, line, false).await
+    }
+    /// `companion`, run from a lasting path when `lasting` (hook setup: see `local::stable_command`).
+    pub(crate) async fn companion_at(
+        &self,
+        lease: &AccessLease,
+        line: String,
+        lasting: bool,
+    ) -> Result<String> {
         match self {
             Self::Remote(session) => crate::companion::exec(session, line, lease).await,
             // Boxed: the local arm's buffers would otherwise grow every remote caller's future.
             #[cfg(desktop)]
             Self::Local(host) => {
                 Box::pin(async {
-                    let cmd = crate::companion::local::command(&line).await?;
+                    let cmd = if lasting {
+                        crate::companion::local::stable_command(&line, host.data_dir()).await?
+                    } else {
+                        crate::companion::local::command(&line).await?
+                    };
                     ssh::command_text(
                         host.exec(lease, &cmd, OP_TIMEOUT, FILE_LIMIT as usize)
                             .await?,
@@ -367,6 +380,20 @@ pub(crate) const INHERITED: [&str; 7] = [
 ];
 #[cfg(desktop)]
 impl LocalHost {
+    /// The data directory a test session keeps its managed files in; this device's own otherwise.
+    fn data_dir(&self) -> Option<std::path::PathBuf> {
+        #[cfg(test)]
+        {
+            self.env
+                .iter()
+                .find(|(name, _)| name == "XDG_DATA_HOME")
+                .map(|(_, dir)| dir.into())
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
     async fn exec(
         &self,
         lease: &AccessLease,
