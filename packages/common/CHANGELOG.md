@@ -1,5 +1,9 @@
 # @lazysh/common
 
+## 1.64.0
+
+No changes in this release.
+
 ## 1.63.0
 
 ### Patch Changes

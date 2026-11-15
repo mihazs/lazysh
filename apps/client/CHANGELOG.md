@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.64.0
+
+### Patch Changes
+
+- 3b0b81d: Extend the Android tmux acceptance case: through the real UI it now creates a window and renames it from the Workspaces panel, then closes it from the tab strip with a held finger, the menu's Close and the confirmation, and the host checks that its own tmux tree showed each name in order and then only the original windows. Test-only; no behaviour changes.
+- 28dfed6: Bind local agent hooks to a lasting copy of the bundled companion (#1666, part of #1132). Hook setup (status, install and remove) in a local session now first places an owner-only copy of the `lazysh-agent` beside the app in the managed directory (`<data>/lazysh/companion/`), written to a new file and renamed into place, and runs from there, so the hooks it writes keep working after the app exits; an AppImage runs the bundled companion from a mount that disappears with the app. A managed copy that is the user's own and at least as new as the bundled version is kept; an older or unsafe one is replaced. Discovery and every other command keep running the bundled companion, a companion found at the managed path or on the `PATH` is used as it is, and Windows (template-only hook setup) is unchanged. No defaults change, and nothing ships a bundled companion yet, so nothing changes for an install today.
+- @lazysh/account-usage@1.64.0
+  - @lazysh/common@1.64.0
+  - @lazysh/display-idle@1.64.0
+  - @lazysh/et-transport@1.64.0
+  - @lazysh/mosh-transport@1.64.0
+
 ## 1.63.0
 
 ### Minor Changes
