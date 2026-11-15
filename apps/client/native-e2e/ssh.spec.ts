@@ -10,7 +10,7 @@ import {prepareRecordedConversation,recordedCompanionBytes} from '../../../tests
 import {recordedPageCall} from '../../../tests/support/recordedCards';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction,startOwnedReceiver} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -160,33 +160,7 @@ it('pans the expanded D-pad through one native held pointer and stops bytes in i
   await (await browser.$('button=dpad')).click();
   const up=await browser.$('.terminal-dpad button[aria-label="D-pad up"]');await up.waitForDisplayed();
   expect(await up.getAttribute('aria-pressed')).toBeNull();
-  gui.stage='owned D-pad raw receiver';
-  const image=join(ssh.directory,'bin','owned-terminal-receiver'),imageStat=await stat(image);
-  const imageHash=createHash('sha256').update(await readFile(image)).digest('hex');
-  expect(imageHash).toBe(createHash('sha256').update(await readFile(tools.receiverBinary)).digest('hex'));
-  await terminal.click();await typeText(browser,'exec ./bin/owned-terminal-receiver .\n');
-  let receiver:OwnedPid|undefined;
-  await browser.waitUntil(async()=>{
-    const text=await readFile(join(ssh.directory,'receiver-pid'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
-    if(!/^[1-9][0-9]{0,9}\n$/.test(text))return false;
-    receiver=await identity(Number(text.trim()));return !!receiver&&!['Z','X'].includes(receiver.state);
-  },{timeout:3000,timeoutMsg:'Owned D-pad receiver was not ready'});
-  const original=receiver!;
-  let ancestor:OwnedPid|undefined=original,owned=false;
-  for(let depth=0;ancestor&&depth<16;depth++){
-    if(ancestor.pid===ssh.daemon.child.pid){owned=true;break;}
-    ancestor=await identity(ancestor.parent);
-  }
-  expect(owned).toBe(true);
-  const bytes=async()=>{
-    const current=await identity(original.pid),executable=await stat(`/proc/${original.pid}/exe`);
-    if(!current||current.start!==original.start||['Z','X'].includes(current.state)||executable.dev!==imageStat.dev||executable.ino!==imageStat.ino)
-      throw new Error('Owned D-pad receiver identity changed');
-    const path=join(ssh.directory,'received-bytes'),info=await stat(path);
-    if(!info.isFile()||info.uid!==process.getuid!()||info.size>4096)throw new Error('Owned D-pad receiver output invalid');
-    const value=await readFile(path);if(value.length>4096)throw new Error('Owned D-pad receiver output exceeds bound');return value;
-  };
-  expect(await bytes()).toEqual(Buffer.alloc(0));
+  const {bytes,image,imageHash}=await startOwnedReceiver(gui,ssh,terminal,tools.receiverBinary,'D-pad');
   fixture.captureSafe=true;
   await up.click();
   await browser.waitUntil(async()=>(await bytes()).equals(Buffer.from('\x1b[A')),{timeout:3000,timeoutMsg:'Owned D-pad tap did not arrive once'});

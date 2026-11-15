@@ -1,8 +1,10 @@
 import {afterEach,expect} from 'vitest';
-import {chmod,mkdir,readFile,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {chmod,mkdir,readFile,stat,writeFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 import {NativeGui} from './fixture';
 import {SshFixture} from '../../../tests/support/sshFixture';
+import {identity,type OwnedPid} from '../../../tests/support/ownedProcess';
 
 type Terminal=Awaited<ReturnType<NonNullable<NativeGui['browser']>['$']>>;
 type Owner=Awaited<ReturnType<NativeGui['appOwner']>>;
@@ -120,6 +122,42 @@ export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Te
   await browser.waitUntil(async()=>(await terminal.getText()).includes(expected),{timeout:20_000,timeoutMsg:'Owned SSH challenge output was not observed'});
   expect(await gui.appOwner()).toEqual(owner);
   expect(gui.connections).toBe(0);
+}
+
+/**
+ * Replace the shell with the fixture's raw receiver, which writes every byte it reads to a file. Returns a reader of
+ * those bytes that refuses to answer for a different process or image than the one it started.
+ */
+export async function startOwnedReceiver(gui:NativeGui,ssh:SshFixture,terminal:Terminal,receiverBinary:string,label:string) {
+  const browser=gui.browser!;
+  gui.stage=`owned ${label} raw receiver`;
+  const image=join(ssh.directory,'bin','owned-terminal-receiver'),imageStat=await stat(image);
+  const imageHash=createHash('sha256').update(await readFile(image)).digest('hex');
+  expect(imageHash).toBe(createHash('sha256').update(await readFile(receiverBinary)).digest('hex'));
+  await terminal.click();await typeText(browser,'exec ./bin/owned-terminal-receiver .\n');
+  let receiver:OwnedPid|undefined;
+  await browser.waitUntil(async()=>{
+    const text=await readFile(join(ssh.directory,'receiver-pid'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+    if(!/^[1-9][0-9]{0,9}\n$/.test(text))return false;
+    receiver=await identity(Number(text.trim()));return !!receiver&&!['Z','X'].includes(receiver.state);
+  },{timeout:3000,timeoutMsg:`Owned ${label} receiver was not ready`});
+  const original=receiver!;
+  let ancestor:OwnedPid|undefined=original,owned=false;
+  for(let depth=0;ancestor&&depth<16;depth++){
+    if(ancestor.pid===ssh.daemon.child.pid){owned=true;break;}
+    ancestor=await identity(ancestor.parent);
+  }
+  expect(owned).toBe(true);
+  const bytes=async()=>{
+    const current=await identity(original.pid),executable=await stat(`/proc/${original.pid}/exe`);
+    if(!current||current.start!==original.start||['Z','X'].includes(current.state)||executable.dev!==imageStat.dev||executable.ino!==imageStat.ino)
+      throw new Error(`Owned ${label} receiver identity changed`);
+    const path=join(ssh.directory,'received-bytes'),info=await stat(path);
+    if(!info.isFile()||info.uid!==process.getuid!()||info.size>4096)throw new Error(`Owned ${label} receiver output invalid`);
+    const value=await readFile(path);if(value.length>4096)throw new Error(`Owned ${label} receiver output exceeds bound`);return value;
+  };
+  expect(await bytes()).toEqual(Buffer.alloc(0));
+  return {bytes,image,imageHash};
 }
 
 export async function disconnectOwnedSsh(gui:NativeGui,terminal:Terminal,name='Owned SSH GUI host') {
