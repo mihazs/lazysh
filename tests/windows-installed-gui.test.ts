@@ -410,7 +410,10 @@ const element = (tag: string, text: string) => `.//${tag}[normalize-space()=${JS
 
 /** Preferences, Appearance and the "Import and share theme" section; the app theme is `custom` only once a theme has been applied. */
 async function enterThemeImport(browser: WebDriver) {
-  await browser.click(await until('Preferences button', () => browser.find('button.preferences-button')));
+  // Above 600 px wide the header keeps only the Workspace tools button; Preferences is a tool in its sheet (one page without a connection).
+  await browser.click(await until('Workspace tools button', () => browser.find('button[aria-label="Workspace tools"]')));
+  const tools = await until('Workspace tools sheet', () => browser.find('[role="dialog"][aria-label="Workspace tools"]'));
+  await browser.click(await until('Preferences tool', () => browser.find(element('button', 'Preferences'), tools, 'xpath')));
   const preferences = await until('Preferences dialog', () => browser.find('[role="dialog"][aria-label="Preferences"]'));
   await browser.click(await until('Appearance category', () => browser.find('button[data-settings-target="appearance"]', preferences)));
   const page = await until('Appearance page', async () => {
