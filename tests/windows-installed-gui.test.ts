@@ -7,8 +7,8 @@ import { digestFile } from '../.changeset/release-artifacts';
 import { project } from './support/gitFixture';
 import { document } from './support/workflowGraph';
 import { exactlyOne, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, launch, mainWindow, parseHostState,
-  parseProcessTable, pinnedTools, powershell, processTable, requireOwnedWindowsRunner, sameImage, killOwned, until,
+import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, installWebViewArguments, launch, mainWindow, parseHostState,
+  parseProcessTable, pinnedTools, powershell, processTable, quote, removeWebViewArguments, requireOwnedWindowsRunner, sameImage, killOwned, until,
   WebDriver, WebDriverError, type HostState, type ProcessRow } from './support/windowsGui';
 
 const root = join(import.meta.dir, '..');
@@ -39,7 +39,7 @@ test('process ownership follows real parent chains and ignores recycled parent i
 });
 
 test('host state and pinned tool receipts reject anything that is not exactly the owned fixture', () => {
-  const state = { runtime: '130.0.2849.80', paths: { roaming: 'C:\\Users\\runner\\AppData\\Roaming\\app.lazysh.client' }, present: ['roaming'] };
+  const state = { runtime: '130.0.2849.80', paths: { roaming: 'C:\\Users\\runner\\AppData\\Roaming\\app.lazysh.client' }, present: ['roaming', 'webViewArguments'] };
   expect(parseHostState(JSON.stringify(state))).toEqual(state);
   for (const bad of [{ ...state, runtime: '' }, { ...state, present: ['unknown'] }, { ...state, paths: { roaming: 'relative' } }])
     expect(() => parseHostState(JSON.stringify(bad))).toThrow('Invalid Windows host state');
@@ -112,7 +112,6 @@ async function removeOwnedRoot(path: string) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Owned Windows application root was replaced by a link or file');
   await rm(path, { recursive: true, maxRetries: 10, retryDelay: 500 });
 }
-const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 async function uninstall(directory: string, before: HostState) {
   const installed = join(directory, 'lazysh.exe'), uninstaller = join(directory, 'uninstall.exe');
   if (await exists(uninstaller)) {
@@ -130,6 +129,7 @@ if (Test-Path -LiteralPath $key) {
   Remove-Item -LiteralPath $key
 }`);
   for (const name of ['roaming', 'local', 'localLegacy'] as const) await removeOwnedRoot(before.paths[name]);
+  await removeWebViewArguments();
 }
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns the installed image, shows its bundled identity, shuts down in bounds and uninstalls cleanly', async () => {
@@ -160,6 +160,7 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows install
   let failed = false;
   try {
     await mkdir(directory);
+    await installWebViewArguments();
     await runToExit(installer, ['/S', '/NS', `/D=${directory}`]);
     const image = await digestFile(installed);
     expect(image).toEqual(predicted);
