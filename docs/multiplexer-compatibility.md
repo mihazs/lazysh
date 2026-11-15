@@ -145,7 +145,7 @@ implemented without full evidence, *part* means partial.
 | Capability | tmux | Zellij | Herdr | rmux |
 | --- | --- | --- | --- | --- |
 | Discovery | yes | impl → yes #1145 | yes | yes |
-| Attach, reattach | yes | yes (reattach never creates and refuses an exited session, #1145, #2047) | yes | attach yes; reattach → #1677 |
+| Attach, reattach | yes | yes (reattach never creates and refuses an exited session, #1145, #2047) | yes | yes while the session exists |
 | Navigation, Jump To, current marker | yes, with pane rows (#1691) | impl (tab Jump To; a current row only while one client is attached, #2046); Android evidence → #1145 | yes; marker assertion #990 | tree and window and pane actions yes; Jump To → #1675 |
 | Create in a directory | yes | part → #1141 | yes | yes |
 | Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
@@ -159,11 +159,11 @@ implemented without full evidence, *part* means partial.
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
 | Notification opens the pane | part → #1146 | part: the attached session's pane #1690 | part → #1146 | no → #1146 |
-| Restore | desktop yes; Android #988 | impl (live session only; GUI and Android evidence → #1145) | impl → #990, #988 | impl → #1677 (while the daemon lives) |
+| Restore | desktop yes; Android #988 | impl (live session only; GUI and Android evidence → #1145) | impl → #990, #988 | yes while the daemon lives; a vanished session is offered for recreation |
 | Version detection | yes | yes | version yes; API schema → #1159 | yes (Limited until #1675) |
 
-Restore after a host reboot is not offered for rmux (in-memory daemon) or Zellij;
-lazysh offers to recreate the session instead.
+Restore after a host reboot is not offered for rmux (in-memory daemon) or Zellij.
+For rmux, lazysh offers to recreate the session instead; Zellij follows #1145.
 
 ## Capability table: client platforms and local sessions
 

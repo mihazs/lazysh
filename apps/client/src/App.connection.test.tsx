@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The harness registers the module mocks, so it has to be the first import.
-import {chooseWorkspaceTool, host, mocks, openConnection} from './test/appHarness';
+import {chooseWorkspaceTool, enableTransports, host, mocks, openConnection} from './test/appHarness';
 import {LocalUiError} from './i18n/localError';
 import {t, uiI18n} from './i18n/core';
 import {describe, expect, it, vi} from "vitest";
@@ -470,6 +470,76 @@ it.each([undefined, "agents"])("restores the exact tmux workspace on server %s w
       { hostId: "home", attached: { kind: "tmux", name: "durable-agent", ...(tmuxServer===undefined?{}:{tmuxServer}) } },
     ]),
   );
+});
+
+describe('restoring a saved rmux session', () => {
+  const intent = (tmuxServer?: string, name = 'durable-rmux') => ({hostId: 'home', attached: {kind: 'rmux', name, ...(tmuxServer === undefined ? {} : {tmuxServer})}});
+  const missing = {kind: 'multiplexer_session_missing', message: 'The session "durable-rmux" is not running on this host.'};
+  /** Saves `intents`, opens the app and presses Restore previous workspace. */
+  const restore = async (...intents: object[]) => {
+    vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify(intents));
+    mocks.api.connect.mockResolvedValue({sessionId: 'temporary-shell'});
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', {name: 'Restore previous workspace'}));
+    return user;
+  };
+  const offer = async () => expect((await screen.findByText(/The rmux session "durable-rmux" on Home is gone/)).getAttribute('role')).toBe('status');
+  it.each([undefined, 'lab'])('reattaches a live session on server %s without offering to recreate it', async tmuxServer => {
+    mocks.api.attachMultiplexer.mockResolvedValue({sessionId: 'restored-rmux'});
+    await restore(intent(tmuxServer));
+    expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+    expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('temporary-shell', 'rmux', 'durable-rmux', expect.any(Function), true, ...(tmuxServer === undefined ? [] : [tmuxServer]));
+    expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', {name: 'Recreate session'})).toBeNull();
+  });
+  it.each([undefined, 'lab'])('offers to recreate a vanished session on server %s and opens it only on request', async tmuxServer => {
+    mocks.api.attachMultiplexer.mockRejectedValue(missing);
+    mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId: 'recreated-rmux'});
+    const user = await restore(intent(tmuxServer));
+    await offer();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('Live SSH terminal')).toBeNull();
+    expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+    expect(mocks.invoke).toHaveBeenCalledWith('disconnect', {sessionId: 'temporary-shell'});
+    vi.mocked(localStorage.setItem).mockClear();
+    await user.click(screen.getByRole('button', {name: 'Recreate session'}));
+    expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+    expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalledExactlyOnceWith('temporary-shell', {kind: 'rmux', name: 'durable-rmux', ...(tmuxServer === undefined ? {} : {tmuxServer})}, expect.any(Function));
+    expect(screen.queryByRole('button', {name: 'Recreate session'})).toBeNull();
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1', JSON.stringify([intent(tmuxServer)]));
+  });
+  it('recreates a vanished session through its saved Mosh entry and keeps the server label', async () => {
+    enableTransports();
+    const mosh = {serverPath: 'mosh-server', portMin: 60000, portMax: 61000};
+    const saved = {hostId: 'home', mosh, attached: intent('lab').attached};
+    mocks.api.connectMosh.mockRejectedValueOnce(missing).mockResolvedValue({sessionId: 'recreated-mosh'});
+    const user = await restore(saved);
+    await offer();
+    expect(mocks.api.connectMosh).toHaveBeenCalledExactlyOnceWith('temporary-shell', mosh, expect.any(Function), saved.attached);
+    await user.click(screen.getByRole('button', {name: 'Recreate session'}));
+    await waitFor(() => expect(mocks.api.connectMosh).toHaveBeenCalledTimes(2));
+    expect(mocks.api.connectMosh).toHaveBeenLastCalledWith('temporary-shell', mosh, expect.any(Function), {...saved.attached, createIfMissing: true});
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Recreate session'})).toBeNull());
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1', JSON.stringify([saved]));
+  });
+  it('forgets a vanished session the person gives up and keeps the other saved sessions', async () => {
+    mocks.api.attachMultiplexer.mockImplementation(async (_session: string, _kind: string, name: string) => {
+      if (name === 'durable-rmux') throw missing;
+      return {sessionId: 'restored-other'};
+    });
+    const user = await restore(intent(), intent(undefined, 'other'));
+    await user.click(await screen.findByRole('button', {name: 'Forget saved session'}));
+    expect(screen.queryByRole('button', {name: 'Recreate session'})).toBeNull();
+    expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1', JSON.stringify([intent(undefined, 'other')]));
+  });
+  it('still reports any other failed restore as an error without an offer', async () => {
+    mocks.api.attachMultiplexer.mockRejectedValue({kind: 'multiplexer_unavailable', message: 'Cannot enter the selected multiplexer.'});
+    await restore(intent());
+    expect((await screen.findByRole('alert')).textContent).toContain('Cannot enter the selected multiplexer.');
+    expect(screen.queryByRole('button', {name: 'Recreate session'})).toBeNull();
+  });
 });
 
 it("exports a protected key only on explicit request and clears it when forgotten", async () => {

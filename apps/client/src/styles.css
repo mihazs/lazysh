@@ -1759,6 +1759,7 @@ button svg {
 .workspace-restore-row > button:first-child { flex: 1; min-width: 0; min-height: 44px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .workspace-restore-row > .icon-button { flex: 0 0 44px; width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; }
 .workspace-restore-help { margin: 4px 0 0; overflow-wrap: anywhere; }
+.workspace-recreate-offer { margin-top: 8px; }
 
 .attachment-panel { padding: 18px; }
 .attachment-panel > .button-row { flex-wrap: wrap; align-items: end; }

@@ -15,7 +15,7 @@ describe('retriableFailure', () => {
     expect(retriableFailure({kind: 'ssh_error', message: 'Connection refused'})).toBe(true);
     expect(retriableFailure({kind: 'timeout', message: 'SSH connection timed out'})).toBe(true);
     expect(retriableFailure(new Error('offline'))).toBe(true);
-    for (const kind of ['authentication_failed', 'credentials_required', 'host_key_changed', 'unknown_host_key'])
+    for (const kind of ['authentication_failed', 'credentials_required', 'host_key_changed', 'unknown_host_key', 'multiplexer_session_missing'])
       expect(retriableFailure({kind, message: kind})).toBe(false);
   });
 });

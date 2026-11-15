@@ -1663,12 +1663,14 @@ async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after
     let name = "named '$(printf NO);";
     for _ in 0..2 {
         // First call creates; the second must preserve the same explicit session.
-        crate::multiplexer::prepare_default_entry(
-            &parent,
-            &lease,
-            crate::multiplexer::MultiplexerKind::Tmux,
-            name,
-        )
+        crate::multiplexer::Entry {
+            kind: crate::multiplexer::MultiplexerKind::Tmux,
+            name: name.into(),
+            tmux_server: None,
+            create_if_missing: true,
+            backend: None,
+        }
+        .prepare(&parent, &lease)
         .await
         .unwrap();
         assert_eq!(
@@ -1767,27 +1769,36 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH namespace, LAZYSH_NATIVE_MOSH_SERVER, LAZYSH_TEST_HERDR_STOCK and Zellij (LAZYSH_TEST_ZELLIJ or /usr/bin/zellij)"]
+#[ignore = "requires owned OpenSSH namespace, LAZYSH_NATIVE_MOSH_SERVER, LAZYSH_TEST_HERDR_STOCK, LAZYSH_TEST_RMUX and Zellij (LAZYSH_TEST_ZELLIJ or /usr/bin/zellij)"]
 async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display() {
     use crate::multiplexer::{Entry, MultiplexerKind};
     let stock = std::env::var("LAZYSH_TEST_HERDR_STOCK").expect("absolute stock Herdr binary");
     let zellij = zellij_binary();
+    let rmux = std::env::var("LAZYSH_TEST_RMUX").expect("absolute rmux binary");
     for (kind, binary, user_install) in [
         (MultiplexerKind::Herdr, stock.as_str(), false),
         (MultiplexerKind::Herdr, stock.as_str(), true),
         (MultiplexerKind::Zellij, zellij.as_str(), false),
+        (MultiplexerKind::Rmux, rmux.as_str(), false),
     ] {
-        let f = Fixture::with_mosh_mode_and_user_install(
-            Some(std::path::Path::new(binary)),
-            true,
-            user_install,
-        )
-        .await;
-        fs::write(f.dir.path().join(".zshrc"), "").unwrap();
-        if matches!(kind, MultiplexerKind::Zellij) {
-            owned_zellij_layout(&f);
+        // rmux is found through PATH and keeps its daemon sockets in a private directory.
+        let (f, rmux_sockets) = if matches!(kind, MultiplexerKind::Rmux) {
+            let (f, tools, sockets) = rmux_fixture(std::path::Path::new(binary), true).await;
+            (f, Some((tools, sockets)))
         } else {
-            owned_herdr_shell_config(&f);
+            let f = Fixture::with_mosh_mode_and_user_install(
+                Some(std::path::Path::new(binary)),
+                true,
+                user_install,
+            )
+            .await;
+            (f, None)
+        };
+        fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+        match kind {
+            MultiplexerKind::Zellij => owned_zellij_layout(&f),
+            MultiplexerKind::Herdr => owned_herdr_shell_config(&f),
+            _ => {}
         }
         let (app, state) = herdr_native_app(&f);
         let (_authority, lease) = unlocked_authority();
@@ -1808,6 +1819,26 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 create_if_missing,
                 backend: None,
             };
+            if let (MultiplexerKind::Rmux, true, Some((_, sockets))) =
+                (kind, create_if_missing, &rmux_sockets)
+            {
+                // A session that does not exist yet is refused, not attached as a dead display, and no daemon starts.
+                let refused = try_mosh_entry_child(
+                    &app,
+                    &lease,
+                    &source,
+                    Entry {
+                        create_if_missing: false,
+                        ..entry.clone()
+                    },
+                )
+                .await;
+                assert_eq!(refused.err(), Some("multiplexer_session_missing"));
+                assert!(
+                    !socket_named(sockets.path(), "default"),
+                    "refusing a missing session started an rmux daemon"
+                );
+            }
             let (display, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
             if matches!(kind, MultiplexerKind::Herdr) {
                 assert_eq!(
@@ -1817,7 +1848,16 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 );
             }
             let session = state.session(&display.session_id).await.unwrap();
-            assert!(session.bindings.tmux.lock().unwrap().is_none());
+            if matches!(kind, MultiplexerKind::Rmux) {
+                assert_eq!(
+                    session.bindings.tmux_server.lock().unwrap().as_ref(),
+                    Some(&crate::tmux_server::TmuxServer::default_for(
+                        crate::tmux_server::Binary::Rmux
+                    ))
+                );
+            } else {
+                assert!(session.bindings.tmux.lock().unwrap().is_none());
+            }
             assert!(session.bindings.herdr.lock().unwrap().is_none());
             disconnect_inner(&state, source.session_id).await.unwrap();
             let ready = if matches!(kind, MultiplexerKind::Herdr) {
@@ -1849,6 +1889,10 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                     .unwrap();
                 }
                 b"ORDINARY_READY".as_slice()
+            } else if matches!(kind, MultiplexerKind::Rmux) {
+                // Typed earlier, input would be echoed by the Mosh tty before the rmux client takes the screen;
+                // its status line (the session name cut to the default 10 columns) shows the client is up.
+                b"[owned-dir".as_slice()
             } else {
                 b"ZELLIJ-PANE-READY".as_slice()
             };
@@ -3724,15 +3768,22 @@ async fn herdr_echo_source(
     state: &AppState,
     lease: &AccessLease,
 ) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
+    echo_source_on(fixture.handle(), state, lease).await
+}
+/// A `cat` terminal on `handle`: the SSH parent that multiplexer entries attach from.
+async fn echo_source_on(
+    handle: &Arc<SshHandle>,
+    state: &AppState,
+    lease: &AccessLease,
+) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
     let (events, receiver) = super::test_support::json_events();
-    let (channel, initial) =
-        open_terminal_for(fixture.handle(), lease, 80, 24, Some("exec cat".into()))
-            .await
-            .unwrap();
+    let (channel, initial) = open_terminal_for(handle, lease, 80, 24, Some("exec cat".into()))
+        .await
+        .unwrap();
     let source = spawn_terminal(
         state,
         lease.clone(),
-        fixture.handle().clone(),
+        handle.clone(),
         channel,
         initial,
         events,
@@ -3781,6 +3832,17 @@ async fn mosh_entry_child(
     source: &Connected,
     entry: crate::multiplexer::Entry,
 ) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
+    try_mosh_entry_child(app, lease, source, entry)
+        .await
+        .unwrap_or_else(|kind| panic!("owned Mosh entry failed: kind={kind}"))
+}
+/// The Mosh entry through the product command; a refusal is returned as its error kind.
+async fn try_mosh_entry_child(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+    entry: crate::multiplexer::Entry,
+) -> std::result::Result<(Connected, mpsc::UnboundedReceiver<serde_json::Value>), &'static str> {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = socket.local_addr().unwrap().port();
     drop(socket);
@@ -3805,17 +3867,16 @@ async fn mosh_entry_child(
         None,
     )
     .await
-    .unwrap_or_else(|error| {
-        let kind = error
+    .map_err(|error| {
+        error
             .into_inner()
             .map(|error| error.kind())
-            .unwrap_or("access_changed");
-        panic!("owned Mosh entry failed: kind={kind}")
-    })
+            .unwrap_or("access_changed")
+    })?
     .into_inner()
     .unwrap();
     eprintln!("owned-mosh-startup stage=fixture-connect-ok");
-    (result, receiver)
+    Ok((result, receiver))
 }
 async fn retire_bootstrap(state: &AppState, source: &Connected, parent: &Session) {
     disconnect_inner(state, source.session_id.clone())
@@ -4453,7 +4514,44 @@ struct RmuxServer {
     sockets: PathBuf,
     label: &'static str,
 }
+/// An owned fixture whose remote commands find `rmux` on PATH and keep its daemon sockets in a private directory.
+async fn rmux_fixture(
+    binary: &std::path::Path,
+    mosh: bool,
+) -> (Fixture, tempfile::TempDir, tempfile::TempDir) {
+    assert!(binary.is_absolute());
+    let tools = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(binary, tools.path().join("rmux")).unwrap();
+    // The owned sshd takes its environment from plain `SetEnv` tokens.
+    let sockets = tempfile::tempdir_in("/tmp").unwrap();
+    let fixture = Fixture::with_environment(
+        None,
+        mosh,
+        false,
+        vec![
+            ("PATH", tools.path().display().to_string()),
+            ("RMUX_TMPDIR", sockets.path().display().to_string()),
+        ],
+    )
+    .await;
+    (fixture, tools, sockets)
+}
 impl RmuxServer {
+    /// `pane_id:pane_pid` of the panes of the named session's current window: the identity a reattach must keep.
+    fn identity(&self, session: &str) -> String {
+        let output = self
+            .command(&[
+                "list-panes",
+                "-t",
+                &format!("={session}:"),
+                "-F",
+                "#{pane_id}:#{pane_pid}",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(&self.binary);
         command
@@ -4514,21 +4612,7 @@ async fn rmux_tree(
 async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
     use crate::multiplexer::{tmux_action, MultiplexerKind, MultiplexerKind::Rmux, TmuxAction};
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_RMUX").unwrap());
-    assert!(binary.is_absolute());
-    let tools = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(&binary, tools.path().join("rmux")).unwrap();
-    // The owned sshd takes its environment from plain `SetEnv` tokens.
-    let sockets = tempfile::tempdir_in("/tmp").unwrap();
-    let f = Fixture::with_environment(
-        None,
-        false,
-        false,
-        vec![
-            ("PATH", tools.path().display().to_string()),
-            ("RMUX_TMPDIR", sockets.path().display().to_string()),
-        ],
-    )
-    .await;
+    let (f, _tools, sockets) = rmux_fixture(&binary, false).await;
     // An empty .zshrc keeps zsh's first-run wizard from taking the typed input in the pane.
     fs::write(f.dir.path().join(".zshrc"), "").unwrap();
     let label = "owned lab";
@@ -4707,6 +4791,170 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         .unwrap();
     let after = rmux_tree(&app, &lease, &source_id, Some(label)).await;
     assert_eq!(after["sessions"].as_array().unwrap().len(), 2);
+}
+
+async fn create_rmux_session(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+    (label, name): (&str, &str),
+    directory: &str,
+) {
+    crate::multiplexer::tmux_action(
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+        crate::multiplexer::TmuxAction::CreateSession {
+            name: name.into(),
+            directory: directory.into(),
+        },
+        Some(label.into()),
+        Some(crate::multiplexer::MultiplexerKind::Rmux),
+        lease.clone(),
+    )
+    .await
+    .unwrap();
+}
+/// A fresh SSH connection on `app`, then the product attach of an rmux session on it; a refusal is returned as its error kind.
+async fn reattach_rmux(
+    fixture: &Fixture,
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    (label, name): (&str, &str),
+    create_if_missing: Option<bool>,
+) -> (
+    std::result::Result<Connected, &'static str>,
+    mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let handle = fixture.fresh_handle(&app.state()).await;
+    let (source, _) = echo_source_on(&handle, &app.state(), lease).await;
+    let (events, receiver) = super::test_support::json_events();
+    let attached = attach_multiplexer(
+        lease.clone(),
+        app.state(),
+        source.session_id,
+        Some(label.into()),
+        crate::multiplexer::MultiplexerKind::Rmux,
+        name.into(),
+        80,
+        24,
+        events,
+        create_if_missing,
+        None,
+    )
+    .await
+    .map(|attached| attached.into_inner().unwrap())
+    .map_err(|error| {
+        error
+            .into_inner()
+            .map(|error| error.kind())
+            .unwrap_or("access_changed")
+    });
+    (attached, receiver)
+}
+#[tokio::test]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_RMUX binary"]
+async fn real_rmux_reattaches_a_live_session_and_reports_a_vanished_one() {
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_RMUX").unwrap());
+    let (mut f, _tools, sockets) = rmux_fixture(&binary, false).await;
+    fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+    let (label, name) = ("owned lab", "saved work");
+    let server = RmuxServer {
+        binary,
+        sockets: sockets.path().to_owned(),
+        label,
+    };
+    let (_authority, lease) = unlocked_authority();
+    let directory = f.dir.path().to_str().unwrap();
+    let (first, first_state) = herdr_native_app(&f);
+    let original = f.handle.take().unwrap();
+    let (old_handle, transport) = (Arc::downgrade(&original), original.handle.clone());
+    let (source, _) = echo_source_on(&original, &first_state, &lease).await;
+    create_rmux_session(&first, &lease, &source, (label, name), directory).await;
+    let identity = server.identity(name);
+    let (attached, mut output) = reattach_rmux(&f, &first, &lease, (label, name), None).await;
+    let child = attached.expect("a live rmux session attaches without a prompt");
+    owned_terminal_output(&first, &child.session_id, &mut output, b"\x1b[?1049h").await;
+    write_stdin(
+        lease.clone(),
+        first.state(),
+        child.session_id.clone(),
+        "printf 'BEFORE-%s\\n' DROP\n".into(),
+        None,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    owned_terminal_output(&first, &child.session_id, &mut output, b"BEFORE-DROP").await;
+    // A dropped connection (the app lives on), then an app that was killed and started again: each reattaches the same pane.
+    first_state.cancel_for_renderer_rebind().await;
+    drop(original);
+    let mut phase = "wrapper";
+    timeout(BOUND, retire_transport(old_handle, transport, &mut phase))
+        .await
+        .unwrap_or_else(|_| panic!("the first SSH transport must retire; phase={phase}"));
+    let second = tauri::test::mock_app();
+    second.manage(AppState::new(f.dir.path().join("second-lifetime")).unwrap());
+    for app in [&first, &second] {
+        let (attached, mut output) = reattach_rmux(&f, app, &lease, (label, name), None).await;
+        let child = attached.expect("the rmux session survives the connection");
+        owned_terminal_output(app, &child.session_id, &mut output, b"BEFORE-DROP").await;
+        assert_eq!(
+            server.identity(name),
+            identity,
+            "the same pane keeps running"
+        );
+        app.state::<AppState>().cancel_for_renderer_rebind().await;
+    }
+    // The daemon is in memory: once it is gone the session is reported missing, nothing is started to find out, and the person's
+    // choice to recreate brings the same name back.
+    let _ = server.command(&["kill-server"]).output().unwrap();
+    timeout(BOUND, async {
+        while socket_named(sockets.path(), label) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the rmux daemon must exit");
+    let vanished = |attached: std::result::Result<Connected, &'static str>| {
+        assert_eq!(attached.err(), Some("multiplexer_session_missing"))
+    };
+    vanished(
+        reattach_rmux(&f, &second, &lease, (label, name), None)
+            .await
+            .0,
+    );
+    assert!(
+        !socket_named(sockets.path(), label),
+        "reporting a vanished session started an rmux daemon"
+    );
+    // A daemon that lives on without the session is the same case.
+    let (source, _) = echo_source_on(
+        &f.fresh_handle(&second.state()).await,
+        &second.state(),
+        &lease,
+    )
+    .await;
+    create_rmux_session(&second, &lease, &source, (label, "other"), directory).await;
+    vanished(
+        reattach_rmux(&f, &second, &lease, (label, name), None)
+            .await
+            .0,
+    );
+    let (attached, mut output) =
+        reattach_rmux(&f, &second, &lease, (label, name), Some(true)).await;
+    let child = attached.expect("a vanished session is recreated on request");
+    owned_terminal_output(&second, &child.session_id, &mut output, b"\x1b[?1049h").await;
+    assert_ne!(
+        server.identity(name),
+        identity,
+        "a new pane replaces the lost one"
+    );
+    assert!(
+        server.identity("other").contains(':'),
+        "the other session is untouched"
+    );
 }
 
 #[tokio::test]

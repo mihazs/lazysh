@@ -112,6 +112,9 @@ pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<Strin
     })
 }
 
+/// Exit status of the entry preflight when the tool works but the named tmux-family session is gone.
+const SESSION_MISSING_STATUS: u32 = 66;
+
 /// A connection intention, never a renderer-provided executable or shell command.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -266,7 +269,9 @@ impl Entry {
                     " && ({exists} || {{ {create} >/dev/null 2>&1; {exists}; }})"
                 ));
             } else {
-                command.push_str(&format!(" && {exists}"));
+                command.push_str(&format!(
+                    " && {{ {exists} || exit {SESSION_MISSING_STATUS}; }}"
+                ));
             }
         }
         Ok(
@@ -294,19 +299,23 @@ impl Entry {
             Default::default()
         };
         let positive_unix = herdr && crate::herdr_path::admit(session, lease).await?;
-        crate::ssh::exec_for_access(
+        let preflight = crate::ssh::exec_for_access_status(
             session,
             self.preflight_command(backend, positive_unix)?,
             lease,
         )
-        .await
-        .map_err(|error| {
-            if error.kind() == "remote_command_failed" {
-                unavailable()
-            } else {
-                error
+        .await?;
+        match preflight.status {
+            Some(0) => {}
+            // The daemon of rmux is in memory, so a host or daemon restart leaves its saved sessions gone; the caller may offer to recreate it.
+            Some(SESSION_MISSING_STATUS) if self.kind.is_tmux_family() => {
+                return Err(SshError::new(
+                    "multiplexer_session_missing",
+                    format!("The session \"{}\" is not running on this host.", self.name),
+                ))
             }
-        })?;
+            _ => return Err(unavailable()),
+        }
         if !self.create_if_missing && !self.kind.is_tmux_family() {
             let live = if herdr {
                 let output = crate::ssh::exec_for_access(
@@ -357,22 +366,6 @@ pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Resul
         backend: None,
     }
     .preflight_command(Default::default(), false)
-}
-pub(crate) async fn prepare_default_entry(
-    session: &crate::ssh::Session,
-    lease: &AccessLease,
-    kind: MultiplexerKind,
-    value: &str,
-) -> Result<()> {
-    Entry {
-        kind,
-        name: value.into(),
-        tmux_server: None,
-        create_if_missing: true,
-        backend: None,
-    }
-    .prepare(session, lease)
-    .await
 }
 
 /// Names of the live and the exited (resurrectable) Zellij sessions. With no session left Zellij prints
@@ -1444,6 +1437,43 @@ mod tests {
         assert!(default_entry_command(MultiplexerKind::Tmux, "bad:name").is_err());
         assert!(default_entry_command(MultiplexerKind::Tmux, "bad.name").is_err());
         assert!(default_entry_command(MultiplexerKind::Zellij, "--flag").is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn entry_preflight_reports_a_vanished_session_apart_from_an_unusable_tool() {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+        let tools = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/bin/sh", tools.path().join("sh")).unwrap();
+        let entry = Entry {
+            kind: MultiplexerKind::Rmux,
+            name: "saved".into(),
+            tmux_server: Some("lab".into()),
+            create_if_missing: false,
+            backend: None,
+        };
+        let command = entry.preflight_command(Default::default(), false).unwrap();
+        let status = || {
+            Command::new("/bin/sh")
+                .args(["-c", &command])
+                .env_clear()
+                .env("PATH", tools.path())
+                .output()
+                .unwrap()
+                .status
+                .code()
+        };
+        assert_eq!(status(), Some(1), "no rmux on the host");
+        // The stub admits the capability probe and finds the session only while `alive` exists beside it.
+        let stub = tools.path().join("rmux");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\ncase \"$*\" in *capabilities*) exit 0;; *has-session*) test -e \"${0%/*}/alive\"; exit $?;; esac\nexit 9\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(status(), Some(SESSION_MISSING_STATUS as i32));
+        std::fs::write(tools.path().join("alive"), "").unwrap();
+        assert_eq!(status(), Some(0));
     }
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
