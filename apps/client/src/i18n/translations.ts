@@ -906,6 +906,7 @@ const translations = {
   appNewConnection: ['Nova conexão', 'Nueva conexión'],
   appSessionViews: ['Visualizações da sessão', 'Vistas de la sesión'],
   appEndValue1Connection: ['Encerrar conexão de {{value1}}', 'Finalizar conexión de {{value1}}'],
+  appLocalNoMultiplexer: ['Sessões e Ir para precisam de tmux, Zellij ou Herdr no PATH deste dispositivo. Nenhum foi encontrado.', 'Sesiones e Ir a necesitan tmux, Zellij o Herdr en el PATH de este dispositivo. No se encontró ninguno.'],
   appLocalShellOnThisDeviceSSHHostToolsRemote: ['Shell local neste dispositivo. Arquivos e revisão do repositório usam este dispositivo; agentes, prévias e outras ferramentas SSH não estão disponíveis nesta sessão.', 'Shell local en este dispositivo. Los archivos y la revisión del repositorio usan este dispositivo; los agentes, las vistas previas y otras herramientas SSH no están disponibles en esta sesión.'],
   appOpeningTerminal: ['Abrindo terminal…', 'Abriendo terminal…'],
   appThisConnectionHasEnded: ['Esta conexão foi encerrada.', 'Esta conexión ha finalizado.'],

@@ -889,6 +889,14 @@ describe("terminal interactions", () => {
     await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledWith('ssh',"literal'$(touch nope)",command));
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
+  it('routes Zellij navigation of a local terminal through its session id, as over SSH', async () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
+    render(<TerminalPane session={{id:'local:one',name:'Host',connected:true,local:true,attached:{kind:'zellij',name:'work'},terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} />);
+    const canvas=screen.getByLabelText('Terminal for Host');
+    fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
+    fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+    await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledWith('local:one','work','nextTab'));
+  });
   it('serializes two-finger Zellij actions, reports failures and permits another attempt', async () => {
     savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,left:'nextZellijPane'}});
     const {reject, reportError, canvas} = pendingZellijNavigation();
@@ -901,7 +909,7 @@ describe("terminal interactions", () => {
     await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledTimes(2));
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
-  it('rejects Zellij navigation on plain, local and other multiplexer terminals and ignores inactive, disconnected, selected or composing views', () => {
+  it('rejects Zellij navigation on plain, tmux, Herdr and local Herdr terminals and ignores inactive, disconnected, selected or composing views', () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
     const reportError=vi.fn();
     const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
@@ -912,8 +920,8 @@ describe("terminal interactions", () => {
       fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
     };
     swipe();
-    for(const kind of ['tmux','herdr','zellij'] as const){
-      session.attached={kind,name:'test'}; session.local=kind==='zellij'?true:undefined;
+    for(const [kind,local] of [['tmux',undefined],['herdr',undefined],['herdr',true]] as const){
+      session.attached={kind,name:'test'}; session.local=local;
       view.rerender(<TerminalPane session={session} active reportError={reportError} />); swipe();
     }
     expect(reportError).toHaveBeenCalledTimes(4);

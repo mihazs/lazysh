@@ -52,12 +52,29 @@ it('preserves the existing SSH terminal IO contract',async()=>{
   await api.write('ssh-id','hello');await api.resize('ssh-id',80,24);await api.ackOutput('ssh-id',5);await api.disconnect('ssh-id');
   expect(invoke.mock.calls.map(([command])=>command)).toEqual(['write_stdin','resize','ack_output','disconnect']);
 });
-it('rejects local sessions before invoking SSH-only file or multiplexer tools',async()=>{
+it('rejects local sessions before invoking SSH-only file, default-multiplexer and transport tools',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
-  for(const operation of [()=>api.uploadFile(id,'/a',[],'receipt'),()=>api.muxSessions(id),()=>api.tmuxJumpSnapshot(id),()=>api.tmuxJump(id,'generation','$1','@2'),()=>api.attachTmux(id,'work',()=>{}),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
+  for(const operation of [()=>api.uploadFile(id,'/a',[],'receipt'),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
     await expect(operation()).rejects.toThrow('requires an SSH connection');
   }
   expect(invoke).not.toHaveBeenCalled();
+});
+it('sends the multiplexer reads and Jump To of a local session to the native host context',async()=>{
+  const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
+  await api.muxSessions(id,'agents');await api.tmuxJumpSnapshot(id);await api.tmuxJump(id,'generation','$1','@2');
+  expect(invoke.mock.calls.map(([command,args])=>[command,args])).toEqual([
+    ['list_multiplexer_sessions',{sessionId:id,tmuxServer:'agents'}],['tmux_jump_snapshot',{sessionId:id}],['tmux_jump',{sessionId:id,generation:'generation',targetSessionId:'$1',windowId:'@2'}]]);
+});
+it('attaches a multiplexer from a local session as a new local terminal with a typed entry',async()=>{
+  const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
+  invoke.mockResolvedValue({sessionId:'local:attached'});
+  await api.attachTmux(id,'work',()=>{},'agents');await api.attachTmux(id,'plain',()=>{});await api.attachMultiplexer(id,'zellij','z one',()=>{});
+  expect(invoke.mock.calls.map(([command,args])=>[command,args.sessionId,args.attach])).toEqual([
+    ['local_connect',undefined,{kind:'tmux',name:'work',tmuxServer:'agents'}],
+    ['local_connect',undefined,{kind:'tmux',name:'plain'}],
+    ['local_connect',undefined,{kind:'zellij',name:'z one'}]]);
+  expect(Object.keys(invoke.mock.calls[0][1]).sort()).toEqual(['attach','cols','events','rows']);
+  invoke.mockReset().mockResolvedValue(undefined);
 });
 it('sends local file reads and Git diffs to the native host context',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';

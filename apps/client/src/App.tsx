@@ -306,13 +306,18 @@ type View =
   | "voice"
   | "devices"
   | "apple";
-type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:{files?:boolean;repository?:boolean}}[]};
+type LocalTools={files?:boolean;repository?:boolean;tmux?:boolean;herdr?:boolean;zellij?:boolean};
+type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:LocalTools}[]};
 const localViewTools:Partial<Record<View,'files'|'repository'>>={files:'files',diff:'repository'};
+const hostTools=(capability:LocalCapability)=>capability.targets?.find(target=>target.id==='default')?.tools;
+/** Whether the target offers a multiplexer to list, attach and manage in Sessions; Herdr's own tree and actions do not run on this device yet. */
+const localMultiplexers=(capability:LocalCapability)=>{const tools=hostTools(capability);return tools?.tmux===true || tools?.zellij===true || tools?.herdr===true;};
 /** A local session offers its terminal tools plus the host tools its default target reports. */
 function localView(capability:LocalCapability,id:View) {
   if(id==='terminal' || id==='voice' || id==='usage')return true;
+  if(id==='sessions')return localMultiplexers(capability);
   const tool=localViewTools[id];
-  return !!tool && capability.targets?.find(target=>target.id==='default')?.tools?.[tool]===true;
+  return !!tool && hostTools(capability)?.[tool]===true;
 }
 const views = () => [
   { id: "terminal" as const, label: t("appTerminal"), Icon: TerminalSquare },
@@ -1441,8 +1446,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     else sessionConnected(fresh);
   }
   const active = sessions.find((session) => session.id === activeId);
+  const hostMultiplexers=!!active?.connected && (!active.local || localMultiplexers(localCapability));
   useEffect(()=>{
-    if(!native || !active?.connected || active.local)return;
+    if(!native || !active?.connected || !hostMultiplexers)return;
     let current=true;
     const sessionId=active.id;
     const tmuxServer=active.attached?.kind==='tmux' ? active.attached.tmuxServer : undefined;
@@ -1450,7 +1456,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       if(current && lease.current() && Array.isArray(tree?.tools))setMuxTools(value=>({...value,[sessionId]:tree.tools!}));
     }).catch(()=>{});
     return()=>{current=false;};
-  },[active?.id,active?.connected,active?.local,invoke,lease]);
+  },[active?.id,active?.connected,hostMultiplexers,invoke,lease]);
   // Phones in a session trade the top bar for the side menu: the navigation page, which `sidebar` opens full screen.
   // Switching the gesture off in Preferences, or screen-reader mode, keeps the top bar: no gesture-only access.
   const leftMenuGesture=useEdgeGestureMode('leftMenu')==='gesture';
@@ -1522,7 +1528,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
   const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind==='tmux' && !tool.missing.includes('jump'));
-  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
+  const pickerVisible=sidebarShown && !navigationCovered && hostMultiplexers && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
@@ -1774,10 +1780,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       if (!mounted.current) break;
       if(intent.local) {
         let pending:Prepared|undefined;
+        // Like over SSH, a Zellij terminal stays in the saved list: attaching again could create a second session.
+        if(intent.attached?.kind==='zellij'){remaining.push(intent);continue;}
         try {
           if(!localCapability.available)throw new Error(localCapability.reason);
-          pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);pending.session.local=true;
-          const result=await api.connectLocal(pending.onEvent);pending.establish(result.sessionId);
+          pending=await prepareSession('', intent.attached ? `${t("appLocalTerminal")} / ${intent.attached.name}` : t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);pending.session.local=true;
+          const result=await api.connectLocal(pending.onEvent,undefined,intent.attached);pending.establish(result.sessionId);
+          if(intent.attached)pending.session.attached=intent.attached;
           restoringSessions.current.add(result.sessionId);
           if(!mounted.current)throw new Error(t("appLocalRestorationCancelled"));
           restored.push(pending.session);
@@ -2056,6 +2065,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       source.destination,
       owner,
     );
+    if(source.local)pending.session.local=true;
     const ownership = new PendingSessions();
     try {
       const result =
@@ -2159,7 +2169,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-        {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+        {!sideMenuMode && hostMultiplexers && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
@@ -2338,18 +2348,18 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} aria-pressed={agentSection==='activity'} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
         </nav>
         <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
-        <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>{remoteActive && active?.attached && !muxTools[active.id] && <p role="status">{t('muxVersionUnknown')}</p>}
+        <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>{hostMultiplexers && active?.attached && !muxTools[active.id] && <p role="status">{t('muxVersionUnknown')}</p>}
         {remoteActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
-          {remoteActive && <>
+          {hostMultiplexers && <>
             <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>visitView('sessions')}>{t('navigationManageSessions')}</button>
             {view==='sessions' && <p role="status">{t('navigationManagerOpen')}</p>}
           </>}
           {sideMenuMode && <>
             <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
-            {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
+            {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && hostMultiplexers)).map(toolButton('subtle-button'))}
           </>}
           {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
@@ -2516,6 +2526,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         {active ? (
           <>
             {active.local && <p className="security-note">{t("appLocalShellOnThisDeviceSSHHostToolsRemote")}</p>}
+            {active.local && localCapability.available && !localMultiplexers(localCapability) && <p className="security-note">{t("appLocalNoMultiplexer")}</p>}
             {active.attached?.restoreName === null && <p className="security-note" role="status">{t("appUnsupportedTmuxRestoreName")}</p>}
             {view!=='terminal' && <nav className="context-navigation" aria-label={t('navigationContext')}>
               <button type="button" className="subtle-button" disabled={pendingMuxRequest} onClick={()=>returnToContext()}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
@@ -2586,7 +2597,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && !active.local && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>showNavigation('agents')} /></div>}
-                {active.connected && !active.local && view === "sessions" && (
+                {hostMultiplexers && view === "sessions" && (
                   <MuxPanel
                     key={active.id}
                     sessionId={active.id}

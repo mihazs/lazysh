@@ -1,6 +1,7 @@
 import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {workspaceControl} from './fixtures/workspaceControl';
+import {openLocalTerminal} from './fixtures/localTerminal';
 import {fileReviewName,fileReviewReply} from '../src/test/fileReviewData';
 
 declare global { interface Window { localToolCalls:{command:string;sessionId:unknown}[] } }
@@ -21,10 +22,7 @@ async function openLocal(page:Page,tools:{files:boolean;repository:boolean}) {
       throw new Error(`Unexpected local fixture command: ${command}`);
     };
   },{sessionId,tools,replies});
-  await page.goto('/');
-  if(test.info().project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect(page.getByText('Local PTY')).toBeVisible();
+  await openLocalTerminal(page);
 }
 
 test('a local session opens Files and Diff when its target reports them',async({page})=>{

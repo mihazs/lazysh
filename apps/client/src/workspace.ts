@@ -26,13 +26,21 @@ export function validTmuxServer(name: unknown): name is string {
 function validTmuxName(name: string) {
   return name.length > 0 && new TextEncoder().encode(name).length <= 200 && !/[\x00-\x1f\x7f-\x9f]/.test(name);
 }
+function validAttachment(attached: SessionIntent['attached'] & object) {
+  return ["tmux", "herdr", "zellij"].includes(attached.kind) &&
+    typeof attached.name === "string" &&
+    attached.name.length > 0 &&
+    attached.name.length <= 200 &&
+    (attached.kind !== 'tmux' || validTmuxName(attached.name)) &&
+    (attached.tmuxServer === undefined || (attached.kind === 'tmux' && validTmuxServer(attached.tmuxServer)));
+}
 export function readWorkspace(): SessionIntent[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) || "[]");
     if (!Array.isArray(value) || value.length > 20) return [];
     return value.filter(
       (item): item is SessionIntent =>
-        (item?.local === true && Object.keys(item).length === 1) || (
+        (item?.local === true && Object.keys(item).every(name => name === 'local' || name === 'attached') && (!item.attached || validAttachment(item.attached))) || (
         !!item &&
         typeof item === "object" &&
         item.local === undefined &&
@@ -44,13 +52,7 @@ export function readWorkspace(): SessionIntent[] {
         (!item.auto || (validMosh(item.auto.mosh) && validEt(item.auto.et))) &&
         (!item.et || validEt(item.et)) &&
         (!item.mosh || validMosh(item.mosh)) &&
-        (!item.attached ||
-          (["tmux", "herdr", "zellij"].includes(item.attached.kind) &&
-            typeof item.attached.name === "string" &&
-            item.attached.name.length > 0 &&
-            item.attached.name.length <= 200 &&
-            (item.attached.kind !== 'tmux' || validTmuxName(item.attached.name)) &&
-            (item.attached.tmuxServer === undefined || (item.attached.kind === 'tmux' && validTmuxServer(item.attached.tmuxServer)))))),
+        (!item.attached || validAttachment(item.attached))),
     );
   } catch {
     return [];
@@ -64,14 +66,15 @@ function restorableAttachment({attached}: LiveIntent) {
 }
 /** The saved connection intention of one live session; terminal content and credentials stay out. */
 export function sessionIntent({hostId, attached, mosh, et, auto, local}: LiveIntent): SessionIntent {
-  return local ? {local:true} : ({
+  const attachment = attached && restorableAttachment({attached})
+    ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
+    : {};
+  return local ? {local:true, ...attachment} : ({
     hostId,
     ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
     ...(!auto && et ? { et: publicEt(et) } : {}),
     ...(!auto && mosh ? { mosh: publicMosh(mosh) } : {}),
-    ...(attached && restorableAttachment({attached})
-      ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
-      : {}),
+    ...attachment,
   });
 }
 export function saveWorkspace(sessions: LiveIntent[]) {

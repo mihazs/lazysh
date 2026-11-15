@@ -128,6 +128,14 @@ it('persists local intent without inventing an SSH host or retaining output',()=
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
   }
 });
+it('keeps the multiplexer a local terminal is attached to and rejects an invalid or transport-mixed one',()=>{
+  const attached={kind:'tmux' as const,name:'label',restoreName:'actual',tmuxServer:'agents'};
+  saveWorkspace([{local:true,attached},{local:true,attached:{kind:'zellij',name:'z'}}]);
+  expect(readWorkspace()).toEqual([{local:true,attached:{kind:'tmux',name:'actual',tmuxServer:'agents'}},{local:true,attached:{kind:'zellij',name:'z'}}]);
+  for(const item of [{local:true,attached:{kind:'screen',name:'x'}},{local:true,attached:{kind:'zellij',name:'z',tmuxServer:'agents'}},{local:true,attached:{kind:'tmux',name:'bad\u0000name'}},{local:true,attached:{kind:'tmux',name:'x'},mosh:{serverPath:'mosh-server',portMin:60000,portMax:60010}}]) {
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
+  }
+});
 it('preserves named server identity with the exact restored session and rejects dropped or invalid contexts',()=>{
   const attached={kind:'tmux' as const,name:'label',restoreName:'actual',tmuxServer:"世界 '$(touch NO);"};
   saveWorkspace([{hostId:'host',attached}]);

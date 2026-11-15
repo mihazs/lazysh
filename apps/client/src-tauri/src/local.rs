@@ -29,6 +29,17 @@ pub struct Tools {
     repository: bool,
     /// A `lazysh-agent` is bundled, managed or on the PATH: the Agents board and approvals work.
     companion: bool,
+    /// Multiplexers a local session can attach: on the PATH local commands receive, and never on a
+    /// native Windows target, where `local_connect` refuses an attach until native Zellij and Herdr ship.
+    tmux: bool,
+    herdr: bool,
+    zellij: bool,
+}
+/// Whether a local session can attach `tool`: it is on the PATH local commands receive, and the
+/// platform offers it. A native Windows target offers none until native Zellij and Herdr ship.
+#[cfg(desktop)]
+async fn attachable(tool: &str) -> bool {
+    !cfg!(windows) && crate::host::local_program(tool).await
 }
 #[tauri::command]
 pub async fn local_capability() -> Capability {
@@ -48,6 +59,9 @@ pub async fn local_capability() -> Capability {
                     files: true,
                     repository: crate::host::local_program("git").await,
                     companion: crate::companion::local::available().await,
+                    tmux: attachable("tmux").await,
+                    herdr: attachable("herdr").await,
+                    zellij: attachable("zellij").await,
                 },
             }],
         }
@@ -1393,6 +1407,29 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc;
+    /// The renderer reads these names to decide which views a local session offers.
+    #[cfg(desktop)]
+    #[tokio::test]
+    async fn the_default_target_reports_the_multiplexers_a_local_session_can_attach() {
+        let capability = serde_json::to_value(local_capability().await).unwrap();
+        let tools = &capability["targets"][0]["tools"];
+        for tool in [
+            "files",
+            "repository",
+            "companion",
+            "tmux",
+            "herdr",
+            "zellij",
+        ] {
+            assert!(tools[tool].is_boolean(), "{tool} is missing from {tools}");
+        }
+        // A native Windows target attaches nothing until native Zellij and Herdr ship.
+        if cfg!(windows) {
+            assert!(["tmux", "herdr", "zellij"]
+                .iter()
+                .all(|tool| tools[tool] == false));
+        }
+    }
     pub(super) fn events() -> (
         Channel<SshEvent>,
         mpsc::UnboundedReceiver<serde_json::Value>,

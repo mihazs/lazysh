@@ -880,6 +880,7 @@ export const english = {
   "appSessionViews": "Session views",
   "appEndValue1Connection": "End {{value1}} connection",
   "appLocalShellOnThisDeviceSSHHostToolsRemote": "Local shell on this device. Files and repository review use this device; agents, previews and other SSH host tools are unavailable in this session.",
+  "appLocalNoMultiplexer": "Sessions and Jump To need tmux, Zellij or Herdr on this device's PATH. None was found.",
   "appOpeningTerminal": "Opening terminal…",
   "appThisConnectionHasEnded": "This connection has ended.",
   "appConnectAgainFromHostsToReadLiveData": "Connect again from Hosts to read live data.",
