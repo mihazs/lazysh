@@ -29,7 +29,8 @@ export function mountHerdrCreate(options:{outcome?:Record<string,unknown>;tree?:
   const navigations:HerdrNavigationTarget[]=[];
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic Herdr creation authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'d'.repeat(64)});acknowledgeAccessReady(accessSnapshot().epoch);
   Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async(command:string,args:Record<string,unknown>)=>{
-    calls.push({command,args});
+    // The guarded client's location read grants no input, so it is recorded apart from the `herdr_chat` calls the tests forbid.
+    calls.push({command:command==='herdr_chat' && (args.action as {kind?:string}|undefined)?.kind==='observe'?'herdr_client_observe':command,args});
     if(command==='multiplexer_sessions')return [{name:'default'}];
     if(command==='herdr_tree')return options.tree??tree;
     if(command==='list_directory')return args.path==='/'?[{name:'srv',isDir:true,size:0},{name:'.hidden',isDir:true,size:0},{name:'notes.txt',isDir:false,size:3}]:args.path==='/srv'?[{name:'api',isDir:true,size:0}]:[];
