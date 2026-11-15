@@ -101,6 +101,23 @@ if (Test-Path -LiteralPath $key) {
   Remove-Item -LiteralPath $key
 }`);
 
+/** The registry state the NSIS installer writes for `lazysh://`, read back from the current user's classes. */
+export const protocolRegistrationScript = String.raw`
+$key = Get-Item -LiteralPath 'HKCU:\Software\Classes\lazysh'
+ConvertTo-Json -Compress -InputObject ([ordered]@{
+  urlProtocol = $null -ne $key.GetValue('URL Protocol')
+  command = [string](Get-Item -LiteralPath 'HKCU:\Software\Classes\lazysh\shell\open\command').GetValue('')
+})
+`;
+/** The image a registered `lazysh://` handler starts: the installer writes `"<image>" "%1"`, so the link arrives as one argument. */
+export function protocolHandlerImage(registration: string) {
+  const { urlProtocol, command } = JSON.parse(registration);
+  const image = /^"([^"]+)" "%1"$/.exec(command)?.[1];
+  if (urlProtocol !== true || !image || !win32.isAbsolute(image)) throw new Error('Invalid lazysh:// protocol registration');
+  return image;
+}
+export const registeredProtocolHandler = async () => protocolHandlerImage(await powershell(protocolRegistrationScript));
+
 // ---- Pinned tools. ----
 
 /** Cargo records the exact `--version` request of an installed binary; refuse any other install. */
