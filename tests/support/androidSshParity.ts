@@ -185,7 +185,6 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
       ...ownedDeviceCleanup(device,{keyboard,reverses,remote}),
       ['control',()=>control?close(control):Promise.resolve()],
       ['preview-listener',()=>listener?close(listener.server):Promise.resolve()],
-      ['fixture-file',()=>remote?device(['shell','rm','-rf','--',remote]):Promise.resolve()],
       ...started.map(fixture=>['SSH',()=>fixture.stop()] as const),
     ]);
   }
