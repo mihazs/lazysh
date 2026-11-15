@@ -1143,12 +1143,14 @@ async fn pane_target_probe() {
     };
     let tmux = |args: &[&str]| servers.direct("chat-a", args);
     // work: @0 with %0 %1, and @1 "build" with %2 %3 where %2 is zoomed. other: $1 @2 %4.
-    tmux(&["new-session", "-d", "-s", "work", "sleep 120"]);
-    tmux(&["split-window", "-d", "-t", "%0", "sleep 120"]);
-    tmux(&["new-window", "-d", "-t", "$0", "-n", "build", "sleep 120"]);
-    tmux(&["split-window", "-d", "-t", "%2", "sleep 120"]);
+    // `exec` so a pane runs sleep itself: a plain command can leave it on the `sh` tmux started it with.
+    let sleep = "exec sleep 120";
+    tmux(&["new-session", "-d", "-s", "work", sleep]);
+    tmux(&["split-window", "-d", "-t", "%0", sleep]);
+    tmux(&["new-window", "-d", "-t", "$0", "-n", "build", sleep]);
+    tmux(&["split-window", "-d", "-t", "%2", sleep]);
     tmux(&["resize-pane", "-Z", "-t", "%2"]);
-    tmux(&["new-session", "-d", "-s", "other", "sleep 120"]);
+    tmux(&["new-session", "-d", "-s", "other", sleep]);
     let (state, app, _access, lease) = chat_fixture_app(f.dir.path().join("pane-config"));
     let parent = f.neutral(&state, &lease).await;
     let display = chat_fixture_attach(&app, &lease, &parent.session_id, "work").await;
