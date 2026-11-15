@@ -3,7 +3,7 @@
 //! Starts a Chrome-family browser with a throwaway profile and a random loopback debug port, reports where it
 //! listens, and stops it and deletes the profile when stdin closes, on SIGINT/SIGTERM or when the browser exits.
 //! Off unless the host setting `hostBrowserEnabled` is on (see [`settings`]) and `LAZYSH_DEV_HOST_BROWSER=1`:
-//! the product relay is a separate, later slice.
+//! the product relay is [`relay`], which has no such flag: the switch alone gates it.
 use crate::{Error, Result};
 use std::{
     io::{self, Read, Write},
@@ -13,8 +13,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod outbox;
 pub mod profile;
+pub mod relay;
 pub mod settings;
+pub mod wire;
 
 pub const ENABLE_VARIABLE: &str = "LAZYSH_DEV_HOST_BROWSER";
 const CANDIDATES: [&str; 5] = [
@@ -82,6 +85,31 @@ fn parse_active_port(text: &str) -> Option<(u16, String)> {
         .then(|| (port, path.to_string()))
 }
 
+/// The flags every managed browser starts with: a private profile, nothing synced or phoned home, headless unless
+/// asked otherwise, no input or output of its own, and a process group that dies with the launcher.
+fn browser_command(binary: &Path, profile: &Path, headed: bool, no_sandbox: bool) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .args([
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-sync",
+            "--disable-background-networking",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
+    if !headed {
+        command.args(["--headless=new", "--disable-gpu"]);
+    }
+    if no_sandbox {
+        command.arg("--no-sandbox");
+    }
+    own_process_group(&mut command);
+    die_with_launcher(&mut command);
+    command
+}
+
 pub fn run(launch: &Launch) -> Result<()> {
     // Before anything else: the switch is off by default and an off switch must start nothing.
     settings::require_enabled(launch.state)?;
@@ -114,34 +142,17 @@ pub fn run(launch: &Launch) -> Result<()> {
     // Removed on drop, on every exit path below, unless the user asked to keep it. The browser keeps cookies and
     // sessions here, so it is private.
     let profile = profile::create(launch.state, launch.keep_profile)?;
-    let mut command = Command::new(&binary);
+    let mut command = browser_command(&binary, profile.path(), launch.headed, launch.no_sandbox);
     command
         .arg("--remote-debugging-port=0")
-        .arg(format!("--user-data-dir={}", profile.path().display()))
-        .args([
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-sync",
-            "--disable-background-networking",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
         // The browser's own start-up errors are the only diagnosis of a browser that never listens.
         .stderr(Stdio::inherit());
-    if !launch.headed {
-        command.args(["--headless=new", "--disable-gpu"]);
-    }
-    if launch.no_sandbox {
-        command.arg("--no-sandbox");
-    }
     if !launch.allow_origins.is_empty() {
         command.arg(format!(
             "--remote-allow-origins={}",
             launch.allow_origins.join(",")
         ));
     }
-    own_process_group(&mut command);
-    die_with_launcher(&mut command);
     let mut child = command.arg(url).spawn()?;
     let started = Instant::now();
     let endpoint = loop {
