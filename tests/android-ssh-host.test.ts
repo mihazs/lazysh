@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE,IME_CHAT_WIRE} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
+import {prepareAgentBoardHooks} from './support/androidAgentBoard';
 import {TmuxFixture} from './support/androidTmux';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
@@ -178,6 +179,23 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZ
   }
   expect(await listening(fixture.port)).toBe(false);
   await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+},65_000);
+
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_AGENT_BIN)('owned namespaced SSH preflights the Android board hooks and drops the aged report when the companion reads',async()=>{
+  const bytes=await recordedCompanionBytes(process.env.LAZYSH_TEST_AGENT_BIN),fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  let primary=false;
+  try {
+    const companion=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
+    await mkdir(join(fixture.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});await writeFile(companion,bytes,{flag:'wx',mode:0o700});
+    await prepareAgentBoardHooks(fixture.directory);
+    // What the device types: the script runs the real hook commands, then dates the aged report back.
+    await (await fixture.client(true,'sh "$HOME/board"')).finish('owned Android board hooks',20_000);
+    const stored=await sshCommand('owned stored board reports','python3',['-I','-c','import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute("SELECT group_concat(session_id) FROM (SELECT session_id FROM sessions ORDER BY session_id)").fetchone()[0])',join(fixture.directory,'state/events.sqlite3')]);
+    expect(stored.trim()).toBe('board-aged,board-alpha,board-beta,board-delta');
+    const snapshot=JSON.parse(await (await fixture.client(true,`'${companion}' snapshot`)).finish('owned Android board snapshot',10_000));
+    expect(snapshot.sessions.map((row:{sessionId:string;state:string;eventCount:number})=>`${row.sessionId}:${row.state}:${row.eventCount}`).sort()).toEqual(['board-alpha:done:3','board-beta:needs_attention:1','board-delta:working:1']);
+  } catch(error){primary=true;throw error;}
+  finally {await androidSshCleanup(primary,[['SSH',()=>fixture.stop()]]);}
 },65_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_RECORDED!=='1')('actual Android recorded Codex and OpenCode conversations preserve their original SSH terminal',async()=>{
