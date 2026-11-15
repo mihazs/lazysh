@@ -1268,6 +1268,20 @@ class NativeWorkspaceTest {
         }
     }
 
+    /**
+     * Test-only seam that holds the camera frame the QR panel just drew, before it is encoded. The stream stays live and
+     * nothing reaches native decoding, so a cancel lands on a capture that is provably mid-stream instead of racing the
+     * first decode. [release] hands the held frame back late, the way a slow encoder would.
+     */
+    private class QrFrameGate(private val key: String = "__lazyshQrFrameGate_" + UUID.randomUUID().toString().replace("-", "")) {
+        private val gate = "window[${JSONObject.quote(key)}]"
+        val install = "(()=>{const proto=HTMLCanvasElement.prototype,original=proto.toBlob,held=[];" +
+            "$gate={original,held};proto.toBlob=function(callback,type,quality){held.push(()=>original.call(this,callback,type,quality));};return true;})()"
+        val held = "$gate.held.length"
+        val release = "(()=>{$gate.held.splice(0).forEach(run=>run());return true;})()"
+        val restore = "(()=>{const saved=$gate;if(saved){HTMLCanvasElement.prototype.toBlob=saved.original;saved.held.splice(0).forEach(run=>run());delete window[${JSONObject.quote(key)}];}return true;})()"
+    }
+
     private class QrCameraObservation(private val rear: Set<String>) : CameraManager.AvailabilityCallback() {
         private val available = mutableSetOf<String>()
         private val opened = mutableSetOf<String>()
@@ -1463,6 +1477,8 @@ class NativeWorkspaceTest {
         val preview = "Boolean(document.querySelector('.theme-preview'))"
         val stopped = "document.querySelector('.theme-qr-panel video')?.srcObject===null"
         val available = "Boolean(document.querySelector('.theme-qr-panel button') && !document.querySelector('.theme-qr-panel button').disabled)"
+        val cancelled = "Array.from(document.querySelectorAll('.theme-qr-panel [role=status]')).some(x=>x.textContent==='QR scan stopped.')"
+        val frameGate = QrFrameGate()
         val draftSelector = "[aria-label='Theme JSON or share code']"
         val draft = "manual owned QR draft stays literal"
         var permissionController: String? = null
@@ -1598,11 +1614,33 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "QR explicit preview discarded", "!($preview) && $stopped && $available")
             assertTrue("Discarded preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
             println("lazysh QR UI: decoded preview discarded; camera released; draft unchanged")
+            // Active capture: permission is already granted, so Scan opens the rear camera without a sheet. A frame is held
+            // after it is drawn, which proves the stream is live before the explicit cancel.
+            capture = observe()
+            evaluate(scenario, frameGate.install)
+            button("Scan QR with camera")
+            awaitDocument(scenario, "QR camera streaming with a held frame", "${frameGate.held}>=1 && Boolean(document.querySelector('.theme-qr-panel video')?.srcObject)")
+            assertEquals("The held frame must come from a live camera track", "true", evaluate(scenario,
+                "Array.from(document.querySelector('.theme-qr-panel video').srcObject.getVideoTracks()).some(x=>x.readyState==='live')"))
+            assertTrue("Active capture must open the actual rear camera", capture.openedAny())
+            assertEquals("A frame that was not decoded must not preview", "false", evaluate(scenario, preview))
+            button("Cancel QR scan")
+            awaitDocument(scenario, "QR active capture cancelled", "!($preview) && $stopped && $cancelled")
+            assertTrue("Native rear camera must be released when the active capture is cancelled", capture.released.await(5, TimeUnit.SECONDS))
+            assertEquals("The cancelled request still owns the pipeline until its held frame returns", "false", evaluate(scenario, available))
+            evaluate(scenario, frameGate.release)
+            awaitDocument(scenario, "QR late frame retired", "$available && !($preview) && $stopped && $cancelled")
+            assertEquals("A late frame from the cancelled capture must not preview", "false", evaluate(scenario, preview))
+            assertEquals("Cancelled capture must preserve the manual draft", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
+            assertTrue("Cancelled capture must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
+            println("lazysh QR UI: active capture cancelled mid-stream; camera released; late frame ignored; draft unchanged")
         } catch (failure: Throwable) { primary = failure; propagating = true; throw failure }
         finally {
             fun cleanup(action: () -> Unit) { try { action() } catch (failure: Throwable) {
                 if (primary == null) primary = failure else primary!!.addSuppressed(AssertionError("Owned QR cleanup also failed"))
             } }
+            cleanup { evaluateIfPresent(scenario, frameGate.restore) }
             cleanup {
                 val device = UiDevice.getInstance(instrumentation)
                 permissionController?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
