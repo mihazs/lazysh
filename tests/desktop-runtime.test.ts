@@ -8,8 +8,9 @@ async function until<T>(read:()=>Promise<T>,done:(value:T)=>boolean) {
   for(let waited=0;waited<10_000;waited+=50){const value=await read();if(done(value))return value;await Bun.sleep(50);}
   throw new Error('Condition not reached in 10 s');
 }
-// A child that spends 300 ms of CPU, so the tick count has a known floor.
-const burn='const end=process.cpuUsage().user+300_000;while(process.cpuUsage().user<end);';
+// A child that spends 300 ms of CPU, so the tick count has a known floor. It reads the CPU clock (a system call) once per
+// million iterations: read in a hot loop, the clock reads cost more system time than the 300 ms of user time (#1897).
+const burn='const end=process.cpuUsage().user+300_000;let n=0;for(;;){for(let i=0;i<1e6;i++)n+=i;if(process.cpuUsage().user>=end)break}';
 
 test('a tree sample counts a process and its descendants, not unrelated processes',async()=>{
   const root=spawn(['sh','-c','sleep 30 & sleep 30 & wait']);
