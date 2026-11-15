@@ -2440,7 +2440,7 @@ jobs:
           # A renamed case must not turn the local attach cases into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored local::attach_tests::runtime::real_ | grep -c ': test$' | grep -Fx 4
           # A renamed case must not turn the local-session cases into a zero-test pass.
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ | grep -c ': test$' | grep -Fx 2
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ herdr::tests::real_local_ | grep -c ': test$' | grep -Fx 3
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
       # Pinned tmux (apt 3.4), Zellij 0.45.1 and the same-run stock Herdr drive a browser against lazysh's real terminal pane.
       - *playwright-chromium
