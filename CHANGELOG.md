@@ -644,6 +644,7 @@
 
 - Localize Keep Awake controls and multiplexer prefix shortcuts in English, Brazilian Portuguese and Spanish while preserving native ownership, opt-in state, retained errors and exact input bytes. Keep the board checkbox within narrow layouts; defaults and permissions are unchanged.
 - Record the design for opt-in background usage collection and a host switch for account quota reads as [ADR 0005](docs/architecture/adr-0005-background-usage-collection.md) (#1588, slice 4 of #18): one new `usage-collection.json` policy file, a bounded sample file, a user-level timer on Linux, macOS and Windows, and a `disabled` quota state that carries no number. Documentation only: nothing is collected, no command exists yet and no defaults change.
+- Record the design for opt-in background usage collection and a host switch for account quota reads as [ADR 0005](docs/architecture/adr-0005-background-usage-collection.md) (#1588, slice 4 of #18): one new `usage-collection.json` policy file, a bounded sample file, a user-level timer on Linux, macOS and Windows, and a `disabled` quota state that carries no number. Documentation only: the behavior itself ships in a separate change, and no defaults change.
 
 - Localize terminal controls, clipboard consent, link confirmation, search/composer status and terminal-owned local errors in English, Brazilian Portuguese and Spanish. Language changes preserve live terminal handlers, raw content, drafts, explicit consent and input bytes; locale defaults and permissions are unchanged.
 

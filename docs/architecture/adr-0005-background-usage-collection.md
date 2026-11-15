@@ -1,6 +1,6 @@
 # ADR 0005: opt-in background usage collection and a host switch for account quota reads
 
-- Status: **Accepted** as the design, 2026-11-14. The behavior below is not implemented yet: the slices listed under [Delivery](#delivery) of [#1588](https://github.com/mihazs/lazysh/issues/1588) deliver it. The maintainer's standing instruction (implement every issue of the project with conservative defaults) made the choices below without a separate review; the maintainer can amend any of them.
+- Status: **Accepted** as the design, 2026-11-14, and delivered by [#1823](https://github.com/mihazs/lazysh/pull/1823) (the policy file and quota switch, the collector and its timers, the app view); that pull request says what shipped and what was not exercised. The maintainer's standing instruction (implement every issue of the project with conservative defaults) made the choices below without a separate review; the maintainer can amend any of them.
 - Decision makers: repository maintainer. Tracking: [#1588](https://github.com/mihazs/lazysh/issues/1588), slice 4 of [#18](https://github.com/mihazs/lazysh/issues/18).
 - Related: [recorded token usage](../usage.md) · [AI account usage](../ai-account-usage.md) · [host companion settings](../companion-settings.md) · [settings reference](../reference/companion-settings.md) · [ADR 0003](adr-0003-host-side-companion-update.md) (the same timer and state-file conventions).
 
