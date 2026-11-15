@@ -26,6 +26,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Stage text for an explicitly confirmed terminal destination | [Chat terminal input](chat-terminal-input.md) |
 | Resolve an exact waiting Claude permission hook | [Approvals](approvals.md) |
 | Browse Git changes and stage review comments | [Repository review](repository-review.md) |
+| Why Files plays video and audio in an isolated frame, what it accepts and what is verified | [Files video and audio viewer](reference/files-media-viewer.md) |
 | Preview a forwarded remote web service | [Previews](previews.md) |
 | Finish a browser sign-in whose redirect goes to `localhost` on the host (planned automatic tunnel, manual workaround today) | [Sign in on a host from your device](how-to/sign-in-on-a-host-from-your-device.md) |
 | Preview, upload or recover an image transfer | [Attachments](attachments.md) |

@@ -68,12 +68,18 @@ pub struct Diff {
     pub binary: bool,
 }
 
-/// The command line of `git args` run in `directory`, from the program name on. The directory is one
-/// argument and every path is a literal pathspec, so nothing is ever parsed by a shell or by Git.
-pub fn git<'a>(directory: &'a str, args: &[&'a str]) -> Result<Vec<&'a str>, Invalid> {
+/// A directory the host can be asked about: non-empty, bounded, without NUL.
+pub fn check_directory(directory: &str) -> Result<(), Invalid> {
     if directory.is_empty() || directory.len() > 4096 || directory.contains('\0') {
         return Err(Invalid::Directory);
     }
+    Ok(())
+}
+
+/// The command line of `git args` run in `directory`, from the program name on. The directory is one
+/// argument and every path is a literal pathspec, so nothing is ever parsed by a shell or by Git.
+pub fn git<'a>(directory: &'a str, args: &[&'a str]) -> Result<Vec<&'a str>, Invalid> {
+    check_directory(directory)?;
     let mut argv = vec![
         "git",
         "--no-pager",
