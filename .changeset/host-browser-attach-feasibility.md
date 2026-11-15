@@ -1,0 +1,5 @@
+---
+"@lazysh/client": patch
+---
+
+Record what a running Chrome does when it is asked to be controlled, and specify the separate screen that would attach to a user's normal browser (#1697, part of #1258). Measured on Chromium 157 with a headed browser on a virtual display and throwaway profiles: ticking "Allow remote debugging" at `chrome://inspect` opens a loopback WebSocket that answers no HTTP discovery request and holds every connection, even one with a wrong browser id, until a dialog on the host's screen is answered, with no timeout; every new connection needs its own click; and the phone cannot answer it, because the dialog is browser UI that the protocol neither lists, shows nor receives input for. The setting survives restarts, and an approved connection reaches cookies and every tab, so the relay's closed list is what protects them. Google Chrome 144, the debug flag on Google Chrome's default profile and a real display were not tried. Documentation only: nothing changes in the app, no screen is built, and the host browser stays off by default.

@@ -1,8 +1,9 @@
 # Host browser feasibility measurements
 
 Status: evidence for the [host browser design](../host-browser.md), umbrella
-[#1250](https://github.com/mihazs/lazysh/issues/1250). Measured on 2026-11-11 on one development host.
-Nothing here is released behavior. It answers one question: can lazysh show and control the host's
+[#1250](https://github.com/mihazs/lazysh/issues/1250). Measured on 2026-11-11 on one development host; the
+approval mode for a running Chrome was measured on 2026-11-15 on the same host
+([#1697](https://github.com/mihazs/lazysh/issues/1697)). Nothing here is released behavior. It answers one question: can lazysh show and control the host's
 Chrome and Firefox from a phone, and at what cost.
 
 ## Answer
@@ -14,7 +15,7 @@ Chrome and Firefox from a phone, and at what cost.
 | Tabs and navigation | Yes (`Target`, `Page`). | Yes (`browsingContext`). |
 | Needs a debug flag at launch | Yes, `--remote-debugging-port` or `--remote-debugging-pipe`. | Yes, `--remote-debugging-port`. |
 | Socket-free mode | Yes, `--remote-debugging-pipe`. | No. |
-| Attach to the user's running browser | Only by restarting it with the flag (Chrome 136 or newer ignores the flag on the default profile) or, on Chrome 144 or newer, by the user's approval on the host. | Only by restarting it with the flag. A running instance ignores it. |
+| Attach to the user's running browser | Only by restarting it with the flag (Chrome 136 or newer ignores the flag on the default profile) or, on Chrome 144 or newer, by a box the user ticks and an "Allow remote debugging?" dialog on the host's screen for every connection. The dialog cannot be answered from the phone ([measured](#attaching-to-a-running-chrome-approval-mode)). | Only by restarting it with the flag. A running instance ignores it. |
 | Concurrent clients | Several. | One session. A dropped client blocks all later ones until Firefox exits. |
 | Cost on the host (this machine) | 41 percent of one core at 60 fps, 185 MB. | 73 percent of one core polled at 60 fps, 520 MB. |
 
@@ -223,20 +224,79 @@ Same 11-process tree, animated page unless stated:
 | Reach | A connected client can read every secret the browser holds, including cookies, which Mozilla states plainly. By default commands reach web content only; `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` removes that limit and must never be set. |
 | No socket-free mode | There is none. |
 
-## Attaching to the user's normal profile
+## Attaching to a running Chrome (approval mode)
 
-Not tried against any real profile, by design. What is known:
+What is known without a browser: a debug flag is only read at startup, so attaching to a running Chrome or
+Firefox by the flag means closing it and starting it again, and all its windows go away. Turning the port on gives
+its holder the profile: cookies, signed-in sessions, saved sites, history, every tab. Chrome 136 changed the
+default profile to ignore the flag precisely because attackers used the port to steal cookies. Firefox has no
+equivalent of the approval mode below. The rest of this section was measured.
 
-- A debug flag is only read at startup. Attaching to a running Chrome or Firefox means closing it and starting
-  it again with the flag. All its windows go away, and sessions come back only if the browser restores them.
-- Turning the port on gives its holder the profile: cookies, signed-in sessions, saved sites, history, every tab.
-  Both Chrome and Firefox state this. Chrome 136 changed the default profile to ignore the flag precisely
-  because attackers used the port to steal cookies.
-- Chrome 144 added an approval-based mode: the user ticks a box at `chrome://inspect/#remote-debugging` and
-  Chrome shows an "Allow remote debugging?" dialog for each new connection
-  ([chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/advanced-usage.md)).
-  The dialog is on the host's screen, so a person away from the host cannot approve it. Not verified here.
-- Firefox has no equivalent of the approval mode.
+### Machine and method
+
+- Chromium 157.0.8103.38 (Arch Linux build) on the same Linux x86_64 host, **headed**, on `--ozone-platform=x11`
+  with `--disable-gpu` (software rendering) against a rootful Xwayland inside a virtual KWin 6.8.2 session
+  (`kwin_wayland --virtual`), because the host's shell has no display. xdotool clicked and typed on that display
+  and ImageMagick `import -window root` took the screenshots quoted below. Client scripts ran in Bun 1.3.14 using
+  its built-in WebSocket; one probe used `curl` with the upgrade headers.
+- This is the open-source Chromium build, **not Google Chrome stable**, and version 157, not 144. It has the same
+  page (`chrome://inspect/#remote-debugging`) and the same dialog, but nothing here shows that Google Chrome 144
+  behaves identically.
+- Every browser started with an empty `HOME` under `/tmp`, so its "default profile" directory was a throwaway
+  one and `Local State`, cookies and tabs were its own. No real browser profile, running browser, cookie store or
+  history was touched or read. The cookies that one probe read were the ones a fresh Chromium profile seeds for
+  itself; none are quoted here. Every browser and the display were started and stopped by the script.
+- The setup, to repeat it (the dialog needs a person or a display automation to click it):
+
+```sh
+P=$(mktemp -d /tmp/probe.XXXX); mkdir -p $P/rt $P/home/.config; chmod 700 $P/rt
+XDG_RUNTIME_DIR=$P/rt kwin_wayland --virtual --no-lockscreen --no-global-shortcuts --socket probe-wl &
+XDG_RUNTIME_DIR=$P/rt WAYLAND_DISPLAY=probe-wl Xwayland :77 -geometry 1280x900 -noreset &
+env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY -u XDG_CONFIG_HOME -u XDG_RUNTIME_DIR HOME=$P/home DISPLAY=:77 \
+  chromium --ozone-platform=x11 --password-store=basic --no-first-run --no-default-browser-check --disable-gpu about:blank &
+# On DISPLAY=:77: type chrome://inspect/#remote-debugging in the address bar and tick the box.
+# Client: new WebSocket("ws://127.0.0.1:9222/devtools/browser/<second line of $P/home/.config/chromium/DevToolsActivePort>")
+```
+
+### What Chromium 157 did
+
+| Question | Observed |
+| --- | --- |
+| Where the switch is | `chrome://inspect/#remote-debugging`, a checkbox "Allow remote debugging for this browser instance". The page says external apps can request full control, "read access to your saved data, cookies and site data, and the ability to navigate to any URL". |
+| What ticking does | A listener on `127.0.0.1:9222` opened at once and the page showed "Server running at: 127.0.0.1:9222". `<user data dir>/DevToolsActivePort` was written (the port, then `/devtools/browser/<uuid>`, mode 0644). Port 9222 was used when it was free; a second browser started while 9222 was taken got a random port (34869) instead, so a client must read the file rather than assume 9222. The state is stored as `devtools.remote_debugging.user-enabled` in `Local State`. |
+| Whether it lasts | It survives a restart: the same profile started again opened the listener by itself, with a new browser id and no click. A `Local State` written before the first start with that key set made a brand new profile do the same. Unticking closed the listener within seconds but left `DevToolsActivePort` on disk with the dead port and id, and the file also stays after the browser exits, so the file alone does not say a browser is listening. |
+| HTTP discovery | `GET /json/version`, `/json/list`, `/json` and `/json/protocol` and `PUT /json/new` all answered 404. Only a WebSocket upgrade on `/devtools/browser/<id>` is served. |
+| Before the dialog | A `Host` that is not an IP address or `localhost` got 500 and an `Origin` header got 403 at once, the same rules as the flag mode. A **wrong browser id did not**: the upgrade to `/devtools/browser/00000000-0000-0000-0000-000000000000` raised the same dialog and stayed pending. Any local process that can reach the port can raise the dialog; the id protects nothing. |
+| The dialog | Modal, drawn inside the browser window: "Allow remote debugging? An external app wants full control over this Chrome session to debug it. This includes access to your saved data, cookies and site data, and the ability to navigate to any URL. Only web developers should turn on this feature, and only use it with trusted apps." Buttons **Turn off in settings**, **Cancel** (focused) and **Allow**. It names no app and no client. |
+| While it is open | The WebSocket upgrade gets no answer. A client waited 95 seconds with the connection established and nothing returned, and the dialog was still there: no timeout showed in that time. A dialog raised by a client that had already disconnected stayed on screen until someone answered it. |
+| Allow | The upgrade completed as soon as the dialog was answered. A bar "Chrome is being controlled by automated test software" with **Turn off in settings** appeared in the window. |
+| Cancel | `curl` got `403 Forbidden`, body "Connection rejected"; the Bun WebSocket client failed with close code 1002, "Expected 101 status code". |
+| Every connection | A second connection opened while the first was approved and in use raised a new dialog and stayed pending for the 24 seconds watched; the first kept working. Another connection after the first closed raised another. The approval belongs to one connection, not to the client or the session. |
+| What an approved connection reaches | The whole browser protocol, not one tab: `Browser.getVersion`; `Target.getTargets` listing every tab with its title and URL (plus a `browser_ui` target for the omnibox popup); `Storage.getCookies` returned cookies with their values; `Page.navigate`; `Target.attachToTarget` with `Page.startScreencast`, which delivered 239 frames in 4 seconds (about 60 per second) of an animating page in the headed window. A viewer on this endpoint would work, and the only thing between the phone and the cookies is the relay's closed list. |
+
+### Whether the phone can approve
+
+No, on this build. The dialog is browser UI, not a page, and the protocol cannot reach it:
+
+- While a dialog was pending, `Target.getTargets` listed only the omnibox popup and the page, never the dialog.
+- `Page.captureScreenshot` on the approved connection returned the page content only; the dialog, drawn in the
+  window, was in the screenshot taken on the host and not in the one taken through the protocol. A screencast has
+  the same property.
+- On the approved connection, 72 left clicks on a 9 by 8 grid of the viewport and the keys Enter, Tab and Escape
+  sent through `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent` left the second connection pending.
+- Before approval there is no protocol session to send anything on, and HTTP discovery answers 404.
+
+Someone has to click **Allow** at the host's display: a person at the machine, or a remote desktop. A host with no
+display, such as a server reached over SSH, cannot show the dialog at all.
+The first approval does not carry over to a reconnect: a client that loses its connection needs a new click.
+
+### The debug flag on a default profile directory
+
+Chromium 157 honored `--remote-debugging-port=0` with `--headless=new` on its default user data directory under an
+empty `HOME`: it printed `DevTools listening on ws://127.0.0.1:<port>/devtools/browser/<id>` and `GET /json/version`
+answered 200. Unlike a custom `--user-data-dir`, the default directory got no `DevToolsActivePort` file. This build
+is not subject to Chrome 136's refusal, which the Chrome team documents for Google Chrome; whether Google Chrome 136
+or newer refuses the same call was **not** tried, because no Chrome-branded build was available.
 
 ## Prototype measurements
 
@@ -266,12 +326,20 @@ it, because a hosted runner's speed is not a requirement.
 - A real phone. Rendering, decode speed, battery and the on-screen keyboard behavior in the app's web view were
   not measured. All client numbers come from a desktop Bun process.
 - A real mobile network. The three links are simulated.
-- Headed browsers. The host had no display server, so only `--headless=new` was measured. Frame production in a
-  headed window that is minimized or covered by another window is untested. `--ozone-platform=headless` gave the
-  same 60 fps and is not a headed run.
+- Headed browsers, apart from the approval-mode probe. The host's shell had no display server, so the Chrome and
+  Firefox measurements above were taken with `--headless=new` and `--headless`. The approval-mode probe used a
+  headed Chromium on a virtual display with software rendering: it streamed about 60 frames per second, which
+  says nothing about a real GPU, a real compositor or a minimized or covered window (untested).
+  `--ozone-platform=headless` gave the same 60 fps and is not a headed run.
 - macOS and Windows hosts, and other Chromium builds (Google Chrome stable, Edge, Brave).
 - Pinch in headed Firefox, and Firefox on Android.
-- The user's normal profile, in either browser, and the Chrome 144 approval mode.
+- The user's normal profile, in either browser. The approval-mode probe used throwaway profiles by design.
+- Google Chrome stable, and Chrome 144 itself: the approval mode was measured on Chromium 157 only, and whether
+  Google Chrome refuses the debug flag on its default profile (136 or newer) was not tried. Edge, Brave and other
+  builds, Chrome on macOS and Windows, and the enterprise policy `RemoteDebuggingAllowed` (named in the binary,
+  not exercised) are untested.
+- A real person's approval flow: a real display, a real window manager, and what the dialog does when the browser
+  window is minimized, on another workspace or when a screen is locked.
 - Whether a sign-in flow that rejects automated browsers can be completed.
 - A statistical confidence interval for any figure. They are single short runs.
 
