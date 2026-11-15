@@ -89,7 +89,7 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   if(args.sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   return createSession(command,args,onEvent);
 }
-function installCompanionVia(command:'install_companion'|'install_companion_from_device',sessionId:string,onProgress:(value:unknown)=>void) {
+function installCompanionVia(command:'install_companion'|'install_companion_from_device'|'install_managed_herdr',sessionId:string,onProgress:(value:unknown)=>void) {
   if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
   return remoteInvoke<unknown>(command,{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
@@ -105,6 +105,10 @@ export const api = {
   checkCompanionUpdate: (sessionId:string) => remoteInvoke<unknown>('check_companion_update',{sessionId}),
   /** The labelled offline fallback: this device downloads the companion and uploads it to a host that cannot reach GitHub. */
   installCompanionFromDevice: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion_from_device',sessionId,onProgress),
+  /** Uploads the verified managed Herdr for this host over the connected session; the system Herdr, its configuration and its servers are untouched. */
+  installManagedHerdr: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_managed_herdr',sessionId,onProgress),
+  /** Deletes only the managed Herdr binary: never a server, a session or the system Herdr. */
+  removeManagedHerdr: (sessionId:string) => remoteInvoke<unknown>('remove_managed_herdr',{sessionId}),
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
   clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
   clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),

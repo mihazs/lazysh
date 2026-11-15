@@ -1,12 +1,36 @@
 use super::*;
 use tokio::sync::{watch, OwnedSemaphorePermit};
+mod herdr;
 mod host;
+pub(crate) use herdr::remove as remove_herdr;
 pub(crate) use host::Checked;
-/// Who downloads the companion: the host (the default) or, as the labelled offline fallback, this device.
+/// How an install reaches the host: the host downloads the companion (the default), this device downloads and uploads
+/// it (the labelled offline fallback), or this device uploads the managed Herdr, which only that route can place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     Host,
     Device,
+    Herdr,
+}
+/// What an upload route stages on the host: the companion or the managed Herdr, each with its own closed target.
+#[derive(Clone, Copy)]
+enum Subject {
+    Companion,
+    Herdr,
+}
+impl Subject {
+    fn target(self, unix: &resolve::Unix) -> String {
+        match self {
+            Self::Companion => unix.target(),
+            Self::Herdr => unix.herdr_target(),
+        }
+    }
+    fn file(self) -> &'static str {
+        match self {
+            Self::Companion => "lazysh-agent",
+            Self::Herdr => "lazysh-herdr",
+        }
+    }
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,7 +79,7 @@ impl Route {
     fn seconds(self) -> u64 {
         match self {
             Route::Host => host::OPERATION_SECONDS,
-            Route::Device => 240,
+            Route::Device | Route::Herdr => 240,
         }
     }
 }
@@ -143,36 +167,35 @@ impl Operation {
         self.work_stage(&mut work.phase, Stage::Detecting);
         resolve::detect(&self.session, &self.lease)
             .await?
-            .ok_or_else(|| {
-                error(
-                    "companion_install_unsupported",
-                    "Installation requires a positively identified Linux or macOS SSH shell",
-                )
-            })
+            .ok_or_else(unsupported)
     }
     /// The host and the verified release for it: the metadata is all either route asks the publisher for first.
     async fn resolve(
         &self,
         work: &mut Work,
         publisher: &release::Publisher,
+        subject: Subject,
     ) -> Result<(resolve::Unix, release::Selection)> {
         let unix = self.detect(work).await?;
         self.work_stage(&mut work.phase, Stage::CheckingRelease);
-        let selection = publisher.select(&unix.target()).await?;
+        let selection = publisher.select(&subject.target(&unix)).await?;
         Ok((unix, selection))
     }
     async fn perform(&self, work: &mut Work, publisher: &release::Publisher) -> Result<Installed> {
         match self.route {
             Route::Host => self.perform_host(work, publisher).await,
             Route::Device => self.perform_device(work, publisher).await,
+            Route::Herdr => self.perform_herdr(work, publisher).await,
         }
     }
-    async fn perform_device(
+    /// Downloads the verified release file on this device and stages it on the host over SFTP, then reads it back.
+    async fn stage_upload(
         &self,
         work: &mut Work,
         publisher: &release::Publisher,
-    ) -> Result<Installed> {
-        let (unix, selection) = self.resolve(work, publisher).await?;
+        subject: Subject,
+    ) -> Result<(resolve::Unix, release::Selection)> {
+        let (unix, selection) = self.resolve(work, publisher, subject).await?;
         self.work_stage(&mut work.phase, Stage::Downloading);
         let bytes = publisher.download(&selection).await?;
         self.work_stage(&mut work.phase, Stage::Uploading);
@@ -183,11 +206,27 @@ impl Operation {
             self.flight.clone(),
         )
         .await?;
-        work.staging = Some(transfer::Staging::new(raw, &unix, &selection));
+        work.staging = Some(transfer::Staging::new(
+            raw,
+            &unix,
+            &selection,
+            subject.file(),
+        ));
         let staging = work.staging.as_mut().unwrap();
         staging.upload(&unix.home, &bytes).await?;
         self.work_stage(&mut work.phase, Stage::Verifying);
         staging.verify(&staging.path, 0o600).await?;
+        Ok((unix, selection))
+    }
+    async fn perform_device(
+        &self,
+        work: &mut Work,
+        publisher: &release::Publisher,
+    ) -> Result<Installed> {
+        let (unix, selection) = self
+            .stage_upload(work, publisher, Subject::Companion)
+            .await?;
+        let staging = work.staging.as_mut().unwrap();
         staging.executable().await?;
         let plan: Plan = serde_json::from_str(
             &self
@@ -260,6 +299,12 @@ impl Operation {
         ))
     }
 }
+fn unsupported() -> SshError {
+    error(
+        "companion_install_unsupported",
+        "Installation requires a positively identified Linux or macOS SSH shell",
+    )
+}
 fn invalid() -> SshError {
     error(
         "companion_installer_invalid",
@@ -315,6 +360,20 @@ fn result(
         cleanup: "complete",
         cleanup_failure: None,
     }
+}
+/// One install or removal at a time per session, companion and managed Herdr alike.
+fn permit(session: &Session) -> Result<OwnedSemaphorePermit> {
+    session
+        .bindings
+        .companion_install
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            error(
+                "companion_install_busy",
+                "Companion installation is already running for this session",
+            )
+        })
 }
 pub(super) async fn run(
     session: Arc<Session>,

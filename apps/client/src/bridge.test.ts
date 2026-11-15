@@ -43,6 +43,18 @@ it('sends the read-only check through a protected command',async()=>{
   await expect(api.checkCompanionUpdate('local:owned')).rejects.toThrow('SSH connection');
   expect(invoke).not.toHaveBeenCalled();
 });
+it('sends the managed Herdr install and removal as protected commands that carry only the session and never a path or command',async()=>{
+  const progress=vi.fn();
+  await api.installManagedHerdr('ssh-herdr',progress);
+  expect(invoke).toHaveBeenCalledWith('install_managed_herdr',{sessionId:'ssh-herdr',progress:expect.any(Object)},expect.anything());
+  expect(Object.keys(invoke.mock.calls[0][1]).sort()).toEqual(['progress','sessionId']);
+  invoke.mockClear();await api.removeManagedHerdr('ssh-herdr');
+  expect(invoke).toHaveBeenCalledWith('remove_managed_herdr',{sessionId:'ssh-herdr'},expect.anything());
+  invoke.mockClear();
+  await expect(api.installManagedHerdr('local:owned',progress)).rejects.toThrow('SSH connection');
+  await expect(api.removeManagedHerdr('local:owned')).rejects.toThrow('SSH connection');
+  expect(invoke).not.toHaveBeenCalled();
+});
 it('submits a complete sequence through one protected native request for either transport',async()=>{
   for (const [id,command] of [['local:sequence','local_write'],['ssh-sequence','write_stdin']]) {
     await api.writeSequence(id,['\x02','T']);

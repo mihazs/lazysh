@@ -95,6 +95,17 @@ impl Unix {
     pub fn managed(&self) -> String {
         format!("{}/lazysh-agent", self.managed_dir())
     }
+    /// The closed choice of managed Herdr artifact for this host: one of the four `<os>-herdr-<arch>` targets.
+    pub fn herdr_target(&self) -> String {
+        format!("{}-herdr-{}", self.os, self.arch)
+    }
+    /// The fixed directory, beside the companion's and never inside Herdr's own `lazysh-herdr` application namespace.
+    pub fn herdr_dir(&self) -> String {
+        format!("{}/lazysh/herdr", self.data.trim_end_matches('/'))
+    }
+    pub fn herdr(&self) -> String {
+        format!("{}/lazysh-herdr", self.herdr_dir())
+    }
     fn stat(&self) -> &'static str {
         if self.os == "linux" {
             "stat -c '%u %a %h'"

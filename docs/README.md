@@ -63,6 +63,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Agent view design: the brief, the rules and the type, spacing and colour scale of the Agent view | [Agent view design](reference/agent-view-design.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
+| Explicit install and removal of the optional managed Herdr over SSH: target choice, fixed path, checks, refusals and what is not claimed | [Managed Herdr install and removal](herdr-managed-install.md) |
 | Planned host browser: requirements, opt-in and launch model, threat model, input mapping and milestones | [Host browser](host-browser.md) |
 | Sign-in callbacks on the host's `localhost` that the terminal scanner reports: evidence, limits and event shape | [Sign-in hints](reference/auth-hints.md) |
 | Planned terminal adapter contract, platform matrix, benchmark design and the measured desktop xterm.js baseline (no device or native-candidate measurements yet) | [TerminalAdapter](architecture/terminal-adapter.md) · [Platform integration](architecture/platform-integration.md) · [Terminal benchmarks](architecture/terminal-benchmarks.md) |

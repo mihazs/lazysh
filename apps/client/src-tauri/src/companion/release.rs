@@ -90,10 +90,18 @@ impl Publisher {
             Calls::bump(&self.calls.selects);
             return Ok(selection.clone());
         }
-        // The app installs only onto a positively identified Unix shell.
+        // The app installs only onto a positively identified Unix shell. The managed Herdr targets pass
+        // through to the shared chain, which refuses any the published release set does not list.
         if !matches!(
             target,
-            "linux-agent-x64" | "linux-agent-arm64" | "macos-agent-x64" | "macos-agent-arm64"
+            "linux-agent-x64"
+                | "linux-agent-arm64"
+                | "macos-agent-x64"
+                | "macos-agent-arm64"
+                | "linux-herdr-x64"
+                | "linux-herdr-arm64"
+                | "macos-herdr-x64"
+                | "macos-herdr-arm64"
         ) {
             return Err(rejected());
         }

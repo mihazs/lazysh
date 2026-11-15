@@ -148,6 +148,14 @@ pub struct Installed {
     #[serde(skip_serializing_if = "Option::is_none")]
     cleanup_failure: Option<transfer::CleanupFailure>,
 }
+/// What a removal did: it deleted the managed Herdr binary, or found none. Nothing else is ever deleted.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Removed {
+    schema_version: u8,
+    status: &'static str,
+    path: String,
+}
 #[derive(Debug, Serialize)]
 pub struct InstallFailure {
     #[serde(flatten)]
@@ -198,6 +206,31 @@ pub async fn check_companion_update(
         .run(async {
             let session = state.session(&session_id).await?;
             install::check(session, &access, &release::Publisher::new()?).await
+        })
+        .await
+}
+/// Installs the managed Herdr: the verified release file for this host is uploaded over this connection and published
+/// by one rename. The system Herdr, its configuration, its servers and the saved default are never touched.
+#[tauri::command]
+pub async fn install_managed_herdr(
+    session_id: String,
+    access: AccessLease,
+    state: State<'_, AppState>,
+    progress: Channel<Progress>,
+) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
+    install_from(state, session_id, progress, access, install::Route::Herdr).await
+}
+/// Removes the managed Herdr binary only: never a server, a session, a configuration or the system Herdr.
+#[tauri::command]
+pub async fn remove_managed_herdr(
+    state: State<'_, AppState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<Removed>, GuardedError<SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            install::remove_herdr(session, &access).await
         })
         .await
 }
