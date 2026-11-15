@@ -35,6 +35,17 @@ jobs:
       - id: revision
         shell: bash
         run: echo "sha=$(cat target/release/bundle-revision.txt)" >> "$GITHUB_OUTPUT"
+      # WebView2 ignores WEBVIEW2_* environment overrides in an elevated process (the hosted runner is one), so the
+      # debugging port EdgeDriver asks for never opens; the machine policy is the override an elevated host honors.
+      - name: Give the elevated application its WebView2 arguments through the machine policy
+        shell: pwsh
+        run: |
+          whoami /groups | Select-String 'Mandatory Label'
+          $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          if (Test-Path -LiteralPath $key) { throw 'unexpected ambient policy' }
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'lazysh.exe' -Value '--remote-debugging-port=0' -PropertyType String | Out-Null
+          Get-Item -LiteralPath $key | Format-List | Out-String | Write-Host
       - uses: ./.github/actions/windows-installed-gui
         with:
           revision: ${{ steps.revision.outputs.sha }}
@@ -52,14 +63,13 @@ jobs:
           Write-Host "== installed: $((Get-ChildItem $dir | ForEach-Object Name) -join ', '); session $([System.Diagnostics.Process]::GetCurrentProcess().SessionId); user $env:USERNAME"
           Write-Host '== 1. the application with a debugging port'
           $data = Join-Path $env:RUNNER_TEMP 'diag-wv2'
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
           $env:WEBVIEW2_USER_DATA_FOLDER = $data
           $out = Join-Path $env:RUNNER_TEMP 'diag-out.txt'
           $err = Join-Path $env:RUNNER_TEMP 'diag-err.txt'
           $p = Start-Process -FilePath "$dir\lazysh.exe" -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
           Start-Sleep -Seconds 25
           Write-Host "exited=$($p.HasExited) code=$(if ($p.HasExited) { $p.ExitCode })"
-          try { Invoke-RestMethod http://127.0.0.1:9333/json/version | ConvertTo-Json -Compress } catch { Write-Host "devtools: $($_.Exception.Message)" }
+          Get-ChildItem -Recurse -Filter DevToolsActivePort $data -ErrorAction SilentlyContinue | ForEach-Object { "$($_.FullName): $((Get-Content $_.FullName) -join ' ')" }
           Get-ChildItem -Recurse -Depth 1 $data -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object FullName
           Write-Host '-- stdout/stderr'
           Get-Content $out, $err -ErrorAction SilentlyContinue | Select-Object -Last 40
@@ -72,12 +82,10 @@ jobs:
           Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table | Out-String | Write-Host
           Write-Host '-- DevToolsActivePort files'
           Get-ChildItem -Recurse -Filter DevToolsActivePort $env:RUNNER_TEMP -ErrorAction SilentlyContinue | ForEach-Object FullName
-          Write-Host '-- browser policies'
-          foreach ($root in 'HKLM:\SOFTWARE\Policies\Microsoft', 'HKCU:\SOFTWARE\Policies\Microsoft', 'HKLM:\SOFTWARE\WOW6432Node\Policies\Microsoft') { if (Test-Path $root) { Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name): $(($_.Property | ForEach-Object { "$_=$($_.GetValue($_))" }) -join ', ')" } } }
           Write-Host '-- application errors'
           Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 2; StartTime = (Get-Date).AddMinutes(-15) } -MaxEvents 8 -ErrorAction SilentlyContinue | ForEach-Object { "$($_.TimeCreated) $($_.ProviderName): $(($_.Message -split "`n")[0..3] -join ' | ')" }
           Get-Process | Where-Object { $_.ProcessName -match 'lazysh|msedgewebview2' } | Stop-Process -Force -ErrorAction SilentlyContinue
-          Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, Env:WEBVIEW2_USER_DATA_FOLDER
+          Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER
           Write-Host '== 2. EdgeDriver with the capabilities tauri-driver sends'
           $log = Join-Path $env:RUNNER_TEMP 'diag-edgedriver.log'
           $edge = Start-Process $env:LAZYSH_WINDOWS_GUI_EDGEDRIVER -ArgumentList '--port=9515', '--verbose', "--log-path=$log" -PassThru
