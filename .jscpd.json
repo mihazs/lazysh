@@ -47,6 +47,7 @@
     "packages/parakeet-runtime/CHANGELOG.md",
     "packages/push-registration/CHANGELOG.md",
     "packages/parakeet-runtime/licenses/**",
+    ".github/herdr-notices/*.txt",
     "packages/deep-link-vendor/tests/xdg_commands.rs",
     "packages/deep-link-vendor/tests/xdg_unregister.rs",
     "packages/display-idle/android/build/**",
