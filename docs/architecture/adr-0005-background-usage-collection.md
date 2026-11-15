@@ -60,7 +60,7 @@ The requirement ([#18](https://github.com/mihazs/lazysh/issues/18)): opt-in back
 1. This ADR (docs only).
 2. `usage-collection.json`, `usage-collection show|update`, the `disabled` quota state and its strings in every locale, and the documentation of the switch.
 3. `usage-collector enable|disable|status|run`, the sample file, the three timer templates and the documentation of the privacy boundary and restart semantics.
-4. The app: the collector's state, last run and sample ages in the Usage view, and the switches in Host settings, in every locale.
+4. The app: the collector's state, last run and sample ages in the Usage view, in every locale. The switches stay on the host (`usage-collector enable|disable`, `usage-collection update`), as `auto-update` does; the app never changes them, and an in-app control would be a separate, explicit decision.
 
 Test seam: in debug builds only, `LAZYSH_USAGE_TIMER_BACKEND_FOR_TESTS` names the backend (`systemd`, `launchd`, `schtasks`) so that each can be driven on one machine against stand-in tools; release builds ignore it.
 
