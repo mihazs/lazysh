@@ -30,13 +30,61 @@ fn app_dir_name() -> &'static str {
     }
 }
 
+/// The executable every case runs: the one Cargo built, or the exact file named by
+/// `LAZYSH_TEST_HERDR_MANAGED` (an absolute path), so a retained or downloaded release asset is
+/// accepted instead of a rebuild. Build the tests with the features that asset was built with.
+fn executable_under_test() -> PathBuf {
+    std::env::var_os("LAZYSH_TEST_HERDR_MANAGED").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_herdr")),
+        |path| {
+            let path = PathBuf::from(path);
+            assert!(
+                path.is_absolute() && path.is_file(),
+                "explicit managed executable"
+            );
+            path
+        },
+    )
+}
+
+/// A fixture for the unchanged stock Herdr named by `LAZYSH_TEST_HERDR_STOCK` (an absolute
+/// path). Its application directory is `herdr-dev` for a debug build and `herdr` for a release
+/// one; `LAZYSH_TEST_HERDR_STOCK_NAMESPACE` names it when the stock build and this test differ.
+fn stock_fixture() -> Fixture {
+    let executable = PathBuf::from(
+        std::env::var_os("LAZYSH_TEST_HERDR_STOCK").expect("explicit unchanged stock binary"),
+    );
+    assert!(executable.is_absolute() && executable.is_file());
+    let namespace = std::env::var("LAZYSH_TEST_HERDR_STOCK_NAMESPACE").unwrap_or_else(|_| {
+        (if cfg!(debug_assertions) {
+            "herdr-dev"
+        } else {
+            "herdr"
+        })
+        .to_owned()
+    });
+    Fixture::with(executable, &namespace, None)
+}
+
 struct Fixture {
     base: PathBuf,
+    /// HOME and the XDG roots; the base itself unless this fixture is a second server on
+    /// another fixture's host.
+    roots: PathBuf,
     executable: PathBuf,
+    /// The application directory this executable uses below the config and state roots.
+    namespace: String,
+    /// Read configuration from `<config root>/<namespace>/config.toml` instead of
+    /// `HERDR_CONFIG_PATH`, as a user's server does.
+    own_config: bool,
     children: Vec<Child>,
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with(executable_under_test(), app_dir_name(), None)
+    }
+
+    fn with(executable: PathBuf, namespace: &str, roots: Option<&PathBuf>) -> Self {
         let mut random = [0_u8; 8];
         getrandom::fill(&mut random).unwrap();
         let base = PathBuf::from("/tmp").join(format!(
@@ -47,8 +95,11 @@ impl Fixture {
         fs::create_dir(&base).unwrap();
         fs::write(base.join("config.toml"), "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n").unwrap();
         Self {
+            roots: roots.unwrap_or(&base).clone(),
             base,
-            executable: PathBuf::from(env!("CARGO_BIN_EXE_herdr")),
+            executable,
+            namespace: namespace.to_owned(),
+            own_config: false,
             children: Vec::new(),
         }
     }
@@ -60,7 +111,11 @@ impl Fixture {
             "ssh://owned-fixture@127.0.0.1:{}",
             endpoint.local_addr().unwrap().port()
         );
-        let client = self.base.join("state").join(app_dir_name()).join("client");
+        let client = self
+            .roots
+            .join("state")
+            .join(&self.namespace)
+            .join("client");
         fs::create_dir_all(&client).unwrap();
         fs::write(client.join("endpoints.json"), serde_json::to_vec(&json!({"version":1,"ssh":[{"id":"ab".repeat(16),"label":"Owned forbidden catalog","target":target,"session":"unused","enabled":true}]})).unwrap()).unwrap();
         let bin = self.base.join("bin");
@@ -101,9 +156,11 @@ impl Fixture {
             ("XDG_CACHE_HOME", "cache"),
             ("XDG_STATE_HOME", "state"),
             ("XDG_RUNTIME_DIR", "runtime"),
+            // A provider profile that pane children must keep seeing.
+            ("CODEX_HOME", "codex-home"),
         ]
         .into_iter()
-        .map(|(name, child)| (name, self.base.join(child)))
+        .map(|(name, child)| (name, self.roots.join(child)))
         .collect()
     }
 
@@ -112,7 +169,6 @@ impl Fixture {
         command
             .env_clear()
             .envs(self.environment())
-            .env("HERDR_CONFIG_PATH", self.base.join("config.toml"))
             .env(
                 "PATH",
                 format!("{}:/usr/bin:/bin", self.base.join("bin").display()),
@@ -124,13 +180,16 @@ impl Fixture {
             .env("HERDR_GUARD_SSH_MARKER", self.base.join("ssh-attempted"))
             .args(["--session", session])
             .current_dir(self.base.join(session));
+        if !self.own_config {
+            command.env("HERDR_CONFIG_PATH", self.base.join("config.toml"));
+        }
         command
     }
 
     fn data(&self, session: &str) -> PathBuf {
-        self.base
+        self.roots
             .join("config")
-            .join(app_dir_name())
+            .join(&self.namespace)
             .join("sessions")
             .join(session)
     }
@@ -141,6 +200,10 @@ impl Fixture {
         }
         fs::create_dir(self.base.join(session)).unwrap();
         fs::create_dir_all(self.data(session)).unwrap();
+        if self.own_config {
+            let config = self.roots.join("config").join(&self.namespace);
+            fs::copy(self.base.join("config.toml"), config.join("config.toml")).unwrap();
+        }
         let mut saved: Value = serde_json::from_slice(include_bytes!(
             "../herdr-upstream/tests/fixtures/session/current-herdr-session.json"
         ))
@@ -212,6 +275,41 @@ impl Fixture {
 
     fn api(&self, session: &str, method: &str, params: Value) -> Value {
         Self::answer(self.request(session, method, params))
+    }
+
+    /// A new workspace `label` of `session` whose pane runs `script`, returned once the script
+    /// has created the file `ready` in the session directory.
+    fn workload(&self, session: &str, label: &str, script: &str, ready: &str) -> Value {
+        let created = self.api(
+            session,
+            "workspace.create",
+            json!({"label":label,"cwd":self.base.join(session),"focus":false}),
+        );
+        assert!(created.get("error").is_none());
+        let snapshot = self.api(session, "session.snapshot", json!({}));
+        let tree = &snapshot["result"]["snapshot"];
+        let workspace = tree["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["label"] == label)
+            .unwrap()["workspace_id"]
+            .clone();
+        let pane = tree["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["workspace_id"] == workspace)
+            .unwrap()
+            .clone();
+        let sent = self.api(
+            session,
+            "pane.send_input",
+            json!({"pane_id":pane["pane_id"],"text":script,"keys":["Enter"]}),
+        );
+        assert!(sent.get("error").is_none());
+        crate::support::wait_for_file(&self.base.join(session).join(ready), BOUND);
+        pane
     }
 
     async fn guarded_cli(&self, session: &str, method: &str, params: Value) -> Value {
@@ -528,16 +626,27 @@ fn wait_bytes(fixture: &Fixture, session: &str, expected: &[u8]) {
     panic!("owned pane byte deadline");
 }
 
-/// Names below `root`, without following symlinks.
+/// Paths below each of the fixture's HOME and XDG roots, each shown with its root's directory
+/// name first, without following symlinks.
 #[cfg(feature = "lazysh-managed")]
-fn names_below(root: &std::path::Path, names: &mut Vec<String>) {
-    for entry in fs::read_dir(root).unwrap() {
-        let entry = entry.unwrap();
-        names.push(entry.file_name().to_string_lossy().into_owned());
-        if entry.file_type().unwrap().is_dir() {
-            names_below(&entry.path(), names);
+fn host_paths(fixture: &Fixture) -> std::collections::BTreeSet<PathBuf> {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+    fn walk(directory: &Path, shown: &Path, paths: &mut BTreeSet<PathBuf>) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let shown = shown.join(entry.file_name());
+            paths.insert(shown.clone());
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &shown, paths);
+            }
         }
     }
+    let mut paths = BTreeSet::new();
+    for (_, root) in fixture.environment() {
+        walk(&root, Path::new(root.file_name().unwrap()), &mut paths);
+    }
+    paths
 }
 
 /// A stock Herdr on the same host shares HOME and the XDG roots, so every socket, config,
@@ -562,15 +671,116 @@ fn managed_build_keeps_sockets_config_and_state_in_its_own_namespace() {
     assert!(config
         .join("lazysh-herdr/sessions/managed/herdr.sock")
         .exists());
-    let mut names = Vec::new();
-    for root in fixture.environment().into_iter().map(|(_, path)| path) {
-        names_below(&root, &mut names);
-    }
-    let stock: Vec<_> = names
-        .iter()
-        .filter(|name| matches!(name.as_str(), "herdr" | "herdr-dev") || name.starts_with(".herdr"))
+    let stock: Vec<_> = host_paths(&fixture)
+        .into_iter()
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            matches!(&*name, "herdr" | "herdr-dev") || name.starts_with(".herdr")
+        })
         .collect();
     assert!(stock.is_empty(), "stock Herdr names created: {stock:?}");
+}
+
+/// What a managed server beside a running stock server must leave exactly as it was.
+#[cfg(feature = "lazysh-managed")]
+#[derive(Debug, PartialEq)]
+struct Stock {
+    pid: u32,
+    sockets: Vec<(u64, u64)>,
+    config: String,
+    bytes: Vec<u8>,
+}
+#[cfg(feature = "lazysh-managed")]
+impl Stock {
+    fn capture(fixture: &mut Fixture, session: &str) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        assert!(
+            fixture.children[0].try_wait().unwrap().is_none(),
+            "stock server exited"
+        );
+        let namespace = fixture.roots.join("config").join(&fixture.namespace);
+        Self {
+            pid: fixture.children[0].id(),
+            sockets: ["herdr.sock", "herdr-client.sock"]
+                .map(|name| {
+                    let meta = fs::symlink_metadata(fixture.data(session).join(name)).unwrap();
+                    (meta.dev(), meta.ino())
+                })
+                .to_vec(),
+            config: fs::read_to_string(namespace.join("config.toml")).unwrap(),
+            bytes: fixture.bytes(session),
+        }
+    }
+}
+
+/// Release acceptance of the managed derivative (#1761): the executable under test and an
+/// unchanged stock Herdr serve one session name on one host, sharing HOME and every XDG root.
+/// Neither may touch the other, and the managed server's pane children keep the provider
+/// profile variables. Cargo builds the executable unless `LAZYSH_TEST_HERDR_MANAGED` names a
+/// retained or downloaded release asset.
+#[cfg(feature = "lazysh-managed")]
+#[test]
+#[ignore = "requires explicit unchanged stock Herdr"]
+fn managed_and_stock_servers_of_one_session_name_coexist_without_touching_each_other() {
+    let mut stock = stock_fixture();
+    stock.own_config = true;
+    stock.start("shared");
+    let (before, host) = (Stock::capture(&mut stock, "shared"), host_paths(&stock));
+    let mut managed = Fixture::with(executable_under_test(), "lazysh-herdr", Some(&stock.roots));
+    managed.own_config = true;
+    managed.start("shared");
+    let send = |fixture: &Fixture, text: &str| {
+        let snapshot = fixture.api("shared", "session.snapshot", json!({}));
+        let pane = &snapshot["result"]["snapshot"]["focused_pane_id"];
+        let sent = fixture.api(
+            "shared",
+            "pane.send_input",
+            json!({"pane_id":pane,"text":text}),
+        );
+        assert!(sent.get("error").is_none());
+    };
+    send(&managed, "managed-input");
+    wait_bytes(&managed, "shared", b"managed-input");
+    // Pane children of the managed server keep HOME, every XDG root and the provider profile.
+    managed.workload(
+        "shared",
+        "Environment",
+        r#"printf '%s\n' "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR" "$CODEX_HOME" > env-seen; : > env-ready"#,
+        "env-ready",
+    );
+    let environment: Vec<_> = managed
+        .environment()
+        .into_iter()
+        .map(|(_, path)| path.display().to_string())
+        .collect();
+    let seen = fs::read_to_string(managed.base.join("shared/env-seen")).unwrap();
+    assert_eq!(seen.lines().collect::<Vec<_>>(), environment);
+    // Old capability absence stays the fallback: only the managed executable advertises guarded attachment.
+    let (absent, present) = (capabilities(&stock), capabilities(&managed));
+    assert!(!absent.status.success() && absent.stdout.is_empty());
+    assert!(present.status.success() && !present.stdout.is_empty());
+    // The stock server's process, sockets, configuration and workload are exactly as they were,
+    // and everything the managed server added to the shared roots sits in its own directory.
+    assert_eq!(Stock::capture(&mut stock, "shared"), before);
+    let after = host_paths(&managed);
+    assert_eq!(
+        host.difference(&after).count(),
+        0,
+        "stock paths disappeared"
+    );
+    let outside: Vec<_> = after
+        .difference(&host)
+        .filter(|path| path.iter().nth(1) != Some("lazysh-herdr".as_ref()))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "managed server wrote outside its namespace: {outside:?}"
+    );
+    assert!(managed.data("shared").join("herdr.sock").exists());
+    // Both servers answer, and each receives only its own input.
+    send(&stock, "stock-input");
+    wait_bytes(&stock, "shared", b"stock-input");
+    assert_eq!(managed.bytes("shared"), b"managed-input");
 }
 
 #[test]
@@ -996,10 +1206,7 @@ impl Drop for TerminalClient {
 #[tokio::test]
 #[ignore = "requires explicit unchanged stock Herdr and current lazysh companion"]
 async fn stock_public_focus_moves_both_clients_for_shell_and_agent_without_input_or_fallback() {
-    let mut fixture = Fixture::new();
-    fixture.executable = PathBuf::from(
-        std::env::var_os("LAZYSH_TEST_HERDR_STOCK").expect("explicit unchanged stock binary"),
-    );
+    let mut fixture = stock_fixture();
     let companion = PathBuf::from(
         std::env::var_os("LAZYSH_TEST_AGENT_BIN").expect("explicit current companion binary"),
     );
@@ -1012,36 +1219,12 @@ async fn stock_public_focus_moves_both_clients_for_shell_and_agent_without_input
         .iter()
         .enumerate()
     {
-        let created=fixture.api("shared","workspace.create",json!({"label":format!("Space-{index}"),"cwd":fixture.base.join("shared"),"focus":false}));
-        assert!(created.get("error").is_none());
-        let snapshot = fixture.api("shared", "session.snapshot", json!({}));
-        let tree = &snapshot["result"]["snapshot"];
-        let workspace = tree["workspaces"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["label"] == format!("Space-{index}"))
-            .unwrap()["workspace_id"]
-            .clone();
-        let pane = tree["panes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["workspace_id"] == workspace)
-            .unwrap()
-            .clone();
         let script=format!("printf '\\033[2J\\033[H{marker}\\n'; stty raw -echo; : > ready-{index}; exec cat > bytes-{index}");
-        assert!(fixture
-            .api(
-                "shared",
-                "pane.send_input",
-                json!({"pane_id":pane["pane_id"],"text":script,"keys":["Enter"]})
-            )
-            .get("error")
-            .is_none());
-        crate::support::wait_for_file(
-            &fixture.base.join("shared").join(format!("ready-{index}")),
-            BOUND,
+        let pane = fixture.workload(
+            "shared",
+            &format!("Space-{index}"),
+            &script,
+            &format!("ready-{index}"),
         );
         targets.push(pane);
     }
@@ -1323,17 +1506,23 @@ async fn actual_session_terminal_client_private_join_and_copy_barrier() {
     }
 }
 
-#[test]
-fn guarded_capability_and_invalid_descriptor_do_not_emit_terminal_or_ticket_bytes() {
-    use std::os::unix::process::CommandExt;
-    let fixture = Fixture::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+/// What the fixture's executable answers to the host probe for guarded attachment. It opens no
+/// configuration, so a stock Herdr answers as an unknown option.
+fn capabilities(fixture: &Fixture) -> std::process::Output {
+    Command::new(&fixture.executable)
         .env_clear()
         .envs(fixture.environment())
         .current_dir(&fixture.base)
         .arg("--guarded-attach-capabilities")
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+#[test]
+fn guarded_capability_and_invalid_descriptor_do_not_emit_terminal_or_ticket_bytes() {
+    use std::os::unix::process::CommandExt;
+    let fixture = Fixture::new();
+    let output = capabilities(&fixture);
     assert!(output.status.success() && output.stderr.is_empty());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
@@ -1344,7 +1533,7 @@ fn guarded_capability_and_invalid_descriptor_do_not_emit_terminal_or_ticket_byte
         "advertisement opened configuration"
     );
     for alias_stdout in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = Command::new(&fixture.executable);
         command
             .env_clear()
             .envs(fixture.environment())
