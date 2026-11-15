@@ -236,6 +236,25 @@ it('browses, labels and attaches rmux sessions on their own server and lists no 
   fireEvent.click(screen.getByRole('button',{name:'Select %9'}));
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('tmux_action',{sessionId:'ssh1',action:{type:'selectPane',target:'%9'},kind:'rmux'},expect.anything()));
 });
+it('sends the rmux close, rename and resize actions to the labelled rmux server, the title as typed',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...rmuxTree,tools:[rmuxTool]});
+  render(<MuxPanel sessionId="ssh1" attached={{kind:'rmux',name:'rmux work',tmuxServer:'lab'}} onAttach={vi.fn()}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Close %9'}));
+  fireEvent.click(screen.getByRole('button',{name:'Close it'}));
+  await waitFor(()=>expect(tmuxActions()).toHaveLength(1));
+  fireEvent.click(screen.getByRole('button',{name:'Close session'}));
+  fireEvent.click(screen.getByRole('button',{name:'Close it'}));
+  await waitFor(()=>expect(tmuxActions()).toHaveLength(2));
+  fireEvent.click(screen.getByRole('button',{name:'Rename %9'}));
+  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'ci #{pane_id}'}});
+  fireEvent.click(screen.getByRole('button',{name:'Save workspace'}));
+  await waitFor(()=>expect(tmuxActions()).toHaveLength(3));
+  fireEvent.click(screen.getByRole('button',{name:'Move %9 divider left'}));
+  await waitFor(()=>expect(tmuxActions()).toHaveLength(4));
+  expect(tmuxActions()).toEqual([{type:'closePane',target:'%9'},{type:'closeSession',target:'$3'},{type:'renamePane',target:'%9',title:'ci #{pane_id}'},{type:'resizePane',target:'%9',direction:'left',amount:5}]);
+  const actionCalls=vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_action');
+  expect(actionCalls.every(([,args])=>(args as {tmuxServer?:string;kind?:string}).kind==='rmux' && (args as {tmuxServer?:string}).tmuxServer==='lab')).toBe(true);
+});
 it('keeps an attached rmux terminal on its labelled server and offers the tmux-family prefix shortcuts',async()=>{
   vi.mocked(invoke).mockResolvedValue({...rmuxTree,tools:[rmuxTool]});
   const attach=vi.fn().mockResolvedValue(undefined);

@@ -1273,7 +1273,7 @@ printf '%s\n' "$*" >> {calls}
 case "$*" in
   "capabilities --json") printf '{{\n  "version": "0.10.0",\n  "binary_contract_version": 1,\n  "wire_version": 8,\n  "public_contract": ["cli", "control-mode"],\n  "control_mode": {{"entrypoint": "rmux -C"}}\n}}\n';;
   *list-sessions*) if [ -e {stale} ]; then echo 'rmux: unsupported RMUX wire version 7; supported range is 8..=8' >&2; exit 1; fi; echo 'work: 1 windows';;
-  *list-panes*) printf '$0\twork\t@1\t0\tsh\t1\t%%0\t0\t1\tsh\t/tmp\n';;
+  *list-panes*) printf '$0\twork\t@1\t0\tsh\t1\t%%0\t0\t1\tsh\t/tmp\t80\t24\tt\n';;
   *) exit 9;;
 esac
 "#,
@@ -1525,6 +1525,53 @@ esac
         );
         assert!(action(serde_json::json!({"type":"renamePane","target":"%1","title":"x"})).is_ok());
         assert!(action(serde_json::json!({"type":"closeSession","target":"$1"})).is_ok());
+    }
+    #[test]
+    fn rmux_layout_actions_run_on_the_labelled_rmux_server_and_keep_titles_literal() {
+        let rmux = crate::tmux_server::TmuxServer::parse_for(
+            crate::tmux_server::Binary::Rmux,
+            Some("lab"),
+        )
+        .unwrap();
+        let command = |action| action_command_for(&action, &rmux).unwrap();
+        assert_eq!(
+            command(TmuxAction::ClosePane {
+                target: "%12".into()
+            }),
+            "rmux -u -L 'lab' kill-pane -t '%12'"
+        );
+        assert_eq!(
+            command(TmuxAction::CloseSession {
+                target: "$3".into()
+            }),
+            "rmux -u -L 'lab' kill-session -t '$3'"
+        );
+        assert_eq!(
+            command(TmuxAction::CloseWindow {
+                target: "@7".into()
+            }),
+            "rmux -u -L 'lab' kill-window -t '@7'"
+        );
+        assert_eq!(
+            command(TmuxAction::ResizePane {
+                target: "%1".into(),
+                direction: ResizeDirection::Down,
+                amount: 5
+            }),
+            "rmux -u -L 'lab' resize-pane -t '%1' -D 5"
+        );
+        // tmux expands `#{...}` in a pane title and needs it doubled; rmux 0.10.0 stores the title as typed.
+        let rename = || TmuxAction::RenamePane {
+            target: "%1".into(),
+            title: "ci #{pane_id}".into(),
+        };
+        assert_eq!(
+            command(rename()),
+            "rmux -u -L 'lab' select-pane -t '%1' -T 'ci #{pane_id}'"
+        );
+        assert!(action_command(&rename())
+            .unwrap()
+            .ends_with("-T 'ci ##{pane_id}'"));
     }
     #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]

@@ -285,7 +285,7 @@ rmux 0.10.0 is discovered, attached, browsed and acted on through the tmux code 
 | Navigation, Jump To, current marker | missing | missing | missing | #1675. |
 | Create | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` creates sessions and windows with names containing spaces, quotes, `#` and a trailing `;`. A new Git worktree: #1141. |
 | Agent launch | missing | missing | missing | #1141. |
-| Layout actions | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` renames, splits, zooms and selects. Close and resize: #1144. |
+| Layout actions | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` renames, splits, zooms and selects, then (#1687) retitles a pane with `#{pane_id}` in it and reads the title back as typed, resizes a pane by 5 cells and reads both widths, and closes a pane, a window and a session, each read back from the parsed tree; a pane that is already gone is refused. Zellij, Herdr: #1144. |
 | History and clipboard | missing | missing | missing | #1147. |
 | Confirmed input | missing | missing | missing | #1675. |
 | Agent state and notifications | missing | missing | missing | #1146 (PR #1693 records the rmux server label). |

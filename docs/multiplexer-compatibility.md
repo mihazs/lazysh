@@ -127,10 +127,10 @@ implemented without full evidence, *part* means partial.
 | Create in a directory | yes | part → #1141 | yes | yes |
 | Create in a worktree | no → #1141 | no → #1141 | yes | no → #1141 |
 | Agent launch | no → #1141 | no → #1141 | yes | no → #1141 |
-| Rename | session, window, pane | no → #1144 | workspace, tab; pane → #1144 | session, window; pane → #1144 |
-| Close | session, pane; window #1573 | no → #1144 | no → #1144 | no → #1144 |
+| Rename | session, window, pane | no → #1144 | workspace, tab; pane → #1144 | session, window, pane |
+| Close | session, pane; window #1573 | no → #1144 | no → #1144 | session, pane; window by action, no panel button |
 | Split, zoom | yes | yes | yes | yes |
-| Resize | yes | no → #1144 | no → #1144 | no → #1144 |
+| Resize | yes | no → #1144 | no → #1144 | yes |
 | History | prefix+[ only → #1147 | no → #1147 | no → #1147 | no → #1147 |
 | OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1675 |
