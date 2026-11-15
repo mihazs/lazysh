@@ -34,7 +34,8 @@ Security and data (each is tested, not only stated):
 6. **Opt-in per host.** Off by default. Nothing is spawned and no port is opened until the user turns it on and
    confirms.
 7. **Dedicated browser.** The app starts the browser itself with a throwaway profile. It never turns on remote
-   debugging in a browser the user already runs, and never restarts or stops one.
+   debugging in a browser the user already runs, and never restarts or stops one. The separate, later Attach
+   screen only connects to an endpoint the user turned on.
 8. **No network exposure.** The debug endpoint is reachable only through the SSH connection. Nothing listens on
    a routable address on the host or on the device.
 9. **Bounded lifetime.** The browser and its profile end with the session, the SSH channel or the app.
@@ -53,7 +54,7 @@ Security and data (each is tested, not only stated):
 | Does the client open the debug port? | No, in the product. Yes, in the flagged prototype only. | The client is a web view; it cannot set `Host`, it sends an `Origin` that both browsers refuse unless widened, and the app's Content Security Policy (`connect-src`) allows no loopback WebSocket. The prototype widens the origin for one exact origin and runs only in the Vite dev server, where no such policy applies, to prove the forwarded-loopback path. |
 | Frames | JPEG, length-prefixed binary on the channel, acknowledged after decode. | PNG was 340 KB per frame against 15 KB for JPEG (measured). Base64 inside JSON costs 33 percent. |
 | Input | A fixed set of relay operations that map onto each browser's input commands. | The phone never sends a raw protocol command. |
-| Normal profile | A separate, advanced, warned option, not in the first release. | See "Attaching to the normal profile". |
+| Normal profile | A separate, advanced, warned screen that connects to an endpoint the user turned on, not in the first release. | A running browser reads its debug flag only at startup, so the app can never turn it on; Chrome 144 or newer lets the user do it with a box and a dialog on the host's screen that the phone cannot answer (measured). See "Attaching to the normal profile". |
 
 ## Opt-in and launch model
 
@@ -88,17 +89,56 @@ disk until **Clear browser data**). It is off by default and labelled with what 
 
 ### Attaching to the normal profile
 
-A separate screen, never the default path, and not part of the first release. It exists for a user who must see
-the browser they are already signed in to. It requires, and the page says plainly:
+A separate screen, **Attach to your browser**, never the default path and not part of the first release. It exists
+for a user who must see the browser they are already signed in to. The app never starts, restarts, stops or
+reconfigures that browser, and never writes its settings or profile: the user gives the browser a loopback debug
+endpoint on the host, and the screen only connects to it. What a real Chrome does when asked is recorded, with the
+build and the commands, in the
+[feasibility note](reference/host-browser-feasibility.md#attaching-to-a-running-chrome-approval-mode).
 
-- Restarting the browser with a debug flag. A browser reads the flag only at startup; a running Firefox ignores
-  it, and Chrome 136 or newer ignores it on its default profile. The app never restarts or stops a browser; the
-  user does that on the host, and the app only connects to a loopback endpoint the user started.
-- That whoever can reach the endpoint then holds the profile: cookies, signed-in sessions, history and every
-  tab. Both browsers state this in their documentation.
-- Chrome 144 or newer has an approval mode (a checkbox in `chrome://inspect` plus an "Allow remote debugging?"
-  dialog per connection on the host's screen). It cannot be approved from the phone. It is investigated in
-  slice #1258 and not assumed.
+**Two ways for the user to get an endpoint**, both done by the user on the host:
+
+| Way | What the user does | What the app can rely on |
+| --- | --- | --- |
+| Approval mode, Chrome 144 or newer | Ticks "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`. | A WebSocket on `127.0.0.1` whose every connection waits for **Allow** on the host's screen. The setting then outlives the browser: it comes back at the next start until the user unticks it. |
+| A debug flag the user started the browser with | Closes the browser and starts it again with `--remote-debugging-port`. All its windows go away. | An endpoint with no approval at all: whoever reaches the port holds the profile. Chrome 136 or newer ignores the flag on its default profile, so this is for a custom profile, other Chromium builds and, once Firefox ships, Firefox. |
+
+**What the screen requires.**
+
+- It is reachable only with the host browser switch on and the first-use confirmation given, and it opens on a
+  warning that lists what the endpoint gives its holder: cookies and signed-in sessions, history, and every open
+  tab with its title and address. **Attach** stays disabled until the warning is acknowledged. The text states
+  that the approval dialog names no app and that a wrong browser id raises it too, so the user should approve only
+  a dialog they just caused.
+- The companion, not the phone, connects. It is a WebSocket client on the host's loopback, inside the same relay,
+  so the phone never sees the port or the browser id. It finds the endpoint from the browser's
+  `DevToolsActivePort` file or a port the user types, and uses it only when something is listening there that a
+  browser of the same user owns: the file is left stale by unticking and by quitting (measured).
+- **Waiting for the host is a state, not a failure.** The screen says that the browser is asking on the host's
+  screen, offers **Cancel**, and gives up on its own after a limit the relay sets (the browser sets none). A
+  refusal (HTTP 403 "Connection rejected") is shown as "Refused on the host" and ends the attempt. It never
+  retries by itself, because each attempt raises another dialog on the user's screen, and it never answers the
+  dialog: no automation of the browser's window.
+- **One connection per view.** Every connection needs its own approval, so the relay opens exactly one and keeps
+  it until the view closes. A dropped SSH channel or a closed browser ends the view; attaching again needs a new
+  approval. The screen says this, and that approval cannot be given from the phone, so it needs someone at the
+  host's display. A host without a display cannot use it.
+- **The same closed list.** The relay's allow-list (`host_browser::allow`) is asked before every command and
+  address whatever the transport: the attached browser answers `Storage.getCookies` and the whole browser
+  protocol once approved (measured), and the list is what refuses it. Downloads, the file chooser, permission
+  prompts, the clipboard and non-web addresses are denied exactly as for a managed browser, and nothing about
+  URLs, titles or frames is stored or logged.
+- **Pages the user opened stay theirs.** The viewer lists the browser's tabs and shows one at a time; switching
+  activates that tab on the host's screen too. The screen never closes a tab it did not open, and a tab it opened
+  is closed when the view ends. Closing the view closes the relay's connection and leaves the browser, its tabs
+  and the user's setting as they were; the screen tells the user how to untick the box and that it stays ticked
+  across restarts.
+- It ships only after the independent review ([#1258](https://github.com/mihazs/lazysh/issues/1258), slice E).
+
+**Not decided here.** Whether to read the browser's data directories by name or only accept a typed port, and
+whether to detect and refuse a browser that another local account owns, are decided in the build issue with the
+real browser at hand. Firefox has no approval mode and keeps one session, so it is out of this screen until the
+Firefox adapter exists ([#1257](https://github.com/mihazs/lazysh/issues/1257)).
 
 ## Threat model
 
@@ -126,6 +166,7 @@ Trust boundaries:
 | Typed secrets are captured | Text goes phone to relay to browser in memory over SSH. It is never logged or stored. The text field sets no-suggestions and no-learning keyboard hints; password fields are detected best-effort. | The phone keyboard's own policies. |
 | A site refuses or traps an automated browser | The page sees `navigator.webdriver` true (measured); sign-in providers may refuse it. Not worked around by default. | OAuth flows against such providers can fail. |
 | A compromised relay or companion | It runs as the user and could start any process anyway. | Equal to the companion's existing trust. |
+| The user attaches to their normal browser | The separate screen's warning, one approved connection per view, the same closed list as a managed browser, no stored cookies, URLs, titles or frames, and no action on the browser's own settings or dialog ("Attaching to the normal profile"). | While approval mode is ticked, any process of any local account can raise the host's dialog, and a flag-started endpoint has no approval at all. The profile is the user's real one, so a bug in the list is a leak of real sessions: the screen waits for the review. |
 
 Not in scope: defending a browser the user started themselves, and a host an attacker already controls.
 
@@ -382,7 +423,8 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
 
 ## What it will not do
 
-- Attach to, restart or stop a browser the user already runs, or turn on remote debugging silently.
+- Restart or stop a browser the user already runs, turn on remote debugging in it, answer its approval dialog, or
+  attach to it outside the separate, warned screen that is not in the first release.
 - Expose a debug port on the network, on a device listener in the product, or without SSH.
 - Store, sync, log or upload cookies, page content, URLs, titles or frames, or record the screen.
 - Give the phone raw DevTools, a JavaScript console, cookie or storage access, request interception or the
@@ -401,6 +443,9 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
 ## Open questions
 
 - Whether to refuse Firefox while other interactive accounts exist on the host (slice #1258).
+- Whether Google Chrome 144 or newer behaves like the Chromium 157 that was measured, including its refusal of the
+  debug flag on the default profile ([#1697](https://github.com/mihazs/lazysh/issues/1697) records what was not
+  tried).
 - Whether a hosted-runner headed run (Xvfb) is worth adding once the relay exists.
 - Whether Safari's remote automation has a place on macOS hosts. It is not investigated.
 
