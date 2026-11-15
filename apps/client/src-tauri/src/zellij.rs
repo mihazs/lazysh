@@ -27,6 +27,10 @@ pub enum ZellijAction {
     PreviousTab,
     NextPane,
     PreviousPane,
+    /// The terminal pane a notification names, by the number Zellij exports in `ZELLIJ_PANE_ID`. It takes several host calls (see `focus_pane`), so `zellij_action` runs it and `command` has no single line for it.
+    FocusPane {
+        pane: u32,
+    },
     NewPane {
         horizontal: bool,
         directory: String,
@@ -78,6 +82,12 @@ fn command(session: &str, action: &ZellijAction) -> Result<Cmd> {
         ZellijAction::PreviousTab => vec!["go-to-previous-tab".into()],
         ZellijAction::NextPane => vec!["focus-next-pane".into()],
         ZellijAction::PreviousPane => vec!["focus-previous-pane".into()],
+        ZellijAction::FocusPane { .. } => {
+            return Err(SshError::new(
+                "invalid_target",
+                "Focus a pane through its own host calls",
+            ))
+        }
         ZellijAction::NewPane {
             horizontal,
             directory,
@@ -148,6 +158,81 @@ pub async fn zellij_tabs(
         })
         .await
 }
+/// The terminal pane the attached client has focused: the first row of `list-clients` (`CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND`).
+fn client_focus(listing: &str) -> Option<u32> {
+    listing
+        .lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(1)?
+        .strip_prefix("terminal_")?
+        .parse()
+        .ok()
+}
+/// Focuses one terminal pane of the attached terminal. Zellij's own `action focus-pane-id` does not: from the command line
+/// it moves the focus of the command's own client, which no terminal shows (measured on 0.46.0: the attached client keeps
+/// its pane and tab). So this reads the pane's tab, goes to that tab, and steps `focus-next-pane` until the attached client
+/// reports the pane, waiting for each change because Zellij applies a command asynchronously.
+/// shortcut: the first attached client is the one read, and a tab where `focus-next-pane` does not reach the pane (a zoomed
+/// or hidden floating pane) ends in `zellij_pane_unreachable` after one turn of the tab; upgrade when Zellij focuses an
+/// attached client's pane from the command line.
+async fn focus_pane<F, Fut>(session: &str, pane: u32, run: F) -> Result<()>
+where
+    F: Fn(Cmd) -> Fut,
+    Fut: std::future::Future<Output = Result<String>>,
+{
+    let call = |args: &[&str]| {
+        session_command(session, args.iter().map(|arg| (*arg).to_owned()).collect()).map(&run)
+    };
+    let focus = || async { Ok::<_, SshError>(client_focus(&call(&["list-clients"])?.await?)) };
+    // Zellij applies a command asynchronously: wait for the focus to leave `before`.
+    let settle = |before: Option<u32>| async move {
+        let mut now = before;
+        for _ in 0..25 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            now = focus().await?;
+            if now != before {
+                break;
+            }
+        }
+        Ok::<_, SshError>(now)
+    };
+    let protocol = || SshError::new("zellij_protocol", "Zellij returned an unreadable pane list");
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&call(&["list-panes", "--json"])?.await?).map_err(|_| protocol())?;
+    let terminals = || {
+        rows.iter()
+            .filter(|row| row["is_plugin"] == false && row["is_suppressed"] != true)
+    };
+    let tab_of = |id: u32| {
+        terminals()
+            .find(|row| row["id"] == id)
+            .and_then(|row| row["tab_position"].as_u64())
+    };
+    let tab = tab_of(pane)
+        .ok_or_else(|| SshError::new("zellij_pane_gone", "Zellij has no pane with that number"))?;
+    let mut now = focus().await?;
+    if now.and_then(tab_of) != Some(tab) {
+        // `go-to-tab` counts tabs from 1.
+        call(&["go-to-tab", &(tab + 1).to_string()])?.await?;
+        now = settle(now).await?;
+    }
+    for _ in 0..terminals().filter(|row| row["tab_position"] == tab).count() {
+        if now == Some(pane) {
+            return Ok(());
+        }
+        call(&["focus-next-pane"])?.await?;
+        now = settle(now).await?;
+    }
+    if now == Some(pane) {
+        Ok(())
+    } else {
+        Err(SshError::new(
+            "zellij_pane_unreachable",
+            "Zellij could not focus that pane",
+        ))
+    }
+}
 #[tauri::command]
 pub async fn zellij_action(
     state: State<'_, AppState>,
@@ -159,6 +244,14 @@ pub async fn zellij_action(
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
+            if let ZellijAction::FocusPane { pane } = action {
+                let host = Host::resolve(&state, &local, &session_id, &access).await?;
+                return focus_pane(&name, pane, |cmd| {
+                    let (host, access) = (&host, &access);
+                    async move { host.run(access, &cmd).await }
+                })
+                .await;
+            }
             let command = command(&name, &action);
             Host::resolve(&state, &local, &session_id, &access)
                 .await?
@@ -286,6 +379,163 @@ mod tests {
                 format!("zellij '--session=a'\\''$(touch nope);x' action {verb}")
             );
         }
+    }
+    /// Zellij as `focus_pane` sees it: tabs of terminal panes in `focus-next-pane` order, the attached client's focus, and a command that takes effect only at the second `list-clients` after it (Zellij applies commands asynchronously).
+    struct FakeZellij {
+        tabs: Vec<Vec<u32>>,
+        focus: Vec<usize>,
+        active: usize,
+        attached: bool,
+        pending: Option<(String, u8)>,
+        calls: Vec<String>,
+    }
+    impl FakeZellij {
+        fn new(tabs: Vec<Vec<u32>>) -> Self {
+            let focus = vec![0; tabs.len()];
+            Self {
+                tabs,
+                focus,
+                active: 0,
+                attached: true,
+                pending: None,
+                calls: Vec::new(),
+            }
+        }
+        fn focused(&self) -> u32 {
+            self.tabs[self.active][self.focus[self.active]]
+        }
+        fn run(&mut self, command: &str) -> Result<String> {
+            let verb = command
+                .split(" action ")
+                .nth(1)
+                .expect("an action")
+                .to_owned();
+            self.calls.push(verb.clone());
+            match verb.as_str() {
+                "list-panes --json" => {
+                    let mut rows = vec![
+                        r#"{"id":0,"is_plugin":true,"is_suppressed":true,"tab_position":0}"#
+                            .to_owned(),
+                    ];
+                    for (tab, panes) in self.tabs.iter().enumerate() {
+                        rows.extend(panes.iter().map(|id| format!(r#"{{"id":{id},"is_plugin":false,"is_suppressed":false,"tab_position":{tab}}}"#)));
+                    }
+                    Ok(format!("[{}]", rows.join(",")))
+                }
+                "list-clients" => {
+                    if let Some((action, wait)) = self.pending.take() {
+                        if wait > 0 {
+                            self.pending = Some((action, wait - 1));
+                        } else if let Some(index) = action.strip_prefix("go-to-tab ") {
+                            self.active = index.parse::<usize>().unwrap() - 1;
+                        } else {
+                            self.focus[self.active] =
+                                (self.focus[self.active] + 1) % self.tabs[self.active].len();
+                        }
+                    }
+                    Ok(if self.attached {
+                        format!("CLIENT_ID  ZELLIJ_PANE_ID RUNNING_COMMAND\n1          terminal_{}     N/A\n", self.focused())
+                    } else {
+                        "CLIENT_ID  ZELLIJ_PANE_ID RUNNING_COMMAND\n".into()
+                    })
+                }
+                "focus-next-pane" => {
+                    self.pending = Some((verb, 1));
+                    Ok(String::new())
+                }
+                _ if verb.starts_with("go-to-tab ") => {
+                    self.pending = Some((verb, 1));
+                    Ok(String::new())
+                }
+                other => Err(SshError::new("fake", format!("unexpected {other}"))),
+            }
+        }
+    }
+    async fn focus_fake(
+        fake: &std::cell::RefCell<FakeZellij>,
+        session: &str,
+        pane: u32,
+    ) -> Result<()> {
+        focus_pane(session, pane, |command| {
+            let output = fake.borrow_mut().run(&command.render());
+            async move { output }
+        })
+        .await
+    }
+    #[tokio::test(start_paused = true)]
+    async fn focuses_a_pane_in_another_tab_and_in_the_same_tab_with_the_host_taking_its_time() {
+        let fake = std::cell::RefCell::new(FakeZellij::new(vec![vec![0, 1], vec![2, 3, 4]]));
+        // A hostile session name stays one literal word of every host command.
+        focus_fake(&fake, "a'$(touch nope)", 4).await.unwrap();
+        assert_eq!((fake.borrow().active, fake.borrow().focused()), (1, 4));
+        assert!(fake.borrow().calls.contains(&"go-to-tab 2".to_owned()));
+        assert!(!fake
+            .borrow()
+            .calls
+            .iter()
+            .any(|call| call.contains("focus-pane-id")));
+        focus_fake(&fake, "work", 3).await.unwrap();
+        focus_fake(&fake, "work", 1).await.unwrap();
+        assert_eq!((fake.borrow().active, fake.borrow().focused()), (0, 1));
+        // The pane the attached client already shows is left alone: no command changes the focus.
+        let calls = fake.borrow().calls.len();
+        focus_fake(&fake, "work", 1).await.unwrap();
+        assert_eq!(
+            fake.borrow().calls[calls..],
+            ["list-panes --json", "list-clients"]
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn refuses_a_pane_that_has_gone_and_gives_up_on_a_client_that_never_moves() {
+        let fake = std::cell::RefCell::new(FakeZellij::new(vec![vec![0, 1], vec![2]]));
+        let error = focus_fake(&fake, "work", 9).await.unwrap_err();
+        assert_eq!(error.kind(), "zellij_pane_gone");
+        assert!(!fake
+            .borrow()
+            .calls
+            .iter()
+            .any(|call| call.starts_with("focus") || call.starts_with("go-to")));
+        // No attached client reports a pane, so nothing can be focused: the call ends instead of cycling for ever.
+        fake.borrow_mut().attached = false;
+        let error = focus_fake(&fake, "work", 2).await.unwrap_err();
+        assert_eq!(error.kind(), "zellij_pane_unreachable");
+        assert!(
+            fake.borrow().calls.len() < 80,
+            "{}",
+            fake.borrow().calls.len()
+        );
+        // A pane list that is not JSON is a protocol error, not a guess.
+        let error = focus_pane("work", 1, |_| async { Ok("not json".to_owned()) })
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), "zellij_protocol");
+    }
+    #[test]
+    fn reads_the_attached_clients_pane_and_takes_no_action_shape_from_the_client() {
+        let listing = |row: &str| format!("CLIENT_ID  ZELLIJ_PANE_ID RUNNING_COMMAND\n{row}\n");
+        assert_eq!(
+            client_focus(&listing("1          terminal_12     N/A")),
+            Some(12)
+        );
+        for bad in [
+            "",
+            "CLIENT_ID  ZELLIJ_PANE_ID RUNNING_COMMAND\n",
+            &listing("1  plugin_3  N/A"),
+            &listing("1  terminal_x  N/A"),
+            &listing("1  terminal_-1  N/A"),
+        ] {
+            assert_eq!(client_focus(bad), None, "{bad:?}");
+        }
+        // A pane number is an unsigned integer: a name, a negative or a plugin-style id never reaches the host.
+        for bad in [
+            r#"{"type":"focusPane","pane":-1}"#,
+            r#"{"type":"focusPane","pane":"terminal_1;id"}"#,
+            r#"{"type":"focusPane"}"#,
+            r#"{"type":"focusPane","pane":1,"extra":true}"#,
+        ] {
+            assert!(serde_json::from_str::<ZellijAction>(bad).is_err(), "{bad}");
+        }
+        assert!(serde_json::from_str::<ZellijAction>(r#"{"type":"focusPane","pane":7}"#).is_ok());
     }
     /// A fresh 80x24 PTY and the Zellij command to run on it.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -683,6 +933,44 @@ mod tests {
             .unwrap()
             .render());
         wait("previous pane focus", &focused_pane, &|id| id == second);
+        // A notification names the pane by number; the attached client (not `list-panes`, which marks a pane focused for the command's own client too) must show it.
+        let number = |id: u64| u32::try_from(id).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let focus_by_number = |pane: u64| {
+            runtime.block_on(focus_pane(&name, number(pane), |command| {
+                let output = execute(command.render());
+                async move {
+                    if output.status.success() {
+                        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+                    } else {
+                        Err(SshError::new(
+                            "zellij",
+                            String::from_utf8_lossy(&output.stderr),
+                        ))
+                    }
+                }
+            }))
+        };
+        let attached_pane = || {
+            client_focus(&run(format!(
+                "zellij --session={} action list-clients",
+                quote(&name)
+            )))
+            .map(u64::from)
+        };
+        focus_by_number(first).unwrap();
+        assert_eq!(attached_pane(), Some(first));
+        // A pane that has gone changes nothing.
+        assert_eq!(
+            focus_by_number(9999).unwrap_err().kind(),
+            "zellij_pane_gone"
+        );
+        assert_eq!(attached_pane(), Some(first));
+        focus_by_number(second).unwrap();
+        assert_eq!(attached_pane(), Some(second));
         run(command(&name, &ZellijAction::ZoomPane).unwrap().render());
         let tabs = run(format!(
             "zellij --session={} action list-tabs --json",
@@ -721,6 +1009,28 @@ mod tests {
         wait("renamed tab by id", &renamed_second, &|found| found == 1);
         // Rename and close act on the tab they name, not the focused one: the first tab is still active.
         assert_eq!(wait("first tab still focused", &active_tab, &|_| true), 0);
+        // A pane in another tab is focused too: its tab comes forward with it.
+        let other_tab_pane = query("list-panes")
+            .unwrap()
+            .as_array()
+            .and_then(|panes| {
+                panes.iter().find(|pane| {
+                    pane["is_plugin"] == false
+                        && pane["tab_position"] == 1
+                        && pane["is_suppressed"] != true
+                })
+            })
+            .and_then(|pane| pane["id"].as_u64())
+            .expect("the second tab has a terminal pane");
+        focus_by_number(other_tab_pane).unwrap();
+        assert_eq!(attached_pane(), Some(other_tab_pane));
+        assert_eq!(wait("focus in another tab", &active_tab, &|_| true), 1);
+        focus_by_number(first).unwrap();
+        assert_eq!(attached_pane(), Some(first));
+        assert_eq!(
+            wait("focus back in the first tab", &active_tab, &|_| true),
+            0
+        );
         run(command(&name, &ZellijAction::CloseTab { id: second })
             .unwrap()
             .render());
