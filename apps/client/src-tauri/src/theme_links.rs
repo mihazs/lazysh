@@ -11,7 +11,12 @@ fn theme_code(url: &str) -> Result<String, &'static str> {
     if url.len() > LIMIT {
         return Err(INVALID);
     }
-    let data = url.strip_prefix("lazysh://theme?data=").ok_or(INVALID)?;
+    // Windows canonicalizes the URL it hands a protocol handler and adds a slash after the host
+    // (`lazysh://theme/?data=`); browsers do the same. Both spellings name the same route.
+    let data = url
+        .strip_prefix("lazysh://theme?data=")
+        .or_else(|| url.strip_prefix("lazysh://theme/?data="))
+        .ok_or(INVALID)?;
     if data.is_empty()
         || data.len() % 4 == 1
         || !data
@@ -235,16 +240,19 @@ mod tests {
     }
     #[test]
     fn accepts_only_the_bounded_canonical_theme_route() {
-        assert_eq!(
-            theme_code("lazysh://theme?data=YWJj").unwrap(),
-            "lazysh-theme:YWJj"
-        );
+        for value in ["lazysh://theme?data=YWJj", "lazysh://theme/?data=YWJj"] {
+            assert_eq!(theme_code(value).unwrap(), "lazysh-theme:YWJj");
+        }
         for value in [
             "https://theme?data=YWJj",
             "lazysh://agents/id",
             "lazysh://@theme?data=YWJj",
             "lazysh://theme:80?data=YWJj",
-            "lazysh://theme/?data=YWJj",
+            "lazysh://theme//?data=YWJj",
+            "lazysh://theme/x?data=YWJj",
+            "lazysh://theme/?data=YWJj#",
+            "lazysh://theme/?data=YWJj&data=YWJj",
+            "lazysh://theme/?data=",
             "lazysh://theme?data=YWJj#",
             "lazysh://theme?data=YWJj&data=YWJj",
             "lazysh://theme?data=YWJj&x=y",
