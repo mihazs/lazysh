@@ -20,6 +20,9 @@ jobs:
       - name: Build the companion this checkout produces
         shell: bash
         run: cargo build --locked -p lazysh-agent --bin lazysh-agent
+      - name: The agent's Windows case for the host browser relay
+        shell: bash
+        run: cargo test --locked -p lazysh-agent --lib host_browser::relay::tests::a_windows_host_has_no_browser_pipe_and_says_so -- --exact
       - name: Run the owned Windows sshd cases
         shell: bash
         env:
