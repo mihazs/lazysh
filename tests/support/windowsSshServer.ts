@@ -100,7 +100,7 @@ export async function startOwnedSshServer(): Promise<OwnedSshServer> {
     const started = server;
     owner = await until('sshd process identity', async () => (await processTable()).find(row => row.pid === started.child.pid));
     await until('sshd readiness', async () => (await speaksSsh(port)) ? true : undefined);
-    return { port, username, privateKey: await readFile(clientKey, 'utf8'), privateKeyPath: clientKey, fingerprint, directory, stop, output: () => started.output() };
+    return { port, username, privateKey: (await readFile(clientKey, 'utf8')).replaceAll('\r\n', '\n'), privateKeyPath: clientKey, fingerprint, directory, stop, output: () => started.output() };
   } catch (error) {
     console.error(`Owned Windows sshd failed to start; output:\n${server?.output().slice(-4000) ?? ''}`);
     try { await stop(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Owned Windows sshd startup and cleanup failed'); }
