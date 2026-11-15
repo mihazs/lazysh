@@ -220,9 +220,11 @@ jobs:
       stock-sha256: ${{ steps.stock-artifact.outputs.sha256 }}
       guarded-id: ${{ steps.guarded-upload.outputs.artifact-id }}
       stock-id: ${{ steps.stock-upload.outputs.artifact-id }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: "2"
+      # The one feature set the managed release build, its acceptance and its receipt share.
+      HERDR_FEATURES: lazysh-managed
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -512,13 +514,41 @@ jobs:
           path: ${{ runner.temp }}/lazysh-herdr-native/stock-artifact/
           if-no-files-found: error
           retention-days: 3
-      # Last on purpose: the feature rebuilds target/debug/herdr, and both artifacts above are already sealed.
-      - name: Exercise the managed build's own application namespace with real servers
-        id: managed-namespace
+      # The managed derivative as it would ship (#1756): the release profile, built from the same copied pinned source.
+      # Its own target profile leaves the sealed debug artifacts above untouched. The acceptance below runs the
+      # managed-namespace cases too, so no separate debug run is needed. Linux x86-64 only until another host has native evidence.
+      - name: Build the release-profile managed Herdr
+        id: managed-build
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: |
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --release --features "$HERDR_FEATURES" --bin herdr
+          printf 'sha256=%s\n' "$(sha256sum "$CARGO_TARGET_DIR/release/herdr" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Exercise the owned acceptance against that exact release executable
+        id: managed-acceptance
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
+        env:
+          MANAGED_SHA256: ${{ steps.managed-build.outputs.sha256 }}
+        run: |
           export HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture"
-          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input acceptance::
+          cargo +1.96.1 test --locked --release --features "$HERDR_FEATURES" --test guarded_input acceptance::
+          # Cargo must have reused the built executable: acceptance ran against these bytes and no others.
+          printf '%s  %s\n' "$MANAGED_SHA256" "$CARGO_TARGET_DIR/release/herdr" | sha256sum --check --strict
+      - name: Measure the libc floor and seal the managed executable with its receipt
+        id: managed-receipt
+        env:
+          HERDR_SOURCE_COMMIT: 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01
+        run: |
+          artifact="$HERDR_CI_ROOT/managed-artifact"
+          mkdir -p "$artifact"
+          cp "$CARGO_TARGET_DIR/release/herdr" "$artifact/herdr"
+          sh .github/scripts/herdr-release-receipt.sh "$artifact/herdr" packages/herdr-upstream/SOURCE-MANIFEST.sha256 "$artifact/receipt.json"
+          cat "$artifact/receipt.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: managed-herdr-linux-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-herdr-native/managed-artifact/
+          if-no-files-found: error
+          retention-days: 14
 
       # The terminal runtime for Android, with the same admitted Zig, archives and caches as above. Last, because
       # nothing sealed above depends on it. Compiling and linking only: nothing runs on Android here.
