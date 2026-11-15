@@ -204,12 +204,20 @@ export class WebDriver {
     this.session = (await this.request('POST', '/session', { capabilities: { alwaysMatch: { 'tauri:options': { application } } } }, 90_000)).sessionId;
   }
   url = () => this.call('GET', '/url') as Promise<string>;
-  async find(selector: string) {
-    try { return (await this.call('POST', '/element', { using: 'css selector', value: selector }))[ELEMENT] as string; }
+  /** The first match below `within` (the whole page by default), or undefined while there is none. */
+  async find(selector: string, within?: string, using: 'css selector' | 'xpath' = 'css selector') {
+    try { return (await this.call('POST', within ? `/element/${within}/element` : '/element', { using, value: selector }))[ELEMENT] as string; }
     catch (error) { if (error instanceof WebDriverError && error.code === 'no such element') return undefined; throw error; }
   }
   click = (element: string) => this.call('POST', `/element/${element}/click`, {});
   text = (element: string) => this.call('GET', `/element/${element}/text`) as Promise<string>;
+  displayed = (element: string) => this.call('GET', `/element/${element}/displayed`) as Promise<boolean>;
+  property = (element: string, name: string) => this.call('GET', `/element/${element}/property/${name}`);
+  /** Type into one form control. */
+  type = (element: string, text: string) => this.call('POST', `/element/${element}/value`, { text });
+  /** Press keys on whatever has focus, as the real keyboard does ('\uE007' is Enter); needed for the terminal's hidden input. */
+  keys = (text: string) => this.call('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard',
+    actions: [...text].flatMap(value => [{ type: 'keyDown', value }, { type: 'keyUp', value }]) }] });
   script = (source: string, args: unknown[] = []) => this.call('POST', '/execute/sync', { script: source, args });
   screenshot = () => this.call('GET', '/screenshot') as Promise<string>;
   async quit() { const session = this.session; this.session = ''; await this.request('DELETE', `/session/${session}`, undefined, 20_000); }
