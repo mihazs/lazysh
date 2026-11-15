@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.65.0
+
+### Patch Changes
+
+- 8170c44: Add an owned Android runtime case for Files and repository review over OpenSSH (#994, #1737): through the real UI it browses a host directory over SFTP, reads a text file and meets the not-UTF-8 and over-1-MiB refusals, then opens a Git repository and checks modified, staged and untracked entries, their diffs, a binary diff refusal, the history list, a historical commit's tree and file, and that leaving the review and returning reopens the remembered revision and file. The owned sshd gains an opt-in SFTP subsystem for this. Test infrastructure only; the app is unchanged.
+- 390837c: Cancel an active Android QR camera capture in the owned emulator case and verify the camera is released and a late frame never previews. Test and documentation only. No user-visible behaviour changes.
+- a6449cd: Make the tree-sample CPU test deterministic: its burner no longer spends more system time on clock reads than the 300 ms of user time it is meant to burn, which made the required `client` check fail on loaded runners. Test-only; no behaviour changes.
+- bb02d69: Add a Chromium test for the two SwiftKey inputs that arrive as key events rather than text edits: Backspace over an empty terminal editor and Enter must each put exactly one byte on the wire (#1215). Test-only; no behavior change.
+- e9489ff: Accept the slash Windows and browsers add after the host of a `lazysh://theme` link, so a theme link opened from Windows is offered for review instead of being dropped.
+- @lazysh/account-usage@1.65.0
+  - @lazysh/common@1.65.0
+  - @lazysh/display-idle@1.65.0
+  - @lazysh/et-transport@1.65.0
+  - @lazysh/mosh-transport@1.65.0
+
 ## 1.64.2
 
 ### Patch Changes
