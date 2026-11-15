@@ -619,7 +619,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       recorded?'-PlazyshRecordedConversationAcceptance=true':tmux?'-PlazyshTmuxAcceptance=true':herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':deniedNotification?'-PlazyshDeniedNotificationAcceptance=true':'-PlazyshSshAcceptance=true',
       ...((herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?'ownedTmuxThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?(tmux.metadata().agent?'ownedTmuxAgentViewThroughRealUi':'ownedTmuxThroughRealUi'):herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr || attachments || dpad;
     let monitoring=sharedHerdr || rawInput || !!tmux,byteFailure:unknown;
@@ -692,7 +692,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(JSON.stringify(attachmentFiles)!==JSON.stringify(Object.values(attachmentNames).sort()))throw new Error('Unexpected owned attachment destination created');
       console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
     }
-    if(tmux) {
+    if(tmux?.metadata().agent) {
+      await tmux.verifyReportingAgent();
+      console.log('Owned packaged tmux Agent view: the reporting agent pane received each prompt once and no key from any view switch, with one display client');
+    } else if(tmux) {
       await tmux.verifyWindowLifecycle();
       await tmux.verifyDetachedAndReattached();
       console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, detach and reattach verified against the original server and pane processes');

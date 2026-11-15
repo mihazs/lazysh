@@ -1,10 +1,12 @@
 import {isAbsolute,join} from 'node:path';
-import {lstat,readdir,readlink,writeFile} from 'node:fs/promises';
+import {chmod,lstat,readdir,readFile,readlink,writeFile} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,descendants,identity,type OwnedPid} from './ownedProcess';
 import {SshFixture,stopOwnedTree} from './sshFixture';
+import {reportingAgentDeliveredOnce,reportingAgentPrompts,reportingAgentScript} from './androidTmuxAgent';
 
 type OwnedChat={transcript:string;record:string;draft:string;window:'alpha'};
+type OwnedAgent=ReturnType<typeof reportingAgentPrompts>;
 type OwnedWindow={windowId:string;index:number;name:'alpha'|'beta';marker:string;paneId:string;pane:OwnedPid};
 const paneRow=/^(@[0-9]{1,9})\|([0-9]{1,3})\|(alpha|beta)\|([01])\|(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])$/;
 
@@ -52,9 +54,9 @@ export function tmuxDisplayClients(text:string) {
   if(text.length>64 || lines.length>8 || lines.some(line=>line!=='0' && line!=='1'))throw new Error('Owned tmux client readback invalid');
   return lines.filter(line=>line==='0').length;
 }
-/** Compressed display-client history: attach, detach, reattach and final detach. */
-export function tmuxAttachHistoryVerified(history:readonly number[]) {
-  return history.length===5 && [0,1,0,1,0].every((count,index)=>history[index]===count);
+/** Compressed display-client history: no client, then `attaches` rounds of attach and detach (two: attach, detach, reattach, final detach). */
+export function tmuxAttachHistoryVerified(history:readonly number[],attaches=2) {
+  return history.length===1+2*attaches && history.every((count,index)=>count===(index%2===1?1:0));
 }
 
 /**
@@ -113,11 +115,16 @@ export class TmuxFixture {
   private history:number[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
   private chat:OwnedChat|undefined;
+  private agent:OwnedAgent|undefined;
   private constructor(readonly ssh:SshFixture) {}
-  /** With an `agent` companion the fixture also owns a synthetic Claude transcript, so the app can open it and send Chat input. */
-  static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string) {
+  /**
+   * With an `agent` companion the fixture also owns a synthetic Claude transcript, so the app can open it and send Chat input.
+   * With `reporting` too, window alpha runs the hook-reporting stand-in agent instead of `sleep`, so the Agent view binds to a real pane.
+   */
+  static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string,reporting=false) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
     if(agent!==undefined && !isAbsolute(agent))throw new Error('Explicit current-source companion required');
+    if(reporting && agent===undefined)throw new Error('The reporting agent needs the current-source companion');
     const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary,agentBinary:agent});
     const owned=new TmuxFixture(ssh);
     try {
@@ -132,8 +139,9 @@ export class TmuxFixture {
         if(performance.now()>=until || !await owned.server.liveIdentity())throw new Error('Owned tmux startup deadline');
         await delay(10);
       }
+      if(reporting)owned.agent=await owned.prepareAgent();
       for(const [index,name] of [[0,'alpha'],[1,'beta']] as const) {
-        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec sleep 3600`;
+        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=reporting && index===0?owned.agentCommand():`printf '%s\\n' '${marker}'; exec sleep 3600`;
         await owned.run(index===0?['new-session','-d','-s',owned.name,'-n',name,'-x','80','-y','24','-c',ssh.directory,command]
           :['new-window','-d','-t',`=${owned.name}:${index}`,'-n',name,'-c',ssh.directory,command]);
         owned.windows.push({windowId:'',index,name,marker,paneId:'',pane:{pid:0,parent:0,start:'',state:''}});
@@ -149,13 +157,14 @@ export class TmuxFixture {
         const pane=row && await identity(row.pid);
         if(!row || row.dead || row.active!==(window.index===0) || !pane || pane.parent!==owned.serverPid!.pid)throw new Error('Owned tmux topology changed');
         Object.assign(window,{windowId:row.windowId,paneId:row.paneId,pane});
-        const deadline=performance.now()+3000;
-        while(!(await owned.run(['capture-pane','-p','-t',row.paneId])).includes(window.marker)) {
+        // The stand-in repaints its pane, so its own READY record is its readiness; it first runs the companion's SessionStart hook.
+        const stand=reporting && window.index===0,deadline=performance.now()+(stand?10_000:3000);
+        while(!(stand?(await owned.agentLog()).includes('READY'):(await owned.run(['capture-pane','-p','-t',row.paneId])).includes(window.marker))) {
           if(performance.now()>=deadline)throw new Error('Owned tmux pane marker unavailable');
           await delay(10);
         }
       }
-      if(agent)await owned.prepareChat();
+      if(agent && !reporting)await owned.prepareChat();
       await owned.observe();
       return owned;
     } catch(error) {
@@ -206,13 +215,17 @@ export class TmuxFixture {
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
   diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
-  async verifyDetachedAndReattached() {
+  /** Samples until the last display client has gone, for at most five seconds. */
+  private async untilDetached() {
     const deadline=performance.now()+5000;
     while(true) {
       await this.observe();
       if(this.history.at(-1)===0 || performance.now()>=deadline)break;
       await delay(25);
     }
+  }
+  async verifyDetachedAndReattached() {
+    await this.untilDetached();
     if(!tmuxAttachHistoryVerified(this.history))throw new Error('Owned tmux attach, detach and reattach were not observed');
     if((await this.run(['list-sessions','-F','#{session_name}'])).trim()!==this.name)throw new Error('Owned tmux sessions changed');
     const rows=tmuxPaneRows(await this.panes());
@@ -239,6 +252,32 @@ export class TmuxFixture {
     if(page.schemaVersion!==1 || !JSON.stringify(page.messages).includes(record))throw new Error('Owned tmux companion did not read the synthetic transcript');
     this.chat={transcript,record,draft:`tmux chat ${nonce}: it's "quoted" $HOME #{pane_id} a;b`,window:'alpha'};
   }
+  /** The stand-in agent, its fixed prompts and the companion's own state directory, which the app's companion reads over SSH too. */
+  private async prepareAgent() {
+    const directory=this.ssh.directory;
+    await writeFile(join(directory,'agent.sh'),await readFile(reportingAgentScript),{mode:0o700,flag:'wx'});
+    await chmod(join(directory,'agent.sh'),0o700);
+    return reportingAgentPrompts(this.ssh.nonce);
+  }
+  private agentCommand() {
+    const directory=this.ssh.directory,[agent,log,companion]=['session.jsonl','agent.log','bin/lazysh-agent'].map(name=>`'${join(directory,name)}'`);
+    // The companion's default state directory under the fixture's XDG_STATE_HOME; the app's companion reads the same one.
+    return `exec bash '${join(directory,'agent.sh')}' ${agent} ${log} ${companion} '${join(directory,'state/lazysh')}' report`;
+  }
+  private readonly agentFile=(name:string)=>readFile(join(this.ssh.directory,name),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+  private agentLog() {return this.agentFile('agent.log');}
+  /**
+   * After the run: the display client attached once and detached, the original server and panes survived, and the stand-in
+   * received exactly the three prompts once each, in order, with no other key from any view switch.
+   */
+  async verifyReportingAgent() {
+    const agent=this.agent,alpha=this.windows[0];
+    if(!agent || alpha?.name!=='alpha')throw new Error('Owned tmux reporting agent fixture required');
+    await this.untilDetached();
+    if(!tmuxAttachHistoryVerified(this.history,1))throw new Error('Owned tmux agent display was not attached exactly once and then detached');
+    const pane=await this.run(['capture-pane','-p','-J','-t',alpha.paneId]);
+    reportingAgentDeliveredOnce(await this.agentLog(),await this.agentFile('agent.log.keys'),pane,[agent.hold,agent.sent,agent.typed]);
+  }
   /** After the run: the confirmed draft is in the original pane only (by pane id), once, and that pane is the same process. */
   async verifyChatInput() {
     const chat=this.chat,alpha=this.windows.find(window=>window.name===chat?.window);
@@ -250,7 +289,7 @@ export class TmuxFixture {
   }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames],...(this.chat?{chat:this.chat}:{})};
+    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames],...(this.chat?{chat:this.chat}:{}),...(this.agent?{agent:this.agent}:{})};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */
