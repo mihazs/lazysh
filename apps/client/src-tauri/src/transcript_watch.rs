@@ -145,6 +145,8 @@ enum Verdict {
     Unavailable(&'static str),
 }
 fn judge(line: &[u8]) -> Result<Verdict> {
+    // A Windows host's PowerShell ends every line with CR LF.
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
     if line == COMPANION_REQUIRED.as_bytes() {
         return Ok(Verdict::Unavailable("companion_required"));
     }
@@ -449,9 +451,15 @@ mod tests {
             judge(json!({"type":"progress"}).to_string().as_bytes()).unwrap(),
             Verdict::Skip
         ));
+        for line in [COMPANION_REQUIRED, &format!("{COMPANION_REQUIRED}\r")] {
+            assert!(matches!(
+                judge(line.as_bytes()).unwrap(),
+                Verdict::Unavailable("companion_required")
+            ));
+        }
         assert!(matches!(
-            judge(COMPANION_REQUIRED.as_bytes()).unwrap(),
-            Verdict::Unavailable("companion_required")
+            judge(b"{\"type\":\"hello\",\"protocol\":1}\r").unwrap(),
+            Verdict::Send(_)
         ));
         for bad in ["{ not json", "[]", "{\"type\":3}", "usage: lazysh-agent"] {
             assert_eq!(
