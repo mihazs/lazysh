@@ -328,7 +328,7 @@ Grok Build is bound to its pane by evidence it reports itself: its hooks pass th
 (a session whose file is not written yet) binds nothing, and a sub-agent's own events are ignored. Nothing is guessed from a
 process or from the newest file of a folder. The record format and the hook input are verified against the pinned source
 snapshot and synthetic fixtures only: the development host has no Grok Build binary and no account, so the runtime case
-against a real agent is still open ([#1657](https://github.com/mihazs/lazysh/issues/1657)).
+against a real agent is still open ([#1842](https://github.com/mihazs/lazysh/issues/1842)).
 
 ## Input and control mapping
 
