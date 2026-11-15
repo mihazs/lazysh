@@ -4836,6 +4836,131 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** A JS array literal for `values`, so a DOM list compares exactly without Android's JSON escaping of "/". */
+    private fun jsArray(values: List<String>) = values.joinToString(",", "[", "]") { JSONObject.quote(it) }
+
+    @Test fun ownedSshFilesAndRepositoryReviewThroughRealUi() {
+        val name = "Parity files"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val files = parity.fixture.getJSONObject("files")
+            val directory = files.getString("directory")
+            val repository = files.getString("repository")
+            val firstCommit = files.getString("firstCommit")
+            // Double quotes keep the selector usable inside the single-quoted JS strings below.
+            val filesPanel = "section[aria-label=\"Remote files\"]"
+            val reviewPanel = "section.repository-panel"
+            var shown = filesPanel
+            // A failed wait reports the visible text of the panel it was waiting on.
+            fun awaitPanel(stage: String, expression: String) = awaitDocument(scenario, stage, expression,
+                observe = { evaluate(scenario, "(document.querySelector(${JSONObject.quote(shown)})?.innerText||'').slice(0,400)") })
+            fun click(xpath: String) = onWebView().withElement(findElement(Locator.XPATH, xpath)).perform(webScrollIntoView()).perform(webClick())
+            fun clickEntry(entry: String) = click("//section[@aria-label='Remote files']//div[contains(@class,'file-list')]//button[span[normalize-space(text())='$entry']]")
+            fun clickChange(file: String, label: String) = click("//section[contains(@class,'repository-panel')]//article[contains(@class,'repository-change')]" +
+                "[code[substring(., string-length(.) - ${file.length - 1}) = '$file']]//button[normalize-space(text())='$label']")
+            // Controls are disabled while the panel reads, and a click on a disabled button does nothing.
+            fun awaitIdle(stage: String, panel: String) = awaitPanel("$stage: $panel idle", "!document.querySelector('$panel [role=status]')")
+            fun awaitAlert(stage: String, panel: String, text: String) = awaitPanel(stage,
+                "document.querySelector('$panel .inline-error[role=alert]')?.textContent.includes(${JSONObject.quote(text)})===true")
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("files"))
+            parity.mark("files")
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, files.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("files"), "127.0.0.1:${parity.port("files")}")
+            proveOwnedShell(scenario, parity, parity.prompt("files"), "FILES")
+
+            // Files: browse the home directory over SFTP, read a text file, and meet both refusals.
+            sessionView(scenario, "Files")
+            awaitPanel("Files lists the home directory", """
+                (()=>{const names=Array.from(document.querySelectorAll('$filesPanel .file-entry span')).map(x=>x.textContent);
+                  return names.includes(${JSONObject.quote(directory)}) && !document.querySelector('$filesPanel [role=status]');})()
+            """)
+            clickEntry(directory)
+            awaitPanel("Files lists the fixture directory", """
+                (()=>{const names=Array.from(document.querySelectorAll('$filesPanel .file-entry span')).map(x=>x.textContent).sort();
+                  return JSON.stringify(names)===JSON.stringify(${jsArray(listOf("blob.bin", "huge.txt", "notes.txt", "review"))}) && !document.querySelector('$filesPanel [role=status]');})()
+            """)
+            clickEntry("notes.txt")
+            awaitPanel("Files shows the text file", """
+                (()=>document.querySelector('$filesPanel .file-preview .preview-heading')?.textContent.endsWith('/$directory/notes.txt') &&
+                  document.querySelector('$filesPanel .file-preview .repository-code')?.textContent===${JSONObject.quote(files.getString("note") + "\nsecond line\n")})()
+            """)
+            clickEntry("blob.bin")
+            awaitAlert("Files refuses a file that is not UTF-8", filesPanel, "This file is not UTF-8 text")
+            awaitIdle("after the binary refusal", filesPanel)
+            clickEntry("huge.txt")
+            awaitAlert("Files refuses a file over the preview limit", filesPanel, "Text preview is limited to 1 MiB")
+
+            // Repository review: the working tree through Git over exec channels.
+            shown = reviewPanel
+            sessionView(scenario, "Diff")
+            awaitPanel("repository panel", present(reviewPanel))
+            replaceNativeText(scenario, "$reviewPanel form.tool-bar input", repository)
+            closeSoftKeyboard()
+            click("//section[contains(@class,'repository-panel')]//button[normalize-space(text())='Open repository']")
+            awaitPanel("status lists every kind of change", """
+                (()=>{const rows=Array.from(document.querySelectorAll('$reviewPanel .repository-change code')).map(x=>x.textContent);
+                  return JSON.stringify(rows)===JSON.stringify(${jsArray(listOf(" M data.bin", " M file.txt", "A  staged-new.txt", "?? notes/untracked.txt"))}) &&
+                    !document.querySelector('$reviewPanel [role=status]');})()
+            """)
+            fun awaitDiff(stage: String, rows: List<String>) = awaitPanel(stage, """
+                (()=>JSON.stringify(Array.from(document.querySelectorAll('$reviewPanel .repository-diff tr.change')).map(row =>
+                  Array.from(row.querySelectorAll('pre')).map(x=>x.textContent).join('|')))===JSON.stringify(${jsArray(rows)}) &&
+                  !document.querySelector('$reviewPanel [role=status]'))()
+            """)
+            clickChange("file.txt", "Unstaged diff")
+            awaitDiff("unstaged diff of the modified file", listOf("before|after"))
+            clickChange("staged-new.txt", "Staged diff")
+            awaitDiff("staged diff of the added file", listOf("|staged addition"))
+            clickChange("notes/untracked.txt", "Read file")
+            awaitPanel("the untracked file's content", """
+                (()=>document.querySelector('$reviewPanel .repository-code')?.textContent===${JSONObject.quote(files.getString("untracked") + "\n")} &&
+                  !document.querySelector('$reviewPanel [role=status]'))()
+            """)
+            clickChange("data.bin", "Unstaged diff")
+            awaitPanel("the binary diff is refused", """
+                (()=>document.querySelector('$reviewPanel .repository-content')?.textContent.includes('Binary file changed. Text diff unavailable.') &&
+                  !document.querySelector('$reviewPanel [role=status]'))()
+            """)
+
+            // History: the older commit's tree and its own version of a file, not the working copy.
+            awaitPanel("the first commit is in the history list", present("$reviewPanel select option[value='$firstCommit']"))
+            evaluate(scenario, """(()=>{const select=document.querySelector('$reviewPanel select');
+                Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'$firstCommit');
+                select.dispatchEvent(new Event('change',{bubbles:true}));return select.value==='$firstCommit';})()""")
+            awaitPanel("the first commit's tree", """
+                (()=>JSON.stringify(Array.from(document.querySelectorAll('$reviewPanel .repository-file code')).map(x=>x.textContent).sort())===
+                  JSON.stringify(${jsArray(listOf("data.bin", "docs", "file.txt"))}) && !document.querySelector('$reviewPanel [role=status]'))()
+            """)
+            click("//section[contains(@class,'repository-panel')]//button[contains(@class,'repository-file')][code[normalize-space(text())='docs']]")
+            awaitPanel("the first commit's docs directory", """
+                (()=>JSON.stringify(Array.from(document.querySelectorAll('$reviewPanel .repository-file code')).map(x=>x.textContent))===
+                  JSON.stringify(${jsArray(listOf("docs/readme.md"))}) && !document.querySelector('$reviewPanel [role=status]'))()
+            """)
+            click("//section[contains(@class,'repository-panel')]//button[contains(@class,'repository-file')][code[normalize-space(text())='docs/readme.md']]")
+            val historical = """
+                (()=>document.querySelector('$reviewPanel select').value==='$firstCommit' &&
+                  document.querySelector('$reviewPanel .repository-code')?.textContent.startsWith(${JSONObject.quote(files.getString("firstReadme") + "\n")}) &&
+                  !document.querySelector('$reviewPanel .repository-code').textContent.includes(${JSONObject.quote(files.getString("secondReadme"))}) &&
+                  !document.querySelector('$reviewPanel [role=status]'))()
+            """
+            awaitPanel("the historical file at the first commit", historical)
+
+            // The remembered file: leaving the review and coming back reopens the same revision and file.
+            sessionView(scenario, "Terminal")
+            awaitPanel("the review panel is gone", "!document.querySelector('$reviewPanel')")
+            sessionView(scenario, "Diff")
+            awaitPanel("the remembered revision and file are reopened", historical)
+
+            val facts = parity.observe("files")
+            assertTrue("Files must have used the SFTP subsystem: $facts", parityCount(facts, "sftpSubsystems") >= 1)
+            assertTrue("The repository's Git commands must have run over exec channels: $facts", parityCount(facts, "execRequests") >= 4)
+            sessionView(scenario, "Terminal")
+            endOwnedConnection(scenario, name)
+            println("lazysh parity: Files browsed and read over SFTP with both refusals, and the repository's status, diffs, history, tree and remembered file reviewed over exec")
+        }
+    }
+
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
         val fixture = "Instrumentation ${UUID.randomUUID()}"
         val selector = "button[aria-label='Connect to $fixture']"

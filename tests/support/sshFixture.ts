@@ -156,8 +156,8 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
     return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean}={}) {
-    if((options.password!==undefined || options.log) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean}={}) {
+    if((options.password!==undefined || options.log || options.sftp) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
     if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
@@ -190,11 +190,13 @@ export class SshFixture {
       const prompt=`UI_PROMPT_${nonce}> `;
       let environment:NodeJS.ProcessEnv|undefined;
       let subsystem:string|undefined;
-      if(options.companion || options.moshBinary) {
+      if(options.companion || options.moshBinary || options.sftp) {
         for(const candidate of ['/usr/lib/openssh/sftp-server','/usr/lib/ssh/sftp-server']) {
           if(await stat(candidate).then(value=>value.isFile()).catch(()=>false)){subsystem=candidate;break;}
         }
         if(!subsystem)throw new Error('Owned file-transfer fixture requires installed OpenSSH SFTP server');
+      }
+      if(options.companion || options.moshBinary) {
         if(!tools)environment=await privateEnvironment(directory,'/usr/bin:/bin',[['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]);
       }
       if(tools) {

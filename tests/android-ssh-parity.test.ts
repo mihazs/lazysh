@@ -1,10 +1,11 @@
 import {expect,test} from 'bun:test';
-import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
 import {androidSshParityAcceptance,parityControl,previewListener,sshdLogFacts,validateSshParityReport,sshParityCases} from './support/androidSshParity';
 import {sshCommand} from './support/sshFixture';
+import {writeFilesFixture} from './support/androidFilesFixture';
 
 const parity=process.env.LAZYSH_ANDROID_UI_SSH_PARITY==='1';
 
@@ -101,6 +102,31 @@ test.skipIf(!parity)('owned exec sshd runs the requested command while the plain
     expect(await run(running)).toContain('EXEC_PROOF');
     expect(await run(plain)).not.toContain('EXEC_PROOF');
   } finally {for(const fixture of started)await fixture.stop();}
+},40_000);
+
+test.skipIf(!parity)('owned files sshd serves the fixture over SFTP and its repository over exec',async()=>{
+  const fixture=await SshFixture.start(undefined,{log:true,sftp:true});
+  try {
+    const log=join(fixture.directory,'sshd.log'),offset=(await readFile(log)).length;
+    const files=await writeFilesFixture(fixture.directory,fixture.nonce);
+    const status=await fixture.client(true,`git -C ${files.repository} status --porcelain=v1 --untracked-files=all`);
+    status.child.stdin!.end();
+    expect((await status.finish('owned repository status',10_000)).split('\n').filter(Boolean)).toEqual([' M data.bin',' M file.txt','A  staged-new.txt','?? notes/untracked.txt']);
+    const history=await fixture.client(true,`git -C ${files.repository} log --format=%H%x20%s`);
+    history.child.stdin!.end();
+    const commits=(await history.finish('owned repository history',10_000)).split('\n').filter(Boolean);
+    expect(commits).toEqual([expect.stringMatching(/^[0-9a-f]{40} second commit$/),`${files.firstCommit} first commit`]);
+    const listing=await fixture.sftp();
+    listing.child.stdin!.end(`ls -l ${files.directory}\nquit\n`);
+    expect((await listing.finish('owned files listing',10_000)).split('\n').flatMap(line=>/^[-d]\S+ .*\/([^/\s]+)$/.exec(line)?.[1]??[]).sort())
+      .toEqual(['blob.bin','huge.txt','notes.txt','review']);
+    // The refusals depend on these exact shapes: invalid UTF-8, and one byte over the 1 MiB preview limit.
+    expect((await stat(join(fixture.directory,files.directory,'huge.txt'))).size).toBe(1024*1024+1);
+    expect(()=>new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from([0xff,0xfe,0x00,0x80]))).toThrow();
+    const facts=sshdLogFacts((await readFile(log)).subarray(offset).toString('utf8'));
+    expect(facts.sftpSubsystems).toBe(1);
+    expect(facts.execRequests).toBe(2);
+  } finally {await fixture.stop();}
 },40_000);
 
 test('parity report counts only every expected native case passing exactly once',()=>{
