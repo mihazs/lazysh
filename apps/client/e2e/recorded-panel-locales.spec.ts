@@ -2,7 +2,7 @@ import {expectPanelInsets} from './fixtures/panelLayout';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {expect,test} from '@playwright/test';
 import type {mountRecordedPanels} from './fixtures/RecordedPanelsHarness';
-import {panelRawText,panelSession,panelTimestamp} from '../src/test/recordedPanelData';
+import {panelInboxRow,panelRawText,panelSession,panelTimestamp} from '../src/test/recordedPanelData';
 declare global {interface Window {recordedPanels:ReturnType<typeof mountRecordedPanels>;}}
 for(const labels of [
   {locale:'pt-BR',transcript:'Transcrição do agente',path:'Caminho da transcrição',open:'Abrir transcrição',draft:'Rascunho para este terminal',stage:'Preparar no terminal',usage:'Uso de tokens registrado',usageAgent:'Agente dos dados de uso',usagePath:'Caminho da transcrição de uso',inspect:'Inspecionar uso',inbox:'Caixa de entrada dos agentes',connected:'Abrir sessão conectada',archive:'Arquivar',minute:'1 minuto'},
@@ -34,7 +34,7 @@ for(const labels of [
     await expectPanelInsets(panel);
   }
   await root.getByRole('button',{name:labels.connected,exact:true}).click();
-  expect(await page.evaluate(()=>window.recordedPanels.opened)).toEqual([{sessionId:panelSession.id,waiting:false}]);
+  expect(await page.evaluate(()=>window.recordedPanels.opened)).toEqual([{sessionId:panelSession.id,paneId:panelInboxRow.paneId,waiting:false}]);
   const before=await page.evaluate(()=>window.recordedPanels.calls);
   await page.evaluate(async()=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:'en'});});
   await expect(root.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveValue(panelRawText);

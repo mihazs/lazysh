@@ -101,6 +101,7 @@ import { readWorkspace, saveWorkspace, sessionIntent, type SessionIntent } from 
 import { ConnectionRecovery, useNetworkOnline, type RecoveryOutcome } from "./connectionRecovery";
 import { ConnectionRecoveryBanner, NetworkOfflineNotice } from "./ConnectionBanner";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
+import { focusInboxPane } from "./notificationStore";
 import {agentViewShortcut, appShortcut, navigationShortcut, shiftedChordHint, useCapturedShortcut, type NavigationShortcut} from './keyboard';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
@@ -1848,7 +1849,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       setView("terminal");
     };
     window.addEventListener("lazysh-prompt-draft", stage);
-    const openInbox = (event: Event) => {
+    const openInbox = async (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail;
       if (
         !detail ||
@@ -1857,12 +1858,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         typeof detail.sessionId !== "string"
       )
         return;
-      if (
-        !sessionsRef.current.some(
-          (session) => session.id === detail.sessionId && session.connected && !session.local,
-        )
-      )
-        return;
+      const reachable = (id: string) => sessionsRef.current.find(
+        (session) => session.id === id && session.connected && !session.local,
+      );
+      const source = reachable(detail.sessionId);
+      if (!source) return;
+      // The pane comes first so the Agent view that opens next follows the agent that raised the event.
+      if ("paneId" in detail && typeof detail.paneId === "string") await focusInboxPane(invoke, source, detail.paneId);
+      if (!mounted.current || !reachable(detail.sessionId)) return;
       const target=detail.sessionId;
       setActiveId(target);
       setView('terminal');setInbox(false);
