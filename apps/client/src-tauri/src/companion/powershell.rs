@@ -422,6 +422,15 @@ mod native_tests {
     fn text(bytes: &[u8]) -> &str {
         std::str::from_utf8(bytes).unwrap().trim()
     }
+    /// The status `shell` reports for a command that exits with `status`: `cmd.exe` passes it on, while
+    /// `powershell.exe -Command` turns every non-zero status of its last native command into 1.
+    fn reported(shell: (&str, &[&str]), status: i32) -> Option<i32> {
+        Some(if shell.0 == "cmd.exe" {
+            status
+        } else {
+            status.min(1)
+        })
+    }
     fn identified(shell: (&str, &[&str]), state: &Path) -> Windows {
         let out = run(shell, &Windows::probe_command(), &search(None), state);
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -494,7 +503,7 @@ mod native_tests {
             assert_eq!(json["sessionId"], hostile, "{shell:?}");
             // The companion's own exit status (2 for a command it does not know) is the command's.
             let unknown = go(host.command("lazysh-agent no-such-command").unwrap(), &with);
-            assert_eq!(unknown.status.code(), Some(2), "{shell:?}");
+            assert_eq!(unknown.status.code(), reported(shell, 2), "{shell:?}");
             // A required command answers the marker for what is missing or too old, and runs what is there.
             let required = |line: &str, path: &str| go(host.required(line, marker).unwrap(), path);
             let old = required("lazysh-agent no-such-command", &with);
@@ -517,7 +526,7 @@ mod native_tests {
             );
             // With no companion at all an ordinary command fails as `sh` does: status 127 and a message.
             let missing = go(host.command("lazysh-agent --version").unwrap(), &without);
-            assert_eq!(missing.status.code(), Some(127), "{shell:?}");
+            assert_eq!(missing.status.code(), reported(shell, 127), "{shell:?}");
             assert!(
                 String::from_utf8_lossy(&missing.stderr).contains("command not found"),
                 "{shell:?}"
