@@ -355,9 +355,8 @@ fn assert_jpeg_preview(frame: &Value) {
     assert!(serde_json::to_vec(&frame).unwrap().len() < 768 * 1024);
 }
 
-#[test]
-#[ignore = "requires an explicitly selected owned Android emulator and installed SDK"]
-fn android_owned_emulator_inventory_and_screenshot() {
+/// The serial an acceptance test was explicitly told to use, which must be an emulator.
+pub(super) fn owned_emulator() -> String {
     let id = std::env::var("LAZYSH_TEST_ANDROID_SERIAL")
         .expect("explicitly select an owned emulator with LAZYSH_TEST_ANDROID_SERIAL");
     assert!(
@@ -365,6 +364,12 @@ fn android_owned_emulator_inventory_and_screenshot() {
         "this acceptance test requires an emulator"
     );
     assert_eq!(std::env::var("ANDROID_SERIAL").as_deref(), Ok(id.as_str()));
+    id
+}
+#[test]
+#[ignore = "requires an explicitly selected owned Android emulator and installed SDK"]
+fn android_owned_emulator_inventory_and_screenshot() {
+    let id = owned_emulator();
     let mut runner = SdkRunner {
         cancelled: Arc::new(AtomicBool::new(false)),
     };

@@ -311,14 +311,17 @@ pub(crate) fn cancellation_signal() -> Result<Arc<AtomicBool>> {
         .map_err(|_| Error::Device("DeviceCancellationUnavailable"))?;
     Ok(cancelled)
 }
+fn write_line(writer: &mut impl std::io::Write, frame: &Value) -> Result<()> {
+    serde_json::to_writer(&mut *writer, frame).map_err(|_| Error::Device("DeviceStreamClosed"))?;
+    writer.write_all(b"\n")?;
+    Ok(writer.flush()?)
+}
 fn write_frame(
     writer: &mut impl std::io::Write,
     frame: &Value,
     sender: &std::sync::mpsc::SyncSender<Result<()>>,
 ) -> Result<bool> {
-    serde_json::to_writer(&mut *writer, frame).map_err(|_| Error::Device("DeviceStreamClosed"))?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
+    write_line(writer, frame)?;
     Ok(sender.send(Ok(())).is_ok())
 }
 fn frame_ready(receiver: &std::sync::mpsc::Receiver<Result<()>>) -> Result<bool> {

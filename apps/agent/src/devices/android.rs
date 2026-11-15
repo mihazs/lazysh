@@ -1,6 +1,12 @@
 //! Optional view-only Android capture through SDK screenrecord and an installed FFmpeg.
 use super::*;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::{atomic::AtomicU64, Mutex, PoisonError};
+
+/// `screenrecord` writes nothing while the screen is unchanged and FFmpeg completes a frame only
+/// when the next one starts, so a screenshot stands in for a video frame that has not come for this
+/// long, and is taken no more often than this.
+const IDLE_SCREENSHOT: Duration = Duration::from_secs(1);
 
 #[derive(Subcommand, Debug)]
 pub enum AndroidAction {
@@ -188,13 +194,22 @@ fn next_jpeg(reader: &mut impl BufRead) -> Result<Vec<u8>> {
     }
     Ok(jpeg)
 }
+fn screenshot(runner: &mut impl Runner, id: &str) -> Result<Value> {
+    let png = runner.output(
+        Tool::Adb,
+        &args(&["-s", id, "exec-out", "screencap", "-p"]),
+        MAX_PNG,
+    )?;
+    frame(Platform::Android, id, &png)
+}
 fn pipeline(
     mut capture: Command,
     mut decoder: Command,
-    mut writer: impl Write + Send + 'static,
+    writer: impl Write + Send + 'static,
     id: String,
     cancel: Arc<AtomicBool>,
     maximum: Duration,
+    mut idle_frame: impl FnMut() -> Result<Value>,
 ) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
         return Err(Error::Device("DeviceCancelled"));
@@ -216,11 +231,22 @@ fn pipeline(
     ));
     let mut reader = BufReader::new(child.0.as_mut().unwrap().stdout.take().unwrap());
     let (sender, receiver) = mpsc::sync_channel(1);
+    // Every video frame bumps the count under the writer lock, so a screenshot taken meanwhile is
+    // dropped instead of replacing a newer frame.
+    let writer = Arc::new(Mutex::new(writer));
+    let video_frames = Arc::new(AtomicU64::new(0));
+    let (video_writer, video_count) = (writer.clone(), video_frames.clone());
     thread::spawn(move || {
         let result = (|| loop {
             let jpeg = next_jpeg(&mut reader)?;
             let frame = idb::jpeg_frame(Platform::Android, &id, jpeg, None)?;
-            if !super::write_frame(&mut writer, &frame, &sender)? {
+            {
+                let mut writer = video_writer.lock().unwrap_or_else(PoisonError::into_inner);
+                write_line(&mut *writer, &frame)?;
+                video_count.fetch_add(1, Ordering::SeqCst);
+            }
+            // Outside the lock: a full channel waits for the loop below, which may need the lock.
+            if sender.send(Ok(())).is_err() {
                 return Ok(());
             }
         })();
@@ -228,6 +254,8 @@ fn pipeline(
     });
     let start = Instant::now();
     let mut first_frame = false;
+    let mut last_video = None::<Instant>;
+    let mut next_screenshot = start;
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(Error::Device("DeviceCancelled"));
@@ -237,6 +265,22 @@ fn pipeline(
         }
         if super::frame_ready(&receiver)? {
             first_frame = true;
+            last_video = Some(Instant::now());
+        }
+        if Instant::now() >= next_screenshot
+            && last_video.is_none_or(|at| at.elapsed() >= IDLE_SCREENSHOT)
+        {
+            next_screenshot = Instant::now() + IDLE_SCREENSHOT;
+            let seen = video_frames.load(Ordering::SeqCst);
+            // A failed screenshot only leaves the video as it was: a dead capture is reported
+            // by the reader above, and a cancellation by the check at the top of the loop.
+            if let Ok(frame) = idle_frame() {
+                let mut writer = writer.lock().unwrap_or_else(PoisonError::into_inner);
+                if video_frames.load(Ordering::SeqCst) == seen {
+                    write_line(&mut *writer, &frame)?;
+                    first_frame = true;
+                }
+            }
         }
     }
 }
@@ -251,12 +295,10 @@ pub fn stream(id: &str) -> Result<()> {
         while matches!(std::io::stdin().read(&mut byte), Ok(1)) {}
         eof.store(true, Ordering::Relaxed);
     });
-    let (width, height) = probe(
-        &mut SdkRunner {
-            cancelled: cancel.clone(),
-        },
-        id,
-    )?;
+    let mut runner = SdkRunner {
+        cancelled: cancel.clone(),
+    };
+    let (width, height) = probe(&mut runner, id)?;
     pipeline(
         SdkRunner::command(Tool::Adb, &capture_args(id, width, height)),
         SdkRunner::command(Tool::Ffmpeg, &ffmpeg_args()),
@@ -264,6 +306,7 @@ pub fn stream(id: &str) -> Result<()> {
         id.into(),
         cancel,
         Duration::from_secs(180),
+        || screenshot(&mut runner, id),
     )
 }
 
@@ -370,7 +413,8 @@ mod tests {
                 Vec::new(),
                 "fixture".into(),
                 Arc::new(AtomicBool::new(true)),
-                Duration::from_secs(1)
+                Duration::from_secs(1),
+                || panic!("a cancelled stream takes no screenshot")
             ),
             Err(Error::Device("DeviceCancelled"))
         ));
@@ -382,6 +426,227 @@ mod tests {
         assert!(!capture_expired(Duration::from_secs(11), true, maximum));
         assert!(!capture_expired(Duration::from_secs(179), true, maximum));
         assert!(capture_expired(Duration::from_secs(180), true, maximum));
+    }
+    #[cfg(unix)]
+    mod idle_frames {
+        use super::*;
+        #[derive(Clone, Default)]
+        pub(super) struct Output(Arc<Mutex<Vec<u8>>>);
+        impl Write for Output {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Output {
+            pub(super) fn lines(&self) -> Vec<Value> {
+                let bytes = self.0.lock().unwrap().clone();
+                String::from_utf8(bytes)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect()
+            }
+            pub(super) fn wait_for(&self, count: usize) {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while self.lines().len() < count {
+                    assert!(Instant::now() < deadline, "{count} frames never arrived");
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        fn shell(script: &str, arguments: &[&std::path::Path]) -> Command {
+            let mut command = Command::new("sh");
+            command.args(["-c", script]).args(arguments);
+            command
+        }
+        /// Runs the pipeline over a silent capture, as `screenrecord` is on an idle screen.
+        fn stream(
+            decoder: Command,
+            output: &Output,
+            idle_frame: impl FnMut() -> Result<Value> + Send + 'static,
+        ) -> (Arc<AtomicBool>, thread::JoinHandle<Result<()>>) {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let (writer, signal) = (output.clone(), cancel.clone());
+            let handle = thread::spawn(move || {
+                pipeline(
+                    shell("sleep 30", &[]),
+                    decoder,
+                    writer,
+                    "fixture".into(),
+                    signal,
+                    Duration::from_secs(60),
+                    idle_frame,
+                )
+            });
+            (cancel, handle)
+        }
+        fn stop(cancel: Arc<AtomicBool>, stream: thread::JoinHandle<Result<()>>) {
+            cancel.store(true, Ordering::Relaxed);
+            assert!(matches!(
+                stream.join().unwrap(),
+                Err(Error::Device("DeviceCancelled"))
+            ));
+        }
+        fn multipart_jpeg() -> Vec<u8> {
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 70)
+                .encode_image(&image::RgbImage::from_pixel(
+                    64,
+                    96,
+                    image::Rgb([20, 80, 140]),
+                ))
+                .unwrap();
+            let mut bytes = format!(
+                "--lazysh-frame\r\nContent-type: image/jpeg\r\nContent-length: {}\r\n\r\n",
+                jpeg.len()
+            )
+            .into_bytes();
+            bytes.extend(jpeg);
+            bytes.extend(b"\r\n");
+            bytes
+        }
+        #[test]
+        fn a_silent_capture_still_gets_a_screenshot_at_most_once_a_second() {
+            let output = Output::default();
+            let calls = Arc::new(Mutex::new(Vec::<Instant>::new()));
+            let log = calls.clone();
+            let (cancel, handle) = stream(shell("sleep 30", &[]), &output, move || {
+                let mut log = log.lock().unwrap();
+                log.push(Instant::now());
+                match log.len() {
+                    1 => Err(Error::Device("SdkCommandFailed")),
+                    count => Ok(json!({ "screenshot": count })),
+                }
+            });
+            output.wait_for(2);
+            stop(cancel, handle);
+            // The first screenshot failed: the stream kept going and tried again, not sooner.
+            assert_eq!(output.lines()[0]["screenshot"], 2);
+            let calls = calls.lock().unwrap();
+            assert!(calls
+                .windows(2)
+                .all(|pair| pair[1] - pair[0] >= Duration::from_millis(900)));
+        }
+        #[test]
+        fn a_video_frame_that_arrives_during_a_screenshot_replaces_it() {
+            let directory = tempfile::tempdir().unwrap();
+            let (go, frame) = (directory.path().join("go"), directory.path().join("frame"));
+            std::fs::write(&frame, multipart_jpeg()).unwrap();
+            // Emits its frame once the screenshot has started, as a held frame is released.
+            let decoder = shell(
+                "while [ ! -e \"$0\" ]; do sleep 0.02; done; cat \"$1\"; sleep 30",
+                &[&go, &frame],
+            );
+            let output = Output::default();
+            let (watched, calls) = (output.clone(), Arc::new(AtomicU64::new(0)));
+            let (cancel, handle) = stream(decoder, &output, move || {
+                let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 1 {
+                    std::fs::write(&go, b"").unwrap();
+                    watched.wait_for(1);
+                }
+                Ok(json!({ "screenshot": call }))
+            });
+            output.wait_for(2);
+            stop(cancel, handle);
+            let lines = output.lines();
+            assert_eq!(lines[0]["mime"], "image/jpeg");
+            assert_eq!(lines[0]["id"], "fixture");
+            // The screenshot taken while the video frame was written is gone; the next one follows.
+            assert_eq!(lines[1], json!({ "screenshot": 2 }));
+        }
+    }
+    #[cfg(unix)]
+    mod owned_device {
+        use super::idle_frames::*;
+        use super::*;
+        /// A frame as a 16x16 grayscale grid, to tell two screens apart whatever encoded them.
+        fn thumbnail(frame: &Value) -> Vec<u8> {
+            let jpeg = base64::engine::general_purpose::STANDARD
+                .decode(frame["base64"].as_str().unwrap())
+                .unwrap();
+            image::load_from_memory(&jpeg)
+                .unwrap()
+                .resize_exact(16, 16, image::imageops::FilterType::Triangle)
+                .to_luma8()
+                .into_raw()
+        }
+        fn distance(a: &[u8], b: &[u8]) -> usize {
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| a.abs_diff(*b) as usize)
+                .sum::<usize>()
+                / a.len()
+        }
+        #[test]
+        #[ignore = "requires an explicitly selected owned Android emulator, the SDK and FFmpeg"]
+        fn owned_emulator_video_delivers_frames_while_idle_and_after_a_change() {
+            let id = crate::devices::tests::owned_emulator();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let mut runner = SdkRunner {
+                cancelled: cancel.clone(),
+            };
+            let (width, height) = probe(&mut runner, &id).expect("verified video tools");
+            let mut device = |arguments: &[&str]| {
+                let mut shell = vec!["-s", &id, "shell"];
+                shell.extend(arguments);
+                runner
+                    .output(Tool::Adb, &args(&shell), MAX_SDK_TEXT)
+                    .unwrap();
+            };
+            device(&["input", "keyevent", "KEYCODE_HOME"]);
+            thread::sleep(Duration::from_secs(2));
+            let output = Output::default();
+            let (writer, signal, serial) = (output.clone(), cancel.clone(), id.clone());
+            let mut shots = SdkRunner {
+                cancelled: cancel.clone(),
+            };
+            let stream = thread::spawn(move || {
+                pipeline(
+                    SdkRunner::command(Tool::Adb, &capture_args(&serial, width, height)),
+                    SdkRunner::command(Tool::Ffmpeg, &ffmpeg_args()),
+                    writer,
+                    serial.clone(),
+                    signal,
+                    Duration::from_secs(120),
+                    move || screenshot(&mut shots, &serial),
+                )
+            });
+            // The screen is idle: without a screenshot the stream ends in DeviceTimeout instead.
+            let started = Instant::now();
+            output.wait_for(1);
+            assert!(
+                started.elapsed() < SDK_TIMEOUT,
+                "first frame took {:?}",
+                started.elapsed()
+            );
+            let before = thumbnail(&output.lines()[0]);
+            device(&["am", "start", "-a", "android.settings.SETTINGS"]);
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let changed = loop {
+                let lines = output.lines();
+                if lines
+                    .iter()
+                    .skip(1)
+                    .any(|frame| distance(&before, &thumbnail(frame)) > 12)
+                {
+                    break true;
+                }
+                if Instant::now() > deadline || stream.is_finished() {
+                    break false;
+                }
+                thread::sleep(Duration::from_millis(250));
+            };
+            device(&["input", "keyevent", "KEYCODE_HOME"]);
+            cancel.store(true, Ordering::Relaxed);
+            let result = stream.join().unwrap();
+            assert!(changed, "no frame showed the changed screen: {result:?}");
+            assert!(matches!(result, Err(Error::Device("DeviceCancelled"))));
+        }
     }
     #[test]
     #[ignore = "requires an installed FFmpeg with H264 encoder/decoder and MJPEG muxer"]
@@ -429,6 +694,7 @@ mod tests {
             "fixture".into(),
             cancel.clone(),
             Duration::from_secs(10),
+            || Err(Error::Device("SdkCommandFailed")),
         );
         assert!(
             cancel.load(Ordering::Relaxed),
@@ -454,7 +720,8 @@ mod tests {
             Vec::new(),
             "fixture".into(),
             Arc::new(AtomicBool::new(false)),
-            Duration::from_secs(2)
+            Duration::from_secs(2),
+            || Err(Error::Device("SdkCommandFailed"))
         )
         .is_err());
     }

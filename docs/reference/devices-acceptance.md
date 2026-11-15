@@ -22,4 +22,21 @@ passed the exact case at source `cb9be42`: a 1080×1920 screen became a valid
 720×1280 JPEG. This is screenshot/discovery evidence for that owned emulator,
 separate from the synthetic interface checks in the [host devices guide](../devices.md#interface-language).
 
+## Android video acceptance
+
+The `native-android-auxiliary` job, which runs on `main` only, also runs the native Cargo case
+`devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change`
+against `emulator-5580` with an installed FFmpeg. It presses Home, starts the real
+`screenrecord` and FFmpeg pipeline on the idle screen, requires a first frame within the ten-second
+startup limit, opens Settings and requires a later frame that shows it (a 16x16 grayscale comparison
+with the first frame), then returns to Home. Without the idle screenshot an idle screen ends in
+`DeviceTimeout`. Only dimensions and the comparison result are reported; no capture is kept.
+
+The same case passed on a Waydroid Android 13 x86_64 guest (1920x1080), with the emulator-only guard
+lifted for that run: the first frame arrived 2.9 s after the stream started (about 2.6 s of that
+the companion's own probe), then one screenshot about every 1.1 s while the screen was idle (54 KB
+each), and about eight video frames a second from the moment Settings opened. No physical device, no
+Android emulator run and no iOS video was observed. Waydroid's `screencap` output and `adb features`
+list need the reading fixes of [#1859](https://github.com/mihazs/lazysh/pull/1859).
+
 For setup and usage, see [devices](../devices.md). Return to the [documentation map](../README.md).
