@@ -1,0 +1,30 @@
+[package]
+name = "lazysh-linux-surface-poc"
+version = "0.0.0"
+edition = "2021"
+description = "Composition probe for a native terminal surface beside the WebKitGTK web view (#1331); not shipped"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Standalone, like the wgpu prototype: GTK and Wayland crates must not reach the app's workspace or the runtime's lock file.
+[workspace]
+
+[[bin]]
+name = "surface-poc"
+path = "src/main.rs"
+
+# The versions the app ships (Cargo.lock at the repository root): tauri 2.12.5 uses wry 0.57.1 on tao 0.37.2.
+[dependencies]
+tao = "=0.37.2"
+wry = "=0.57.1"
+gtk = "0.18"
+gdk = "0.18"
+gdkx11 = "0.18"
+glib = "0.18"
+libc = "0.2"
+x11rb = "0.13"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wgpu = { version = "30", default-features = false, features = ["vulkan", "wgsl"] }
+raw-window-handle = "0.6"
+pollster = "0.4"
