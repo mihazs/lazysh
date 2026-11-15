@@ -220,7 +220,7 @@ pub(super) async fn unsupported_architecture(
     assert_eq!(version.trim(), "lazysh-agent 1.0.0");
 }
 /// A finished device-route install releases its SFTP channel in the background; the next install starts after it.
-async fn settled(session: &Session) {
+pub(super) async fn settled(session: &Session) {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while session
             .bindings
