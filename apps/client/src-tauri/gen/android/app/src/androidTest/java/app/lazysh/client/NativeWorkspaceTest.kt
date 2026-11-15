@@ -2999,13 +2999,62 @@ class NativeWorkspaceTest {
         }
     }
 
+    // Opens the synthetic transcript the host companion reads, stages a draft, and sends it through the explicit
+    // Choose, Confirm and Send steps to the pane this tmux display shows. The host later reads that exact pane back.
+    private fun verifyOwnedTmuxChat(scenario: ActivityScenario<MainActivity>, chat: JSONObject, shown: JSONObject, session: String, label: String) {
+        val transcript = chat.getString("transcript")
+        val record = chat.getString("record")
+        val draft = chat.getString("draft")
+        require(transcript.startsWith("/") && transcript.length <= 4096 && transcript.none { it.isISOControl() })
+        require(Regex("OWNED_TMUX_RECORD_[a-f0-9]{32}").matches(record))
+        require(draft.toByteArray(Charsets.UTF_8).size in 1..4096 && draft.none { it.isISOControl() })
+        require(chat.getString("window") == shown.getString("name"))
+        val region = "section[aria-label='Terminal input']"
+        val path = "input[placeholder='Absolute host path to session.jsonl']"
+        val composer = "form.chat-composer textarea"
+        fun hasButton(text: String) = "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote(text)}).length===1"
+        fun press(text: String) = onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='$text']")).perform(webScrollIntoView()).perform(webClick())
+        sessionView(scenario, "Transcript")
+        awaitDocument(scenario, "tmux transcript controls ready", present(path))
+        typeInto(scenario, path, transcript)
+        closeSoftKeyboard()
+        press("Open transcript")
+        awaitDocument(scenario, "real companion transcript read for the tmux display",
+            "document.querySelector('.chat-messages')?.textContent.includes(${JSONObject.quote(record)}) && Boolean(document.querySelector(${JSONObject.quote(region)}))",
+            observe = { remaining -> evaluate(scenario, """
+                (()=>{const chat=document.querySelector('.chat-panel');
+                  return JSON.stringify({chatPanel:!!chat,shown:chat?.hidden===false,messages:(document.querySelector('.chat-messages')?.textContent??'').slice(0,80),
+                    region:!!document.querySelector(${JSONObject.quote(region)}),alert:(chat?.querySelector('[role=alert]')?.textContent??'').slice(0,160),
+                    path:(chat?.querySelector('input[required]')?.value??'').length,tabs:document.querySelectorAll('.session-tabs [role=tab]').length});})()
+            """, remaining) })
+        assertEquals("No Send before the destination is confirmed", "false", evaluate(scenario, hasButton("Send to terminal")))
+        pasteOwnedText(scenario, composer, draft, label)
+        closeSoftKeyboard()
+        assertEquals("Native paste must preserve the exact draft", "true", evaluate(scenario, "document.querySelector(${JSONObject.quote(composer)})?.value===${JSONObject.quote(draft)}"))
+        press("Choose terminal destination")
+        // The confirmation names the live display's session, window and pane; choosing alone never enables Send.
+        awaitDocument(scenario, "tmux destination names the displayed window", """
+            (()=>{const rows=Array.from(document.querySelectorAll(${JSONObject.quote("$region dl")}));if(rows.length!==1)return false;
+              const text=Array.from(rows[0].children).map(x=>x.textContent.trim());
+              return text.join('|').includes(${JSONObject.quote("tmux session|$session|tmux window|${shown.getString("name")}|")}) && ${hasButton("Confirm this destination")};})()
+        """)
+        assertEquals("Choosing the destination must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
+        press("Confirm this destination")
+        awaitDocument(scenario, "explicit tmux destination binding", hasButton("Send to terminal"))
+        press("Send to terminal")
+        awaitDocument(scenario, "tmux delivery acknowledged",
+            "Array.from(document.querySelectorAll('[role=status]')).some(x=>x.textContent==='Text and Enter sent to the confirmed pane.')")
+        assertEquals("Only the acknowledged draft is cleared", "true", evaluate(scenario, "document.querySelector(${JSONObject.quote(composer)})?.value===''"))
+        sessionView(scenario, "Terminal")
+    }
+
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
-    // window control, a top/bottom split and zoom of beta's pane from the Sessions
-    // panel, tab-close detach and reattach. The host independently proves the remote
-    // window state, that the split left the original pane untouched and the zoom
-    // returned, and that the original server and panes survived.
-    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String) {
+    // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
+    // from the Sessions panel, tab-close detach and reattach. The host independently proves the remote
+    // window state, the Chat draft in the original pane, that the split left the original pane untouched
+    // and the zoom returned, and that the original server and panes survived.
+    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
         val windows = tmux.getJSONArray("windows")
@@ -3208,6 +3257,9 @@ class NativeWorkspaceTest {
             visible(alpha, beta, "attached tmux shows its current window")
             agentViewBack()
             visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            // Chat input returns to the pane this display shows (alpha), and the host reads that pane back by id.
+            tmux.optJSONObject("chat")?.let { verifyOwnedTmuxChat(scenario, it, alpha, server, label) }
+            visible(alpha, beta, "Chat input leaves the displayed tmux window in place")
             jump(beta, alpha)
             visible(beta, alpha, "tmux Jump To shows the selected window")
             numbered(alpha)
@@ -4536,7 +4588,7 @@ class NativeWorkspaceTest {
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
             } else if (requireTmux) {
-                verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name)
+                verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label)
             } else if (requireDpad) {
                 verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {
