@@ -25,7 +25,7 @@ test('Google ntfy reclaims only unused host toolchains before APK and system-ima
   const job=workflow.jobs['native-android-ntfy'],steps=job.steps;
   const cleanup=steps.findIndex(step=>step.name===name);
   expect(cleanup).toBeGreaterThanOrEqual(0);
-  expect(job['runs-on']).toBe('ubuntu-24.04');
+  expect(job['runs-on']).toBe('sengi-basic-4-ubuntu-2404');
   expect(steps[cleanup].if).toBe("matrix.push-variant == 'google'");
   expect(emulatorCommands(steps[cleanup].run!)).toEqual([
     'df -h /','sudo rm -rf -- /usr/share/dotnet /usr/local/.ghcup','df -h /',
@@ -102,7 +102,7 @@ test('independent Android auxiliary owners have their own finite native job and 
   const guarded=workflow.jobs['native-android-runtime'],auxiliary=workflow.jobs['native-android-auxiliary'];
   expect(auxiliary).toBeDefined();
   expect(auxiliary['timeout-minutes']).toBe(30);
-  expect(auxiliary['runs-on']).toBe('ubuntu-24.04');
+  expect(auxiliary['runs-on']).toBe('sengi-basic-4-ubuntu-2404');
   // Only the documentation-only gate precedes it; no client or Herdr build prerequisite.
   expect(auxiliary.needs).toBe('changes');
   expect(auxiliary.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'auxiliary',LAZYSH_ANDROID_RUNTIME_ARTIFACT:'lazysh-android-auxiliary-results',VITE_LAZYSH_QR_CAMERA_TRACE:'1'});

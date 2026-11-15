@@ -3,10 +3,13 @@ package app.lazysh.client
 import android.app.Instrumentation
 import android.app.Instrumentation.ActivityMonitor
 import android.app.Instrumentation.ActivityResult
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.SystemClock
+import android.service.notification.StatusBarNotification
 import androidx.lifecycle.Lifecycle
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
@@ -75,6 +78,22 @@ class AuthBrowserTest {
         return JSONObject(response.json)
     }
 
+    private fun textOf(signIn: StatusBarNotification) = signIn.notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+
+    /**
+     * The notification manager posts on its own thread and holds a post for an enabled assistant, so a read right after `present`
+     * can miss the notification or see the one it replaces: wait until exactly one is active and it names [host].
+     */
+    private fun awaitSignIn(host: String): StatusBarNotification {
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (true) {
+            val active = notifications.activeNotifications.filter { it.id == AuthBrowserPlugin.NOTIFICATION }
+            active.singleOrNull()?.takeIf { textOf(it).contains(host) }?.let { return it }
+            assertTrue("no single sign-in notification naming $host within 10 s; active: ${active.map(::textOf)}", SystemClock.uptimeMillis() < deadline)
+            Thread.sleep(100)
+        }
+    }
+
     private fun stopped() {
         scenario.moveToState(Lifecycle.State.CREATED)
         assertEquals(Lifecycle.State.CREATED, scenario.state)
@@ -111,21 +130,20 @@ class AuthBrowserTest {
         assertEquals("notified", present(url).getString("outcome"))
         instrumentation.removeMonitor(launches)
         assertEquals("the app started an activity from the background", 0, launches.hits)
-        val posted = notifications.activeNotifications.single { it.id == AuthBrowserPlugin.NOTIFICATION }.notification
+        val signIn = awaitSignIn("idp.example")
+        val posted = signIn.notification
         assertNotNull("a tap must be able to open the page", posted.contentIntent)
-        val text = posted.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+        val text = textOf(signIn)
         assertTrue(text, text.contains("idp.example"))
         assertFalse(text, text.contains("SECRET"))
-        assertTrue(posted.flags and android.app.Notification.FLAG_AUTO_CANCEL != 0)
+        assertTrue(posted.flags and Notification.FLAG_AUTO_CANCEL != 0)
     }
 
     @Test fun aNewerRequestReplacesTheOlderNotification() {
         stopped()
         present("https://one.example/a")
         present("https://two.example/b")
-        val posted = notifications.activeNotifications.filter { it.id == AuthBrowserPlugin.NOTIFICATION }
-        assertEquals(1, posted.size)
-        assertTrue(posted.single().notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString().contains("two.example"))
+        awaitSignIn("two.example")
     }
 
     @Test fun onlyWebPagesAreAccepted() {

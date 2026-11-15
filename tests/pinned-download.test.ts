@@ -160,7 +160,7 @@ async function linuxRows(file: string) {
     const matrix = job.strategy?.matrix;
     for (const row of matrix?.include ?? (Array.isArray(matrix?.os) ? matrix.os.map((os: string) => ({ os })) : [{}])) {
       const label = String(interpolate(job['runs-on'], { matrix: row }));
-      if (!label.startsWith('ubuntu-') || label.endsWith('-arm')) continue;
+      if (!/^(sengi-basic-\d+-)?ubuntu-/.test(label) || label.endsWith('-arm')) continue;
       const context: Context = { github: { event_name: 'push', ref: 'refs/heads/main' }, inputs: {}, matrix: row, runner: { os: 'Linux', arch: 'X64' } };
       rows.push({ name: `${file.split('/').pop()}#${id}${row.target ? `[${row.target}]` : ''}`, steps: await executedSteps(job.steps, context) });
     }
