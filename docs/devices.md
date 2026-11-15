@@ -19,6 +19,10 @@ values, plus real browser JPEG decoding and stable frame/draft identity while
 changing language. These renderer checks do not execute SDK commands or establish
 real-device input, video, latency, battery use or physical mobile WebView acceptance.
 
+## Local sessions
+
+A local desktop session offers the same view for the SDK installed on this device, when `adb` (or, on macOS, `xcrun`) resolves; see [Devices on this device](local-terminal.md#devices-on-this-device). Windows and iOS Simulators on macOS have no hardware run yet.
+
 ## Inspect host devices
 
 The optional Rust companion can inspect Android devices/emulators and iOS Simulators on the connected host. It invokes the host's installed SDK tools through the existing authenticated SSH connection. It does not install SDKs, pair devices, change debugging authorization, or expose a control server.

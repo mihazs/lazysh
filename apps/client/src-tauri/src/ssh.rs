@@ -6497,7 +6497,7 @@ mod tests {
                                 watch::channel(crate::devices::stream::Packet::default());
                             crate::devices::stream::receive(
                                 original.clone(),
-                                session.clone(),
+                                crate::host::Host::Remote(session.clone()),
                                 "fixture".into(),
                                 "fixture".into(),
                                 "android".into(),

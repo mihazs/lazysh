@@ -2,6 +2,7 @@
 //! `lazysh-agent` serving a local session. The real-runtime cases need the companion this build
 //! produced in `LAZYSH_TEST_AGENT_BIN` (a release build: hook setup refuses binaries over 64 MiB).
 use super::*;
+use crate::host::process_gone;
 use crate::{
     app_lock::{AccessLease, AccessState, Guarded, GuardedError},
     local::{adopted_test_session, LocalState},
@@ -328,10 +329,16 @@ fn lease() -> AccessLease {
     AccessState::disabled().lease(None).unwrap()
 }
 async fn session(home: &Path) -> (App<MockRuntime>, String) {
+    session_with(home, Vec::new()).await
+}
+/// A session whose commands also see `extra` variables, which win over the login PATH.
+async fn session_with(home: &Path, extra: Vec<(String, String)>) -> (App<MockRuntime>, String) {
     let app = tauri::test::mock_app();
     app.manage(AppState::new(home.join("app")).unwrap());
     app.manage(LocalState::default());
-    app.state::<LocalState>().set_test_env(variables(home));
+    app.manage(crate::devices::DeviceStreams::default());
+    app.state::<LocalState>()
+        .set_test_env([variables(home), extra].concat());
     let id = adopted_test_session(&app.state::<LocalState>(), lease()).await;
     (app, id)
 }
@@ -666,4 +673,179 @@ async fn real_local_hook_setup_on_windows_is_template_only() {
     .await
     .unwrap();
     assert_eq!(discovered["schemaVersion"], 1);
+}
+
+// ---- Host devices on this device, driven through a fake Android SDK.
+
+/// The fake SDK (`LAZYSH_TEST_FAKE_SDK_BIN`) laid out where `lazysh-agent devices` looks for the
+/// real one: `adb` and `emulator` under `ANDROID_HOME`, `ffmpeg` first on the PATH. Returns the
+/// variables that point a session at it and the directory its long-lived children announce
+/// themselves in.
+fn fake_sdk(home: &Path) -> (Vec<(String, String)>, PathBuf) {
+    let source = std::env::var_os("LAZYSH_TEST_FAKE_SDK_BIN")
+        .expect("build the fake_android_sdk example and pass it as LAZYSH_TEST_FAKE_SDK_BIN");
+    let place = |directory: PathBuf, name: &str| {
+        fs::create_dir_all(&directory).unwrap();
+        let file = if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        };
+        fs::copy(&source, directory.join(file)).unwrap();
+    };
+    let sdk = home.join("sdk");
+    place(sdk.join("platform-tools"), "adb");
+    place(sdk.join("emulator"), "emulator");
+    place(home.join("bin"), "ffmpeg");
+    let pids = home.join("pids");
+    fs::create_dir_all(&pids).unwrap();
+    let mut directories = vec![home.join("bin")];
+    directories.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(directories).unwrap();
+    let text = |path: &Path| path.to_str().unwrap().to_owned();
+    (
+        vec![
+            ("ANDROID_HOME".into(), text(&sdk)),
+            ("ANDROID_SDK_ROOT".into(), text(&sdk)),
+            ("PATH".into(), path.to_str().unwrap().to_owned()),
+            ("LAZYSH_FAKE_SDK_PIDS".into(), text(&pids)),
+        ],
+        pids,
+    )
+}
+/// The `<role>-<pid>` files the fake SDK's long-lived children left behind.
+fn announced(directory: &Path) -> Vec<(String, u32)> {
+    fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            let (role, pid) = name.split_once('-').unwrap();
+            (role.to_owned(), pid.parse().unwrap())
+        })
+        .collect()
+}
+/// Starts the stream of the fake device and waits for its first frame.
+async fn streaming(app: &App<MockRuntime>, id: &str) -> (String, Value) {
+    let token = call(crate::devices::stream::device_stream_start(
+        lease(),
+        app.state(),
+        app.state(),
+        app.state(),
+        id.into(),
+        "emulator-5554".into(),
+        None,
+        Some("android".into()),
+    ))
+    .await
+    .unwrap();
+    let first = call(crate::devices::stream::device_stream_next(
+        lease(),
+        app.state(),
+        id.into(),
+        token.clone(),
+        0,
+    ))
+    .await
+    .unwrap();
+    (token, serde_json::to_value(first).unwrap())
+}
+
+#[tokio::test]
+#[ignore = "requires the companion in LAZYSH_TEST_AGENT_BIN and the fake SDK in LAZYSH_TEST_FAKE_SDK_BIN"]
+async fn real_local_companion_lists_devices_and_streams_frames_until_stopped_or_the_session_closes()
+{
+    bundle();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let (variables, pids) = fake_sdk(home);
+    let (app, id) = session_with(home, variables).await;
+
+    let listed = call(crate::devices::list_devices(
+        lease(),
+        app.state(),
+        app.state(),
+        id.clone(),
+        "android".into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(listed["devices"][0]["id"], "emulator-5554");
+    assert_eq!(listed["devices"][0]["state"], "running");
+    assert_eq!(listed["avds"][0]["id"], "Pixel_API_36");
+    let screenshot = call(crate::devices::device_frame(
+        lease(),
+        app.state(),
+        app.state(),
+        id.clone(),
+        "android".into(),
+        "emulator-5554".into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        (screenshot["mime"].as_str(), screenshot["id"].as_str()),
+        (Some("image/jpeg"), Some("emulator-5554"))
+    );
+    let probe = call(crate::devices::android_device_probe(
+        lease(),
+        app.state(),
+        app.state(),
+        id.clone(),
+        "emulator-5554".into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(probe["stream"], true);
+    // The device id stays one argument of the companion, which refuses it: no shell ran it.
+    let marker = home.join("pwned");
+    let hostile = format!("x'; touch {}; '", marker.display());
+    let refused = call(crate::devices::android_device_probe(
+        lease(),
+        app.state(),
+        app.state(),
+        id.clone(),
+        hostile,
+    ))
+    .await;
+    assert_eq!(refused.unwrap_err().kind(), "remote_command_failed");
+    assert!(!marker.exists());
+
+    // Frames arrive in order, and stopping the stream removes everything it started.
+    let (token, first) = streaming(&app, &id).await;
+    assert_eq!(first["frame"]["id"], "emulator-5554");
+    assert_eq!(first["frame"]["mime"], "image/jpeg");
+    let after = first["sequence"].as_u64().unwrap();
+    let second = call(crate::devices::stream::device_stream_next(
+        lease(),
+        app.state(),
+        id.clone(),
+        token.clone(),
+        after,
+    ))
+    .await
+    .unwrap();
+    assert!(serde_json::to_value(second).unwrap()["sequence"].as_u64() > Some(after));
+    crate::devices::stream::device_stream_stop(app.state(), id.clone(), token)
+        .await
+        .unwrap();
+    let started = announced(&pids);
+    assert_eq!(started.len(), 2, "{started:?}");
+    for (_, pid) in &started {
+        assert!(process_gone(*pid).await, "{pid} outlived its stream");
+    }
+
+    // Closing the session ends a running stream by itself.
+    let (token, frame) = streaming(&app, &id).await;
+    assert!(frame["frame"].is_object());
+    crate::local::local_disconnect(app.state(), id.clone()).unwrap();
+    let all = announced(&pids);
+    assert_eq!(all.len(), 4, "{all:?}");
+    for (_, pid) in &all {
+        assert!(process_gone(*pid).await, "{pid} outlived its session");
+    }
+    crate::devices::stream::device_stream_stop(app.state(), id, token)
+        .await
+        .unwrap();
 }

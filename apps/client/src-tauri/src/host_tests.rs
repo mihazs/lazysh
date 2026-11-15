@@ -2,7 +2,7 @@
 pub(crate) mod local {
     use crate::{
         app_lock::{AccessLease, AccessState, Guarded, GuardedError},
-        host::{Cmd, Host},
+        host::{process_gone, Chunk, Cmd, Host, LocalHost, LocalStream},
         local::{adopted_test_session, local_disconnect, LocalState},
         ssh::{AppState, SshError},
     };
@@ -649,6 +649,65 @@ pub(crate) mod local {
             .exec(&lease(), &command, Duration::from_secs(1), 1024)
             .await;
         assert_eq!(result.unwrap_err().kind(), "disconnected");
+        let stream = local_arm(&host).spawn_stream(&lease(), &command).await;
+        assert_eq!(stream.err().unwrap().kind(), "disconnected");
+    }
+
+    fn local_arm(host: &Host) -> &LocalHost {
+        match host {
+            Host::Local(local) => local,
+            Host::Remote(_) => panic!("a local session resolves to the local arm"),
+        }
+    }
+    async fn started(host: &Host, command: &Cmd) -> LocalStream {
+        local_arm(host)
+            .spawn_stream(&lease(), command)
+            .await
+            .unwrap()
+    }
+    /// All of a started command's output, and how it ended.
+    async fn drained(mut stream: LocalStream) -> (Vec<u8>, &'static str) {
+        let mut output = Vec::new();
+        loop {
+            match stream.next().await.unwrap() {
+                Chunk::Data(data) => output.extend(data),
+                Chunk::Failed => return (output, "failed"),
+                Chunk::Closed => return (output, "closed"),
+                Chunk::Other => {}
+            }
+        }
+    }
+    #[tokio::test]
+    async fn a_local_stream_hands_out_output_and_says_how_the_command_ended() {
+        let (_temp, _app, _id, host) = resolved().await;
+        let (output, end) =
+            drained(started(&host, &Cmd::new(&[], &["git", "--version"])).await).await;
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .starts_with("git version"));
+        assert_eq!(end, "closed");
+        let failing = Cmd::new(&[], &["git", "--no-such-flag"]);
+        let (output, end) = drained(started(&host, &failing).await).await;
+        assert!(output.is_empty());
+        assert_eq!(end, "failed");
+    }
+    #[tokio::test]
+    async fn closing_or_dropping_a_local_stream_removes_a_child_that_ignores_end_of_input() {
+        let (_temp, _app, _id, host) = resolved().await;
+        let closed = started(&host, &slow()).await;
+        let pid = closed.child.id().unwrap();
+        closed.close().await;
+        assert!(
+            process_gone(pid).await,
+            "closed child {pid} was not removed"
+        );
+        let dropped = started(&host, &slow()).await;
+        let pid = dropped.child.id().unwrap();
+        drop(dropped);
+        assert!(
+            process_gone(pid).await,
+            "dropped child {pid} was not removed"
+        );
     }
 
     #[cfg(unix)]
@@ -734,23 +793,10 @@ pub(crate) mod local {
             .trim()
             .parse()
             .unwrap();
-        #[cfg(unix)]
-        assert_eq!(
-            unsafe { libc::kill(pid as i32, 0) },
-            -1,
+        assert!(
+            process_gone(pid).await,
             "timed-out child {pid} was not reaped"
         );
-        #[cfg(windows)]
-        {
-            let listed = Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-                .output()
-                .unwrap();
-            assert!(
-                !String::from_utf8_lossy(&listed.stdout).contains(&format!("\"{pid}\"")),
-                "timed-out child {pid} is still running"
-            );
-        }
         // A successful command still runs after a timeout in the same session.
         let version = host
             .run(&access, &Cmd::new(&[], &["git", "--version"]))
@@ -1347,5 +1393,36 @@ mod herdr_install {
             with_herdr_install(Some(join(&[&empty])), Some(home)),
             Some(join(&[&empty]))
         );
+    }
+}
+
+mod sdk {
+    use std::{ffi::OsString, fs, path::Path};
+
+    fn adb_in(directory: &Path) {
+        fs::create_dir_all(directory).unwrap();
+        let name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        fs::write(directory.join(name), b"").unwrap();
+    }
+    #[test]
+    fn adb_is_found_only_where_the_companion_looks_for_it() {
+        use crate::host::adb_resolves;
+        let temp = tempfile::tempdir().unwrap();
+        let (sdk, empty_sdk, bin) = (
+            temp.path().join("sdk"),
+            temp.path().join("empty-sdk"),
+            temp.path().join("bin"),
+        );
+        fs::create_dir_all(&empty_sdk).unwrap();
+        let path = std::env::join_paths([&bin]).unwrap();
+        let sdk_root = |root: &Path| Some(OsString::from(root));
+        assert!(!adb_resolves(None, &path));
+        adb_in(&sdk.join("platform-tools"));
+        // An SDK root is enough on its own, without any PATH.
+        assert!(adb_resolves(sdk_root(&sdk), &OsString::new()));
+        // adb on the PATH counts only when no SDK root is set: the companion never falls back.
+        adb_in(&bin);
+        assert!(adb_resolves(None, &path));
+        assert!(!adb_resolves(sdk_root(&empty_sdk), &path));
     }
 }

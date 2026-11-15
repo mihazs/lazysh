@@ -4,14 +4,15 @@ import {workspaceControl} from './fixtures/workspaceControl';
 import {fileReviewName,fileReviewReply} from '../src/test/fileReviewData';
 import {attachmentReceipt} from '../src/test/attachmentData';
 import {routePreviewPage} from './fixtures/previewPage';
+import {deviceInventory,deviceRecord} from '../src/test/deviceData';
 
 declare global { interface Window { localToolCalls:{command:string;sessionId:unknown;args?:Record<string,unknown>}[] } }
 const sessionId='local:12345678-1234-4234-8234-123456789abc';
-const none={files:false,repository:false,attachments:false,previews:false};
+const none={files:false,repository:false,attachments:false,previews:false,devices:false};
 
 async function openLocal(page:Page,tools:Partial<typeof none>) {
   await installNativeBridge(page);
-  const replies=Object.fromEntries(['list_directory','read_file','repository_status','repository_history','repository_diff'].map(command=>[command,fileReviewReply(command)]));
+  const replies={...Object.fromEntries(['list_directory','read_file','repository_status','repository_history','repository_diff'].map(command=>[command,fileReviewReply(command)])),list_devices:deviceInventory};
   await page.addInitScript(({sessionId,tools,replies,receipt})=>{
     window.localToolCalls=[];
     const record=(command:string,args:Record<string,unknown>)=>window.localToolCalls.push({command,sessionId:args.sessionId,args:{...args,events:undefined}});
@@ -103,4 +104,21 @@ test('a local session opens a preview of a dev server on this device and closes 
   expect(calls.some(call=>call.command==='list_previews')).toBe(true);
   expect(calls.every(call=>call.sessionId===sessionId)).toBe(true);
   expect(calls.find(call=>call.command==='start_preview')?.args).toMatchObject({remotePort:5173,remoteAddress:'127.0.0.1'});
+});
+
+test('a local session opens Devices and lists this device\'s SDK devices when its target reports them',async({page})=>{
+  await openLocal(page,{devices:true});
+  await (await workspaceControl(page,'Devices')).click();
+  const devices=page.getByRole('region',{name:'Host devices',exact:true});
+  await expect(devices.getByText('Uses the SDK installed on this device.',{exact:false})).toBeVisible();
+  await devices.getByRole('button',{name:'Find devices',exact:true}).click();
+  await expect(devices.getByRole('option',{name:`${deviceRecord.name} · ${deviceRecord.state}`})).toBeAttached();
+  expect(await page.evaluate(()=>window.localToolCalls)).toEqual([{command:'list_devices',sessionId}]);
+});
+
+test('a local session hides Devices when its target does not report them',async({page})=>{
+  await openLocal(page,{files:true,repository:true,devices:false});
+  await workspaceControl(page,'Dictate');
+  await expect(page.getByRole('button',{name:'Devices',exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>window.localToolCalls)).toEqual([]);
 });

@@ -96,11 +96,7 @@ fn find(
     })
 }
 async fn resolve() -> Option<(String, Source)> {
-    let path = crate::host::login_path()
-        .await
-        .cloned()
-        .or_else(|| std::env::var_os("PATH"))
-        .unwrap_or_default();
+    let path = crate::host::local_path().await;
     let exe = std::env::current_exe().ok()?;
     let (file, source) = find(exe.parent(), managed_dir(None).as_deref(), &path)?;
     Some((file.into_os_string().into_string().ok()?, source))
