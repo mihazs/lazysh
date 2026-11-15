@@ -38,3 +38,43 @@ jobs:
       - uses: ./.github/actions/windows-installed-gui
         with:
           revision: ${{ steps.revision.outputs.sha }}
+      # Throwaway evidence for why the driver cannot create a session; never merged.
+      - name: Run the installed application and EdgeDriver outside tauri-driver
+        if: always()
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $installer = (Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1).FullName
+          $dir = Join-Path $env:RUNNER_TEMP 'diag-lazysh'
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          Start-Process -FilePath $installer -ArgumentList '/S', '/NS', "/D=$dir" -Wait
+          Write-Host "== installed: $((Get-ChildItem $dir | ForEach-Object Name) -join ', '); session $([System.Diagnostics.Process]::GetCurrentProcess().SessionId); user $env:USERNAME"
+          Write-Host '== 1. the application with a debugging port'
+          $data = Join-Path $env:RUNNER_TEMP 'diag-wv2'
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
+          $env:WEBVIEW2_USER_DATA_FOLDER = $data
+          $out = Join-Path $env:RUNNER_TEMP 'diag-out.txt'
+          $err = Join-Path $env:RUNNER_TEMP 'diag-err.txt'
+          $p = Start-Process -FilePath "$dir\lazysh.exe" -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+          Start-Sleep -Seconds 25
+          Write-Host "exited=$($p.HasExited) code=$(if ($p.HasExited) { $p.ExitCode })"
+          try { Invoke-RestMethod http://127.0.0.1:9333/json/version | ConvertTo-Json -Compress } catch { Write-Host "devtools: $($_.Exception.Message)" }
+          Get-ChildItem -Recurse -Depth 1 $data -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object FullName
+          Write-Host '-- stdout/stderr'
+          Get-Content $out, $err -ErrorAction SilentlyContinue | Select-Object -Last 40
+          Write-Host '-- processes'
+          Get-Process | Where-Object { $_.ProcessName -match 'lazysh|msedgewebview2' } | Select-Object Id, ProcessName, SessionId, MainWindowHandle | Format-Table | Out-String | Write-Host
+          Write-Host '-- application errors'
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 2; StartTime = (Get-Date).AddMinutes(-15) } -MaxEvents 8 -ErrorAction SilentlyContinue | ForEach-Object { "$($_.TimeCreated) $($_.ProviderName): $(($_.Message -split "`n")[0..3] -join ' | ')" }
+          Get-Process | Where-Object { $_.ProcessName -match 'lazysh|msedgewebview2' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, Env:WEBVIEW2_USER_DATA_FOLDER
+          Write-Host '== 2. EdgeDriver with the capabilities tauri-driver sends'
+          $log = Join-Path $env:RUNNER_TEMP 'diag-edgedriver.log'
+          $edge = Start-Process $env:LAZYSH_WINDOWS_GUI_EDGEDRIVER -ArgumentList '--port=9515', '--verbose', "--log-path=$log" -PassThru
+          Start-Sleep -Seconds 3
+          $body = @{ capabilities = @{ alwaysMatch = @{ browserName = 'webview2'; 'ms:edgeOptions' = @{ binary = "$dir\lazysh.exe"; webviewOptions = @{} } } } } | ConvertTo-Json -Depth 6
+          try { Invoke-RestMethod -Method Post -Uri http://127.0.0.1:9515/session -ContentType 'application/json' -Body $body -TimeoutSec 90 | ConvertTo-Json -Depth 5 -Compress } catch { Write-Host $_.Exception.Message; Write-Host $_.ErrorDetails.Message }
+          Get-Content $log -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { $_.Substring(0, [Math]::Min($_.Length, 400)) }
+          Stop-Process -Id $edge.Id -Force -ErrorAction SilentlyContinue
+          Get-Process | Where-Object { $_.ProcessName -match 'lazysh|msedgewebview2' } | Stop-Process -Force -ErrorAction SilentlyContinue
