@@ -65,6 +65,15 @@ jobs:
           Get-Content $out, $err -ErrorAction SilentlyContinue | Select-Object -Last 40
           Write-Host '-- processes'
           Get-Process | Where-Object { $_.ProcessName -match 'lazysh|msedgewebview2' } | Select-Object Id, ProcessName, SessionId, MainWindowHandle | Format-Table | Out-String | Write-Host
+          Write-Host '-- webview2 command lines (first arguments only)'
+          Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine.Substring(0, [Math]::Min($_.CommandLine.Length, 1500)) }
+          Write-Host '-- listeners of the webview2 browser processes'
+          $ids = @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue | ForEach-Object Id)
+          Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table | Out-String | Write-Host
+          Write-Host '-- DevToolsActivePort files'
+          Get-ChildItem -Recurse -Filter DevToolsActivePort $env:RUNNER_TEMP -ErrorAction SilentlyContinue | ForEach-Object FullName
+          Write-Host '-- browser policies'
+          foreach ($root in 'HKLM:\SOFTWARE\Policies\Microsoft', 'HKCU:\SOFTWARE\Policies\Microsoft', 'HKLM:\SOFTWARE\WOW6432Node\Policies\Microsoft') { if (Test-Path $root) { Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name): $(($_.Property | ForEach-Object { "$_=$($_.GetValue($_))" }) -join ', ')" } } }
           Write-Host '-- application errors'
           Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 2; StartTime = (Get-Date).AddMinutes(-15) } -MaxEvents 8 -ErrorAction SilentlyContinue | ForEach-Object { "$($_.TimeCreated) $($_.ProviderName): $(($_.Message -split "`n")[0..3] -join ' | ')" }
           Get-Process | Where-Object { $_.ProcessName -match 'lazysh|msedgewebview2' } | Stop-Process -Force -ErrorAction SilentlyContinue
