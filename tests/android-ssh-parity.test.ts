@@ -112,6 +112,13 @@ test('parity report counts only every expected native case passing exactly once'
     expect(()=>validateSshParityReport(report(rows))).toThrow();
 });
 
+test('the shared Android runtime job leaves every owned parity case to the parity job',async()=>{
+  // Those cases need the host-written sshd fixture and fail with no fixture path in the shared job.
+  const moon=Bun.YAML.parse(await readFile(join(import.meta.dir,'../apps/client/moon.yml'),'utf8')) as {tasks:Record<string,{script:string}>};
+  const excluded=moon.tasks['test-android'].script.match(/notClass=(\S+)/)![1].split(',');
+  for(const name of sshParityCases) expect(excluded).toContain(`app.lazysh.client.NativeWorkspaceTest#${name}`);
+});
+
 test.skipIf(!parity)('actual Android app logs in by password, encrypted key, bastion and forwarded agent and refuses a rotated host key',async()=>{
   await androidSshParityAcceptance();
 },1_000_000);
