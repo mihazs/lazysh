@@ -406,24 +406,33 @@ actual('actual Windows installed GUI opens a lazysh:// theme link through the sh
     expect(await find('button', 'Review linked theme')).toBeUndefined();
     // Nothing is registered by the test: the handler is the one the NSIS installer wrote for this installation.
     expect(sameImage(await registeredProtocolHandler(), installed)).toBe(true);
-    const reviewShown = async () => (await browser.script("return [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Review linked theme')")) as boolean;
-    for (const method of ['rundll32', 'cmdstart', 'startprocess', 'explorer']) {
-      const url = `lazysh://theme?data=${Buffer.from(JSON.stringify({ ...linked, name: `Linked ${method}` })).toString('base64url')}`;
-      const trace = await powershell(String.raw`
-$null = Register-CimIndicationEvent -ClassName Win32_ProcessStartTrace -SourceIdentifier trace
-$url = ${quote(url)}
-switch (${quote(method)}) {
-  'rundll32' { Start-Process rundll32.exe -ArgumentList 'url.dll,FileProtocolHandler', $url -Wait }
-  'cmdstart' { cmd.exe /c start "" $url }
-  'startprocess' { Start-Process $url }
-  'explorer' { Start-Process explorer.exe -ArgumentList $url }
+    const data = Buffer.from(JSON.stringify(linked)).toString('base64url');
+    const probe = join(process.env.RUNNER_TEMP!, 'probe.txt');
+    console.info(`DIAG probe: ${await powershell(String.raw`
+$base = 'HKCU:\Software\Classes\lazyshprobe'
+$null = New-Item -Path "$base\shell\open\command" -Force
+Set-ItemProperty -LiteralPath $base -Name 'URL Protocol' -Value ''
+Set-ItemProperty -LiteralPath "$base\shell\open\command" -Name '(default)' -Value 'cmd.exe /c echo "%1">>${probe}'
+foreach ($m in 'rundll32', 'cmdstart', 'startprocess') {
+  $u = 'lazyshprobe://theme?data=${data}'
+  switch ($m) {
+    'rundll32' { Start-Process rundll32.exe -ArgumentList 'url.dll,FileProtocolHandler', $u -Wait }
+    'cmdstart' { cmd.exe /c start "" $u }
+    'startprocess' { Start-Process $u }
+  }
+  Start-Sleep -Seconds 2
 }
-Start-Sleep -Seconds 6
-$seen = Get-Event -SourceIdentifier trace | ForEach-Object { $e = $_.SourceEventArgs.NewEvent; '{0}:{1}<-{2}' -f $e.ProcessName, $e.ProcessID, $e.ParentProcessID }
-Unregister-Event -SourceIdentifier trace
-($seen -join ' ')`, 90_000);
-      console.info(`DIAG ${method}: started ${trace}; review shown=${await reviewShown()}`);
-    }
+Remove-Item -LiteralPath $base -Recurse
+Get-Content -LiteralPath ${quote(probe)}`)}`);
+    // Capture the real handler's command line while the shell starts it.
+    console.info(`DIAG handler: ${await powershell(String.raw`
+$seen = @{}
+Start-Process rundll32.exe -ArgumentList 'url.dll,FileProtocolHandler', 'lazysh://theme?data=${data}'
+$deadline = [DateTime]::Now.AddSeconds(5)
+while ([DateTime]::Now -lt $deadline) {
+  foreach ($p in Get-CimInstance Win32_Process -Filter "Name='lazysh.exe'") { $seen[$p.ProcessId] = $p.CommandLine }
+}
+($seen.GetEnumerator() | ForEach-Object { '{0}: {1}' -f $_.Key, $_.Value }) -join ' || '`, 30_000)}`);
     const review = await appears('offer to review the linked theme', 'button', 'Review linked theme');
     expect(await appTheme()).not.toBe('custom');
     await browser.click(review);
