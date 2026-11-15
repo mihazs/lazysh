@@ -42,6 +42,22 @@ it('imports a theme from a QR image chosen in the Linux GUI, decoded natively, a
   expect(gui.connections).toBe(0);
 });
 
+it('reads a theme from the X clipboard in the Linux GUI, previews it and applies it only on request',async()=>{
+  const {gui,browser,page,appTheme}=await enterThemeImport();
+  const draft=await page.$('textarea[aria-label="Theme JSON or share code"]'),theme=JSON.stringify({v:1,name:'Clipboard fixture',mode:'light',colors:{background:'#f4f4ee',foreground:'#202020'}});
+  gui.stage='theme on the X clipboard';
+  // A separate X client owns CLIPBOARD, as when a user copied the theme elsewhere; WebKitGTK only reads a foreign owner that offers text/plain.
+  await gui.seedClipboard(theme,'text/plain;charset=utf-8');
+  expect(await appTheme()).not.toBe('custom');expect(await draft.getValue()).toBe('');
+  await (await page.$('button=Read theme from clipboard')).click();
+  await (await browser.$('h3=Clipboard fixture')).waitForDisplayed({timeout:20_000});
+  expect(await draft.getValue()).toBe(theme);
+  expect(await appTheme()).not.toBe('custom');
+  await (await page.$('button=Apply to app and terminal')).click();
+  await browser.waitUntil(async()=>await appTheme()==='custom',{timeout:10_000,timeoutMsg:'The clipboard theme was not applied on request'});
+  expect(gui.connections).toBe(0);
+});
+
 it('imports a theme from an lazysh:// link opened by the real xdg-open and reviews it before applying',async()=>{
   const {gui,browser,appTheme}=await enterThemeImport();
   const owner=await gui.appOwner();
