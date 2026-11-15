@@ -132,7 +132,8 @@ the printf handshake is not needed.
 ### Local companion
 
 The companion runs locally without SSH. The desktop bundle ships the matching
-`lazysh-agent` (`linux-agent-*`, `windows-agent-x64`, macOS) next to the app; the
+`lazysh-agent` (`linux-agent-x64`, `windows-agent-x64`, and macOS once macOS packages
+are released; see [bundled companion](release-artifacts.md#bundled-companion)) next to the app; the
 local arm resolves it by absolute path, falling back to a managed copy and then
 `PATH`. Calls are argv (`lazysh-agent <subcommand> …`), JSON on stdout, as remotely.
 Inside a WSL target the existing Linux install path is reused through `wsl.exe`.

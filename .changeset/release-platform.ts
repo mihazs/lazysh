@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
+import { artifactTargets, buildIdentity, companionMaximumBytes, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
+import { publishedCompanion, requireBundled, requireBundledImage, type DesktopTarget, type PublishedCompanion } from './release-bundle';
 
 const execute = promisify(execFile);
-export async function native(command: string, args: string[], env = process.env, timeout = 180_000, input?: string) {
+export async function native(command: string, args: string[], env = process.env, timeout = 180_000, input?: string, cwd?: string) {
   try {
     if (input !== undefined && Buffer.byteLength(input) > 65_536) throw new Error('Native fixture input exceeds its bound');
-    const pending = execute(command, args, { env, timeout, maxBuffer: 2_097_152 });
+    const pending = execute(command, args, { env, timeout, maxBuffer: 2_097_152, cwd });
     const supplied = input === undefined ? Promise.resolve() : new Promise<void>((resolve, reject) => {
       pending.child.stdin!.once('error', reject);
       pending.child.stdin!.end(input, resolve);
@@ -43,7 +45,7 @@ async function appleApp(path: string, version: string, id: string) {
 }
 const windowsInstallerGuards = new Set([
   'REPARSE_POINT', 'INSTALLER_TIMEOUT', 'INSTALLER_EXIT', 'PROCESS_TREE',
-  'MISSING_BINARY', 'BINARY_MISMATCH', 'VERSION_MISMATCH', 'PROCESS_ARCHITECTURE',
+  'MISSING_BINARY', 'BINARY_MISMATCH', 'MISSING_COMPANION', 'COMPANION_MISMATCH', 'VERSION_MISMATCH', 'PROCESS_ARCHITECTURE',
   'EXISTING_PATH', 'EXISTING_REGISTRY', 'EXISTING_AUTOSTART', 'EXISTING_MSI',
   'WEBVIEW2_REQUIRED', 'UNEXPECTED_DATA', 'REPAIR_MARKER', 'MISSING_UNINSTALLER',
   'INSTALL_OWNERSHIP', 'UNINSTALL_OWNERSHIP', 'UNINSTALL_BINARY', 'UNINSTALL_REGISTRY',
@@ -93,7 +95,8 @@ export async function windowsNsisBinaryDigest(path: string, source: { bytes: num
   predicted.update(tail);
   return { bytes, sha256: predicted.digest('hex') };
 }
-export async function windowsInstallation(installer: string, binary: string, version: string) {
+/** `companion`, when the installer bundles one, is what the installation must contain beside the app. */
+export async function windowsInstallation(installer: string, binary: string, version: string, companion?: PublishedCompanion) {
   requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
     && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
   'Windows installation requires an owned GitHub-hosted Windows job');
@@ -135,6 +138,12 @@ function Installed {
   Require ((Get-Item -LiteralPath $installed).Length -eq [long]$env:LAZYSH_BINARY_BYTES -and (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash -eq $env:LAZYSH_NSIS_BINARY_SHA256) 'BINARY_MISMATCH'
   Require ((Get-AuthenticodeSignature -LiteralPath $installed).Status -eq 'NotSigned') 'UNSUPPORTED_SIGNING'
   Require ((Get-Item -LiteralPath $installed).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'VERSION_MISMATCH'
+  if ($env:LAZYSH_COMPANION_SHA256) {
+    $companion = Join-Path $directory 'lazysh-agent.exe'
+    Plain $companion
+    Require (Test-Path -LiteralPath $companion -PathType Leaf) 'MISSING_COMPANION'
+    Require ((Get-Item -LiteralPath $companion).Length -eq [long]$env:LAZYSH_COMPANION_BYTES -and (Get-FileHash -LiteralPath $companion -Algorithm SHA256).Hash -eq $env:LAZYSH_COMPANION_SHA256) 'COMPANION_MISMATCH'
+  }
 }
 $stage = 'preflight'
 $failure = 'UNEXPECTED'
@@ -248,26 +257,65 @@ if ($primaryFailed) { exit 1 }
 'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
 `], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
     LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
-    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256 }, 450_000);
+    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256,
+    ...(companion ? { LAZYSH_COMPANION_BYTES: String(companion.bytes), LAZYSH_COMPANION_SHA256: companion.sha256 } : {}) }, 450_000);
 }
+const unpacked = async <T>(work: (directory: string) => Promise<T>) => {
+  const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), 'lazysh-unpacked-'));
+  try { return await work(directory); } finally { await rm(directory, { recursive: true, force: true }); }
+};
+/** The Debian package must install the published companion beside the app, in `/usr/bin`. */
+export const debCompanion = (deb: string, published: PublishedCompanion) => unpacked(async directory => {
+  await native('dpkg-deb', ['--extract', deb, directory]);
+  const installed = join(directory, 'usr/bin/lazysh-agent');
+  await requireBundled(installed, published, 'Debian package');
+  requirePlatform((await lstat(installed)).mode & 0o111, 'Debian package lazysh-agent is not executable');
+});
+/** The AppImage carries it in its own `usr/bin`, with the dynamic section linuxdeploy rewrote; extraction needs neither FUSE nor a display. */
+export const appImageCompanion = (image: string, published: PublishedCompanion) => unpacked(async directory => {
+  await native(resolve(image), ['--appimage-extract'], process.env, 180_000, undefined, directory);
+  const installed = join(directory, 'squashfs-root/usr/bin/lazysh-agent');
+  await requireBundledImage(installed, published, 'AppImage');
+  requirePlatform((await lstat(installed)).mode & 0o111, 'AppImage lazysh-agent is not executable');
+});
+/** The bundler signs everything in the app, so an app's copy is the published one once both signatures are removed. */
+export const macosCompanion = (app: string, published: PublishedCompanion, where: string) => unpacked(async directory => {
+  const stripped = async (source: string, name: string) => {
+    const copy = join(directory, name);
+    await native('/bin/cp', [source, copy]);
+    await native('/usr/bin/codesign', ['--remove-signature', copy]);
+    return copy;
+  };
+  const bundled = join(app, 'Contents/MacOS/lazysh-agent');
+  const reference = await stripped(published.file, 'published');
+  const comparable = await digestFile(reference, companionMaximumBytes);
+  await requireBundled(await stripped(bundled, 'bundled'), { ...published, ...comparable }, where);
+});
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);
   requirePlatform(['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64'].includes(target), 'unsupported desktop target');
   const bundle = join(root, 'target/release/bundle');
+  // The release job downloads the companion its companion job verified and staged for this platform.
+  const companionDirectory = process.env.LAZYSH_COMPANION_DIR;
+  requirePlatform(companionDirectory, 'published companion directory required');
+  const published = await publishedCompanion(identity, target as DesktopTarget, resolve(companionDirectory));
   const sources: string[] = [];
   let signing: 'unsigned' | 'ad-hoc' = 'unsigned';
   if (target === 'linux-x64') {
     const deb = await exactlyOne('deb/*.deb', bundle);
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Version']) === identity.version, 'Debian version mismatch');
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Architecture']) === 'amd64', 'Debian architecture mismatch');
-    sources.push(deb, await exactlyOne('appimage/*.AppImage', bundle));
+    const image = await exactlyOne('appimage/*.AppImage', bundle);
+    await debCompanion(deb, published);
+    await appImageCompanion(image, published);
+    sources.push(deb, image);
   } else if (target === 'windows-x64') {
     const installer = await exactlyOne('nsis/*.exe', bundle);
     const version = await native('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       '(Get-Item -LiteralPath $env:LAZYSH_INSTALLER).VersionInfo.ProductVersion'],
     { ...process.env, LAZYSH_INSTALLER: installer });
     requirePlatform([identity.version, `${identity.version}.0`].includes(version), 'Windows installer version mismatch');
-    console.info(await windowsInstallation(installer, join(root, 'target/release/lazysh.exe'), identity.version));
+    console.info(await windowsInstallation(installer, join(root, 'target/release/lazysh.exe'), identity.version, published));
     sources.push(installer);
   } else {
     const app = await exactlyOne('macos/*.app', bundle);
@@ -275,6 +323,7 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
     requirePlatform(await plist(info, 'CFBundleIdentifier') === 'app.lazysh.client'
       && await plist(info, 'CFBundleShortVersionString') === identity.version, 'macOS identity/version mismatch');
     await native('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+    await macosCompanion(app, published, 'macOS app');
     const dmg = await exactlyOne('dmg/*.dmg', bundle);
     const mount = await mkdtemp(join(process.env.RUNNER_TEMP!, 'lazysh-dmg-'));
     let attached = false;
@@ -285,6 +334,7 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
       requirePlatform(await plist(join(packaged, 'Contents/Info.plist'), 'CFBundleShortVersionString') === identity.version
         && await plist(join(packaged, 'Contents/Info.plist'), 'CFBundleIdentifier') === 'app.lazysh.client', 'DMG identity mismatch');
       await native('/usr/bin/codesign', ['--verify', '--deep', '--strict', packaged]);
+      await macosCompanion(packaged, published, 'DMG');
     } finally {
       if (attached) await native('/usr/bin/hdiutil', ['detach', mount]);
       await rm(mount, { recursive: true });
