@@ -6,7 +6,7 @@ import {useHostUpload} from './useHostUpload';
 import {resolveHostPath} from './hostPath';
 import HostFileActions from './HostFileActions';
 import FilePreview, {type FileContent} from './FilePreview';
-import {IMAGE_PREVIEW_LIMIT, imageUrl, previewKind} from './mediaPreview';
+import {IMAGE_PREVIEW_LIMIT, MEDIA_PREVIEW_LIMIT, imageUrl, mediaClip, previewKind} from './mediaPreview';
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -89,11 +89,22 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     setError("");
     setSelected(next);
     try {
-      if (previewKind(entry.name) === 'image') {
+      const kind = previewKind(entry.name);
+      if (kind === 'image') {
         if (entry.size > IMAGE_PREVIEW_LIMIT) throw new LocalUiError('filesImageTooLarge');
         // The native reader rejects symlinks and sniffs PNG, JPEG, GIF or WebP bytes.
         const image = imageUrl(await invoke('repository_image', { sessionId, path, filePath: entry.name, objectId: null }));
         if (current === request.current) setContent({ path: next, image });
+      } else if (kind === 'video' || kind === 'audio') {
+        if (entry.size > MEDIA_PREVIEW_LIMIT) throw new LocalUiError('filesMediaTooLarge');
+        // The native reader rejects symlinks, caps the read and refuses bytes whose signature is not this kind.
+        const clip = mediaClip(await invoke('file_media', { sessionId, path, fileName: entry.name, kind }), kind);
+        // A media element on a system without GStreamer's audio sink takes WebKitGTK's web process down; ask before making one.
+        if (await invoke('media_playback') !== true) throw new LocalUiError('filesMediaNoPlayer');
+        if (current === request.current) setContent({ path: next, clip });
+      } else if (kind === 'pdf') {
+        // No WebView here draws a PDF inside a frame without running code, so the host's viewer app opens it.
+        setContent({ path: next, pdf: true });
       } else {
         const text = await api.readFile(sessionId, next);
         if (current === request.current) setContent({ path: next, text });

@@ -3957,6 +3957,7 @@ version = "1.87.1"
 dependencies = [
  "age",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "dunce",
  "futures-util",
