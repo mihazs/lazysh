@@ -1,0 +1,66 @@
+import { expect, test } from 'bun:test';
+import { execFile } from 'node:child_process';
+import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { powershell, requireOwnedWindowsRunner } from './support/windowsGui';
+import { hostKeyFingerprint, offeredHostKey, openSshTools, speaksSsh, startOwnedSshServer } from './support/windowsSshServer';
+
+const fingerprint = `SHA256:${'Ab1+/'.repeat(8)}Ab1`;
+
+test('the host key fingerprint is read from ssh-keygen output and nothing else is accepted', () => {
+  expect(hostKeyFingerprint(`256 ${fingerprint} lazysh-owned (ED25519)\r\n`)).toBe(fingerprint);
+  for (const bad of ['', `3072 ${fingerprint} lazysh-owned (RSA)`, `256 SHA256:short lazysh-owned (ED25519)`, `256 MD5:${fingerprint.slice(7)} x (ED25519)`])
+    expect(() => hostKeyFingerprint(bad)).toThrow('Unrecognized ssh-keygen fingerprint output');
+});
+
+test('the offered host key is read from the verbose client log and nothing else is accepted', () => {
+  expect(offeredHostKey(`debug1: Remote protocol version 2.0\r\ndebug1: Server host key: ssh-ed25519 ${fingerprint}\r\ndebug1: rekey\r\n`)).toBe(fingerprint);
+  for (const bad of ['', `debug1: Server host key: ssh-rsa ${fingerprint}`, `debug1: Server host key: ssh-ed25519 SHA256:short`])
+    expect(() => offeredHostKey(bad)).toThrow('The server offered no Ed25519 host key');
+});
+
+test('only the OpenSSH build below the system directory is ever run', () => {
+  expect(openSshTools({ SystemRoot: 'D:\\Windows' })).toEqual({
+    sshd: 'D:\\Windows\\System32\\OpenSSH\\sshd.exe', keygen: 'D:\\Windows\\System32\\OpenSSH\\ssh-keygen.exe', client: 'D:\\Windows\\System32\\OpenSSH\\ssh.exe' });
+});
+
+const run = (program: string, args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>(resolve =>
+  execFile(program, args, { timeout: 60_000, windowsHide: true }, (error, stdout, stderr) =>
+    resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout, stderr })));
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_SSH !== '1')('owned Windows OpenSSH server accepts only its key, offers its host key on loopback and leaves nothing behind', async () => {
+  requireOwnedWindowsRunner();
+  const tools = openSshTools();
+  const service = () => powershell('(Get-Service sshd -ErrorAction SilentlyContinue).Status');
+  const before = await service();
+  const server = await startOwnedSshServer();
+  let stopped = false;
+  try {
+    const ssh = (args: string[]) => run(tools.client, ['-p', String(server.port), '-o', 'UserKnownHostsFile=NUL', '-o', 'StrictHostKeyChecking=no',
+      '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10', ...args.slice(0, -1), `${server.username}@127.0.0.1`, args.at(-1)!]);
+    expect(server.port).not.toBe(22);
+    // The challenge is computed by the Windows shell, so its answer is not in the text typed.
+    const accepted = await ssh(['-v', '-i', server.privateKeyPath, 'set /a 1234*5678']);
+    expect(accepted.code).toBe(0);
+    expect(accepted.stdout).toContain('7006652');
+    expect(offeredHostKey(accepted.stderr)).toBe(server.fingerprint);
+
+    const other = join(server.directory, 'other_key');
+    await run(tools.keygen, ['-q', '-t', 'ed25519', '-N', '', '-f', other]);
+    const wrongKey = await ssh(['-i', other, 'echo refused']);
+    expect([wrongKey.code, wrongKey.stdout.includes('refused'), wrongKey.stderr.includes('Permission denied')]).toEqual([255, false, true]);
+    const password = await ssh(['-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no', 'echo refused']);
+    expect([password.code, password.stdout.includes('refused'), password.stderr.includes('Permission denied')]).toEqual([255, false, true]);
+
+    const listeners = JSON.parse(await powershell(`ConvertTo-Json -Compress -InputObject @(Get-NetTCPConnection -State Listen -LocalPort ${server.port} | ForEach-Object LocalAddress)`));
+    expect(listeners).toEqual(['127.0.0.1']);
+
+    await server.stop();
+    stopped = true;
+    expect(await speaksSsh(server.port)).toBe(false);
+    await expect(lstat(server.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await service()).toBe(before);
+  } finally {
+    if (!stopped) await server.stop().catch(error => console.error(`Owned Windows sshd cleanup failed: ${error}`));
+  }
+}, 180_000);

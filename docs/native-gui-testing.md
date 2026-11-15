@@ -87,6 +87,18 @@ The `native-desktop` step is blocking: it was `continue-on-error` until the case
 
 This establishes startup, window ownership, bundled identity, saved-host dialogs, singleton delivery of `--host` and `--dir` and a local ConPTY shell of the installed application. An authenticated SSH terminal on Windows remains open ([#492](https://github.com/mihazs/lazysh/issues/492), [#1828](https://github.com/mihazs/lazysh/issues/1828)); the parity matrix marks a Windows row only for a scenario that has passed in a `main` run. No Windows hardware was used; the result is whatever the hosted run reports.
 
+### Owned Windows OpenSSH server
+
+`tests/support/windowsSshServer.ts` is the SSH server the Windows GUI SSH case connects to, and `tests/windows-ssh-server.test.ts` proves it with the real Windows `ssh.exe` before any GUI case depends on it ([#1632](https://github.com/mihazs/lazysh/issues/1632)). The GitHub-hosted Windows image already carries the Windows OpenSSH Server capability (and an `sshd` service), so nothing is installed. The fixture starts a second `sshd.exe`, from `%SystemRoot%\System32\OpenSSH` only, as an ordinary process of the job's own user:
+
+- it listens on a fresh loopback port only, with `publickey` as the sole authentication method and one throwaway Ed25519 key for the job user; password and keyboard-interactive logins are refused, and the host key is another throwaway key whose SHA-256 fingerprint is what the application's host-verification dialog must show;
+- everything it creates (keys, configuration, PID file) lives in one fresh directory below `RUNNER_TEMP`; it never edits the machine's `sshd` service, its `sshd_config` or `administrators_authorized_keys`;
+- `stop()` kills exactly the processes below the server (matched by PID and start time), requires them to retire, and removes the directory.
+
+The hosted case runs a command that the Windows shell computes (`set /a 1234*5678`) so its answer is not in the text sent, requires the host key the client was offered to equal the fixture's fingerprint, requires a different key and password-only authentication to be refused, requires the listener to be bound to `127.0.0.1` alone, and after `stop()` requires the port to refuse, the directory to be gone and the ambient `sshd` service to be in its original state. The remote shell is `cmd.exe` on a Windows host; a Windows OpenSSH host is outside the multiplexer features (discovery reports `unsupported_host_shell`), so the GUI case exercises the plain SSH terminal only.
+
+The fixture's `native-desktop` step is `continue-on-error` until its first hosted pass on `main` is recorded on [#1632](https://github.com/mihazs/lazysh/issues/1632). A skipped or failed run proves nothing about the fixture.
+
 ## Acceptance limits
 
 The suite covers Linux singleton handoff through the real WebView/native IPC,
