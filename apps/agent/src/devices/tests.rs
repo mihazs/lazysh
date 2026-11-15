@@ -335,6 +335,67 @@ fn screenshots_bound_bridge_payload_and_preserve_source_coordinate_dimensions() 
     );
 }
 
+#[test]
+fn a_warning_line_before_the_screenshot_is_skipped_but_other_prefixes_are_not() {
+    let screenshot = |bytes: Vec<u8>| {
+        execute(
+            &mut FakeRunner::new(vec![Ok(bytes)]),
+            DeviceCommand::Screenshot {
+                platform: Platform::Android,
+                id: "emulator-5554".into(),
+            },
+        )
+    };
+    let warning = b"/vendor/etc/hwdata/amdgpu.ids: No such file or directory\n";
+    let with_warning = [warning.as_slice(), &png(300, 200)].concat();
+    let frame = screenshot(with_warning).unwrap();
+    assert_eq!(
+        (frame["width"].as_u64(), frame["height"].as_u64()),
+        (Some(300), Some(200))
+    );
+    assert_jpeg_preview(&frame);
+    // Text that never reaches a PNG signature, or reaches it only past the first KiB, is no image.
+    let invalid = |bytes: Vec<u8>| screenshot(bytes).unwrap_err();
+    assert!(matches!(
+        invalid(warning.to_vec()),
+        Error::Device("InvalidDeviceImage")
+    ));
+    let late = [vec![b'x'; 1024], png(300, 200)].concat();
+    assert!(matches!(invalid(late), Error::Device("InvalidDeviceImage")));
+}
+
+#[test]
+fn the_android_video_probe_reads_the_feature_list_comma_or_line_separated() {
+    let probe = |features: &str| {
+        let mut runner = FakeRunner::new(vec![
+            Ok(features.as_bytes().to_vec()),
+            Ok(Vec::new()),
+            Ok(b"Decoder h264 x".to_vec()),
+            Ok(b"Encoder mjpeg x".to_vec()),
+            Ok(b"Muxer mpjpeg x".to_vec()),
+            Ok(b"Filter fps x".to_vec()),
+            Ok(png(64, 128)),
+        ]);
+        android::execute(&mut runner, "emulator-5554", android::AndroidAction::Probe)
+    };
+    for features in [
+        "shell_v2,cmd",
+        "shell_v2\ncmd\nstat_v2\n",
+        "cmd\r\nshell_v2\r\n",
+    ] {
+        assert_eq!(probe(features).unwrap()["stream"], true, "{features:?}");
+    }
+    for features in ["cmd\nstat_v2\n", "shell_v2x,cmd", ""] {
+        assert!(
+            matches!(
+                probe(features),
+                Err(Error::Device("AndroidShellV2Unavailable"))
+            ),
+            "{features:?}"
+        );
+    }
+}
+
 fn assert_jpeg_preview(frame: &Value) {
     assert_eq!(frame["mime"], "image/jpeg");
     let bytes = base64::engine::general_purpose::STANDARD
