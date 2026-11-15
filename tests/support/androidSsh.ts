@@ -254,6 +254,23 @@ export async function androidSshCleanup(primary:boolean,steps:readonly (readonly
   if(failed){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
 }
 
+/** The one explicitly selected owned emulator and an adb bound to it; any other device is refused. */
+export function ownedEmulator(acceptance:string) {
+  if(process.platform!=='linux')throw new Error(`Owned Android ${acceptance} requires Linux`);
+  const serial=process.env.ANDROID_SERIAL;
+  if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
+  const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
+  return {serial,adb,device:(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args])};
+}
+/** The cleanup every owned-emulator acceptance owes: the keyboard preference, each device reverse and the pushed fixture directory. */
+export function ownedDeviceCleanup(device:(args:string[])=>Promise<unknown>,owned:{keyboard?:{restore():Promise<unknown>};reverses:readonly number[];remote?:string}) {
+  return [
+    ['software-keyboard',()=>owned.keyboard?.restore()??Promise.resolve()],
+    ...owned.reverses.map(port=>['reverse',()=>device(['reverse','--remove',`tcp:${port}`])] as const),
+    ['fixture-file',()=>owned.remote?device(['shell','rm','-rf','--',owned.remote]):Promise.resolve()],
+  ] as const satisfies readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[];
+}
+
 // No raw crash output enters OwnedProcess's retained output windows. This is a
 // best-effort diagnostic child on the explicitly selected owned emulator only.
 export async function recoverOwnedCaseCrash(adb:string,serial:string,source:OwnedCaseCrashParser) {
