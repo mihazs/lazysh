@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxGesturesVerified,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxViewHistory,tmuxWindowLifecycle,tmuxWindowRows,type TmuxView} from './support/androidTmux';
 import {listening,OwnedProcess} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -30,21 +30,42 @@ test('tmux host readback admits only the owned two-window topology and display c
 });
 
 test('tmux window readback follows only the one added window and refuses a touched original',()=>{
-  const originals=[{windowId:'@1',name:'alpha'},{windowId:'@2',name:'beta'}],base='@1|alpha\n@2|beta';
+  const originals=[{windowId:'@1',name:'alpha'},{windowId:'@2',name:'beta'}],base='@1|alpha|0|0\n@2|beta|1|0';
   const fold=(text:string,seen?:Parameters<typeof tmuxWindowLifecycle>[2])=>tmuxWindowLifecycle(tmuxWindowRows(text),originals,seen);
   let seen=fold(base);
   expect(seen).toBeUndefined();
-  seen=fold(`${base}\n@3|scratch`,seen);
+  seen=fold(`${base}\n@3|scratch|0|0`,seen);
   expect(seen).toEqual({windowId:'@3',names:['scratch'],closed:false});
-  expect(fold(`${base}\n@3|scratch`,seen)).toBe(seen);
-  seen=fold(`${base}\n@3|renamed`,seen);
+  expect(fold(`${base}\n@3|scratch|0|0`,seen)).toBe(seen);
+  seen=fold(`${base}\n@3|renamed|0|0`,seen);
   expect(seen?.names).toEqual(['scratch','renamed']);
   expect(fold(base,seen)).toEqual({windowId:'@3',names:['scratch','renamed'],closed:true});
   // A closed or renamed original, a second added window, a replaced or reappearing one: never the app's window.
-  for(const text of ['@1|alpha','@1|alpha\n@2|renamed',`${base}\n@3|a\n@4|b`])expect(()=>fold(text)).toThrow(/Owned tmux (original window|window topology) changed/);
-  expect(()=>fold(`${base}\n@4|b`,{windowId:'@3',names:['a'],closed:false})).toThrow('Owned tmux window topology changed');
-  expect(()=>fold(`${base}\n@3|a`,{windowId:'@3',names:['a'],closed:true})).toThrow('Owned tmux window topology changed');
-  for(const invalid of ['','private text','@3|bad name','@3|'+'x'.repeat(33),`${base}\n@3|a|private`])expect(()=>tmuxWindowRows(invalid)).toThrow('Owned tmux window topology changed');
+  for(const text of ['@1|alpha|0|0','@1|alpha|0|0\n@2|renamed|1|0',`${base}\n@3|a|0|0\n@4|b|0|0`])expect(()=>fold(text)).toThrow(/Owned tmux (original window|window topology) changed/);
+  expect(()=>fold(`${base}\n@4|b|0|0`,{windowId:'@3',names:['a'],closed:false})).toThrow('Owned tmux window topology changed');
+  expect(()=>fold(`${base}\n@3|a|0|0`,{windowId:'@3',names:['a'],closed:true})).toThrow('Owned tmux window topology changed');
+  for(const invalid of ['','private text','@3|bad name|0|0','@3|'+'x'.repeat(33)+'|0|0','@3|a','@3|a|2|0','@3|a|0|zoomed',`${base}\n@3|a|0|0|private`])expect(()=>tmuxWindowRows(invalid)).toThrow('Owned tmux window topology changed');
+});
+
+test('tmux view history keeps the active window and its zoom flag, and the gesture check needs the exact closing order',()=>{
+  const originals=[{windowId:'@1',name:'alpha'},{windowId:'@2',name:'beta'}];
+  const fold=(history:readonly TmuxView[],active:'@1'|'@2'|'@3',zoomed=false)=>tmuxViewHistory(tmuxWindowRows(
+    ['@1|alpha','@2|beta','@3|scratch'].map(line=>`${line}|${line.startsWith(`${active}|`)?1:0}|${line.startsWith(`${active}|`) && zoomed?1:0}`).join('\n')),originals,history);
+  let history:readonly TmuxView[]=[];
+  for(const [active,zoomed] of [['@1',false],['@1',false],['@2',false],['@3',false],['@2',false],['@2',true],['@2',true],['@2',false],['@2',true],['@2',false],['@1',false],['@2',false],['@2',false]] as const)history=fold(history,active,zoomed);
+  expect(history).toEqual([{window:'alpha',zoomed:false},{window:'beta',zoomed:false},{window:'other',zoomed:false},{window:'beta',zoomed:false},{window:'beta',zoomed:true},
+    {window:'beta',zoomed:false},{window:'beta',zoomed:true},{window:'beta',zoomed:false},{window:'alpha',zoomed:false},{window:'beta',zoomed:false}]);
+  expect(tmuxGesturesVerified(history)).toBe(true);
+  // Missing a step, a different order or a zoom of the other window is not the gesture phase.
+  const tail=history.slice(-5);
+  for(const wrong of [history.slice(0,-1),history.slice(0,-2),[...history.slice(0,-5),tail[0],tail[2],tail[1],tail[3],tail[4]],
+    [...history.slice(0,-5),{window:'alpha' as const,zoomed:true},...tail.slice(1)],[...history,{window:'beta' as const,zoomed:true},{window:'beta' as const,zoomed:false}],[],tail.slice(0,4)])
+    expect(tmuxGesturesVerified(wrong)).toBe(false);
+  // Two active windows or none is not a tmux session, and a runaway history is bounded.
+  expect(()=>tmuxViewHistory(tmuxWindowRows('@1|alpha|1|0\n@2|beta|1|0'),originals,[])).toThrow('Owned tmux window topology changed');
+  expect(()=>tmuxViewHistory(tmuxWindowRows('@1|alpha|0|0\n@2|beta|0|0'),originals,[])).toThrow('Owned tmux window topology changed');
+  const long=Array.from({length:24},(_,index):TmuxView=>({window:'beta',zoomed:index%2===1}));
+  expect(()=>fold(long,'@1')).toThrow('Owned tmux view history exceeded');
 });
 
 test('tmux split readback admits only the original pane, one added pane and a closed zoom flag',()=>{
@@ -157,7 +178,7 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await wait(()=>client!.stdout.includes(beta.marker));
     await client.stop();
     await owned.verifyDetachedAndReattached();
-    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],windows:2,server:{state:'running',exit:null,signal:'none'}});
+    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],views:['alpha','beta'],windows:2,server:{state:'running',exit:null,signal:'none'}});
     // A still-attached control-mode client, like the app's Jump binding, whose reader no
     // longer drains its output must not break teardown: retiring SSH ends it first.
     client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -t '=owned-tmux'");
@@ -243,6 +264,39 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     // The extra pane alone, with the original pane lost, is a changed topology.
     await tmux(`kill-pane -t '${beta.paneId}'`);
     await expect(owned.verifySplitAndZoom()).rejects.toThrow();
+  } finally {
+    await owned.stop();
+  }
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the pinch zoom, unzoom and window swipes the default gestures send',async()=>{
+  const owned=await TmuxFixture.start();
+  try {
+    const [,beta]=owned.metadata().windows;
+    const tmux=hostTmux(owned);
+    const step=async(command:string)=>{await tmux(command);await owned.observe();};
+    const missing='Owned tmux pinch zoom, unzoom and two-finger window swipes were not observed';
+    await expect(owned.verifyGestures()).rejects.toThrow(missing);
+    // tmux refuses to zoom alpha's only pane, so the pinch needs the split the app made in beta. The app's own zoom of the added pane, toggled back, comes first.
+    await tmux(`split-window -d -v -t '${beta.paneId}' -c '${owned.ssh.directory}'`);
+    const added=(await tmux(`list-panes -t '=owned-tmux:1' -F '#{pane_id}'`)).split('\n').find(id=>id && id!==beta.paneId)!;
+    await step("resize-pane -Z -t '=owned-tmux:0'");
+    expect(owned.diagnostic().views).toEqual(['alpha']);
+    await step("select-window -t '=owned-tmux:1'");
+    await step(`resize-pane -Z -t '${added}'`);
+    await step(`resize-pane -Z -t '${added}'`);
+    await expect(owned.verifyGestures()).rejects.toThrow(missing);
+    // The tmux client behind the app runs these for the default gestures: prefix z, n and p (n wraps from the last window to the first).
+    await step("resize-pane -Z -t '=owned-tmux:1'");
+    await expect(owned.verifyGestures()).rejects.toThrow(missing);
+    await step("resize-pane -Z -t '=owned-tmux:1'");
+    await step("next-window -t '=owned-tmux'");
+    await expect(owned.verifyGestures()).rejects.toThrow(missing);
+    await step("previous-window -t '=owned-tmux'");
+    await owned.verifyGestures();
+    expect(owned.diagnostic().views).toEqual(['alpha','beta','beta+zoom','beta','beta+zoom','beta','alpha','beta']);
+    // Neither original window was replaced.
+    expect(owned.metadata().windows.map(({name})=>name)).toEqual(['alpha','beta']);
   } finally {
     await owned.stop();
   }
