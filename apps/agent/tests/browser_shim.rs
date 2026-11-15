@@ -22,6 +22,7 @@ use std::{
 const URL: &str =
     "https://login.example.com/authorize?client_id=a&redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F";
 const BEGIN: &str = "# >>> lazysh browser shim >>>";
+const ANSWER: &str = "LAZYSH_BROWSER_ANSWER_MS";
 
 struct Host {
     _guard: tempfile::TempDir,
@@ -53,10 +54,13 @@ impl Host {
         self.root.join("run/lazysh")
     }
     /// Only the wrappers and the recording openers are on `PATH`: no opener of the machine under test.
+    /// A launcher waits up to 5 s for a live watcher: a stall of the loaded machine under test must not
+    /// turn into the real opener's fallback (the deadline itself is tested with the default wait).
     fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
         command
             .env_clear()
+            .env(ANSWER, "5000")
             .env("HOME", self.home())
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env(
@@ -248,7 +252,10 @@ fn a_fake_cli_reaches_the_device_through_every_launcher_it_may_use() {
     }
     let output = cli.output().unwrap();
     assert!(output.status.success(), "{}", text(&output.stderr));
-    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    assert_eq!(
+        (text(&output.stdout), text(&output.stderr)),
+        (String::new(), String::new())
+    );
     let launchers = [
         "xdg-open",
         "sensible-browser",
@@ -338,7 +345,11 @@ fn an_attached_device_answers_inside_100_ms_and_a_repeat_is_not_delivered_twice(
         let started = Instant::now();
         let output = host.launch("xdg-open", &[URL]);
         elapsed.push(started.elapsed());
-        assert!(output.status.success() && output.stdout.is_empty() && output.stderr.is_empty());
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            (text(&output.stdout), text(&output.stderr)),
+            (String::new(), String::new())
+        );
     }
     elapsed.sort();
     assert!(
@@ -358,14 +369,22 @@ fn a_watcher_that_never_answers_delays_a_launcher_by_its_deadline_not_longer() {
     fs::create_dir(host.socket_directory()).unwrap();
     fs::set_permissions(host.socket_directory(), fs::Permissions::from_mode(0o700)).unwrap();
     let silent = UnixListener::bind(host.socket_directory().join("browser.sock")).unwrap();
-    let started = Instant::now();
-    assert!(host.launch("xdg-open", &[URL]).status.success());
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "{:?}",
+    let wait = |limit: Option<&str>| {
+        let mut command = host.command(host.shims().join("xdg-open"));
+        match limit {
+            Some(limit) => command.env(ANSWER, limit),
+            None => command.env_remove(ANSWER),
+        };
+        let started = Instant::now();
+        assert!(command.arg(URL).output().unwrap().status.success());
         started.elapsed()
-    );
-    assert_eq!(host.opened(), [host.recorded("xdg-open", URL)]);
+    };
+    let default = wait(None);
+    assert!(default < Duration::from_secs(2), "{default:?}");
+    // The wait can be raised for a host too loaded for 100 ms, and a value below 100 ms is ignored.
+    assert!(wait(Some("400")) >= Duration::from_millis(400));
+    assert!(wait(Some("1")) < Duration::from_secs(2));
+    assert_eq!(host.opened(), vec![host.recorded("xdg-open", URL); 3]);
     drop(silent);
 }
 

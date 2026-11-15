@@ -548,6 +548,7 @@
 - Add explicit private F-Droid Android relay enrollment and encrypted challenge confirmation with Keystore-protected state. Registration defaults remain unchanged; event messages and remote notification display remain disconnected.
 
 - Show a server-reported Next.js hint when explicit preview HTTP discovery already has a complete bounded response header available. Probing stays off by default; unknown or incomplete headers preserve ordinary HTTP detection without waiting or issuing another request.
+- Let `LAZYSH_BROWSER_ANSWER_MS` raise how long a host browser shim launcher waits for the attached device (#1512, part of #1504). The launcher still stops waiting after 100 ms by default and then hands the link to the next real opener; on a host too loaded to answer that fast it now waits up to the value you set, at most 5000 ms, so a healthy watcher is not mistaken for none. This also fixes the shim's launcher test failing at random on a busy CI runner.
 
 - Use the Bed Mode SVG mark in the existing app sidebar, keeping the visible lazysh name and accessible text singular. Connection behavior and responsive drawer controls are unchanged.
 

@@ -1128,7 +1128,7 @@ The wrapper takes the last `http` or `https` argument (launchers receive more, s
 
 | Situation | Result |
 | --- | --- |
-| A device is attached and takes the link | Exit status 0, nothing printed. The answer comes within 100 ms or the launcher stops waiting. |
+| A device is attached and takes the link | Exit status 0, nothing printed. The answer comes within 100 ms or the launcher stops waiting. On a host too loaded for that, `LAZYSH_BROWSER_ANSWER_MS` in the launcher's environment raises the wait (to at most 5000; a smaller value is ignored). |
 | A device is attached and refuses the link (rate limit, queue full) | Exit status 1 and `lazysh: the device did not take the link (REASON)` on stderr. The host's own desktop is not used instead. |
 | No device attached, or it did not answer | The next real opener runs with the original arguments: the real tool of the same name, then your own `BROWSER` (entries separated by `:`, `%s` is the URL), then `xdg-open`, `sensible-browser`, `x-www-browser`, `wslview` (macOS: `open`). It runs with the wrapper directory removed from `PATH` and your own `BROWSER` restored, so an opener that calls `$BROWSER` or `xdg-open` itself cannot come back into the shim. |
 | Nothing can open the URL | `lazysh: open this on your device: URL` on stderr and exit status 0, so the terminal's link detection offers a tap target. With no URL, exit status 3 (the status `xdg-open` uses for a missing tool). |

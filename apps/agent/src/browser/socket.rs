@@ -20,6 +20,19 @@ use std::{
 pub(crate) const NAME: &str = "browser.sock";
 /// A launcher answers like a real opener: quickly, whatever the watcher does.
 const ANSWER: Duration = Duration::from_millis(100);
+/// Raises that wait, in milliseconds (never above `LONGEST_ANSWER`), for a host so loaded that a
+/// healthy watcher cannot reply in time and the launcher would wrongly fall back to the real opener.
+const ANSWER_VARIABLE: &str = "LAZYSH_BROWSER_ANSWER_MS";
+const LONGEST_ANSWER: Duration = Duration::from_secs(5);
+
+/// The wait for a watcher's answer: 100 ms unless `value` asks for longer; garbage or a shorter wait is ignored.
+fn deadline(value: Option<&str>) -> Duration {
+    value
+        .and_then(|text| text.parse().ok())
+        .map_or(ANSWER, |ms| {
+            Duration::from_millis(ms).clamp(ANSWER, LONGEST_ANSWER)
+        })
+}
 
 #[derive(Deserialize)]
 pub(crate) struct Reply {
@@ -136,7 +149,7 @@ fn exchange(line: &str) -> io::Result<Reply> {
     Err(last)
 }
 
-/// One request to the attached watcher, `None` when nobody answers within 100 ms.
+/// One request to the attached watcher, `None` when nobody answers within 100 ms (see `deadline`).
 pub(crate) fn request(message: &Value) -> Option<Reply> {
     let line = format!("{message}\n");
     let (done, reply) = mpsc::channel();
@@ -146,7 +159,8 @@ pub(crate) fn request(message: &Value) -> Option<Reply> {
             let _ = done.send(exchange(&line));
         })
         .ok()?;
-    reply.recv_timeout(ANSWER).ok()?.ok()
+    let wait = deadline(std::env::var(ANSWER_VARIABLE).ok().as_deref());
+    reply.recv_timeout(wait).ok()?.ok()
 }
 
 #[cfg(test)]
@@ -170,6 +184,17 @@ mod tests {
             path("/run/user/1000/lazysh")
         );
         assert_eq!(candidates(None, 501, false), [path("/tmp/lazysh-501")]);
+    }
+
+    #[test]
+    fn the_answer_wait_can_only_be_raised_and_never_past_five_seconds() {
+        let wait = |value| deadline(value).as_millis();
+        assert_eq!(wait(None), 100);
+        assert_eq!(wait(Some("1000")), 1000);
+        assert_eq!(wait(Some("99999")), 5000);
+        for ignored in ["0", "50", "-1", "soon", ""] {
+            assert_eq!(wait(Some(ignored)), 100, "{ignored:?}");
+        }
     }
 
     #[test]
