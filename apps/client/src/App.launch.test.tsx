@@ -129,6 +129,21 @@ it.each([['agents',{tmuxServer:'agents'}],['default',{}]] as const)('selects the
   await waitFor(()=>expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page'));
   expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
+it('focuses the Zellij pane of an inbox event in the attached session and opens the Agents board without touching a pane of another session',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'ssh',defaultMultiplexer:{kind:'zellij',name:'work'}}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'default-parent'});mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'default-child'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const open=(paneId:string)=>act(()=>{window.dispatchEvent(new CustomEvent('lazysh-inbox-open',{detail:{sessionId:'default-child',waiting:false,paneId}}));});
+  const focuses=()=>mocks.invoke.mock.calls.filter(([command])=>command==='zellij_action');
+  open('zellij:other:4');
+  await waitFor(()=>expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page'));
+  expect(focuses()).toEqual([]);
+  await user.click(screen.getByRole('button',{name:t('navigationWorkspaces')}));
+  open('zellij:work:4');
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('zellij_action',{sessionId:'default-child',name:'work',action:{type:'focusPane',pane:4}},expect.anything()));
+  await waitFor(()=>expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page'));
+  expect(focuses()).toHaveLength(1);expect(mocks.api.write).not.toHaveBeenCalled();
+});
 it('binds a newly offered mux picker to its new SSH control rather than the already active session',async()=>{
   enableMuxLaunch({kind:'tmux',tmuxServer:'agents'});mocks.hostLaunchReceipt=null;
   mocks.api.connect.mockResolvedValueOnce({sessionId:'old-active'}).mockResolvedValueOnce({sessionId:'new-exact-source'});

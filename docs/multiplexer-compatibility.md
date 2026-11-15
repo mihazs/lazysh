@@ -121,6 +121,17 @@ A `-S` socket has no label and records none. Using the label to focus the pane a
 servers' `%7` apart in the Agent view, tmux and rmux Jump To pane rows, and Herdr
 `events.subscribe` are still open.
 
+Shipped for the tap focus (#1690): a notification tap, an inbox row and **Open session** focus
+the pane of an event whose pane is `zellij:<session>:<pane>`, only when the terminal is
+attached to that Zellij session. `zellij action focus-pane-id` cannot do it: from the command
+line it moves the focus of the command's own client, not the attached terminal's (measured on
+0.46.0), so the app reads the pane's tab (`list-panes --json`), goes to it (`go-to-tab`) and
+steps `focus-next-pane` until `list-clients` reports the pane. A pane of another session, or of
+another multiplexer, is left alone rather than guessed, and a pane that has gone still opens
+the session. Still open in #1690: tmux and rmux on the server the event names (needs the
+`paneServer` field of #1146), the Agent view ignoring a report of another server, and the
+Herdr pane identity (needs #1571).
+
 ## Capability table: remote hosts
 
 The multiplexer runs on a POSIX SSH or Mosh host (Linux or macOS). The client is
@@ -144,7 +155,7 @@ implemented without full evidence, *part* means partial.
 | OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
-| Notification opens the pane | part → #1146 | no → #1146 | part → #1146 | no → #1146 |
+| Notification opens the pane | part → #1146 | part: the attached session's pane #1690 | part → #1146 | no → #1146 |
 | Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | no → #1140 (while the daemon lives) |
 | Version detection | yes | yes | version yes; API schema → #1159 | no → #1140 |
 

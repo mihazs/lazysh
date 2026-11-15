@@ -2,6 +2,7 @@ import {t} from './i18n/core';
 import { useSyncExternalStore } from 'react';
 import { parseSnapshot } from './agentReports';
 import { localHostLabel } from './localHost';
+import { zellijPane } from './agentPaneIdentity';
 
 export type InboxSession = { id: string; hostId: string; name: string; connected: boolean; local?: boolean };
 export type InboxRow = { id: string; eventId: string; sessionId: string; hostId: string; hostName: string; agent: string; project: string; agentSessionId: string; state: 'working' | 'needs_attention' | 'done'; updatedAt: string; paneId: string | null };
@@ -77,13 +78,21 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
   return alerts;
 }
 
-type PaneSession = { id: string; attached?: { kind: string; tmuxServer?: string } };
-/** Makes the tmux pane that raised an event the pane its attached terminal shows, so the Agent view follows that agent and not another one in the session.
+type PaneSession = { id: string; attached?: { kind: string; name?: string; tmuxServer?: string } };
+/** Makes the pane that raised an event the pane its attached terminal shows, so the Agent view follows that agent and not another one in the session: a tmux `%N` on the attached tmux server, a `zellij:<session>:<pane>` of the attached Zellij session (Zellij also switches to the pane's tab). A pane of any other multiplexer or Zellij session is left alone, never guessed.
  * shortcut: the companion records only `TMUX_PANE`, not its tmux server, so the id is looked up on the server the terminal is attached to; record the socket in the report to bind the exact server. A closed pane still opens its session. */
 export async function focusInboxPane(invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>, session: PaneSession, paneId: string | null | undefined): Promise<void> {
-  if (!paneId || !/^%\d{1,10}$/.test(paneId) || session.attached?.kind !== 'tmux') return;
-  const server = session.attached.tmuxServer;
-  try { await invoke('tmux_action', { sessionId: session.id, action: { type: 'selectPane', target: paneId }, ...(server && server !== 'default' ? { tmuxServer: server } : {}) }); } catch { /* The pane may be gone; the session still opens. */ }
+  const attached = session.attached;
+  const zellij = zellijPane(paneId);
+  let request: [string, Record<string, unknown>] | undefined;
+  if (zellij) {
+    if (attached?.kind === 'zellij' && attached.name === zellij.session) request = ['zellij_action', { sessionId: session.id, name: zellij.session, action: { type: 'focusPane', pane: zellij.pane } }];
+  } else if (paneId && /^%\d{1,10}$/.test(paneId) && attached?.kind === 'tmux') {
+    const server = attached.tmuxServer;
+    request = ['tmux_action', { sessionId: session.id, action: { type: 'selectPane', target: paneId }, ...(server && server !== 'default' ? { tmuxServer: server } : {}) }];
+  }
+  if (!request) return;
+  try { await invoke(...request); } catch { /* The pane may be gone; the session still opens. */ }
 }
 
 /** `waiting` asks the app for the Agent view: only a needs-you event of an agent whose pane the Agent view can follow has a pending card to show. */
