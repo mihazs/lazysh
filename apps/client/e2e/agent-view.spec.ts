@@ -371,6 +371,32 @@ test('a Gemini CLI pane binds its conversation and sends a prompt through the co
   await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send')).toEqual([expect.objectContaining({input:{kind:'send',text:'Summarise the plan'},source:expect.objectContaining({agent:'gemini',view:'conversation'})})]);
 });
 
+test('a Grok Build pane binds its session log, keeps Terminal and Agent switchable and sends a prompt through the confirmed tmux input',async({page})=>{
+  await open(page);
+  await claudeHere(page,{as:{name:'Grok Build',agent:'grok-acp',session:'grok-thread'}});
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible({timeout:8000});
+  await expect(agent.getByText('Grok Build',{exact:false}).first()).toBeVisible();
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('Summarise the plan');
+  // Terminal and Agent switch without losing the conversation or the unsent draft.
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(draft).toHaveValue('Summarise the plan');
+  // On a phone Enter adds a line; the Send button sends.
+  if(page.viewportSize()!.width<600)await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  else await draft.press('Enter');
+  await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send')).toEqual([expect.objectContaining({input:{kind:'send',text:'Summarise the plan'},source:expect.objectContaining({agent:'grok-acp',view:'conversation'})})]);
+  // The terminal under the Agent view is the same one: its scrollback is there and the view wrote no byte of its own.
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  expect(await terminalText(page)).toContain('work scrollback 40');
+  expect((await fixture(page)).stdin).toEqual([]);
+  // Nothing else reached the terminal: no key, no dialog answer, only the one confirmed send after its binding.
+  expect((await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input && (input as {input:{kind:string}}).input.kind!=='send')).toEqual([]);
+});
+
 /** A Claude Code agent in the pane, with the Agent view shown. */
 async function showClaudeAgent(page:Page) {
   await open(page);

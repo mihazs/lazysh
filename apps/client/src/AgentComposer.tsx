@@ -109,12 +109,14 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
   const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
+  // Escape is not known to interrupt Grok Build, so the view offers it no key beyond the guarded send.
+  const stoppable=ready && agent!=='grok-acp';
   // Shift+Tab has a verified key profile for Claude Code on tmux only; every other terminal hides the button.
   const modeSwitch=useModeSwitch(control,labels?.backend==='tmux' && agent==='claude',key);
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
-  // An @ path is plain text to OpenCode (its own picker makes the real mention), so the folder is not offered.
-  const mention=!slash && !slashClosed && !compositionActive && cwd && agent!=='opencode' ? mentionAt(draft,caret) : undefined;
+  // An @ path is plain text to OpenCode (its own picker makes the real mention), and nothing here has checked it for Grok Build, so the folder is not offered.
+  const mention=!slash && !slashClosed && !compositionActive && cwd && agent!=='opencode' && agent!=='grok-acp' ? mentionAt(draft,caret) : undefined;
   const files=useAgentFileSuggestions({sessionId,invoke,cwd,mention});
   // One list for both kinds of suggestion, so the keys and the listbox behave the same.
   const popup:{label:string;items:Suggestion[];pick:(index:number)=>void}|undefined=slash?{label:t('agentComposerCommands'),
@@ -211,7 +213,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
         }}/>
       <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
       {modeSwitch.button}
-      {ready && <button type="button" className="icon-button agent-composer-stop" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
+      {stoppable && <button type="button" className="icon-button agent-composer-stop" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}>{control?.busy ? <LoaderCircle size={18} aria-hidden="true"/> : <SendHorizontal size={18} aria-hidden="true"/>}</button>}
     </form>
     {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock} zellij={zellij}

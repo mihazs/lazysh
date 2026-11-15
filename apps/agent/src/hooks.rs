@@ -1,5 +1,5 @@
 //! Native lifecycle adapters observe status; they never answer approvals.
-use crate::{field, Event, Result, SessionState, Waiting};
+use crate::{field, Agent, Event, Result, SessionState, Waiting};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -41,6 +41,87 @@ pub fn gemini_config() -> Value {
         ],
         5000,
     )
+}
+
+pub fn grok_config() -> Value {
+    // No PreToolUse: it is the one event that can block a tool call, and the hook adds nothing PostToolUse does not.
+    command_config(
+        "grok",
+        &[
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "StopCancelled",
+            "SessionEnd",
+        ],
+        5,
+    )
+}
+
+/// Grok Build also runs the hooks of `~/.claude/settings.json`, so its report can arrive under `--agent claude`.
+/// Only Grok sends the camelCase `hookEventName`; such a report belongs to Grok Build, never to a Claude Code session.
+pub(crate) fn reporting_agent(agent: Agent, payload: &Value) -> Agent {
+    match agent {
+        Agent::Claude if payload.get("hookEventName").is_some_and(Value::is_string) => Agent::Grok,
+        other => other,
+    }
+}
+
+/// A Grok Build sub-agent's own events name its type; they are not the session of the pane.
+pub(crate) fn grok_subagent(payload: &Value) -> bool {
+    !matches!(payload.get("subagentType"), None | Some(Value::Null))
+        && payload["subagentType"].as_str() != Some("")
+}
+
+pub(crate) fn grok_event(payload: &Value, pane: Option<&str>) -> Result<Option<Event>> {
+    if grok_subagent(payload) {
+        return Ok(None);
+    }
+    let kind = payload
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let (state, summary, waiting) = match kind {
+        "UserPromptSubmit" => (SessionState::Working, "Working on your prompt", None),
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => (
+            SessionState::Working,
+            payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(kind),
+            None,
+        ),
+        "Stop" => (SessionState::Done, "Turn finished", None),
+        "StopCancelled" => (SessionState::Done, "Turn interrupted", None),
+        "StopFailure" => (SessionState::NeedsAttention, "Turn failed", None),
+        "SessionEnd" => (SessionState::Done, "Session ended", None),
+        // `idle_prompt` follows every finished turn, so only a permission prompt means the agent waits.
+        "Notification"
+            if payload.get("notificationType").and_then(Value::as_str)
+                == Some("permission_prompt") =>
+        {
+            (
+                SessionState::NeedsAttention,
+                "Permission requested",
+                Some(Waiting::Approval),
+            )
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(Event {
+        session_id: field(payload, "session_id", 256)
+            .or_else(|_| field(payload, "sessionId", 256))?,
+        agent: "Grok Build".into(),
+        project: field(payload, "cwd", 4096)?,
+        state,
+        summary: summary.into(),
+        pane_id: pane.map(str::to_owned),
+        waiting,
+    }))
 }
 
 pub fn droid_config() -> Value {

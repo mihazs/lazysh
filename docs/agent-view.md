@@ -319,11 +319,16 @@ evidence. [Agent view parity](reference/agent-view-parity.md) has the element-by
 | Claude Code | The whole table: timeline, live stream, hook state, questions, menus and approvals (docks), interrupt, header pills (model, mode, context, branch), work panel with sub-agents and workflows, send, queue, attachments, slash palette, copy, search and history ([#1293](https://github.com/mihazs/lazysh/pull/1293), [#1276](https://github.com/mihazs/lazysh/pull/1276), [#1351](https://github.com/mihazs/lazysh/pull/1351), [#1356](https://github.com/mihazs/lazysh/pull/1356), [#1377](https://github.com/mihazs/lazysh/pull/1377), [#1431](https://github.com/mihazs/lazysh/pull/1431)) | A dialog with a text field |
 | Codex | Timeline, live stream, hook state, header from the transcript, send and Stop, the approval prompt and list dialogs answered through keys read back from the screen ([#1490](https://github.com/mihazs/lazysh/pull/1490)), sub-agents in the work panel ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | The notes box of a Codex question, the Codex app-server daemon |
 | OpenCode | Timeline from its database, header (model, context in use, cost), send and Stop on tmux ([#1491](https://github.com/mihazs/lazysh/pull/1491)), sub-agents ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | Every dialog: OpenCode marks the highlighted choice by colour only, which a read of the screen's text cannot see, so permission and question prompts wait for its own decision channel ([#1535](https://github.com/mihazs/lazysh/issues/1535)); Herdr and Zellij panes (Herdr's session reference is not a transcript the view can read) |
-| Grok Build, Gemini CLI | The agent's name and hook state, labelled partial, with **Show terminal** and no composer | Everything else |
+| Gemini CLI | Timeline, hook state, header model and tokens, plan, sub-agent and background-shell cards, send on tmux ([#1568](https://github.com/mihazs/lazysh/pull/1568)) | Questions, approvals and dialogs |
+| Grok Build | Timeline from its session log (turns, tool calls with their output, thinking), the plan card, hook state, send on tmux. The pane is bound by a hook report that names it, so it needs the opted-in hook fragment (`lazysh-agent grok-config --reported-history`), or the Claude Code hooks (Grok Build runs those too) | Questions, approvals (the view says the agent waits in the terminal and holds the draft), dialogs, Stop, header pills (the log records no model or usage), sub-agents and background work |
 | Records-only adapters | The same partial state | Everything else |
 
-The companion reads Grok Build sessions for the Chat tool view; binding them to the Agent view needs a runtime case against a real Grok
-Build, which the development host does not have. A Gemini CLI reader is a separate change ([#1348](https://github.com/mihazs/lazysh/issues/1348)).
+Grok Build is bound to its pane by evidence it reports itself: its hooks pass the session id and the path of the session's
+`updates.jsonl`, and the companion records them with the pane the hook ran in (`TMUX_PANE`). A report without a path
+(a session whose file is not written yet) binds nothing, and a sub-agent's own events are ignored. Nothing is guessed from a
+process or from the newest file of a folder. The record format and the hook input are verified against the pinned source
+snapshot and synthetic fixtures only: the development host has no Grok Build binary and no account, so the runtime case
+against a real agent is still open ([#1657](https://github.com/mihazs/lazysh/issues/1657)).
 
 ## Input and control mapping
 

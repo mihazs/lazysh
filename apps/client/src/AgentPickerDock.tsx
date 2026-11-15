@@ -138,8 +138,10 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
       <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
     </div>
   </section>;
-  // A dialog that cannot be read exactly, or a menu the agent reported that is not on screen: the terminal has it.
-  if (shown && !ownCard && (lift.kind === 'unliftable' || waiting === 'menu')) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
+  // A dialog that cannot be read exactly, a menu the agent reported that is not on screen, or an approval or plan decision of an
+  // agent whose dialogs were never captured (Grok Build, Gemini CLI, OpenCode): the terminal has it.
+  const unreadable = !hasDialogProfile(agent) && (waiting === 'approval' || waiting === 'plan');
+  if (shown && !ownCard && (lift.kind === 'unliftable' || waiting === 'menu' || unreadable)) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
     <p role="status">{t('agentWaitingInTerminal')}</p>
     <div className="button-row"><button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button></div>
   </section>;
