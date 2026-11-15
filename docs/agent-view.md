@@ -326,6 +326,14 @@ After a launch the Agent view stays where it is and follows the new agent as soo
 interval; under Herdr the new workspace is focused and linked). The terminal keeps running and is
 one tap away; the launcher never types into an existing pane.
 
+The native Linux GUI case `native-e2e/agentLaunch.spec.ts` runs this against a real tmux session behind
+the owned OpenSSH server, with a stand-in `codex` on the host's login `PATH`: the dialog finds the agent,
+reviewing the commands creates nothing, confirming opens one new window whose pane runs the stand-in in
+the chosen folder with the prompt (a quote and a line break) as one argument, and the original pane's
+screen is unchanged. The terminal then shows the agent, and a Terminal, Agent and Terminal round trip
+keeps the same pane and process (it answers a typed line with the same pane ID and PID), the same single
+tmux client and the same scrollback size and cursor.
+
 Not covered yet: opening a plain terminal session in the folder when no multiplexer runs, resuming
 an earlier session through the launcher ([#1545](https://github.com/mihazs/lazysh/issues/1545)),
 rmux ([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions

@@ -156,10 +156,11 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
     return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;/** Executable stand-ins (name to script text) for host programs such as an agent CLI, found first on the login PATH; system tmux fixture only. */commands?:Readonly<Record<string,string>>;password?:string;log?:boolean;shellSeconds?:number}={}) {
     if((options.password!==undefined || options.log) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
+    if(options.commands && (!options.tmux || Object.keys(options.commands).some(name=>!/^[a-z][a-z0-9-]*$/.test(name))))throw new Error('Owned command stand-ins need the system tmux fixture and plain lowercase names');
     if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
     // A namespaced companion validates its private state ancestors, which an unmapped host root fails.
@@ -205,6 +206,11 @@ export class SshFixture {
       if(options.tmuxBinary)environment=await privateEnvironment(directory,await installOwnedBinary(directory,'tmux',options.tmuxBinary)+':/usr/bin:/bin',toolDirectories);
       // A private socket directory keeps every system tmux command away from the account's own servers.
       if(options.tmux)environment=await privateEnvironment(directory,'/usr/bin:/bin',[['TMUX_TMPDIR','tmux']]);
+      if(options.commands) {
+        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700,recursive:true});
+        for(const [name,script] of Object.entries(options.commands))await writeFile(join(bin,name),script,{mode:0o700,flag:'wx'});
+        environment!.PATH=`${bin}:${environment!.PATH}`;
+      }
       if(options.moshBinary)environment!.PATH=await installOwnedBinary(directory,'mosh-server',options.moshBinary)+':/usr/bin:/bin';
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       // Long-lived UI owners share the existing bounded 600s host fixture budget.
