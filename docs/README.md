@@ -2,6 +2,8 @@
 
 Choose a guided lesson when learning, a how-to guide when completing a task, reference when looking up a contract, or explanation when understanding a boundary. These documents describe the checked-out source. The [installation guide](install-and-update.md) and public release assets determine what you can actually download; source versions and CI artifacts alone are not released availability.
 
+New to lazysh or to contributing? The [community guides](community/README.md) include a [glossary](community/glossary.md) of the terms used here.
+
 ## Tutorials
 
 [Open your first SSH session](tutorials/first-ssh-session.md) walks through saving one direct host, independently verifying its key, printing a message, disconnecting and reconnecting. It needs an installed native app and a reachable Unix password-authenticated SSH host you control.
