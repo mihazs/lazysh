@@ -131,3 +131,57 @@ it('polls this device once for every local tab and names its attention events Th
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'agent_snapshot')).toHaveLength(1);
   expect(getInbox().rows.map(item => item.hostId)).toEqual(['local:default']);
 });
+
+/** A pane the open Herdr view follows became blocked, as the hub reports it. */
+const herdrTransition = (extra: Record<string, unknown> = {}) => ({ sessionId: 'ssh1', server: 'main', paneId: 'w1:p2', workspaceId: 'w1', status: 'blocked', agent: 'codex', cwd: '/work', agentSession: { agent: 'codex', value: 'codex-1' }, at: Date.now(), sequence: 1, ...extra });
+const announce = (detail: object) => act(async () => { window.dispatchEvent(new CustomEvent('lazysh-herdr-transition', { detail })); });
+/** A monitor with notifications on and no host reports yet. */
+const watchHerdr = async () => {
+  vi.mocked(isPermissionGranted).mockResolvedValue(true);
+  vi.mocked(invoke).mockImplementation(async command => command === 'agent_snapshot' ? { schemaVersion: 1, sessions: [] } : undefined);
+  updateInbox({ monitoring: true, notifications: true });
+  render(<NotificationMonitor sessions={sessions} />);
+  await act(async () => {});
+};
+const notified = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === 'notify_agent_attention');
+
+it('turns a blocked Herdr pane into an inbox row and one system notification, without a poll', async () => {
+  await watchHerdr();
+  await announce(herdrTransition());
+  await waitFor(() => expect(notified()).toHaveLength(1));
+  expect(notified()[0][1]).toEqual({ sessionId: 'ssh1', agent: 'Codex', project: '/work', eventId: getInbox().rows[0].eventId });
+  expect(getInbox().rows).toHaveLength(1);
+  expect(getInbox().rows[0]).toMatchObject({ agent: 'Codex', state: 'needs_attention', paneId: 'herdr:main:w1:p2' });
+  // The hook's report of the same turn arrives with the next poll: the same row, no second notification.
+  vi.mocked(invoke).mockImplementation(async command => command === 'agent_snapshot' ? { schemaVersion: 1, sessions: [{ ...event, sessionId: 'codex-1', agent: 'Codex', project: '/work', paneId: '%3', eventCount: 3, updatedAt: new Date().toISOString() }] } : undefined);
+  fireEvent(window, new Event('lazysh-inbox-refresh'));
+  await waitFor(() => expect(getInbox().rows[0].paneId).toBe('%3'));
+  expect(getInbox().rows).toHaveLength(1);
+  expect(notified()).toHaveLength(1);
+});
+
+it('records a finished Herdr agent quietly and ignores events of a host that is not connected or while monitoring is off', async () => {
+  await watchHerdr();
+  await announce(herdrTransition({ status: 'done' }));
+  await waitFor(() => expect(getInbox().rows.map(row => row.state)).toEqual(['done']));
+  await announce(herdrTransition({ sessionId: 'elsewhere', paneId: 'w1:p3', sequence: 2 }));
+  await announce(herdrTransition({ status: 'working', paneId: 'w1:p4', sequence: 3 }));
+  act(() => updateInbox({ monitoring: false }));
+  await announce(herdrTransition({ paneId: 'w1:p5', sequence: 4 }));
+  expect(getInbox().rows).toHaveLength(1);
+  expect(notified()).toHaveLength(0);
+});
+
+it('lists the pane without notifying while system notifications are paused, and reports a failed notification', async () => {
+  vi.mocked(isPermissionGranted).mockResolvedValue(true);
+  vi.mocked(invoke).mockImplementation(async command => { if (command === 'notify_agent_attention') throw new Error('notification service down'); return { schemaVersion: 1, sessions: [] }; });
+  updateInbox({ monitoring: true, notifications: false });
+  render(<NotificationMonitor sessions={sessions} />);
+  await act(async () => {});
+  await announce(herdrTransition());
+  await waitFor(() => expect(getInbox().rows).toHaveLength(1));
+  expect(notified()).toHaveLength(0);
+  updateInbox({ notifications: true });
+  await announce(herdrTransition({ paneId: 'w1:p9', agentSession: null, sequence: 9 }));
+  await waitFor(() => expect(getInbox().error).toContain('notification service down'));
+});
