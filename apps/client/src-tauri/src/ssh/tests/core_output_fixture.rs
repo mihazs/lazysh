@@ -253,7 +253,7 @@ fn between<'a>(seen: &'a [u8], begin: &[u8], end: &[u8]) -> Option<&'a [u8]> {
 /// shell computes the 42) must be exactly [`expected`], with the window credited back and no `Data`
 /// message on the Channel.
 #[cfg(target_os = "linux")]
-pub(super) async fn verify_et(app: &App, parent: &str, directory: &std::path::Path) {
+async fn check_et(app: &App, parent: &str, directory: &std::path::Path) {
     let server = crate::et::tests::Server::start(directory).await;
     let (core, prepared) = ChecksumCore::prepared();
     let (events, data_messages) = data_counting_events();
@@ -301,7 +301,7 @@ pub(super) async fn verify_et(app: &App, parent: &str, directory: &std::path::Pa
     disconnect(app.state(), id).await.unwrap();
 }
 
-pub(super) async fn verify(app: &App, id: &str) {
+async fn check(app: &App, id: &str) {
     let state = app.state::<AppState>();
     let handle = state.session(id).await.unwrap().handle.clone();
     let expected = expected(LINES);
@@ -329,4 +329,19 @@ pub(super) async fn verify(app: &App, id: &str) {
             "real Mosh, {MOSH_LINES} lines printed: {received} bytes of display frames reached the core, peak {peak} bytes queued"
         );
     }
+}
+
+// Boxed like `openssh_interoperability`: a debug build sizes these state machines in the caller's
+// poll frame, and `openssh_check` shares that frame (and a 2 MiB test thread) with every check.
+pub(super) fn verify<'a>(app: &'a App, id: &'a str) -> impl std::future::Future<Output = ()> + 'a {
+    Box::pin(check(app, id))
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn verify_et<'a>(
+    app: &'a App,
+    parent: &'a str,
+    directory: &'a std::path::Path,
+) -> impl std::future::Future<Output = ()> + 'a {
+    Box::pin(check_et(app, parent, directory))
 }
