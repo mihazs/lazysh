@@ -4,7 +4,8 @@
 # prompt, answered question, interrupt and mode change to a second file. No provider, network or account is used.
 # With a fifth argument it also acts as a hook-reporting agent: it runs the companion's `ingest --reported-history` hook
 # the way Claude Code's hooks do, shows each prompt in its pane, logs every key it reads to `$log.keys`, and a `hold ...`
-# prompt keeps its turn running until `$log.release` exists.
+# prompt keeps its turn running until `$log.release` exists or the next prompt is submitted, as a real agent finishes or abandons
+# its work when told something new.
 transcript=$1 log=$2 companion=$3 state=$4 report=$5
 modes=('manual mode on' 'accept edits on' 'plan mode on')
 mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0 sub_due=0 flow_due=0 held=0
@@ -105,6 +106,7 @@ while true; do
   if ((pasting)); then buf+=${key//$'\r'/$'\n'}; continue; fi
   # Enter reaches a bash read as CR or LF depending on the tty settings in force, so either byte submits.
   if [[ $key == $'\r' || $key == $'\n' ]]; then
+    if ((held)); then held=0; note HOLD_ENDED; text 'Finished the held work.'; hook Stop ''; fi
     note "SUBMIT $(escape "$buf")"
     user "$buf"
     shown "$buf"
