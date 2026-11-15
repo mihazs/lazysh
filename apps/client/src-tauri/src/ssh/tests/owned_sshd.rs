@@ -6,9 +6,69 @@ use std::path::Path;
 pub(super) struct Process(pub(super) std::process::Child);
 impl Drop for Process {
     fn drop(&mut self) {
+        // The Windows sshd runs one process per connection and per command, and none of them ends with its parent.
+        #[cfg(windows)]
+        let _ = std::process::Command::new("taskkill.exe")
+            .args(["/T", "/F", "/PID", &self.0.id().to_string()])
+            .output();
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+/// Paths in `sshd_config` use forward slashes on Windows, where the keyword values are not escaped.
+pub(super) fn slashes(path: &Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
+}
+
+#[cfg(unix)]
+const PLATFORM_SETTINGS: &str = "UsePAM no\nPermitRootLogin yes\n";
+#[cfg(windows)]
+const PLATFORM_SETTINGS: &str = "";
+
+#[cfg(unix)]
+fn sshd() -> PathBuf {
+    let sshd = std::process::Command::new("sh")
+        .args(["-c", "command -v sshd"])
+        .output()
+        .unwrap();
+    PathBuf::from(String::from_utf8(sshd.stdout).unwrap().trim())
+}
+/// The build the Windows image installs as a capability; no other `sshd.exe` is ever run.
+#[cfg(windows)]
+fn sshd() -> PathBuf {
+    PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join(r"System32\OpenSSH\sshd.exe")
+}
+
+#[cfg(unix)]
+fn private_file(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+/// sshd refuses a host key that any principal beyond SYSTEM and Administrators (by SID, so on any locale) can read.
+#[cfg(windows)]
+fn private_file(path: &Path) {
+    let grant = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .args([
+            "/inheritance:r",
+            "/grant",
+            "*S-1-5-18:F",
+            "/grant",
+            "*S-1-5-32-544:F",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        grant.status.success(),
+        "{}",
+        String::from_utf8_lossy(&grant.stdout)
+    );
 }
 
 pub(super) fn free_port() -> u16 {
@@ -30,21 +90,16 @@ impl OwnedSshd {
         settings: &str,
         environment: &[(&str, &std::ffi::OsStr)],
     ) -> Self {
-        use std::os::unix::fs::PermissionsExt;
         let key_path = directory.join("host_key");
         fs::write(
             &key_path,
             host_key.to_openssh(Default::default()).unwrap().as_bytes(),
         )
         .unwrap();
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
+        private_file(&key_path);
         let config = directory.join("sshd_config");
-        let base = format!("{settings}ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\n", key_path.display(), directory.join("sshd.pid").display());
-        let sshd = std::process::Command::new("sh")
-            .args(["-c", "command -v sshd"])
-            .output()
-            .unwrap();
-        let sshd = PathBuf::from(String::from_utf8(sshd.stdout).unwrap().trim());
+        let base = format!("{settings}ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nStrictModes no\n{PLATFORM_SETTINGS}", slashes(&key_path), slashes(&directory.join("sshd.pid")));
+        let sshd = sshd();
         // OpenSSH 9.8+ penalises loopback clients that leave before authenticating
         // (readiness probes, refused host keys); older releases reject the keyword.
         fs::write(&config, format!("PerSourcePenalties no\n{base}")).unwrap();
