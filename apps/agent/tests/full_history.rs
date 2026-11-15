@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 use std::{path::Path, process::Command};
 
 const RECORDS: usize = 12_000;
+/// Gemini pages of 10 over 1,200 records: more than the 60 pages `walk_back` requires.
+const GEMINI_RECORDS: usize = 1_200;
 
 fn texts(page: &TranscriptPage) -> Vec<String> {
     page.messages
@@ -131,6 +133,51 @@ fn codex_reads_back_to_the_first_message() {
 }
 
 #[test]
+fn gemini_reads_back_to_the_first_message_and_forward_from_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory
+        .path()
+        .join("tmp/project/chats/session-2026-11-13T01-00-abcd1234.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let records: Vec<Value> = (0..GEMINI_RECORDS)
+        .map(|n| {
+            if n % 2 == 0 {
+                json!({"id":format!("g{n}"),"type":"user","content":[{"text":format!("m{n}")}]})
+            } else {
+                json!({"id":format!("g{n}"),"type":"gemini","content":format!("m{n}")})
+            }
+        })
+        .collect();
+    write(&path, &records);
+    let read = |window: &Window| {
+        conversation_window(&path, TranscriptAgent::Gemini, 10, false, window).unwrap()
+    };
+    assert_eq!(walk_back(read), expected(GEMINI_RECORDS));
+    let mut page = read(&Window::Start);
+    assert!(!page.truncated && page.has_newer);
+    let mut all = texts(&page);
+    while page.has_newer {
+        let last = page.messages.last().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        page = read(&Window::After(last));
+        assert!(page.truncated);
+        all.extend(texts(&page));
+    }
+    assert_eq!(all, expected(GEMINI_RECORDS));
+    let unknown = conversation_window(
+        &path,
+        TranscriptAgent::Gemini,
+        100,
+        false,
+        &Window::Before("nope".into()),
+    );
+    assert!(unknown.is_err());
+    assert_older_and_first_page("gemini", &path, "g");
+}
+
+#[test]
 fn opencode_reads_back_to_the_first_message() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().canonicalize().unwrap().join("opencode.db");
@@ -170,12 +217,12 @@ fn opencode_reads_back_to_the_first_message() {
     assert_eq!(walk_back(read), expected(RECORDS));
 }
 
-fn companion(path: &Path, extra: &[&str]) -> std::process::Output {
+fn companion(agent: &str, path: &Path, extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
         .args([
             "transcript",
             "--agent",
-            "claude",
+            agent,
             "--view",
             "conversation",
             "--path",
@@ -187,6 +234,32 @@ fn companion(path: &Path, extra: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+/// The companion's page before message `{prefix}5` (three messages, with newer ones after them) and its first page,
+/// for a session whose message ids run `{prefix}0`, `{prefix}1`, ...
+fn assert_older_and_first_page(agent: &str, path: &Path, prefix: &str) {
+    let page = |extra: &[&str]| -> Value {
+        serde_json::from_slice(&companion(agent, path, extra).stdout).unwrap()
+    };
+    let older = page(&["--before", &format!("{prefix}5")]);
+    let ids: Vec<_> = older["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        (ids, older["hasNewer"].clone()),
+        (
+            (2..5).map(|n| format!("{prefix}{n}")).collect(),
+            json!(true)
+        )
+    );
+    assert_eq!(
+        page(&["--from-start"])["messages"][0]["id"],
+        format!("{prefix}0")
+    );
+}
+
 #[test]
 fn the_companion_command_pages_older_and_rejects_a_window_outside_the_conversation_view() {
     let directory = tempfile::tempdir().unwrap();
@@ -195,26 +268,13 @@ fn the_companion_command_pages_older_and_rejects_a_window_outside_the_conversati
         .map(|n| json!({"type":"user","uuid":format!("u{n}"),"parentUuid":(n > 0).then(|| format!("u{}", n - 1)),"message":{"content":format!("m{n}")}}))
         .collect();
     write(&path, &records);
-    let newest: Value = serde_json::from_slice(&companion(&path, &[]).stdout).unwrap();
+    let newest: Value = serde_json::from_slice(&companion("claude", &path, &[]).stdout).unwrap();
     assert_eq!(
         (newest["truncated"].clone(), newest.get("hasNewer").cloned()),
         (json!(true), None)
     );
-    let older: Value =
-        serde_json::from_slice(&companion(&path, &["--before", "u5"]).stdout).unwrap();
-    let ids: Vec<_> = older["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        (ids, older["hasNewer"].clone()),
-        (vec!["u2", "u3", "u4"], json!(true))
-    );
-    let first: Value = serde_json::from_slice(&companion(&path, &["--from-start"]).stdout).unwrap();
-    assert_eq!(first["messages"][0]["id"], "u0");
-    let both = companion(&path, &["--before", "u5", "--after", "u1"]);
+    assert_older_and_first_page("claude", &path, "u");
+    let both = companion("claude", &path, &["--before", "u5", "--after", "u1"]);
     assert!(!both.status.success());
     let records = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
         .args(["transcript", "--agent", "claude", "--from-start", "--path"])
