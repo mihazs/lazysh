@@ -340,7 +340,7 @@ fn spawn_piped(command: &mut Command) -> Result<Piped> {
 // shortcut: no pipe transport off Unix, so no browser there; Windows hosts are not supported, and the viewer
 // says so. Upgrade only if a Windows host is ever required.
 #[cfg(not(unix))]
-fn spawn_piped(_: &mut Command) -> Result<(Child, Box<dyn Write + Send>, Box<dyn Read + Send>)> {
+fn spawn_piped(_: &mut Command) -> Result<Piped> {
     Err(Error::Browser("HostBrowserUnsupported"))
 }
 
@@ -614,6 +614,16 @@ mod tests {
         ] {
             assert_eq!(major(product), major_version, "{product}");
         }
+    }
+
+    // The agent is built for Windows too, where the relay only answers that the host has no browser pipe.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_host_has_no_browser_pipe_and_says_so() {
+        assert!(matches!(
+            spawn_piped(&mut Command::new("cmd.exe")),
+            Err(Error::Browser("HostBrowserUnsupported"))
+        ));
     }
 
     #[test]
