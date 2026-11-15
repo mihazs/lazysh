@@ -245,7 +245,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
       <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
       <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>
       <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
-      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
+      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} hostKey={archiveHost} visible={panelVisible && !error} />}
     </section>
     {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
     <div className="agent-discovery">

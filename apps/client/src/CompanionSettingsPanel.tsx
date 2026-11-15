@@ -2,6 +2,7 @@ import {t, useUi} from './i18n/core';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
+import HostBrowserSwitch from './HostBrowserSwitch';
 
 
 type Settings = { schemaVersion:1; revision:number; transcriptDiscoveryEnabled:boolean; recordedUsageEnabled:boolean; deviceToolsEnabled:boolean };
@@ -12,7 +13,7 @@ export function parseCompanionSettings(value:unknown):Settings {
   if (Object.keys(settings).some(key=>!fields.includes(key)) || settings.schemaVersion!==1 || !Number.isSafeInteger(settings.revision) || settings.revision<0 || [settings.transcriptDiscoveryEnabled,settings.recordedUsageEnabled,settings.deviceToolsEnabled].some(value=>typeof value!=="boolean")) throw new LocalUiError('companionUnsupported');
   return settings;
 }
-export default function CompanionSettingsPanel({sessionId,visible=true}:{sessionId:string;visible?:boolean}) {
+export default function CompanionSettingsPanel({sessionId,hostKey=sessionId,visible=true}:{sessionId:string;hostKey?:string;visible?:boolean}) {
   useUi();
   const invoke = useProtectedInvoke();
   const [settings,setSettings]=useState<Settings>();
@@ -20,6 +21,7 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<UiErrorCause | {refresh:UiErrorCause}>('');
   const [saved,setSaved]=useState(false);
+  const [reload,setReload]=useState(0);
   const request=useRef(0);
   const loadedSource=useRef<string|undefined>(undefined);
   const scope=useRef({sessionId,visible});scope.current={sessionId,visible};
@@ -47,7 +49,7 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
     finally {if(owns(current))setBusy(false);}
   }
   return <section hidden={!visible} style={visible?undefined:{display:'none'}} className="tool-panel" aria-label={t('companionSettingsTitle')}>
-    <div className="tool-bar"><h3>{t('companionSettingsTitle')}</h3><button disabled={busy || !visible} onClick={()=>void refresh()}>{t('companionRefresh')}</button></div>
+    <div className="tool-bar"><h3>{t('companionSettingsTitle')}</h3><button disabled={busy || !visible} onClick={()=>{setReload(count=>count+1);void refresh();}}>{t('companionRefresh')}</button></div>
     <p className="agent-note">{t('companionScope')}</p>
     {busy&&<p role="status">{t('companionBusy')}</p>}
     {error&&<p role="alert" className="inline-error">{typeof error==='object'&&'refresh' in error?t('companionRefreshWarning',{error:uiErrorText(error.refresh)}):uiErrorText(error)}</p>}
@@ -63,6 +65,7 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
       <button type="submit">{t('companionSave')}</button>
     </fieldset></form>}
     {saved&&<p role="status">{t('companionSaved')}</p>}
+    <HostBrowserSwitch key={sessionId} sessionId={sessionId} hostKey={hostKey} visible={visible} reload={reload}/>
     <p className="agent-note">{t('companionIndependent')}</p>
   </section>;
 }

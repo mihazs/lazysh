@@ -18,6 +18,7 @@ async function fixture(page:Page) {
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+      if(command==='get_host_browser_settings')return {schemaVersion:1,revision:0,hostBrowserEnabled:false};
       if(command==='board_keep_awake_status')return status(++f.ticket);
       if(command==='board_keep_awake_acquire'){
         const owner=args.request as {epoch:string;ticket:number};
