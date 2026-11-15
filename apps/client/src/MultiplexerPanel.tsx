@@ -102,6 +102,11 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
     } catch (e) { if (currentOwner(current)) setError(errorMessage(e)); }
     finally { locked.current = false; if (currentOwner(current)) setBusy(false); }
   }
+  /** The controlled session was renamed, or closed when no name is given: the open panel and the listed sessions follow it. */
+  function changeZellij(renamed?: string) {
+    setPersistent(value => ({ ...value, zellij: value.zellij?.flatMap(session => session.name !== zellij ? [session] : renamed ? [{ name: renamed }] : []) }));
+    setZellij(renamed ?? '');
+  }
   async function loadProjects() {
     if (locked.current || !currentOwner(generation.current)) return;
     locked.current = true;
@@ -151,7 +156,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
         {persistent[kind]?.map(session => <div className="mux-row" key={session.name}><strong>{kind}: {session.name}</strong>{(kind !== 'herdr' || tree!.tools?.some(tool=>tool.kind==='herdr' && tool.support==='full')) && <button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name, kind)}>{t('muxAttachKind',{kind,name:session.name})}</button>}{!requested && (kind === 'herdr' ? <button className="subtle-button" disabled={busy} onClick={() => setHerdr(session.name)}>{t('muxBrowseHerdr',{name:session.name})}</button> : <button className="subtle-button" disabled={busy} onClick={() => setZellij(session.name)}>{t('muxControlZellij',{name:session.name})}</button>)}</div>)}
       </div>)}{!requested && <p>{t('muxPersistentHint')}</p>}</div>}
     {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} navigationOnly={tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')} />}
-    {zellij && <ZellijPanel key={`${sessionId}:${zellij}`} sessionId={sessionId} name={zellij} projectDirectory={directory} />}
+    {zellij && <ZellijPanel key={`${sessionId}:${zellij}`} sessionId={sessionId} name={zellij} projectDirectory={directory} missing={tree?.tools?.find(tool=>tool.kind==='zellij')?.missing} attachedHere={attached?.kind==='zellij' && attached.name===zellij} onRenamed={renamed=>changeZellij(renamed)} onClosed={()=>changeZellij()} />}
     {edit && <form onSubmit={submit} aria-label={t('muxDetails')}><label>{t('appName')}<input autoFocus maxLength={200} value={name} onChange={e => setName(e.target.value)} required disabled={busy} /></label>
       {(edit.type === 'createSession' || edit.type === 'createWindow') && <label>{t('muxDirectory')}<input value={directory} onChange={e => setDirectory(e.target.value)} required disabled={busy} placeholder="/home/user/project" /></label>}
       <button className="subtle-button" type="submit" disabled={busy || !name.trim()}>{t('muxSave')}</button><button className="subtle-button" type="button" disabled={busy} onClick={() => setEdit(null)}>{t('appCancel')}</button></form>}

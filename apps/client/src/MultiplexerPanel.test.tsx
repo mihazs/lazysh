@@ -154,7 +154,7 @@ it('lists discovered versions, explains each limited multiplexer and reports the
   expect(screen.getAllByRole('note').map(note=>note.textContent)).toEqual([
     'Jump To and Chat input need tmux 3.4 or newer.',
     'Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.',
-    'The workspace tree, close, resize and agent launch need Zellij 0.45.1.',
+    'The workspace tree, rename, close, resize and agent launch need Zellij 0.45.1.',
   ]);
   expect(onTools).toHaveBeenCalledExactlyOnceWith(tools);
 });
@@ -181,4 +181,25 @@ it('explains why a requested limited Herdr session cannot be attached', async ()
   render(<MuxPanel sessionId="ssh1" requested={request({kind:'herdr'})} onAttach={vi.fn()}/>);
   expect(await screen.findByText('Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.')).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
+});
+it('follows a renamed or closed Zellij session in the session list and hides Rename for the attached one', async () => {
+  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? { ...tree, zellijAvailable: true, tools: [{ kind: 'zellij', version: '0.45.1', support: 'full', missing: [] }] } : command === 'multiplexer_sessions' ? [{ name: 'builds' }, { name: 'other' }] : undefined);
+  const view = render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} attached={{ kind: 'zellij', name: 'other' }} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'List zellij sessions' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Control Zellij other' }));
+  expect(screen.getByRole('button', { name: 'Close Zellij session' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Rename Zellij session' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Control Zellij builds' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Rename Zellij session' }));
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'deploys' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  expect(await screen.findByRole('button', { name: 'Control Zellij deploys' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Control Zellij builds' })).toBeNull();
+  expect(screen.getByRole('region', { name: 'Zellij deploys controls' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Close Zellij session' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm close' }));
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Zellij deploys controls' })).toBeNull());
+  expect(screen.queryByRole('button', { name: 'Control Zellij deploys' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Control Zellij other' })).toBeTruthy();
+  view.unmount();
 });
