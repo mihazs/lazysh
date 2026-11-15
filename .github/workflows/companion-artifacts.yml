@@ -144,6 +144,9 @@ jobs:
       - name: Check uninstrumented Windows initialization owner
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.windows_storage_owner.outcome == 'success' || steps.windows_storage_owner.outcome == 'failure') }}
         run: cargo test --locked --package lazysh-agent --test cli simultaneous_initialization_and_ingest_preserve_every_event -- --exact
+      - name: Replace, keep and roll back a running companion on Windows
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: cargo test --locked --package lazysh-agent --features update-test-endpoint --test update_stub
       - name: Native host harness runs CLI, WAL and installation owners against the exact prepared executable
         if: runner.os != 'Windows'
         env:

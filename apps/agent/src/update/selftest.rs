@@ -17,6 +17,7 @@ pub fn passes(path: &Path, version: &str) -> bool {
     let state = dir.join("state");
     let env = [
         ("LAZYSH_STATE_DIR", state.as_path()),
+        #[cfg(unix)]
         ("PATH", Path::new("/usr/bin:/bin")),
     ];
     version_text(path, dir).as_deref() == Some(version)

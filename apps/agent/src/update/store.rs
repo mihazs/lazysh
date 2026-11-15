@@ -1,39 +1,38 @@
 //! The managed namespace (`<user data>/lazysh/companion`): staging, the atomic replace and the kept
 //! previous copy. Linux and macOS; every name is relative to one retained, owner-only directory.
 use super::{
-    current,
     report::{Failure, Fault},
+    staging::{Identity, Staged as StagedFile, Staging, Swap},
 };
 use crate::{
-    installation::{self, Existing, Lock, Temporary, MAXIMUM, NAME},
+    installation::{self, Existing, Lock, Temporary, NAME},
     managed_directory::Directory,
     storage_filesystem, storage_namespace,
 };
-use std::{
-    fs::{self},
-    io::{Seek, SeekFrom, Write},
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
 pub const PREVIOUS: &str = "lazysh-agent.previous";
 const STAGED: &str = ".update-";
 const KEPT: &str = ".previous-";
-
-/// SHA-256 and length of a file.
-pub type Identity = (String, u64);
 
 pub struct Store {
     dir: Directory,
     _lock: Option<Lock>,
     _scratch: Option<tempfile::TempDir>,
 }
-/// A file on its way into the namespace. It is private and not executable until `seal` has
-/// compared its bytes with the expected identity, and it disappears unless it is committed.
+/// A file on its way into the namespace; it disappears unless it is committed.
 pub struct Staged<'a> {
     guard: Temporary<'a>,
-    file: Option<fs::File>,
-    identity: Option<Identity>,
+    pub staging: Staging,
+}
+impl StagedFile for Staged<'_> {
+    fn staging(&self) -> &Staging {
+        &self.staging
+    }
+}
+/// The hash the store trusts: a private, single-link file that did not change while it was read.
+pub fn hash(file: &mut fs::File) -> Result<Identity, Fault> {
+    Ok(installation::file_hash(file, true)?)
 }
 
 impl Store {
@@ -110,8 +109,7 @@ impl Store {
             .open_file(&name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
         Ok(Staged {
             guard: Temporary::new(&self.dir, name),
-            file: Some(file),
-            identity: None,
+            staging: Staging::new(file),
         })
     }
     pub fn stage(&self) -> Result<Staged<'_>, Fault> {
@@ -120,99 +118,73 @@ impl Store {
     /// A private copy of `name` whose bytes match `sha256`, verified before and after the copy.
     fn copy(&self, name: &str, sha256: &str, prefix: &str) -> Result<Staged<'_>, Fault> {
         let mut source = self.dir.open_file(name, libc::O_RDONLY)?;
-        let (digest, bytes) = installation::file_hash(&mut source, true)?;
-        if digest != sha256 {
-            return Err(Fault::detail(Failure::VerificationFailed, "digestMismatch"));
-        }
-        source.seek(SeekFrom::Start(0))?;
         let mut staged = self.create(prefix)?;
-        std::io::copy(
-            &mut std::io::Read::take(&mut source, MAXIMUM + 1),
-            staged.file.as_mut().unwrap(),
-        )?;
-        staged.seal(&digest, bytes)?;
+        staged.staging.copy_of(&mut source, sha256, hash)?;
         Ok(staged)
     }
     /// The kept previous binary, as a staged copy that is safe to self-test and install.
     pub fn copy_previous(&self, sha256: &str) -> Result<Staged<'_>, Fault> {
         self.copy(PREVIOUS, sha256, STAGED)
     }
-    /// Replace the installed binary with `staged` and prove the installed path answers `version`.
-    /// The binary it replaces is kept as `lazysh-agent.previous`; its identity is returned when so.
-    /// A failed proof restores that binary (`RolledBack`), or is `Uncertain` when it cannot.
-    pub fn commit(
-        &self,
-        mut staged: Staged<'_>,
-        version: &str,
-        checking: impl FnOnce(),
-    ) -> Result<Option<Identity>, Fault> {
-        let expected = staged.identity.clone().ok_or(Failure::Internal)?;
-        self.dir.check()?;
-        let replaced = self.current()?;
-        // What is replaced is copied first; the new file only goes live once that copy is safe.
-        let mut kept = match &replaced {
-            Some((sha256, _)) => Some(self.copy(NAME, sha256, KEPT)?),
-            None => None,
-        };
-        self.dir.check()?;
-        self.dir.rename(&staged.guard.name, NAME, false)?;
-        staged.guard.committed = true;
-        let _ = self.dir.file.sync_all();
-        checking();
-        let installed = self.current().ok().flatten();
-        if installed.as_ref() != Some(&expected)
-            || current::version_of(&self.installed_path()).as_deref() != Some(version)
-        {
-            let restored = match &kept {
-                Some(old) => self.dir.rename(&old.guard.name, NAME, false).is_ok(),
-                None => self.dir.remove(NAME, false).is_ok(),
-            };
-            if let Some(old) = kept.as_mut() {
-                old.guard.committed = restored;
-            }
-            return Err(if restored {
-                Failure::RolledBack
-            } else {
-                Failure::Uncertain
-            }
-            .into());
-        }
-        let retained = match kept.as_mut() {
-            Some(old) if self.dir.rename(&old.guard.name, PREVIOUS, false).is_ok() => {
-                old.guard.committed = true;
-                replaced
-            }
-            _ => None,
-        };
-        let _ = self.dir.file.sync_all();
-        Ok(retained)
-    }
 }
 
-impl Staged<'_> {
-    pub fn write(&mut self, chunk: &[u8]) -> Result<(), Fault> {
-        Ok(self.file.as_mut().unwrap().write_all(chunk)?)
+/// One same-directory rename over the installed name; what it replaces is copied first and put back
+/// (or removed) when the proof fails.
+impl<'a> Swap<Staged<'a>> for Store {
+    fn current(&self) -> Result<Option<Identity>, Fault> {
+        Store::current(self)
     }
-    /// Compare what is on disk with the expected identity, then make it executable and close it.
-    pub fn seal(&mut self, sha256: &str, bytes: u64) -> Result<(), Fault> {
-        let file = self.file.as_mut().unwrap();
-        file.sync_all()?;
-        file.seek(SeekFrom::Start(0))?;
-        let (digest, count) = installation::file_hash(file, true)?;
-        if count != bytes {
-            return Err(Fault::detail(Failure::VerificationFailed, "sizeMismatch"));
-        }
-        if digest != sha256 {
-            return Err(Fault::detail(Failure::VerificationFailed, "digestMismatch"));
-        }
-        file.set_permissions(fs::Permissions::from_mode(0o700))?;
-        // A binary cannot be executed while a descriptor open for writing remains.
-        self.file = None;
-        self.identity = Some((digest, count));
-        Ok(())
+    fn installed_path(&self) -> PathBuf {
+        self.dir.path.join(NAME)
     }
-    pub fn identity(&self) -> Option<&Identity> {
-        self.identity.as_ref()
+    fn place(
+        &self,
+        staged: &mut Staged<'a>,
+        replaced: Option<&Identity>,
+    ) -> Result<Option<String>, Fault> {
+        self.dir.check()?;
+        let kept = match replaced {
+            Some((sha256, _)) => {
+                let mut copy = self.copy(NAME, sha256, KEPT)?;
+                // Kept from here on by name: the swap decides whether it becomes the previous copy.
+                copy.guard.committed = true;
+                Some(copy.guard.name.clone())
+            }
+            None => None,
+        };
+        let renamed = self
+            .dir
+            .check()
+            .map_err(Fault::from)
+            .and_then(|()| Ok(self.dir.rename(&staged.guard.name, NAME, false)?));
+        if let Err(error) = renamed {
+            if let Some(name) = &kept {
+                let _ = self.dir.remove(name, false);
+            }
+            return Err(error);
+        }
+        staged.guard.committed = true;
+        let _ = self.dir.file.sync_all();
+        Ok(kept)
+    }
+    fn restore(&self, kept: Option<&str>) -> bool {
+        match kept {
+            Some(name) => self.dir.rename(name, NAME, false),
+            None => self.dir.remove(NAME, false),
+        }
+        .is_ok()
+    }
+    fn retain(&self, kept: Option<&str>) -> bool {
+        let kept = kept.is_some_and(|name| {
+            let renamed = self.dir.rename(name, PREVIOUS, false).is_ok();
+            // The copy is still under its temporary name when the rename failed.
+            if !renamed {
+                let _ = self.dir.remove(name, false);
+            }
+            renamed
+        });
+        let _ = self.dir.file.sync_all();
+        kept
     }
 }
 
