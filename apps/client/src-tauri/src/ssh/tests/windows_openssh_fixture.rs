@@ -177,6 +177,7 @@ async fn verify(shell: Shell) {
     fs::write(&authorized, user_key.public_key().to_openssh().unwrap()).unwrap();
     let port = owned_sshd::free_port();
     // A host with nothing but Windows and the companion on its PATH: the runner's own PATH (Git's `sh.exe`, for one) is not the host's.
+    // sshd splits `SetEnv` on blanks, and the Windows build does not apply a quoted value, so the directories have none.
     let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
     let path = [
         bin.clone(),
@@ -186,18 +187,17 @@ async fn verify(shell: Shell) {
     ]
     .map(|directory| directory.display().to_string())
     .join(";");
-    let sshd = owned_sshd::OwnedSshd::start(
-        directory.path(),
-        port,
-        &host_key,
-        &format!(
-            "AuthorizedKeysFile {}\nSetEnv \"PATH={path}\" \"LAZYSH_STATE_DIR={}\"\n",
-            owned_sshd::slashes(&authorized),
-            state_dir.display()
-        ),
-        &[],
-    )
-    .await;
+    let state = state_dir.display().to_string();
+    assert!(
+        !path.contains(char::is_whitespace) && !state.contains(char::is_whitespace),
+        "{name}: SetEnv splits on blanks, so the fixture directories must have none: {path} {state}"
+    );
+    let settings = format!(
+        "AuthorizedKeysFile {}\nSetEnv PATH={path} LAZYSH_STATE_DIR={state}\n",
+        owned_sshd::slashes(&authorized)
+    );
+    let sshd =
+        owned_sshd::OwnedSshd::start(directory.path(), port, &host_key, &settings, &[]).await;
     let app_state = AppState::new(directory.path().join("config")).unwrap();
     let host: Host = serde_json::from_value(serde_json::json!({
         "id": "windows-openssh",
