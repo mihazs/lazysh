@@ -100,6 +100,13 @@ impl Timer {
     fn units(&self) -> PathBuf {
         self.home.join(".config/systemd/user")
     }
+    /// A private runtime directory (mode 0700, as systemd requires) for tools that insist on one.
+    fn runtime(&self) -> PathBuf {
+        let runtime = self._root.path().join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        runtime
+    }
     fn plist(&self) -> PathBuf {
         self.home
             .join("Library/LaunchAgents/app.lazysh.usage-collector.plist")
@@ -198,6 +205,9 @@ fn verify_units(timer: &Timer) {
         .arg(timer.units().join("lazysh-usage-collector.service"))
         .arg(timer.units().join("lazysh-usage-collector.timer"))
         .env("HOME", &timer.home)
+        // `--user` needs a runtime directory to start its offline manager; a runner without a login
+        // session has none, so give it a private one instead of the account's.
+        .env("XDG_RUNTIME_DIR", timer.runtime())
         .output()
         .unwrap();
     assert!(
