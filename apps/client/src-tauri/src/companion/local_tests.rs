@@ -151,7 +151,19 @@ async fn the_bundled_companion_is_copied_privately_and_only_replaced_by_a_newer_
     let bundled = temp.path().join("mount/usr/bin/lazysh-agent");
     let target = temp.path().join("data/lazysh/companion/lazysh-agent");
     let run = |path: &Path| {
-        let output = std::process::Command::new(path).output().unwrap();
+        // A concurrent fork can hold the just-written file open for writing for an instant.
+        let mut busy = 0;
+        let output = loop {
+            match std::process::Command::new(path).output() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 50 =>
+                {
+                    busy += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                other => break other.unwrap(),
+            }
+        };
         String::from_utf8(output.stdout).unwrap()
     };
     reporting(&bundled, "1.4.0");

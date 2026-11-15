@@ -41,10 +41,7 @@ fn one() -> f32 {
 impl Viewport {
     /// The relay's limits: 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels once scaled.
     pub(super) fn valid(&self) -> bool {
-        (100..=2048).contains(&self.width)
-            && (100..=2048).contains(&self.height)
-            && (1.0..=3.0).contains(&self.scale)
-            && (self.width as f32 * self.height as f32 * self.scale * self.scale) <= 8_000_000.0
+        lazysh_common::host_browser::valid_viewport(self.width, self.height, self.scale)
     }
 }
 
@@ -440,25 +437,5 @@ mod tests {
             client_message(&encode(&json!({"type":"pause"}))),
             json!({"type":"pause"})
         );
-    }
-
-    #[test]
-    fn viewports_are_bounded_like_the_relays() {
-        let viewport = |width, height, scale| Viewport {
-            width,
-            height,
-            scale,
-        };
-        assert!(viewport(412, 915, 1.0).valid() && viewport(412, 915, 3.0).valid());
-        for bad in [
-            viewport(99, 915, 1.0),
-            viewport(412, 2049, 1.0),
-            viewport(412, 915, 0.5),
-            viewport(412, 915, 3.1),
-            viewport(2048, 2048, 1.5),
-            viewport(412, 915, f32::NAN),
-        ] {
-            assert!(!bad.valid(), "{bad:?}");
-        }
     }
 }

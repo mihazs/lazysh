@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
-    net::TcpListener,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -871,9 +870,6 @@ fn broken_framing_closes_the_session_and_the_browser() {
     }
 }
 
-const GREEN_PAGE: &str =
-    "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
-
 /// A page that keeps its state in its title, which the relay reports as text: clicks on the button, whether it
 /// scrolled, and the text in the input, in brackets (a title loses trailing spaces). The button, the input and a tall spacer fill the width, one below the other.
 const INPUT_PAGE: &str = "<!doctype html><title>clicks=0;scroll=0;text=[]</title>
@@ -889,31 +885,6 @@ input.oninput = report;
 onscroll = report;
 </script>";
 
-/// A page on loopback, served to a real browser.
-fn fixture_page(body: &'static str) -> (u16, std::thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = std::thread::spawn(move || {
-        // The browser asks for the page and a favicon; stop when the test drops its relay and connections stop.
-        listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while Instant::now() < deadline {
-            let Ok((mut stream, _)) = listener.accept() else {
-                std::thread::sleep(Duration::from_millis(20));
-                continue;
-            };
-            let mut request = [0u8; 2048];
-            let _ = std::io::Read::read(&mut stream, &mut request);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-    });
-    (port, server)
-}
-
 /// A relay over the host's real Chrome or Chromium, opened on a loopback page: the fixture, the relay and the
 /// page's port. `None` on a host that has no browser.
 fn real_relay(page: &'static str) -> Option<(Fixture, Relay, u16)> {
@@ -921,7 +892,7 @@ fn real_relay(page: &'static str) -> Option<(Fixture, Relay, u16)> {
         eprintln!("skipped: no Chrome or Chromium on PATH");
         return None;
     };
-    let (port, _server) = fixture_page(page);
+    let (port, _server) = lazysh_common::test_support::loopback_page(page, 60);
     let fixture = Fixture::enabled();
     let mut relay = Relay::start(
         &fixture.state,
@@ -935,7 +906,8 @@ fn real_relay(page: &'static str) -> Option<(Fixture, Relay, u16)> {
 /// The real browser: its pixels, not a fake's, reach the client, and nothing is left behind.
 #[test]
 fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
-    let Some((fixture, mut relay, port)) = real_relay(GREEN_PAGE) else {
+    let Some((fixture, mut relay, port)) = real_relay(lazysh_common::test_support::GREEN_PAGE)
+    else {
         return;
     };
     let state = relay.next_json("state");
