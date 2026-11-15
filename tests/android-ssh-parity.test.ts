@@ -3,7 +3,7 @@ import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
-import {androidSshParityAcceptance,parityControl,sshdLogFacts,validateSshParityReport,sshParityCases} from './support/androidSshParity';
+import {androidSshParityAcceptance,parityControl,previewListener,sshdLogFacts,validateSshParityReport,sshParityCases} from './support/androidSshParity';
 import {sshCommand} from './support/sshFixture';
 
 const parity=process.env.LAZYSH_ANDROID_UI_SSH_PARITY==='1';
@@ -68,6 +68,41 @@ test.skipIf(!parity)('owned parity control answers only its nonce and closed act
   } finally {for(const fixture of started)await fixture.stop();}
 },20_000);
 
+test('owned preview listener serves its proof and counts only iframe navigations',async()=>{
+  const listener=await previewListener('PREVIEW_proof');
+  try {
+    const url=`http://127.0.0.1:${listener.port}/`;
+    const plain=await fetch(url);
+    expect(await plain.text()).toContain('PREVIEW_proof');
+    expect(listener.seen).toEqual({requests:1,iframeLoads:0});
+    await (await fetch(url,{headers:{'sec-fetch-dest':'iframe'}})).text();
+    expect(listener.seen).toEqual({requests:2,iframeLoads:1});
+  } finally {listener.server.closeAllConnections();await new Promise(done=>listener.server.close(done));}
+});
+
+test('owned parity control reports the preview listener only to its nonce and only when one exists',async()=>{
+  const listener=await previewListener('PREVIEW_proof');
+  try {
+    const fixtures={} as Parameters<typeof parityControl>[0];
+    const request={nonce:'n',action:'preview'};
+    await expect(parityControl(fixtures,'n',async()=>{}).reply(request)).rejects.toThrow('action');
+    await expect(parityControl(fixtures,'n',async()=>{},listener).reply({...request,nonce:'foreign'})).rejects.toThrow('nonce');
+    listener.seen.iframeLoads=2;listener.seen.requests=3;
+    expect(await parityControl(fixtures,'n',async()=>{},listener).reply(request)).toEqual({requests:3,iframeLoads:2});
+  } finally {await new Promise(done=>listener.server.close(done));}
+});
+
+test.skipIf(!parity)('owned exec sshd runs the requested command while the plain one keeps its shell',async()=>{
+  const started:SshFixture[]=[];
+  try {
+    for(const exec of [true,false])started.push(await SshFixture.start(undefined,{log:true,exec,shellSeconds:5}));
+    const [running,plain]=started;
+    const run=async(fixture:SshFixture)=>{const client=await fixture.client(true,'printf %s EXEC_PROOF');client.child.stdin!.end('exit\n');return client.finish('owned exec probe',8000).then(output=>output,()=>'');};
+    expect(await run(running)).toContain('EXEC_PROOF');
+    expect(await run(plain)).not.toContain('EXEC_PROOF');
+  } finally {for(const fixture of started)await fixture.stop();}
+},40_000);
+
 test('parity report counts only every expected native case passing exactly once',()=>{
   const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;
   const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
@@ -75,6 +110,13 @@ test('parity report counts only every expected native case passing exactly once'
   for(const rows of [sshParityCases.slice(1).map(name=>row(name)),[...sshParityCases,sshParityCases[0]].map(name=>row(name)),
     sshParityCases.map((name,index)=>row(name,index?'':'<skipped/>')),sshParityCases.map((name,index)=>row(name,index?'':'<failure message="x"/>'))])
     expect(()=>validateSshParityReport(report(rows))).toThrow();
+});
+
+test('the shared Android runtime job leaves every owned parity case to the parity job',async()=>{
+  // Those cases need the host-written sshd fixture and fail with no fixture path in the shared job.
+  const moon=Bun.YAML.parse(await readFile(join(import.meta.dir,'../apps/client/moon.yml'),'utf8')) as {tasks:Record<string,{script:string}>};
+  const excluded=moon.tasks['test-android'].script.match(/notClass=(\S+)/)![1].split(',');
+  for(const name of sshParityCases) expect(excluded).toContain(`app.lazysh.client.NativeWorkspaceTest#${name}`);
 });
 
 test.skipIf(!parity)('actual Android app logs in by password, encrypted key, bastion and forwarded agent and refuses a rotated host key',async()=>{

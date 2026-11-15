@@ -1,4 +1,5 @@
 import {createServer,type Server} from 'node:net';
+import {createServer as createHttpServer} from 'node:http';
 import {chmod,copyFile,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {randomBytes} from 'node:crypto';
@@ -13,10 +14,13 @@ export const sshParityCases=[
   'ownedSshRotatedHostKeyRefusedThroughRealUi',
   'ownedSshBastionRouteThroughRealUi',
   'ownedSshAgentForwardingThroughRealUi',
+  'ownedSshPreviewForwardsAndTearsDownThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
-type ParityServer='primary'|'bastion'|'rotated';
+type ParityServer='primary'|'bastion'|'rotated'|'preview';
+/** The password sshds every case shares; the preview sshd runs commands and is started apart. */
 const servers:readonly ParityServer[]=['primary','bastion','rotated'];
+const observed:readonly ParityServer[]=[...servers,'preview'];
 
 /** Closed facts from an owned sshd DEBUG1 log; no raw log text leaves this function. */
 export function sshdLogFacts(text:string) {
@@ -42,26 +46,42 @@ export function validateSshParityReport(text:string) {
   return names.length;
 }
 
-type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture};
+type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture;preview?:SshFixture};
+type PreviewFacts={requests:number;iframeLoads:number};
 type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
 /**
  * The instrumentation's only host channel. Requests carry the case nonce and one closed
  * action; replies are closed facts. `rotate` points the pinned device port at a second sshd.
  */
-export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>):Control {
-  const marks=new Map<ParityServer,number>(servers.map(name=>[name,0]));
-  const log=(name:ParityServer)=>readFile(join(fixtures[name].directory,'sshd.log'));
+export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<void>,listener?:{seen:PreviewFacts}):Control {
+  const marks=new Map<ParityServer,number>(observed.map(name=>[name,0]));
+  const log=(name:ParityServer)=>{const fixture=fixtures[name];if(!fixture)throw new Error('server');return readFile(join(fixture.directory,'sshd.log'));};
   const mark=async(name:ParityServer)=>{marks.set(name,(await log(name)).length);};
   return {reply:async request=>{
     if(!request || typeof request!=='object')throw new Error('request');
     const {nonce:owner,action,server}=request as Record<string,unknown>;
     if(owner!==nonce)throw new Error('nonce');
-    const name=servers.find(value=>value===server);
+    const name=observed.find(value=>value===server);
     if(action==='mark' && name){await mark(name);return {};}
     if(action==='observe' && name)return sshdLogFacts((await log(name)).subarray(marks.get(name)).toString('utf8'));
     if(action==='rotate'){await rotate();await mark('rotated');return {};}
+    if(action==='preview' && listener)return {...listener.seen};
     throw new Error('action');
   }};
+}
+
+/** An HTTP listener on the sshd host that stands in for a development server and counts what reaches it. */
+export async function previewListener(proof:string) {
+  const seen:PreviewFacts={requests:0,iframeLoads:0};
+  const server=createHttpServer((request,response)=>{
+    seen.requests++;
+    // Only a WebView iframe navigation sends this; the instrumentation's raw socket does not.
+    if(request.headers['sec-fetch-dest']==='iframe')seen.iframeLoads++;
+    response.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
+    response.end(`<!doctype html><title>${proof}</title><h1>${proof}</h1>`);
+  });
+  await new Promise<void>((resolve_,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve_);});
+  return {server,port:(server.address() as {port:number}).port,seen};
 }
 
 async function listen(control:Control) {
@@ -85,7 +105,7 @@ async function listen(control:Control) {
   await new Promise<void>((resolve_,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve_);});
   return {server,port:(server.address() as {port:number}).port};
 }
-const close=(server:Server)=>new Promise<void>((resolve_,reject)=>server.close(error=>error?reject(error):resolve_()));
+const close=(server:Server)=>new Promise<void>((resolve_,reject)=>{server.close(error=>error?reject(error):resolve_());(server as {closeAllConnections?:()=>void}).closeAllConnections?.();});
 
 /** A passphrase-encrypted copy of the primary user key, as `ssh-keygen -p` writes it. */
 async function encryptedIdentity(primary:SshFixture,passphrase:string) {
@@ -113,21 +133,25 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
   const password=randomBytes(16).toString('hex'),passphrase=randomBytes(12).toString('hex');
   const started:SshFixture[]=[];
   const reverses:number[]=[];
-  let remote:string|undefined,keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined,control:Server|undefined;
+  let remote:string|undefined,keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined,control:Server|undefined,listener:Awaited<ReturnType<typeof previewListener>>|undefined;
   let primary=false;
   try {
     const fixtures={} as Fixtures;
     for(const name of servers)started.push(fixtures[name]=await SshFixture.start(undefined,{password,log:true}));
+    // Commands run (discovery needs `ss`), keys only and a longer shell: the preview case outlives the default 90 s.
+    started.push(fixtures.preview=await SshFixture.start(undefined,{log:true,exec:true,shellSeconds:300}));
     const nonce=fixtures.primary.nonce;
+    const proof=`PREVIEW_${nonce}`;
+    listener=await previewListener(proof);
     // The rotation case pins this device port to the primary key, then the host repoints it.
     const pinned={port:await availablePort()};
     const reverse=async(device_:number,host:number,rebind=false)=>{
       await device(['reverse',...(rebind?[]:['--no-rebind']),`tcp:${device_}`,`tcp:${host}`]);
       if(!reverses.includes(device_))reverses.push(device_);
     };
-    const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true)));
+    const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),listener));
     control=channel.server;
-    for(const port of [fixtures.primary.port,fixtures.bastion.port,channel.port])await reverse(port,port);
+    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,channel.port])await reverse(port,port);
     await reverse(pinned.port,fixtures.primary.port);
     keyboard=await ownedSoftwareKeyboard(adb,serial,5000,'aosp-latin');
     remote=`/data/local/tmp/lazysh-ui-ssh-${nonce}`;
@@ -138,7 +162,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     await writeFile(data,JSON.stringify({nonce,username:fixtures.primary.username,controlPort:channel.port,password,passphrase,
       privateKey:fixtures.primary.privateKey,encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
       challenge:fixtures.primary.challenge,expected:fixtures.primary.expected,
-      primary:server(fixtures.primary),bastion:server(fixtures.bastion),rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
+      primary:server(fixtures.primary),bastion:server(fixtures.bastion),preview:{...server(fixtures.preview),privateKey:fixtures.preview.privateKey,listener:listener.port,proof},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
     if((await stat(data)).size>16*1024)throw new Error('Owned Android parity fixture exceeds native bound');
     await device(['push',data,`${remote}/fixture.json`]);
     await device(['shell','chmod','600',`${remote}/fixture.json`]);
@@ -158,6 +182,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
       ['software-keyboard',()=>keyboard?.restore()??Promise.resolve()],
       ...reverses.map(port=>['reverse',()=>device(['reverse','--remove',`tcp:${port}`])] as const),
       ['control',()=>control?close(control):Promise.resolve()],
+      ['preview-listener',()=>listener?close(listener.server):Promise.resolve()],
       ['fixture-file',()=>remote?device(['shell','rm','-rf','--',remote]):Promise.resolve()],
       ...started.map(fixture=>['SSH',()=>fixture.stop()] as const),
     ]);
