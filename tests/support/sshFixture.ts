@@ -214,6 +214,8 @@ export class SshFixture {
       if(options.zellijBinary) {
         environment=await privateEnvironment(directory,await installOwnedBinary(directory,'zellij',options.zellijBinary)+':/usr/bin:/bin',toolDirectories.filter(([key])=>key!=='TMUX_TMPDIR'));
         const zellij=join(directory,'config','zellij');await mkdir(join(zellij,'layouts'),{recursive:true,mode:0o700});
+        // Without this Zellij 0.45.1 looks for ~/.config/zellij, finds none and opens its first-run wizard over the shell, which takes typed input.
+        environment.ZELLIJ_CONFIG_DIR=zellij;
         await writeFile(join(zellij,'layouts','plain.kdl'),'layout { pane; }\n',{mode:0o600});
         await writeFile(join(zellij,'config.kdl'),'show_release_notes false\nshow_startup_tips false\ndefault_layout "plain"\n',{mode:0o600});
       }
