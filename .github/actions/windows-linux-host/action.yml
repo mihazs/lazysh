@@ -24,6 +24,10 @@ runs:
         install -m 0755 "$(wslpath -a '${{ inputs.herdr }}')" /usr/local/bin/herdr
         test "$(tmux -V)" = 'tmux 3.4'
         uname -a
+    # WSL stops an instance, and the server in it, when its last session ends.
+    - name: Keep the WSL instance running before anything starts in it
+      shell: pwsh
+      run: Start-Process -WindowStyle Hidden -FilePath wsl.exe -ArgumentList '--distribution','Ubuntu-24.04','--exec','sleep','7200'
     # The server runs as an unprivileged account, as the Linux fixtures' owned sshd does.
     - name: Start the Linux host
       shell: wsl-bash {0}
@@ -33,10 +37,6 @@ runs:
         su lazysh -c "bash '$(wslpath -a '${{ github.workspace }}')/.github/scripts/external-linux-host.sh' /home/lazysh/host 2222 /home/lazysh/share"
         mkdir -p "$(wslpath -a '${{ runner.temp }}')/lazysh-host"
         cp /home/lazysh/share/key /home/lazysh/share/fingerprint /home/lazysh/share/user "$(wslpath -a '${{ runner.temp }}')/lazysh-host/"
-    # WSL stops an instance, and the server in it, when its last session ends.
-    - name: Keep the WSL instance running for the following steps
-      shell: pwsh
-      run: Start-Process -WindowStyle Hidden -FilePath wsl.exe -ArgumentList '--distribution','Ubuntu-24.04','--exec','sleep','7200'
     - name: Exercise discovery, attach, tree and actions from a Windows client against real tmux, Zellij and Herdr
       shell: bash
       env:

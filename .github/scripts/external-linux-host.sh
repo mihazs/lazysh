@@ -52,7 +52,8 @@ StrictModes no
 LogLevel ERROR
 SetEnv $settings
 EOF
-sshd=$(command -v sshd)
+# `su` keeps root's PATH, but a restricted one may omit sbin.
+sshd=$(command -v sshd || echo /usr/sbin/sshd)
 # sshd keeps running after this script: a new session, no inherited terminal.
 setsid "$sshd" -D -e -f "$dir/sshd_config" > "$dir/sshd.log" 2>&1 < /dev/null &
 for _ in $(seq 1 50); do
