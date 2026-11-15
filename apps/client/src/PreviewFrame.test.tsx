@@ -59,3 +59,13 @@ it('invalid page data produces a recoverable status, never a captured selection'
   fireEvent(window, new MessageEvent('message', { source: s.frame.contentWindow, origin: new URL(url).origin, data: { ...s.initial, action: 'selection', ...selected, text: '\x00evil' } }));
   expect(s.capture).not.toHaveBeenCalled(); expect(screen.getByRole('status').textContent).toContain('invalid element data');
 });
+it('marks only a reviewed selection and clears it on discard',()=>{
+  const s=setup();
+  s.message('ready');
+  fireEvent.click(screen.getByRole('button',{name:'Select page element'}));s.message('started');s.message('selection',selected);
+  expect(s.capture).toHaveBeenCalledOnce();
+  s.view.rerender(<PreviewFrame url={url} port={5173} token={token} onSelection={s.capture} selection={selected}/>);
+  expect(s.send).toHaveBeenLastCalledWith(expect.objectContaining({action:'mark'}),new URL(url).origin);
+  s.view.rerender(<PreviewFrame url={url} port={5173} token={token} onSelection={s.capture} selection={null}/>);
+  expect(s.send).toHaveBeenLastCalledWith(expect.objectContaining({action:'clear'}),new URL(url).origin);
+});

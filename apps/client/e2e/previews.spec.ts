@@ -65,3 +65,30 @@ test('selecting intercepts pointer, touch and keyboard handlers while ordinary a
   await page.getByRole('button', { name: 'Cancel element selection' }).click();
   await expect(page.getByLabel('Staged annotation draft')).toBeEmpty();
 });
+
+test('the selected outline tracks its element, stays non-interactive and clears with the review', async ({page})=>{
+  await mount(page);
+  const frame=page.frameLocator('iframe'),target=frame.getByRole('button',{name:'Save changes'});
+  await expect(page.getByRole('button',{name:'Select page element',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Select page element',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Cancel element selection'})).toBeVisible();
+  await target.click();
+  const marker=frame.locator('[data-lazysh-selection]');
+  await expect(marker).toHaveCount(1);
+  expect(await marker.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('none');
+  await target.evaluate(node=>{node.style.transform='translateX(60px)';});
+  await expect.poll(async()=>Math.abs((await marker.boundingBox())!.x-(await target.boundingBox())!.x)).toBeLessThan(1);
+  await target.evaluate(node=>{node.style.boxSizing='border-box';node.style.width='240px';});
+  await expect.poll(()=>marker.evaluate(node=>Math.round(node.getBoundingClientRect().width))).toBe(240);
+  const before=await target.evaluate(node=>Number(node.ownerDocument.body.dataset.click??'0'));
+  await target.click();
+  expect(await target.evaluate(node=>Number(node.ownerDocument.body.dataset.click??'0'))).toBeGreaterThan(before);
+  await page.getByRole('button',{name:'Discard selection',exact:true}).click();
+  await expect(marker).toHaveCount(0);
+  await page.getByRole('button',{name:'Select page element',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Cancel element selection'})).toBeVisible();
+  await target.click();
+  await expect(marker).toHaveCount(1);
+  await target.evaluate(node=>node.remove());
+  await expect(marker).toHaveCount(0);
+});

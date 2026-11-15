@@ -2,8 +2,8 @@ import {t, useUi} from './i18n/core';
 import { useEffect, useRef, useState } from 'react';
 import { elementSelection, type ElementSelection } from './previewAnnotations';
 
-type Props = { url: string; port: number; token?: string | null; onSelection: (selection: ElementSelection) => void; onNavigate?: () => void };
-export default function PreviewFrame({ url, port, token, onSelection, onNavigate }: Props) {
+type Props = { url: string; port: number; token?: string | null; onSelection: (selection: ElementSelection) => void; onNavigate?: () => void; selection?: ElementSelection | null };
+export default function PreviewFrame({ url, port, token, onSelection, onNavigate, selection }: Props) {
   useUi();
   const frame = useRef<HTMLIFrameElement>(null);
   const channel = useRef<string | null>(null);
@@ -31,6 +31,7 @@ export default function PreviewFrame({ url, port, token, onSelection, onNavigate
     window.addEventListener('message', receive);
     return () => { window.removeEventListener('message', receive); clearTimeout(timer.current); armed.current = 'idle'; };
   }, [token, origin, onSelection]);
+  useEffect(() => { if (channel.current) send(selection ? 'mark' : 'clear'); }, [selection]);
   function loaded() {
     armed.current = 'idle'; channel.current = crypto.randomUUID(); setStarting(false); setPicking(false); setReady(false); clearTimeout(timer.current); onNavigate?.();
     if (!token) return;
