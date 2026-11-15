@@ -346,7 +346,8 @@ fn native_hook_assets_are_print_only_and_never_change_profiles_or_trust() {
             for text in [
                 "legacy Kimi CLI 1.52",
                 "never changes settings",
-                "Kimi Code 2.4 lifecycle is unqualified",
+                "--dialect kimi-code-2.4",
+                "reports only approval requests",
             ] {
                 assert!(help.contains(text));
             }
@@ -384,6 +385,196 @@ fn unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent() {
         observed,
         vec![("working".into(), true), ("working".into(), true)]
     );
+}
+
+fn kimi_code_payload(kind: &str, request: &str, agent: Option<&str>) -> Value {
+    // The key set of the payloads recorded from Kimi Code 2.4.1, with secret-bearing values to prove none is kept.
+    let mut payload = json!({"hook_event_name":kind,"session_id":"owned-session","cwd":"/owned/project","id":request,"turn_id":0,"tool_call_id":"call_1","tool_name":"Bash","tool_input":{"command":"PRIVATE-COMMAND"},"display":{"kind":"generic"},"action":"Run PRIVATE-COMMAND"});
+    if let Some(agent) = agent {
+        payload["agent_id"] = json!(agent);
+    }
+    if kind == "PermissionResult" {
+        payload["decision"] = json!("approved");
+    }
+    payload
+}
+fn kimi_code_rows(dir: &Path) -> Vec<Value> {
+    snapshot(dir, "10")["sessions"].as_array().unwrap().clone()
+}
+
+#[test]
+fn kimi_code_reports_a_root_approval_request_until_every_request_is_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let send = |payload: Value| assert!(ingest(dir.path(), "kimi-code", &payload).status.success());
+    send(kimi_code_payload(
+        "PermissionRequest",
+        "approval_a",
+        Some("main"),
+    ));
+    let rows = kimi_code_rows(dir.path());
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["agent"], "Kimi Code");
+    assert_eq!(rows[0]["state"], "needs_attention");
+    assert_eq!(rows[0]["waiting"], "approval");
+    assert_eq!(rows[0]["summary"], "Approval requested");
+    assert_eq!(rows[0]["project"], "/owned/project");
+    assert_eq!(rows[0]["paneId"], "%7");
+    assert!(!snapshot(dir.path(), "10").to_string().contains("PRIVATE"));
+    // A second request keeps the report open when the first is answered; the last answer retires it.
+    send(kimi_code_payload(
+        "PermissionRequest",
+        "approval_b",
+        Some("main"),
+    ));
+    send(kimi_code_payload(
+        "PermissionResult",
+        "approval_a",
+        Some("main"),
+    ));
+    assert_eq!(kimi_code_rows(dir.path()).len(), 1);
+    send(kimi_code_payload(
+        "PermissionResult",
+        "approval_b",
+        Some("main"),
+    ));
+    assert!(kimi_code_rows(dir.path()).is_empty());
+}
+
+#[test]
+fn kimi_code_result_delivered_before_its_request_cannot_reopen_attention() {
+    let dir = tempfile::tempdir().unwrap();
+    for (kind, request) in [
+        ("PermissionResult", "approval_a"),
+        ("PermissionRequest", "approval_a"),
+    ] {
+        assert!(ingest(
+            dir.path(),
+            "kimi-code",
+            &kimi_code_payload(kind, request, Some("main"))
+        )
+        .status
+        .success());
+    }
+    assert!(kimi_code_rows(dir.path()).is_empty());
+    // Another request is a new observation, and the end of its session retires it.
+    assert!(ingest(
+        dir.path(),
+        "kimi-code",
+        &kimi_code_payload("PermissionRequest", "approval_b", Some("main"))
+    )
+    .status
+    .success());
+    let end = |session: &str| json!({"hook_event_name":"SessionEnd","session_id":session,"cwd":"/owned/project","reason":"exit"});
+    assert!(ingest(dir.path(), "kimi-code", &end("another-session"))
+        .status
+        .success());
+    assert_eq!(kimi_code_rows(dir.path()).len(), 1);
+    assert!(ingest(dir.path(), "kimi-code", &end("owned-session"))
+        .status
+        .success());
+    assert!(kimi_code_rows(dir.path()).is_empty());
+}
+
+#[test]
+fn kimi_code_ignores_what_it_cannot_attribute_to_the_root_and_refuses_incomplete_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut unattributable = vec![
+        kimi_code_payload("PermissionRequest", "approval_a", Some("agent-0")),
+        kimi_code_payload("PermissionRequest", "approval_a", None),
+        kimi_code_payload("PermissionRequest", "approval_a", Some("")),
+    ];
+    // The recorded events that name no agent: the root and a sub-agent look the same, and `Stop` is not completion.
+    for kind in [
+        "UserPromptSubmit",
+        "TurnStarted",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+        "StopFailure",
+        "Interrupt",
+    ] {
+        unattributable.push(json!({"hook_event_name":kind,"session_id":"owned-session","cwd":"/owned/project","turn_id":0}));
+    }
+    for payload in unattributable {
+        assert!(
+            ingest(dir.path(), "kimi-code", &payload).status.success(),
+            "{payload}"
+        );
+    }
+    assert!(kimi_code_rows(dir.path()).is_empty());
+    for missing in ["session_id", "cwd", "id", "tool_call_id", "turn_id"] {
+        let mut payload = kimi_code_payload("PermissionRequest", "approval_a", Some("main"));
+        payload.as_object_mut().unwrap().remove(missing);
+        assert!(
+            !ingest(dir.path(), "kimi-code", &payload).status.success(),
+            "{missing}"
+        );
+    }
+    assert!(kimi_code_rows(dir.path()).is_empty());
+    // A sub-agent's answer never retires the root's open request.
+    assert!(ingest(
+        dir.path(),
+        "kimi-code",
+        &kimi_code_payload("PermissionRequest", "approval_a", Some("main"))
+    )
+    .status
+    .success());
+    assert!(ingest(
+        dir.path(),
+        "kimi-code",
+        &kimi_code_payload("PermissionResult", "approval_a", Some("agent-0"))
+    )
+    .status
+    .success());
+    assert_eq!(kimi_code_rows(dir.path()).len(), 1);
+}
+
+#[test]
+fn kimi_code_dialect_prints_only_what_kimi_accepts_and_the_default_stays_legacy() {
+    let dir = tempfile::tempdir().unwrap();
+    let printed = |args: &[&str]| {
+        let output = run(dir.path(), args, b"");
+        assert!(output.status.success());
+        output.stdout
+    };
+    let modern: Value =
+        serde_json::from_slice(&printed(&["kimi-config", "--dialect", "kimi-code-2.4"])).unwrap();
+    // Kimi drops the whole hooks section for a field outside event, matcher, command and timeout (1 to 600).
+    let config: toml::Table = modern["content"].as_str().unwrap().parse().unwrap();
+    let hooks = config["hooks"].as_array().unwrap();
+    let events: Vec<_> = hooks
+        .iter()
+        .map(|hook| hook["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        events,
+        ["PermissionRequest", "PermissionResult", "SessionEnd"]
+    );
+    for hook in hooks {
+        let keys: Vec<_> = hook
+            .as_table()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["command", "event", "timeout"]);
+        assert_eq!(
+            hook["command"].as_str(),
+            Some("lazysh-agent ingest --agent kimi-code")
+        );
+        assert!((1..=600).contains(&hook["timeout"].as_integer().unwrap()));
+    }
+    assert_eq!(
+        printed(&["kimi-config", "--dialect", "legacy-1.52"]),
+        printed(&["kimi-config"])
+    );
+    assert!(!run(
+        dir.path(),
+        &["kimi-config", "--dialect", "kimi-code-2.6"],
+        b""
+    )
+    .status
+    .success());
 }
 
 #[test]

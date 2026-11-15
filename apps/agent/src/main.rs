@@ -11,6 +11,13 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum KimiDialect {
+    #[value(name = "legacy-1.52")]
+    Legacy,
+    #[value(name = "kimi-code-2.4")]
+    KimiCode24,
+}
 /// Which part of a conversation to read; the newest messages when none is given.
 #[derive(clap::Args, Default)]
 struct WindowArgs {
@@ -207,8 +214,12 @@ enum Command {
     },
     /// Print a standalone Droid hooks.json fragment; never changes settings.
     DroidConfig,
-    /// Print legacy Kimi CLI 1.52 TOML hooks; never changes settings. Kimi Code 2.4 lifecycle is unqualified.
-    KimiConfig,
+    /// Print Kimi TOML hooks; never changes settings. The default is legacy Kimi CLI 1.52; `--dialect kimi-code-2.4`
+    /// reports only approval requests, because Kimi Code 2.4 turn, tool and `Stop` events cannot name the root agent.
+    KimiConfig {
+        #[arg(long, value_enum, default_value_t = KimiDialect::Legacy)]
+        dialect: KimiDialect,
+    },
     /// Print a Copilot CLI hook fragment; never changes settings.
     CopilotConfig,
     /// Print Cursor observation hooks; never changes profiles or permission policy.
@@ -569,7 +580,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             lazysh_agent::hooks::gemini_config()
         }),
         Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
-        Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
+        Command::KimiConfig { dialect } => Some(match dialect {
+            KimiDialect::Legacy => lazysh_agent::hooks::kimi_config(),
+            KimiDialect::KimiCode24 => lazysh_agent::hooks::kimi_code_config(),
+        }),
         Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),
         Command::CursorConfig => Some(lazysh_agent::hooks::cursor_config()),
         Command::AmpPlugin => Some(lazysh_agent::hooks::amp_plugin()),
@@ -771,6 +785,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                         source.as_ref(),
                         chrono::Utc::now(),
                     )?;
+                }
+            } else if matches!(agent, Agent::KimiCode) {
+                if let Some(observation) =
+                    lazysh_agent::kimi_code::read(io::stdin().lock(), pane.as_deref())?
+                {
+                    Store::open(&lazysh_agent::state_directory()?)?
+                        .record_kimi_code(&observation, chrono::Utc::now())?;
                 }
             } else if let Some(event) =
                 lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?

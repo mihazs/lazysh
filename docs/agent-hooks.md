@@ -307,6 +307,43 @@ this hook contract; the last observed working state can remain during idle time.
 SessionEnd reports the root CLI-instance/session-owner boundary, including a
 reload, rather than completion of each turn. This capability gap remains open.
 
+`lazysh-agent kimi-config --dialect kimi-code-2.4` prints a separate, opt-in
+fragment for Kimi Code **2.4.1** (`legacy-1.52` is the default and its output is
+unchanged). It subscribes to `PermissionRequest`, `PermissionResult` and
+`SessionEnd`, each running `lazysh-agent ingest --agent kimi-code` with a
+five-second deadline, and it reports one fact: **the root agent requested
+approval**. The row appears as "Kimi Code", needs attention, waiting for an
+approval, with the summary "Approval requested": a request, not proof that Kimi
+still waits. Nothing is installed; paste the fragment into the profile's
+`config.toml` yourself. Kimi ignores the whole `hooks` section when any entry has
+a field other than `event`, `matcher`, `command` and `timeout` (1 to 600), or an
+unknown event, so edit it with care.
+
+- Only an event with `agent_id` equal to `main` and a complete session, request,
+  turn and tool-call identity counts. A sub-agent, a missing or empty agent and every
+  event that names no agent are ignored, and a root event missing part of its
+  identity is refused. Turn, tool, `Stop`, `StopFailure` and `Interrupt` events name no
+  agent, so they never report working or done: `Stop` is blockable and runs before
+  completion, and a sub-agent's `Stop` is identical to the root's.
+- Kimi's observers are fire-and-forget and unordered. Each request is remembered
+  by id, so a result that arrives first leaves a one-hour tombstone and the late
+  request does not reopen attention; two open requests keep the row until both are
+  answered. Once none is open the row is removed, because nothing true is known about
+  what the agent does next. `SessionEnd` retires the open requests of its session.
+- Checked against the real CLI: the official 2.4.1 Linux x64 release (SHA-256
+  `f4a225fb...d738de`), in a network-less sandbox against a synthetic endpoint,
+  loaded this fragment and drove `lazysh-agent`. An approved and a rejected request each showed
+  one row and removed it; Esc and Ctrl+C at the prompt both answer the request as
+  rejected, so they remove it too; a result delayed past its request left no row; a
+  sub-agent's approval was delivered and reported nothing; `SessionEnd` left no row.
+- Not covered: Kimi's source (not observed in a run) sends no `PermissionResult`
+  when the turn is aborted while an approval waits ([`isUserCancellation`](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/agent/toolApproval/toolApprovalService.ts#L170)),
+  and `Interrupt` cannot say whose turn it ended, so such a report would stay until
+  `SessionEnd` or the seven-day retention. A request delivered after `SessionEnd`
+  is reported again. A `Stop` cannot retire a request, because a sub-agent's `Stop`
+  is identical to the root's. Release 2.6.2, a real provider, macOS, Windows and the
+  managed install lane ([#1636](https://github.com/mihazs/lazysh/issues/1636)) are not covered.
+
 Droid managed setup uses the same six events and five-second deadline in its
 standalone event map, with the inspected companion’s quoted absolute path.
 Configured hooks still require Droid’s normal active-configuration review;

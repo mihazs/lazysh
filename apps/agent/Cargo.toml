@@ -49,6 +49,8 @@ libc = "0.2"
 lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }
 lazysh-common = { path = "../../packages/common", features = ["test-support"] }
 rusqlite = { version = "0.41", features = ["trace"] }
+# Parses the printed Kimi config.toml to check it against Kimi's strict hook schema.
+toml = "1.1"
 
 [target.'cfg(unix)'.dev-dependencies]
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
