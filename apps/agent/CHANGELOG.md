@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.64.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.64.1
+  - @lazysh/common@1.64.1
+  - @lazysh/companion-release@1.64.1
+  - @lazysh/notification-client@1.64.1
+
 ## 1.64.0
 
 ### Minor Changes
