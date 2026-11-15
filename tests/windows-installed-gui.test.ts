@@ -406,33 +406,7 @@ actual('actual Windows installed GUI opens a lazysh:// theme link through the sh
     expect(await find('button', 'Review linked theme')).toBeUndefined();
     // Nothing is registered by the test: the handler is the one the NSIS installer wrote for this installation.
     expect(sameImage(await registeredProtocolHandler(), installed)).toBe(true);
-    const data = Buffer.from(JSON.stringify(linked)).toString('base64url');
-    const probe = join(process.env.RUNNER_TEMP!, 'probe.txt');
-    console.info(`DIAG probe: ${await powershell(String.raw`
-$base = 'HKCU:\Software\Classes\lazyshprobe'
-$null = New-Item -Path "$base\shell\open\command" -Force
-Set-ItemProperty -LiteralPath $base -Name 'URL Protocol' -Value ''
-Set-ItemProperty -LiteralPath "$base\shell\open\command" -Name '(default)' -Value 'cmd.exe /c echo "%1">>${probe}'
-foreach ($m in 'rundll32', 'cmdstart', 'startprocess') {
-  $u = 'lazyshprobe://theme?data=${data}'
-  switch ($m) {
-    'rundll32' { Start-Process rundll32.exe -ArgumentList 'url.dll,FileProtocolHandler', $u -Wait }
-    'cmdstart' { cmd.exe /c start "" $u }
-    'startprocess' { Start-Process $u }
-  }
-  Start-Sleep -Seconds 2
-}
-Remove-Item -LiteralPath $base -Recurse
-Get-Content -LiteralPath ${quote(probe)}`)}`);
-    // Capture the real handler's command line while the shell starts it.
-    console.info(`DIAG handler: ${await powershell(String.raw`
-$seen = @{}
-Start-Process rundll32.exe -ArgumentList 'url.dll,FileProtocolHandler', 'lazysh://theme?data=${data}'
-$deadline = [DateTime]::Now.AddSeconds(5)
-while ([DateTime]::Now -lt $deadline) {
-  foreach ($p in Get-CimInstance Win32_Process -Filter "Name='lazysh.exe'") { $seen[$p.ProcessId] = $p.CommandLine }
-}
-($seen.GetEnumerator() | ForEach-Object { '{0}: {1}' -f $_.Key, $_.Value }) -join ' || '`, 30_000)}`);
+    await runToExit('rundll32.exe', ['url.dll,FileProtocolHandler', `lazysh://theme?data=${Buffer.from(JSON.stringify(linked)).toString('base64url')}`], 30_000);
     const review = await appears('offer to review the linked theme', 'button', 'Review linked theme');
     expect(await appTheme()).not.toBe('custom');
     await browser.click(review);
