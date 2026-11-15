@@ -19,6 +19,10 @@ mod receiver {
         "web "
     );
 
+    /// The Chat composer's committed Japanese word (the reading U+306B U+307B U+3093 U+3054 was composed first),
+    /// staged in the terminal and sent once with its own Enter after the Private keyboard text.
+    const CHAT_TEXT: &str = "\u{65e5}\u{672c}\u{8a9e}";
+
     struct RawMode {
         fd: i32,
         original: libc::termios,
@@ -101,13 +105,19 @@ mod receiver {
         let mut total = 0;
         let expected = nonce
             .map(|nonce| format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
-        // Private keyboard mode then types one more fixed text, after the two soft line breaks.
-        let private = nonce
+        // Private keyboard mode then types one more fixed text, after the two soft line breaks, and the
+        // Chat composer's CJK text is sent last. Each full wire is acknowledged once, in order.
+        let stages: Vec<(&str, String)> = nonce
             .zip(expected.as_ref())
-            .map(|(nonce, expected)| format!("{expected}\r\x1b[13;2uowned-private-{nonce}"));
+            .map(|(nonce, expected)| {
+                let private = format!("{expected}\r\x1b[13;2uowned-private-{nonce}");
+                let chat = format!("{private}{CHAT_TEXT}\r");
+                vec![("PRIVATE", private), ("CHAT", chat)]
+            })
+            .unwrap_or_default();
         let mut observed = Vec::new();
         let mut acknowledged = false;
-        let mut private_acknowledged = false;
+        let mut stage_acknowledged = [false; 2];
         let mut announced = [0; 4];
         let mut bytes = [0; 512];
         loop {
@@ -152,16 +162,13 @@ mod receiver {
                         terminal.flush()?;
                         acknowledged = true;
                     }
-                    if !dpad
-                        && !private_acknowledged
-                        && private
-                            .as_ref()
-                            .is_some_and(|private| observed == private.as_bytes())
-                    {
-                        output.flush()?;
-                        writeln!(terminal, "IME_{nonce}_PRIVATE\r")?;
-                        terminal.flush()?;
-                        private_acknowledged = true;
+                    for (index, (tag, wire)) in stages.iter().enumerate() {
+                        if !dpad && !stage_acknowledged[index] && observed == wire.as_bytes() {
+                            output.flush()?;
+                            writeln!(terminal, "IME_{nonce}_{tag}\r")?;
+                            terminal.flush()?;
+                            stage_acknowledged[index] = true;
+                        }
                     }
                 }
             }
@@ -390,6 +397,75 @@ mod receiver {
             assert_eq!(stored, [expected.as_slice(), b"extra"].concat());
         }
 
+        /// What the receiver prints to the terminal for one stream of input bytes.
+        fn acknowledgements(nonce: &str, input: &[u8]) -> String {
+            let (mut stored, mut terminal) = (Vec::new(), Vec::new());
+            copy_bounded(
+                &mut Cursor::new(input),
+                &mut stored,
+                LIMIT,
+                Some(nonce),
+                false,
+                &mut terminal,
+            )
+            .unwrap();
+            assert_eq!(stored, input);
+            String::from_utf8(terminal).unwrap()
+        }
+
+        #[test]
+        fn chat_text_is_acknowledged_once_after_the_private_wire_text_and_enter() {
+            let nonce = "0123456789abcdef0123456789abcdef";
+            let private = format!(
+                "{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}\r\x1b[13;2uowned-private-{nonce}"
+            );
+            let chat = format!("{private}\u{65e5}\u{672c}\u{8a9e}\r");
+            assert_eq!(CHAT_TEXT, "\u{65e5}\u{672c}\u{8a9e}");
+            // One read that carries the whole wire acknowledges only its final stage.
+            assert_eq!(
+                acknowledgements(nonce, chat.as_bytes()),
+                format!("IME_{nonce}_CHAT\r\n")
+            );
+            // A staged word without its Enter, or only part of a character, is not delivered yet.
+            for unfinished in [
+                format!("{private}\u{65e5}\u{672c}\u{8a9e}"),
+                format!("{private}\u{65e5}\u{672c}"),
+                private.clone(),
+            ] {
+                assert!(!acknowledgements(nonce, unfinished.as_bytes()).contains("_CHAT"));
+            }
+            // A composing reading that leaked, a repeat, a missing character, no staging and a different word never match.
+            for invalid in [
+                format!("{private}\u{306b}\u{307b}\u{3093}\u{3054}\u{65e5}\u{672c}\u{8a9e}\r"),
+                format!("{private}\u{65e5}\u{672c}\u{8a9e}\u{65e5}\u{672c}\u{8a9e}\r"),
+                format!("{private}\u{65e5}\u{8a9e}\r"),
+                format!("{private}\r"),
+                format!("{private}\u{65e5}\u{672c}\u{8a9e}\r\r"),
+                format!("{private}\u{65e5}\u{672c}\u{8a9e}\nextra\r"),
+            ] {
+                assert!(!acknowledgements(nonce, invalid.as_bytes()).contains("_CHAT"));
+            }
+            // Later bytes never remove an acknowledgement already printed, and split reads still acknowledge once.
+            let (mut stored, mut terminal) = (Vec::new(), Vec::new());
+            copy_bounded(
+                &mut Cursor::new(&private)
+                    .chain(Cursor::new("\u{65e5}\u{672c}".as_bytes()))
+                    .chain(Cursor::new("\u{8a9e}\r".as_bytes()))
+                    .chain(Cursor::new(b"extra")),
+                &mut stored,
+                LIMIT,
+                Some(nonce),
+                false,
+                &mut terminal,
+            )
+            .unwrap();
+            assert_eq!(stored, [chat.as_bytes(), b"extra"].concat());
+            assert_eq!(
+                String::from_utf8(terminal).unwrap(),
+                format!("IME_{nonce}_PRIVATE\r\nIME_{nonce}_CHAT\r\n")
+            );
+        }
+
         #[test]
         fn private_keyboard_text_is_acknowledged_only_after_the_exact_full_wire() {
             let nonce = "0123456789abcdef0123456789abcdef";
@@ -397,19 +473,7 @@ mod receiver {
                 format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
             let lines = format!("{delivered}\r\x1b[13;2u").into_bytes();
             let typed = format!("{delivered}\r\x1b[13;2uowned-private-{nonce}").into_bytes();
-            let run = |input: &[u8]| {
-                let (mut stored, mut terminal) = (Vec::new(), Vec::new());
-                copy_bounded(
-                    &mut Cursor::new(input),
-                    &mut stored,
-                    LIMIT,
-                    Some(nonce),
-                    false,
-                    &mut terminal,
-                )
-                .unwrap();
-                String::from_utf8(terminal).unwrap()
-            };
+            let run = |input: &[u8]| acknowledgements(nonce, input);
             assert_eq!(run(&typed), format!("IME_{nonce}_PRIVATE\r\n"));
             // Reads that split the wire still acknowledge each stage once, in order.
             let (mut stored, mut terminal) = (Vec::new(), Vec::new());
