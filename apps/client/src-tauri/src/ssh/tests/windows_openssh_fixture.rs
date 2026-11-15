@@ -176,19 +176,26 @@ async fn verify(shell: Shell) {
     let authorized = directory.path().join("authorized_keys");
     fs::write(&authorized, user_key.public_key().to_openssh().unwrap()).unwrap();
     let port = owned_sshd::free_port();
-    let path = std::env::join_paths(
-        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-    )
-    .unwrap();
+    // A host with nothing but Windows and the companion on its PATH: the runner's own PATH (Git's `sh.exe`, for one) is not the host's.
+    let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+    let path = [
+        bin.clone(),
+        system.join("System32"),
+        system.clone(),
+        system.join(r"System32\WindowsPowerShell\v1.0"),
+    ]
+    .map(|directory| directory.display().to_string())
+    .join(";");
     let sshd = owned_sshd::OwnedSshd::start(
         directory.path(),
         port,
         &host_key,
-        &format!("AuthorizedKeysFile {}\n", owned_sshd::slashes(&authorized)),
-        &[
-            ("PATH", path.as_os_str()),
-            ("LAZYSH_STATE_DIR", state_dir.as_os_str()),
-        ],
+        &format!(
+            "AuthorizedKeysFile {}\nSetEnv \"PATH={path}\" \"LAZYSH_STATE_DIR={}\"\n",
+            owned_sshd::slashes(&authorized),
+            state_dir.display()
+        ),
+        &[],
     )
     .await;
     let app_state = AppState::new(directory.path().join("config")).unwrap();
