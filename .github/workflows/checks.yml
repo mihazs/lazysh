@@ -452,6 +452,13 @@ jobs:
           path: ${{ runner.temp }}/lazysh-herdr-native/stock-artifact/
           if-no-files-found: error
           retention-days: 3
+      # Last on purpose: the feature rebuilds target/debug/herdr, and both artifacts above are already sealed.
+      - name: Exercise the managed build's own application namespace with real servers
+        id: managed-namespace
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
+        run: |
+          export HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture"
+          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input acceptance::
 
   native-linux:
     needs: [changes, herdr-native]

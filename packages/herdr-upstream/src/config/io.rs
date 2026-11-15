@@ -1,3 +1,4 @@
+// Modified by lazysh: the optional `lazysh-managed` build has its own fixed application namespace; upstream license retained.
 use std::path::{Path, PathBuf};
 
 use tracing::warn;
@@ -20,7 +21,11 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
 ];
 
 pub fn app_dir_name() -> &'static str {
-    if cfg!(debug_assertions) {
+    // The managed build owns one fixed namespace in every profile, so it never shares
+    // configuration, state, sockets or logs with a stock Herdr on the same host.
+    if cfg!(feature = "lazysh-managed") {
+        "lazysh-herdr"
+    } else if cfg!(debug_assertions) {
         "herdr-dev"
     } else {
         "herdr"
@@ -41,56 +46,47 @@ pub fn state_dir() -> PathBuf {
     platform_state_dir()
 }
 
+/// `$HOME/<under_home>/<app>`, or `<temp>/<app><temp_suffix>` when HOME is unset.
+fn home_dir_or_temp(under_home: &str, temp_suffix: &str) -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(format!("{under_home}/{}", app_dir_name()))
+    } else {
+        std::env::temp_dir().join(format!("{}{temp_suffix}", app_dir_name()))
+    }
+}
+
 #[cfg(windows)]
-fn platform_config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("APPDATA") {
+fn windows_app_dir(env_var: &str, app_data: &str, under_home: &str, temp_suffix: &str) -> PathBuf {
+    if let Ok(dir) = std::env::var(env_var) {
         return PathBuf::from(dir).join(app_dir_name());
     }
     if let Ok(profile) = std::env::var("USERPROFILE") {
         return PathBuf::from(profile)
             .join("AppData")
-            .join("Roaming")
+            .join(app_data)
             .join(app_dir_name());
     }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(format!(".config/{}", app_dir_name()));
-    }
-    std::env::temp_dir().join(app_dir_name())
+    home_dir_or_temp(under_home, temp_suffix)
+}
+
+#[cfg(windows)]
+fn platform_config_dir() -> PathBuf {
+    windows_app_dir("APPDATA", "Roaming", ".config", "")
 }
 
 #[cfg(not(windows))]
 fn platform_config_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(format!(".config/{}", app_dir_name()))
-    } else {
-        std::env::temp_dir().join(app_dir_name())
-    }
+    home_dir_or_temp(".config", "")
 }
 
 #[cfg(windows)]
 fn platform_state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("LOCALAPPDATA") {
-        return PathBuf::from(dir).join(app_dir_name());
-    }
-    if let Ok(profile) = std::env::var("USERPROFILE") {
-        return PathBuf::from(profile)
-            .join("AppData")
-            .join("Local")
-            .join(app_dir_name());
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(format!(".local/state/{}", app_dir_name()));
-    }
-    std::env::temp_dir().join(format!("{}-state", app_dir_name()))
+    windows_app_dir("LOCALAPPDATA", "Local", ".local/state", "-state")
 }
 
 #[cfg(not(windows))]
 fn platform_state_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(format!(".local/state/{}", app_dir_name()))
-    } else {
-        std::env::temp_dir().join(format!("{}-state", app_dir_name()))
-    }
+    home_dir_or_temp(".local/state", "-state")
 }
 
 /// Normalize UTF-8 byte-order marks in config text.
@@ -1040,20 +1036,27 @@ mouse_captur = true
         assert_eq!(loaded.invalid_sections, vec!["ui"]);
     }
 
-    #[test]
-    fn startup_config_accepts_legacy_agent_panel_scope_without_warning() {
+    /// Loads the startup config from a temporary file named after `label`.
+    fn load_startup_config(label: &str, content: impl AsRef<[u8]>) -> LoadedConfig {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "herdr-config-legacy-agent-panel-scope-{}.toml",
-            std::process::id()
-        ));
-        std::fs::write(&path, "[ui]\nagent_panel_scope = \"all\"\n").unwrap();
+        let path =
+            std::env::temp_dir().join(format!("herdr-config-{label}-{}.toml", std::process::id()));
+        std::fs::write(&path, content).unwrap();
         std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
 
         let loaded = Config::load();
 
         std::env::remove_var(CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_file(path);
+        loaded
+    }
+
+    #[test]
+    fn startup_config_accepts_legacy_agent_panel_scope_without_warning() {
+        let loaded = load_startup_config(
+            "legacy-agent-panel-scope",
+            "[ui]\nagent_panel_scope = \"all\"\n",
+        );
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
     }
@@ -1178,22 +1181,10 @@ mouse_capture = false
 
     #[test]
     fn config_load_recovers_from_a_mid_file_bom() {
-        let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "herdr-config-mid-file-bom-{}.toml",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
+        let loaded = load_startup_config(
+            "mid-file-bom",
             b"onboarding = false\n\xEF\xBB\xBF[terminal]\ndefault_shell = \"pwsh.exe\"\n",
-        )
-        .unwrap();
-        std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
-
-        let loaded = Config::load();
-
-        std::env::remove_var(CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_file(path);
+        );
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
         assert_eq!(loaded.config.terminal.default_shell, "pwsh.exe");
