@@ -406,14 +406,23 @@ actual('actual Windows installed GUI opens a lazysh:// theme link through the sh
     expect(await find('button', 'Review linked theme')).toBeUndefined();
     // Nothing is registered by the test: the handler is the one the NSIS installer wrote for this installation.
     expect(sameImage(await registeredProtocolHandler(), installed)).toBe(true);
-    const started = performance.now();
-    await runToExit('rundll32.exe', ['url.dll,FileProtocolHandler', `lazysh://theme?data=${Buffer.from(JSON.stringify(linked)).toString('base64url')}`], 30_000);
-    console.info(`DIAG rundll32 exited after ${Math.round(performance.now() - started)}ms`);
-    for (let i = 0; i < 12; i++) {
-      const rows = (await processTable()).filter(row => /lazysh|rundll32/i.test(row.path ?? ''));
-      console.info(`DIAG t+${i * 1000}ms ${JSON.stringify(rows.map(row => ({ pid: row.pid, parent: row.parent, path: row.path, created: row.created })))}`);
-      console.info(`DIAG dom ${JSON.stringify(await browser.script("return {review:[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Review linked theme'),aside:document.querySelector('aside[aria-label]')?.outerHTML?.slice(0,300)??null}"))}`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    const reviewShown = async () => (await browser.script("return [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Review linked theme')")) as boolean;
+    for (const method of ['rundll32', 'cmdstart', 'startprocess', 'explorer']) {
+      const url = `lazysh://theme?data=${Buffer.from(JSON.stringify({ ...linked, name: `Linked ${method}` })).toString('base64url')}`;
+      const trace = await powershell(String.raw`
+$null = Register-CimIndicationEvent -ClassName Win32_ProcessStartTrace -SourceIdentifier trace
+$url = ${quote(url)}
+switch (${quote(method)}) {
+  'rundll32' { Start-Process rundll32.exe -ArgumentList 'url.dll,FileProtocolHandler', $url -Wait }
+  'cmdstart' { cmd.exe /c start "" $url }
+  'startprocess' { Start-Process $url }
+  'explorer' { Start-Process explorer.exe -ArgumentList $url }
+}
+Start-Sleep -Seconds 6
+$seen = Get-Event -SourceIdentifier trace | ForEach-Object { $e = $_.SourceEventArgs.NewEvent; '{0}:{1}<-{2}' -f $e.ProcessName, $e.ProcessID, $e.ParentProcessID }
+Unregister-Event -SourceIdentifier trace
+($seen -join ' ')`, 90_000);
+      console.info(`DIAG ${method}: started ${trace}; review shown=${await reviewShown()}`);
     }
     const review = await appears('offer to review the linked theme', 'button', 'Review linked theme');
     expect(await appTheme()).not.toBe('custom');
