@@ -48,7 +48,7 @@ export const packageMaximumBytes = (target: ArtifactTarget, extension: string) =
   (packageBudgetsMiB[target]?.[extension] ?? 2048) * MiB;
 export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64',
   ...Object.keys(companionTargets) as CompanionTarget[]];
-type Identity = { sha: string; version: string };
+export type Identity = { sha: string; version: string };
 type Signing = 'unsigned' | 'ad-hoc' | 'signed';
 type ArtifactFile = { name: string; bytes: number; sha256: string };
 export type ArtifactReceipt = Identity & {
