@@ -1687,6 +1687,9 @@ jobs:
         # Exact Herdr pane focus runs the current-source companion.
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
+          # The companion's `herdr-events` stream against an owned real Herdr: a renamed case must not pass with zero tests.
+          cargo test --locked -p lazysh-agent --test herdr_events -- --list --ignored | grep -c ': test$' | grep -Fx 1
+          cargo test --locked -p lazysh-agent --test herdr_events -- --ignored
           # A renamed case must not turn the local attach cases into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored local::attach_tests::runtime::real_ | grep -c ': test$' | grep -Fx 4
           # A renamed case must not turn the local-session cases into a zero-test pass.

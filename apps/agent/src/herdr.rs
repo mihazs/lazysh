@@ -173,6 +173,10 @@ async fn focus(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), pane: &str) -
         }
     }
 }
+/// A server name the companion will look up; the same bound as the app's.
+pub(crate) fn valid_session(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 200 && !name.chars().any(char::is_control)
+}
 /// The endpoint (Unix socket path or Windows pipe name) of the one running Herdr server called
 /// `name`, from Herdr's own session list.
 pub(crate) fn running_endpoint(name: &str, cancelled: Arc<AtomicBool>) -> Result<String> {
@@ -185,11 +189,7 @@ pub(crate) fn running_endpoint(name: &str, cancelled: Arc<AtomicBool>) -> Result
     socket_path(&bytes, name, endpoint)
 }
 pub fn focus_pane(name: &str, pane: &str) -> Result<Value> {
-    if name.is_empty()
-        || name.len() > 200
-        || name.chars().any(char::is_control)
-        || !lazysh_common::valid_herdr_id(pane, Some('p'))
-    {
+    if !valid_session(name) || !lazysh_common::valid_herdr_id(pane, Some('p')) {
         return Err(invalid());
     }
     let started = Instant::now();

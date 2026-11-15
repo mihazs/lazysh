@@ -6,6 +6,7 @@ pub mod devices;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod directory_listing;
 pub mod herdr;
+pub mod herdr_events;
 pub mod herdr_pane_input;
 pub mod hook_setup;
 pub mod hooks;
@@ -457,6 +458,19 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
     };
     event.validate()?;
     Ok(Some(event))
+}
+
+/// A channel whose sender is dropped when this process's stdin closes: how a stream command learns that
+/// the exec channel it serves went away.
+pub(crate) fn stdin_closed() -> std::sync::mpsc::Receiver<()> {
+    let (closed_tx, closed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = [0; 64];
+        let mut stdin = io::stdin();
+        while matches!(stdin.read(&mut buffer), Ok(count) if count > 0) {}
+        drop(closed_tx);
+    });
+    closed
 }
 
 /// The terminal pane a hook runs in: tmux's `TMUX_PANE`, else Zellij's session and terminal pane as `zellij:<session>:<pane>`,
