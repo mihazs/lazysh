@@ -3000,7 +3000,7 @@ pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
 pub(crate) struct ExecOutput {
     pub(crate) status: Option<u32>,
     pub(crate) stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 impl ExecOutput {
     /// The output of a command that had to succeed.
@@ -3833,7 +3833,6 @@ mod tests {
     mod file_download_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
-    #[cfg(unix)]
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
     #[cfg(unix)]
@@ -3848,6 +3847,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "transcript_watch_fixture.rs"]
     mod transcript_watch_fixture;
+    #[cfg(windows)]
+    #[path = "windows_openssh_fixture.rs"]
+    mod windows_openssh_fixture;
     use super::test_support::*;
     fn fixture_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
