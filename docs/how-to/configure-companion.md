@@ -23,15 +23,13 @@ lazysh-agent snapshot --limit 50
 
 For this source/PATH installation, make `lazysh-agent` available on the noninteractive SSH PATH. The shell commands below assume that PATH installation; with a managed-only installation, use the app controls or invoke its verified absolute executable path explicitly. A new store can return an empty session list; that confirms a snapshot read, not a running agent.
 
-## Update the companion on the host (planned)
+## Update the companion on the host
 
-**Not released yet.** Epic [#1441](https://github.com/mihazs/lazysh/issues/1441) moves the update onto the host; [ADR 0003](../architecture/adr-0003-host-side-companion-update.md) fixes the design. Until it ships, **Update companion** downloads the executable on the device as described above.
-
-What will change, and what stays the same:
+**Update companion** runs on the host, as described in [Install on the remote host](#install-on-the-remote-host); [ADR 0003](../architecture/adr-0003-host-side-companion-update.md) fixes the design. What it does, and what stays the same:
 
 - **No download on the phone.** The app fetches only the small release metadata (at most 344,064 bytes) and tells the host which version, size and SHA-256 to install. The host downloads the release over its own network, over HTTPS with certificate verification, checks the size and the pinned SHA-256 before it runs anything, tests the new executable, keeps the previous one and replaces the managed executable atomically. The host needs outbound HTTPS to GitHub, no `sudo` and no extra credentials. It only ever writes the user's managed `lazysh/companion` location, never a PATH copy.
-- **Old companions.** A companion without the new `update` command (for example 1.28.0) is updated by a short fixed script that the app runs over SSH: `sh` with `curl` or GNU `wget` on Linux and macOS, PowerShell on Windows. It needs `curl` or GNU `wget` and `sha256sum` or `shasum`.
-- **Host has no internet.** The app then offers a separate, clearly labelled **Install through this device** action, which keeps today's behavior (the device downloads about 9 to 12 MB and uploads it over SFTP). It is never used unless you choose it.
+- **Old companions.** A companion without the `update` command (for example 1.28.0) is updated by a short fixed script that the app runs over SSH: `sh` with `curl` or GNU `wget` on Linux and macOS. It needs `curl` or GNU `wget` and `sha256sum` or `shasum`. A PowerShell version for Windows hosts is not available yet ([#490](https://github.com/mihazs/lazysh/issues/490)).
+- **Host has no internet.** The app offers a separate, clearly labelled **Install through this device** action, which keeps the previous behavior (the device downloads about 9 to 12 MB and uploads it over SFTP). It is never used unless you choose it.
 - **From the host terminal**, with a PATH or managed executable that has the command:
 
   ```sh
@@ -42,8 +40,8 @@ What will change, and what stays the same:
   lazysh-agent update --status --json
   ```
 
-  Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
-- **Automatic updates.** A companion setting chooses `off`, `notify` (the host checks for a newer release at most once per interval, the app shows an update-available badge, nothing is replaced) or `install` (the planned default, on since 2026-11-13: replaces when a newer release is out or a newer lazysh app connects, only when no agent turn is active and that version has not already failed). `lazysh-agent auto-update enable` can add a user-level timer (systemd user timer, launchd agent or Scheduled Task); it never uses `sudo`. See [host settings](../companion-settings.md#companion-updates-planned).
+  Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract) and the [companion update reference](../reference/companion-update.md). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
+- **Automatic updates (planned, not released).** A companion setting will choose `off`, `notify` (the host checks for a newer release at most once per interval, the app shows an update-available badge, nothing is replaced) or `install` (the planned default, on since 2026-11-13: replaces when a newer release is out or a newer lazysh app connects, only when no agent turn is active and that version has not already failed). `lazysh-agent auto-update enable` will be able to add a user-level timer (systemd user timer, launchd agent or Scheduled Task); it never uses `sudo`. See [host settings](../companion-settings.md#companion-updates-planned).
 
 ## Open host links on your device (optional)
 

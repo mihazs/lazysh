@@ -48,9 +48,10 @@ installation keeps legacy PATH behavior. Installation never starts automatically
 or changes host permissions or hooks. See [companion setup](https://github.com/mihazs/lazysh/blob/main/docs/companion.md) for the
 explicit action and uncertain-result semantics.
 
-Planned ([#1441](https://github.com/mihazs/lazysh/issues/1441)): the update will run on the host
-instead of downloading on the phone, and the companion will gain `lazysh-agent update`.
-A Windows companion (`lazysh-<version>-windows-agent-x64.exe`) is already published but
+The companion also has `lazysh-agent update` to check for, install and roll back a release from
+the host itself ([reference](reference/companion-update.md)); automatic updates are planned
+([#1446](https://github.com/mihazs/lazysh/issues/1446)). A Windows companion
+(`lazysh-<version>-windows-agent-x64.exe`) is already published but
 cannot be installed from the app yet. See [ADR 0003](architecture/adr-0003-host-side-companion-update.md)
 and [the release asset contract](release-artifacts.md#companion-assets-are-an-updater-contract).
 
