@@ -531,7 +531,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
 | Inventory of host simulators, emulators and devices | implemented | implemented | `apps/agent/src/devices.rs:362-363,476-483`; client `apps/client/src/DevicePanel.tsx`. Host-side real emulator inventory and screenshot `apps/agent/src/devices/tests.rs:360` (NAA). Mocked `e2e/device-locales.spec.ts:6`. | Client-side runtime case; iOS simulator on a Mac host. |
-| Video streaming | partial | partial | iOS `devices/idb.rs:331`; Android screenrecord is view-only (`devices/android.rs:1,139`). | Android touch on video; CI video test (#19). |
+| Video streaming | partial | partial | iOS `devices/idb.rs:331`; Android screenrecord is view-only (`devices/android.rs:1,145`) and a screenshot stands in for a video frame that has not come for a second (`android.rs` `pipeline`, synthetic tests; Waydroid run; emulator case `owned_emulator_video_delivers_frames_while_idle_and_after_a_change` on `main` only). | Android touch on video; a green emulator run of the video case (#19). |
 | Touch and button control | partial | partial | `DevicePanel.tsx:233-235,451-460,526-532`; `devices.rs:570-650`. Android control through screenshots only. | Real-device control test (#19). |
 | Boot, reboot and shutdown | implemented | implemented | `DevicePanel.tsx:462-474,555-558`; `devices.rs:102-118,598-684`. | Real lifecycle test (#19). |
 | Agent accessibility actions | missing | missing | No accessibility tree or actions. | #19. |

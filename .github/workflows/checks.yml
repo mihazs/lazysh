@@ -1026,7 +1026,8 @@ jobs:
             fdroid_result=$?;
             if (( fdroid_result != 0 )); then exit "$fdroid_result"; fi;
             LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
-            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
+            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture &&
+            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change -- --ignored --exact --nocapture;
             exit $?;
             '
       - name: Save Gradle dependency and wrapper downloads from main
@@ -1443,6 +1444,9 @@ jobs:
       - *android-owned-cache
       - run: bun install --frozen-lockfile
       - *android-owned-kvm
+      - name: Install FFmpeg for the Android video case
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'auxiliary'
+        run: sudo sh .github/scripts/apt-install.sh ffmpeg
       - *android-runtime-emulator
       - uses: actions/upload-artifact@v4
         if: always()

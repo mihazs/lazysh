@@ -353,6 +353,9 @@ exit "$SDK_EXIT"
   // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
   expect(stdout).toBe(`android error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
   if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity','appium'].includes(owner)?'':'Unknown Android runtime owner\n');
+  // The video case runs only after the screenshot case has passed.
+  const sdkCases = ['devices::tests::android_owned_emulator_inventory_and_screenshot',
+    ...(sdk === 0 ? ['devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change'] : [])];
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
@@ -360,7 +363,7 @@ exit "$SDK_EXIT"
   const actualInvocations=await Bun.file(invocations).exists()?(await readFile(invocations,'utf8')).trim().split('\n'):[];
   expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?['run test:android-tmux']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='appium'?['run test:mobile-e2e:ci']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
     'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),
-    ...(sdkExpected?['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture']:[]),
+    ...(sdkExpected?sdkCases.map(name=>`cargo test --locked -p lazysh-agent --lib ${name} -- --ignored --exact --nocapture`):[]),
   ]:[]);
   expect(await Bun.file(sdkSerial).exists()).toBe(sdkExpected);
   expect(await Bun.file(sdkArguments).exists()).toBe(sdkExpected);
@@ -368,7 +371,7 @@ exit "$SDK_EXIT"
     expect(await readFile(sdkSerial, 'utf8')).toBe('emulator-5580\n');
     expect((await readFile(sdkArguments, 'utf8')).split('\0')).toEqual([
       'test', '--locked', '-p', 'lazysh-agent', '--lib',
-      'devices::tests::android_owned_emulator_inventory_and_screenshot',
+      sdkCases.at(-1),
       '--', '--ignored', '--exact', '--nocapture', '',
     ]);
   }
