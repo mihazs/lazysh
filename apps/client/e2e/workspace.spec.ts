@@ -115,7 +115,8 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await page.addInitScript(({geometry,sessionNames})=>{
     const calls:string[]=[];const state={updated:false,installed:false,offline:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
-      calls.push(command);
+      // Spaces reads where the guarded client is (`herdr_chat` observe); that read grants no input, so it is recorded apart from the authority calls the tests forbid.
+      calls.push(command==='herdr_chat' && (args.action as {kind?:string}|undefined)?.kind==='observe'?'herdr_client_observe':command);
       // Herdr display replies can be slowed to mimic a network round trip.
       const herdrReply=()=>state.herdrDelay && args.sessionId==='owned-navigation-herdr'?new Promise(resolve=>setTimeout(resolve,state.herdrDelay)):undefined;
       if(command==='list_hosts'){const hosts=[{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];return sessionNames?sessionNames.map((name,index)=>({...hosts[index%2],id:`crowded-host-${index}`,name})):hosts;}
