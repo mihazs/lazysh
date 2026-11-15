@@ -1419,6 +1419,16 @@ describe('the New agent entry',()=>{
     multiplexer_launch:()=>({paneId:'%9'}),
   };
   const entries=()=>screen.queryAllByRole('button',{name:'New agent'});
+  /** Opens the dialog from the first entry, picks Codex and the folder, and stops at the review. */
+  const reviewLaunch=async(folder:string)=>{
+    fireEvent.click(entries()[0]);await advance(0);
+    const dialog=screen.getByRole('dialog',{name:'New agent'});
+    fireEvent.change(within(dialog).getByRole('combobox',{name:'Agent'}),{target:{value:'codex'}});
+    fireEvent.change(within(dialog).getByRole('textbox',{name:'Host folder'}),{target:{value:folder}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
+    return dialog;
+  };
+  const confirmLaunch=async(dialog:HTMLElement)=>{fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);};
   const quiet=(extra:Parameters<typeof view>[0]={})=>view({herdrSession:undefined,...extra});
 
   it('is offered in the tmux session the terminal is attached to, in place of the staged folder command',async()=>{
@@ -1426,13 +1436,9 @@ describe('the New agent entry',()=>{
     render(<AgentView sessionId="ssh" shown tmux tmuxSession="work" onShowTerminal={()=>{}}/>);await advance(0);
     // The header's icon and the empty state's button.
     expect(entries()).toHaveLength(2);expect(screen.queryByRole('button',{name:'Start in a folder'})).toBeNull();
-    fireEvent.click(entries()[0]);await advance(0);
-    const dialog=screen.getByRole('dialog',{name:'New agent'});
-    fireEvent.change(within(dialog).getByRole('combobox',{name:'Agent'}),{target:{value:'codex'}});
-    fireEvent.change(within(dialog).getByRole('textbox',{name:'Host folder'}),{target:{value:'/work/app'}});
-    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
+    const dialog=await reviewLaunch('/work/app');
     expect(calls('multiplexer_launch')).toEqual([]);
-    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);
+    await confirmLaunch(dialog);
     expect(calls('multiplexer_launch')).toEqual([{sessionId:'ssh',multiplexer:{kind:'tmux',name:'work'},request:{target:{type:'directory',label:'app',directory:'/work/app'},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/)}}}]);
     expect(screen.queryByRole('dialog')).toBeNull();
     // Starting the agent never types into a pane: tmux itself makes the new window current.
@@ -1451,6 +1457,30 @@ describe('the New agent entry',()=>{
     expect(entries()).toHaveLength(0);expect(screen.getByRole('button',{name:'Start in a folder'})).toBeTruthy();
   });
 
+  it('opens a new terminal session in place of the staged folder command when the app can open one and there is no multiplexer',async()=>{
+    host('codex',[],'missing',[[]]);
+    answering({...launching,
+      terminal_launch_plan:()=>({steps:[{stage:'terminal',argv:['sh'],command:"'sh' '-c'"}]}),
+      terminal_launch_prepare:()=>({}),
+    });
+    const openTerminal=vi.fn().mockResolvedValue(undefined);
+    render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}} onOpenTerminal={openTerminal}/>);await advance(0);
+    expect(entries()).toHaveLength(2);expect(screen.queryByRole('button',{name:'Start in a folder'})).toBeNull();
+    const dialog=await reviewLaunch('/work/app');
+    expect(openTerminal).not.toHaveBeenCalled();
+    await confirmLaunch(dialog);
+    const request={target:{type:'directory',label:'app',directory:'/work/app'},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/)}};
+    expect(calls('terminal_launch_prepare')).toEqual([{sessionId:'ssh',request}]);
+    expect(openTerminal).toHaveBeenCalledExactlyOnceWith(request);
+    expect(calls('multiplexer_launch')).toEqual([]);expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps the staged folder command in a Herdr that predates the launcher even when the app can open a terminal',async()=>{
+    server({focus:'w2E:p1'});
+    render(view({onOpenTerminal:vi.fn()}));await advance(0);
+    expect(entries()).toHaveLength(0);
+  });
+
   it('is offered under Herdr only when its launcher is available, and focuses the new workspace',async()=>{
     server({focus:'w2E:p1'});
     const rendered=render(quiet());await advance(0);
@@ -1458,12 +1488,7 @@ describe('the New agent entry',()=>{
     rendered.unmount();
     answering({...launching,herdr_workspace_plan:()=>({steps:[{stage:'workspace',argv:['herdr'],command:"'herdr' 'workspace' 'create'"}]}),herdr_workspace_create:()=>({workspaceId:'wNEW',paneId:'wNEW:p1'}),herdr_action:()=>({})});
     render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" herdrLaunch onEnterHerdr={vi.fn()} onShowTerminal={()=>{}}/>);await advance(0);
-    fireEvent.click(entries()[0]);await advance(0);
-    const dialog=screen.getByRole('dialog',{name:'New agent'});
-    fireEvent.change(within(dialog).getByRole('combobox',{name:'Agent'}),{target:{value:'codex'}});
-    fireEvent.change(within(dialog).getByRole('textbox',{name:'Host folder'}),{target:{value:'/work/one'}});
-    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
-    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);
+    await confirmLaunch(await reviewLaunch('/work/one'));
     expect(calls('herdr_workspace_create')).toHaveLength(1);expect(calls('multiplexer_launch')).toEqual([]);
     expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusWorkspace',target:'wNEW'}}]);
   });

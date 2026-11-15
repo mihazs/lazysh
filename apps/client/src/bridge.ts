@@ -111,6 +111,9 @@ export const api = {
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30 },onEvent);
   },
+  /** A new terminal on the same connection that runs a launched agent in its folder; native builds the command from the validated request. */
+  agentTerminal: (sessionId: string, request: unknown, onEvent: (event: SshEvent) => void) =>
+    createRemoteSession('agent_terminal', { sessionId, request, cols: 100, rows: 30 }, onEvent),
   listHosts: () => invoke<Host[]>("list_hosts"),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),
   deleteHost: (hostId: string) => invoke<void>("delete_host", { hostId }),

@@ -264,7 +264,7 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 | Situation | Agent view shows |
 | --- | --- |
-| No agent detected in the pane (tmux, Zellij or a plain shell) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer, and **New agent** under tmux or Zellij (see [New agent](#new-agent)) or **Start in a folder** in a plain shell (see [Starting an agent from the empty state](#starting-an-agent-from-the-empty-state)); the last-reported list when other panes have agents. |
+| No agent detected in the pane (tmux, Zellij or a plain shell) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer, and **New agent** under tmux, Zellij or in a plain shell, where it opens a new terminal session (see [New agent](#new-agent)); the last-reported list when other panes have agents. |
 | Herdr: the focused pane runs an agent with one reported conversation | That conversation, opened by itself and re-linked when focus or the agent changes. |
 | Herdr: the focused pane runs no agent, others do | The live agents of the server, with the reason; a pick is marked **Not this pane** and dropped when focus moves. |
 | Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher), **Start in a new worktree** and **Show terminal**. Without the launcher (a host companion that predates it), **Start in a folder** replaces the last two launcher buttons. |
@@ -283,7 +283,7 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
   yes. It shows the exact commands for review before anything runs; once created, the Agent view
   focuses the new workspace and links to its agent as soon as Herdr reports the session. See
   [Herdr spaces](multiplexers.md#create-workspaces-worktrees-and-agents) for the dialog's branch, base and path rules.
-- **Start in a folder** (plain shells, and Herdr without the launcher; tmux and Zellij offer [New agent](#new-agent) instead): choose Claude
+- **Start in a folder** (Herdr without the launcher only; every other session offers [New agent](#new-agent) instead): choose Claude
   Code or Codex and a host folder (typed, a known folder, or browsed over SFTP). The review step shows
   the exact command, `cd '<folder>' && claude` or `… && codex` with the folder shell-quoted, and
   **Stage in the terminal** puts it in the terminal composer and shows the terminal. Nothing runs
@@ -293,7 +293,7 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 ### New agent
 
 **New agent** starts a coding agent without typing a command. It is the plus button in the Agent
-view's header (always there when the session's multiplexer can launch) and a button in the empty
+view's header (always there when the session can launch: a multiplexer, or a plain terminal over SSH) and a button in the empty
 states, on phone and desktop. It opens a dialog that follows the session's multiplexer:
 
 | Session | Under the hood |
@@ -301,7 +301,7 @@ states, on phone and desktop. It opens a dialog that follows the session's multi
 | tmux | a new window of the attached session, running the agent (`tmux new-window -c <folder> -- <agent> [<prompt>]`), which becomes the session's current window |
 | Zellij | a new pane of the attached session, running the agent (`zellij run --cwd <folder> -- <agent> [<prompt>]`) |
 | Herdr (host companion with the launcher) | a new workspace plus `herdr agent start`, as in [Herdr spaces](multiplexers.md#create-workspaces-worktrees-and-agents), then the Agent view focuses the new workspace |
-| No multiplexer | not offered yet: **Start in a folder** stages `cd <folder> && <agent>` for review |
+| No multiplexer | a new terminal session on the same host and SSH connection that runs the agent in the folder (`cd <folder> && exec <agent> [<prompt>]`, every word a literal argument), opened as its own session tab and shown in its Agent view |
 
 The dialog asks for, in this order:
 
@@ -326,10 +326,35 @@ After a launch the Agent view stays where it is and follows the new agent as soo
 interval; under Herdr the new workspace is focused and linked). The terminal keeps running and is
 one tap away; the launcher never types into an existing pane.
 
-Not covered yet: opening a plain terminal session in the folder when no multiplexer runs, resuming
-an earlier session through the launcher ([#1545](https://github.com/mihazs/lazysh/issues/1545)),
-rmux ([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions
-([#1133](https://github.com/mihazs/lazysh/issues/1133)) and an Android runtime case.
+#### With no multiplexer
+
+A session that is not attached to tmux, Zellij or Herdr has no window to open, so **New agent**
+opens a new terminal session instead. The dialog is the same, and the review lists the same checks
+(the agent with `command -v`, then `mkdir -p`, `test -d` or `git worktree add`) followed by one last
+step, **Open a terminal session in the folder running the agent**: the exact command the host's
+login shell will read, `sh -c 'cd "$1" && shift && exec "$@"' sh <folder> <agent> [<prompt>]`, with
+the folder, the agent and the prompt each one quoted word, so none is parsed as shell syntax. A
+prompt may hold line breaks. Nothing runs, and no session opens, until **Create and start agent** is
+confirmed; the checks run first and a failure stops before the terminal opens, naming what was kept.
+
+The new terminal is a second terminal channel on the connection of the session you were in (no
+second login), named `<host> / <label>`; it opens as its own session tab, the active one, in its
+**Agent view**, and the terminal of the session you started from is untouched and receives no input.
+The agent is the new session's only process, so the session closes when the agent exits. The agent
+is found through the same login shell as the `command -v` check, unlike tmux and Zellij, which start it
+with their server's environment.
+This was verified over plain SSH against an owned OpenSSH server; a session reached through Mosh or
+Eternal Terminal, Android and Apple builds have not been tried.
+
+Until the host companion's hook report can be tied to that terminal ([#1867](https://github.com/mihazs/lazysh/issues/1867):
+a plain terminal has no pane identity), the new session's Agent view lists the agent's report and you
+pick it; it does not follow the agent by itself.
+
+Not covered yet: resuming an earlier session through the launcher
+([#1545](https://github.com/mihazs/lazysh/issues/1545)), rmux
+([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions
+([#1133](https://github.com/mihazs/lazysh/issues/1133)) and an Android runtime case
+([#1683](https://github.com/mihazs/lazysh/issues/1683)).
 
 ## Per-agent capabilities
 

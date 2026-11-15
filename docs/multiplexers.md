@@ -316,6 +316,34 @@ needs [#1140](https://github.com/mihazs/lazysh/issues/1140), tracked in [#1679](
 `herdr_agent_kinds` lists every supported agent with `installed` (the same `command -v` probe), so
 the launcher can show a missing agent as unavailable; the Herdr dialogs offer only the installed ones.
 
+### Launch an agent in a new terminal session (no multiplexer)
+
+A session with no multiplexer has no window to open, so the same plan ends in a new SSH terminal
+([#1684](https://github.com/mihazs/lazysh/issues/1684)). Three commands carry it:
+`terminal_launch_plan(request)` returns the plan, `terminal_launch_prepare(sessionId, request)` runs
+every step before the last (the agent check, `mkdir -p` or `test -d`, `git worktree add`) and returns
+the same outcome as `multiplexer_launch` (what exists, or the stage that failed), and
+`agent_terminal(sessionId, request, cols, rows)` opens the terminal on the session's SSH connection.
+The renderer shows the plan, and calls the second and third only after the user confirmed it.
+
+```sh
+command -v -- <agent>                                          # as above
+mkdir -p -- <directory> | test -d <directory> | git … worktree add …
+sh -c 'cd "$1" && shift && exec "$@"' sh <directory> <agent> [<prompt>]   # the terminal's command
+```
+
+`agent_terminal` builds that command itself from the validated request, never from a renderer
+string: it opens a PTY channel and runs it as the channel's command, so the login shell reads the
+fixed wrapper and each other word as one `login_word` (the quoting that POSIX shells and fish read
+alike), and `sh` runs the folder and the agent as `"$@"`. The agent replaces `sh`, so it is the
+session's only process and the session ends when it exits. Because it runs through the SSH login
+shell, the agent comes from the same `PATH` as the `command -v` check. The prompt rules are the
+tmux and Zellij ones (line breaks allowed). The real-OpenSSH fixture
+`openssh_agent_terminal_runs_the_agent_in_its_folder` (ignored by default; run it with
+`cargo test -p lazysh --lib openssh_agent_terminal -- --ignored`) starts a stub agent through
+`terminal_launch_prepare` and `agent_terminal` against an owned OpenSSH server, in a folder and with
+a prompt full of shell syntax, and checks the folder, the arguments and that nothing was executed.
+
 ## Tab strip
 
 An attached tmux, Herdr or Zellij terminal shows its tabs in one native row above the terminal (`MultiplexerTabStrip`). One backend-agnostic model feeds it (`multiplexerTabs.ts`: title, active, needs attention, agent state, and the guarded command a chip runs), read by `useMultiplexerStrip`:

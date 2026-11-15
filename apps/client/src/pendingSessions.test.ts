@@ -22,6 +22,9 @@ it('allows only late creation-result cleanup and refuses to cancel a retained re
   invoke.mockClear();
   await disposeStaleSessionResult('local_connect',{sessionId:'local:late-created'});
   expect(invoke).toHaveBeenCalledExactlyOnceWith('local_disconnect',{sessionId:'local:late-created'});
+  invoke.mockClear();
+  await disposeStaleSessionResult('agentTerminal',{sessionId:'late-agent-terminal'});
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('disconnect',{sessionId:'late-agent-terminal'});
 });
 it('disables queued terminal replay before native teardown returns',async()=>{
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:'1'});

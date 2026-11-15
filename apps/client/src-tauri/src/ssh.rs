@@ -3707,6 +3707,38 @@ pub async fn attach_multiplexer(
         })
         .await
 }
+/// A new terminal on the same SSH connection that runs a launched agent in its folder, for a
+/// session without a multiplexer. The command is built from the validated launch request, never
+/// taken from the renderer.
+#[tauri::command]
+pub async fn agent_terminal(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    request: crate::herdr_create::CreateRequest,
+    cols: u32,
+    rows: u32,
+    events: Channel<SshEvent>,
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            check_size(cols, rows)?;
+            let command = crate::herdr_create::terminal_command(&request)?;
+            let parent = state.session(&session_id).await?;
+            let (channel, initial) =
+                open_terminal_for(&parent.handle, &lease, cols, rows, Some(command)).await?;
+            spawn_terminal(
+                &state,
+                lease.clone(),
+                parent.handle.clone(),
+                channel,
+                initial,
+                events,
+            )
+            .await
+        })
+        .await
+}
 #[allow(clippy::too_many_arguments)]
 async fn attach_tmux_inner(
     state: &AppState,
@@ -3770,6 +3802,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "agent_board_fixture.rs"]
     mod agent_board_fixture;
+    #[cfg(unix)]
+    #[path = "agent_terminal_fixture.rs"]
+    mod agent_terminal_fixture;
     #[cfg(unix)]
     #[path = "client_environment_fixture.rs"]
     mod client_environment_fixture;
@@ -6909,9 +6944,17 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH; run explicitly for interoperability"]
+    async fn openssh_agent_terminal_runs_the_agent_in_its_folder() {
+        openssh_interoperability(OpenSshCheck::AgentTerminal).await;
+    }
+
+    #[cfg(unix)]
     enum OpenSshCheck {
         Files,
         ClientEnvironment,
+        AgentTerminal,
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Mosh,
         #[cfg(target_os = "linux")]
@@ -6988,6 +7031,8 @@ mod tests {
             openssh_tool_environment(dir.path(), binary, "mosh-server")
         } else if matches!(check, OpenSshCheck::ClientEnvironment) {
             client_environment_fixture::environment(dir.path())
+        } else if matches!(check, OpenSshCheck::AgentTerminal) {
+            agent_terminal_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::AccountUsage) {
             account_usage_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::CompanionInstall) {
@@ -7062,6 +7107,10 @@ mod tests {
         let id = connected.session_id;
         if matches!(check, OpenSshCheck::ClientEnvironment) {
             client_environment_fixture::verify(&app.state(), &host, &user_key).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::AgentTerminal) {
+            agent_terminal_fixture::verify(&app, &id, dir.path()).await;
             return;
         }
         if matches!(check, OpenSshCheck::AccountUsage) {

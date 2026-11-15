@@ -5,7 +5,8 @@ import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../../src
 import {tmuxChatBound,tmuxChatReply,tmuxChatSnapshot} from '../../src/test/tmuxChat';
 import {herdrNavigationTree} from '../../src/test/herdrNavigation';
 
-export type Kind='tmux'|'zellij'|'herdr';
+/** `terminal` is a session with no multiplexer: the launch opens a new terminal session. */
+export type Kind='tmux'|'zellij'|'herdr'|'terminal';
 type Request={target:Record<string,unknown>;agent?:{kind:string;name:string;prompt?:string}};
 const quote=(value:string)=>`'${value.replaceAll("'","'\\''")}'`;
 const step=(stage:string,argv:string[])=>({stage,argv,command:argv.map(quote).join(' ')});
@@ -20,6 +21,7 @@ function plan(kind:Kind,{target,agent}:Request) {
   if(worktree)steps.push(step('worktree',['git','-C',String(target.repository),'worktree','add','-b',String(target.branch),'--',directory,String(target.base)]));
   const launch=[agent!.kind,...(agent!.prompt?[agent.prompt]:[])];
   if(kind==='tmux')steps.push(step('window',['tmux','-u','-L','default','new-window','-P','-F','#{pane_id}','-t','=work:','-n',label,'-c',directory,'--',...launch]));
+  else if(kind==='terminal')steps.push(step('terminal',['sh','-c','cd "$1" && shift && exec "$@"','sh',directory,...launch]));
   else if(kind==='zellij')steps.push(step('pane',['zellij','--session=main','run',`--cwd=${directory}`,`--name=${label}`,'--',...launch]));
   else steps.push(step('workspace',['herdr','--session','default','workspace','create','--no-focus','--label',label,'--cwd',directory]),step('agent',['herdr','--session','default','agent','start',agent!.name,'--kind',agent!.kind,'--pane','<new-workspace-pane>','--timeout','60000',...(agent!.prompt?['--',agent.prompt]:[])]));
   return {steps};
@@ -33,8 +35,10 @@ const page={schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasM
 export function mountAgentLauncher(kind:Kind) {
   const calls:{command:string;args:Record<string,unknown>}[]=[];
   const terminal={shown:0};
+  /** The requests the app was asked to open a new terminal session for. */
+  const terminals:Request[]=[];
   let launched:{directory:string}|undefined;
-  const pane={tmux:'%7',zellij:'zellij:main:4',herdr:'wNEW:p1'}[kind];
+  const pane={tmux:'%7',zellij:'zellij:main:4',herdr:'wNEW:p1',terminal:''}[kind];
   const row=()=>({sessionId:'codex-new',agent:'Codex',project:launched!.directory,state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:pane,eventCount:1});
   const herdrTree=()=>launched&&calls.some(call=>call.command==='herdr_action')?{
     workspaces:[{workspace_id:'w2E',label:'Work',focused:false,agent_status:'idle'},{workspace_id:'wNEW',label:'new',focused:true,agent_status:'working'}],
@@ -50,7 +54,7 @@ export function mountAgentLauncher(kind:Kind) {
       case 'multiplexer_sessions':return [{name:'default'}];
       case 'herdr_tree':return herdrTree();
       case 'herdr_action':return {};
-      case 'agent_snapshot':return {schemaVersion:1,sessions:launched&&kind!=='herdr'?[row()]:[]};
+      case 'agent_snapshot':return {schemaVersion:1,sessions:launched&&kind!=='herdr'&&kind!=='terminal'?[row()]:[]};
       case 'tmux_chat':{
         const reply=await tmuxChatReply(command,args) as Record<string,unknown>;
         const destination={...tmuxChatSnapshot.destination,paneId:launched?pane:'%3'};
@@ -61,7 +65,8 @@ export function mountAgentLauncher(kind:Kind) {
       case 'list_directory':return args.path==='/'?[{name:'srv',isDir:true,size:0}]:[];
       case 'herdr_repository':return {root:'/srv/app',main:'/srv/app',head:'main',detached:false,worktrees:['/srv/app']};
       case 'herdr_agent_kinds':return [{kind:'codex',label:'Codex',executable:'codex',prompt:true,installed:true},{kind:'claude',label:'Claude Code',executable:'claude',prompt:true,installed:false},{kind:'opencode',label:'OpenCode',executable:'opencode',prompt:false,installed:true}];
-      case 'multiplexer_launch_plan':case 'herdr_workspace_plan':return plan(kind,request!);
+      case 'multiplexer_launch_plan':case 'herdr_workspace_plan':case 'terminal_launch_plan':return plan(kind,request!);
+      case 'terminal_launch_prepare':return {};
       case 'multiplexer_launch':case 'herdr_workspace_create':{
         const target=request!.target;
         launched={directory:String(target.type==='worktree'?target.path:target.directory)};
@@ -75,6 +80,7 @@ export function mountAgentLauncher(kind:Kind) {
   document.body.append(host);
   const root=createRoot(host);
   root.render(<AgentView sessionId="launcher-host" shown tmux={kind==='tmux'} tmuxSession={kind==='tmux'?session.tmux:undefined} zellijSession={kind==='zellij'?session.zellij:undefined}
-    herdrSession={kind==='herdr'?session.herdr:undefined} herdrLaunch={kind==='herdr'} onEnterHerdr={async()=>{}} onShowTerminal={()=>{terminal.shown++;}}/>);
-  return {calls,terminal,dispose(){root.unmount();host.remove();}};
+    herdrSession={kind==='herdr'?session.herdr:undefined} herdrLaunch={kind==='herdr'} onEnterHerdr={async()=>{}} onShowTerminal={()=>{terminal.shown++;}}
+    onOpenTerminal={kind==='terminal'?async request=>{terminals.push(request as Request);}:undefined}/>);
+  return {calls,terminal,terminals,dispose(){root.unmount();host.remove();}};
 }

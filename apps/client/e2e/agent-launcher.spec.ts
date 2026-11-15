@@ -112,3 +112,29 @@ for(const kind of ['tmux','zellij','herdr'] as const) {
     expect(await page.evaluate(()=>window.agentLauncher.terminal.shown)).toBe(1);
   });
 }
+
+test('terminal: with no multiplexer the plan ends in a new terminal session, opened only after the confirmation',async({page})=>{
+  await mount(page,'terminal');
+  await page.getByRole('button',{name:'New agent',exact:true}).first().click();
+  const dialog=page.getByRole('dialog',{name:'New agent'});
+  await dialog.getByRole('combobox',{name:'Agent'}).selectOption('codex');
+  // The prompt is one argument of the agent, so it may span lines, as under tmux and Zellij.
+  expect(await dialog.getByRole('textbox',{name:'Initial prompt (optional)'}).evaluate(node=>node.tagName)).toBe('TEXTAREA');
+  await dialog.getByRole('textbox',{name:'Host folder'}).fill('/srv/api');
+  await dialog.getByRole('button',{name:'Review commands'}).click();
+  await expect(dialog.locator('ol code').first()).toBeVisible();
+  await fitsWidth(page);
+  const request={target:{type:'directory',label:'api',directory:'/srv/api'},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/) as unknown as string}};
+  expect((await calls(page,'terminal_launch_plan')).at(-1)).toEqual({request});
+  expect(await commands(dialog)).toEqual(["'command' '-v' '--' 'codex'","'test' '-d' '/srv/api'","'sh' '-c' 'cd \"$1\" && shift && exec \"$@\"' 'sh' '/srv/api' 'codex'"]);
+  await expect(dialog.getByText(/opens as its own tab/)).toBeVisible();
+  // Reviewing ran nothing and opened no session.
+  expect(await calls(page,'terminal_launch_prepare')).toEqual([]);
+  expect(await page.evaluate(()=>window.agentLauncher.terminals)).toEqual([]);
+  await dialog.getByRole('button',{name:'Create and start agent'}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const reviewed=(await calls(page,'terminal_launch_plan')).at(-1)!.request;
+  expect(await calls(page,'terminal_launch_prepare')).toEqual([{sessionId:'launcher-host',request:reviewed}]);
+  expect(await page.evaluate(()=>window.agentLauncher.terminals)).toEqual([reviewed]);
+  expect(await calls(page,'multiplexer_launch')).toEqual([]);
+});

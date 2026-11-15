@@ -1,11 +1,12 @@
-//! Explicit agent launch and Git worktree creation in a Herdr, tmux or Zellij session.
+//! Explicit agent launch and Git worktree creation in a Herdr, tmux or Zellij session, or in a new terminal session when there is none.
 //!
 //! Every remote step is an exact argv run by `sh` as `"$@"`; the SSH login
 //! shell parses each element as one quoted word and nothing else (see
 //! [`script`]), and nothing is typed into an existing pane. An agent starts
 //! only after the renderer showed this plan and the user confirmed it: through
 //! `herdr agent start` in a new workspace's root pane, as the argv of a new tmux
-//! window (`new-window`) or as the argv of a new Zellij pane (`run`).
+//! window (`new-window`) or as the argv of a new Zellij pane (`run`). With no
+//! multiplexer the last step is the argv of a new SSH terminal (`terminal`).
 use crate::app_lock::AccessLease;
 use crate::multiplexer::{tmux_word, Entry, MultiplexerKind};
 use crate::ssh::{quote, AppState, Result, Session, SshError};
@@ -187,11 +188,12 @@ fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|v| (*v).to_owned()).collect()
 }
 
-/// The multiplexer session a launch runs in.
+/// Where a launch runs: a multiplexer session, or a new terminal session when there is none.
 pub(crate) enum Host<'a> {
     Herdr(&'a str),
     Tmux(&'a str, TmuxServer),
     Zellij(&'a str),
+    Terminal,
 }
 impl<'a> Host<'a> {
     /// A launch needs the session a terminal is attached to, so it never creates
@@ -307,7 +309,7 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
     if let Host::Herdr(name) = host {
         server(name)?;
     }
-    // A tmux or Zellij launch is the agent's own argv: `executable [prompt]`.
+    // A tmux, Zellij or terminal launch is the agent's own argv: `executable [prompt]`.
     let launch = match (host, valid.agent) {
         (Host::Herdr(_), _) => vec![],
         (_, None) => return Err(invalid("Choose an agent to start")),
@@ -331,7 +333,8 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             args(&["mkdir", "-p", "--", valid.directory]),
         ));
     } else if valid.worktree.is_none() && !matches!(host, Host::Herdr(_)) {
-        // tmux and Zellij fall back to another directory for a start directory that does not exist.
+        // tmux and Zellij fall back to another directory for a start directory that does not exist,
+        // and a terminal would only print the `cd` error.
         // The path is absolute, so `test` cannot read it as an operator (it takes no `--`).
         steps.push(step("folderCheck", args(&["test", "-d", valid.directory])));
     }
@@ -377,6 +380,10 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             steps.push(step("pane", argv));
             return Ok(steps);
         }
+        Host::Terminal => {
+            steps.push(step("terminal", terminal_argv(valid.directory, launch)));
+            return Ok(steps);
+        }
     };
     steps.push(step(
         "workspace",
@@ -415,6 +422,31 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
         steps.push(step("agent", argv));
     }
     Ok(steps)
+}
+
+/// Changes into the folder, then becomes the agent: the folder and every agent word are separate
+/// arguments of `sh`, so none is parsed as shell syntax.
+const TERMINAL_WRAPPER: &str = r#"cd "$1" && shift && exec "$@""#;
+fn terminal_argv(directory: &str, launch: Vec<String>) -> Vec<String> {
+    let mut argv = args(&["sh", "-c", TERMINAL_WRAPPER, "sh", directory]);
+    argv.extend(launch);
+    argv
+}
+/// The command of the new SSH terminal that runs a no-multiplexer launch, which the login shell
+/// reads as one [`login_word`] per argv element. It is built here from the validated request, never
+/// taken from the renderer.
+pub(crate) fn terminal_command(request: &CreateRequest) -> Result<String> {
+    let steps = plan_steps(&Host::Terminal, request, NEW_PANE)?;
+    let terminal = steps
+        .iter()
+        .find(|step| step.stage == "terminal")
+        .ok_or_else(|| invalid("Choose an agent to start"))?;
+    Ok(terminal
+        .argv
+        .iter()
+        .map(|word| login_word(word))
+        .collect::<Vec<_>>()
+        .join(" "))
 }
 
 /// One completed remote step: combined output and exit status.
@@ -588,6 +620,10 @@ pub(crate) async fn execute(
             && outcome.worktree.is_none()
             && outcome.workspace_id.is_none();
         let stage = steps[index].stage;
+        // The caller opens the terminal once everything before it exists.
+        if stage == "terminal" {
+            continue;
+        }
         let timeout = match stage {
             "worktree" => Duration::from_secs(120),
             "agent" => Duration::from_millis(AGENT_START_MS + 15_000),
@@ -810,6 +846,14 @@ pub fn multiplexer_launch_plan(multiplexer: Entry, request: CreateRequest) -> Re
         steps: plan_steps(&Host::of(&multiplexer, None)?, &request, NEW_PANE)?,
     })
 }
+/// The plan of a launch in a new terminal session: [`terminal_launch_prepare`] runs every step but the last,
+/// which `agent_terminal` runs as a new SSH terminal.
+#[tauri::command]
+pub fn terminal_launch_plan(request: CreateRequest) -> Result<Plan> {
+    Ok(Plan {
+        steps: plan_steps(&Host::Terminal, &request, NEW_PANE)?,
+    })
+}
 async fn run_plan(
     session: &Session,
     access: &AccessLease,
@@ -833,6 +877,25 @@ pub async fn herdr_workspace_create(
         })
         .await
 }
+/// Runs the launch plan of a session's multiplexer, or none: the steps before the new terminal session.
+async fn launch(
+    state: State<'_, AppState>,
+    session_id: String,
+    multiplexer: Option<Entry>,
+    request: CreateRequest,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<Outcome> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let host = match &multiplexer {
+                Some(entry) => Host::of(entry, Some(&session))?,
+                None => Host::Terminal,
+            };
+            run_plan(&session, &access, &host, &request).await
+        })
+        .await
+}
 /// Prepares the worktree (if asked) and starts the agent in the multiplexer
 /// session the terminal is attached to.
 #[tauri::command]
@@ -843,13 +906,18 @@ pub async fn multiplexer_launch(
     request: CreateRequest,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<Outcome> {
-    access
-        .run(async {
-            let session = state.session(&session_id).await?;
-            let host = Host::of(&multiplexer, Some(&session))?;
-            run_plan(&session, &access, &host, &request).await
-        })
-        .await
+    launch(state, session_id, Some(multiplexer), request, access).await
+}
+/// Checks the agent and prepares the folder or worktree of a launch in a new terminal session; nothing
+/// runs in a terminal yet.
+#[tauri::command]
+pub async fn terminal_launch_prepare(
+    state: State<'_, AppState>,
+    session_id: String,
+    request: CreateRequest,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<Outcome> {
+    launch(state, session_id, None, request, access).await
 }
 #[tauri::command]
 pub async fn herdr_agent_kinds(

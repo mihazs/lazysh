@@ -81,6 +81,14 @@ it('requests only the typed named default entry through the existing native atta
   expect(invoke.mock.calls[0][1]).not.toHaveProperty('command');
 });
 
+it('opens a launched agent terminal through the native command with the request and no command text',async()=>{
+  invoke.mockResolvedValueOnce({sessionId:'agent-child'});
+  const request={target:{type:'directory',label:'x',directory:'/srv/x'},agent:{kind:'codex',name:'codex-a1'}};
+  await api.agentTerminal('verified-parent',request,()=>{});
+  expect(invoke).toHaveBeenLastCalledWith('agent_terminal',expect.objectContaining({sessionId:'verified-parent',request,cols:100,rows:30}),expect.anything());
+  expect(invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty('command');
+});
+
 it.each(['files','hostTools'] as const)('restores %s through a guarded ordinary request without replacing terminal output ownership',async purpose=>{
   const original=vi.fn();registerSessionOutput('original-mosh',original);
   invoke.mockResolvedValueOnce({schemaVersion:1,status:'restored'});

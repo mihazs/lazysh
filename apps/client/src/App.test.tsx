@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
     attachTmux: vi.fn(),
     attachMultiplexer: vi.fn(),
     attachDefaultMultiplexer: vi.fn(),
+    agentTerminal: vi.fn(),
     tmuxJumpSnapshot: vi.fn(),
     tmuxJump: vi.fn(),
   },
@@ -2021,6 +2022,39 @@ it('switches between the terminal and the Agent view on the terminal\'s two-fing
   await screen.findByRole('region',{name:'Agent view'});
   act2('switching');
   await waitFor(()=>expect(screen.queryByRole('region',{name:'Agent view'})).toBeNull());
+});
+it('opens New agent of a session with no multiplexer as a new terminal session tab that shows its Agent view',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'plain-parent'});
+  mocks.api.agentTerminal.mockResolvedValue({sessionId:'agent-child'});
+  mocks.invoke.mockImplementation(async command=>{
+    switch(command) {
+      case 'agent_snapshot':return {schemaVersion:1,sessions:[]};
+      case 'herdr_agent_kinds':return [{kind:'codex',label:'Codex',executable:'codex',prompt:true,installed:true}];
+      case 'terminal_launch_plan':return {steps:[{stage:'terminal',argv:['sh'],command:"'sh' '-c'"}]};
+      case 'terminal_launch_prepare':return {};
+      default:return false;
+    }
+  });
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const views=()=>within(screen.getByRole('group',{name:'Session view'}));
+  await user.click(views().getByRole('button',{name:'Agent'}));
+  const parent=await screen.findByRole('region',{name:'Agent view'});
+  await user.click((await within(parent).findAllByRole('button',{name:'New agent'}))[0]);
+  const dialog=await screen.findByRole('dialog',{name:'New agent'});
+  await user.selectOptions(await within(dialog).findByRole('combobox',{name:'Agent'}),'codex');
+  await user.type(within(dialog).getByRole('textbox',{name:'Host folder'}),'/work/app');
+  await user.click(within(dialog).getByRole('button',{name:'Review commands'}));
+  expect(mocks.api.agentTerminal).not.toHaveBeenCalled();
+  await user.click(await within(dialog).findByRole('button',{name:'Create and start agent'}));
+  const request={target:{type:'directory',label:'app',directory:'/work/app'},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/)}};
+  await waitFor(()=>expect(mocks.api.agentTerminal).toHaveBeenCalledExactlyOnceWith('plain-parent',request,expect.any(Function)));
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='terminal_launch_prepare').map(([,args])=>args)).toEqual([{sessionId:'plain-parent',request}]);
+  // The new terminal is a tab of its own, on the same host, and it is the one shown, in its Agent view.
+  await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getAllByRole('tab')[1].getAttribute('aria-selected')).toBe('true');
+  expect(views().getByRole('button',{name:'Agent'}).getAttribute('aria-pressed')).toBe('true');
+  expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();expect(mocks.api.attachTmux).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
 });
 it.each(['enter','stale-pane','hidden','locked','wrong-server'] as const)('enters only the owned Agent view Herdr pane: %s',async outcome=>{
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);

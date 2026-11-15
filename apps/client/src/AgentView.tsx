@@ -3,7 +3,7 @@ import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
-import {AgentLaunch,HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
+import {AgentLaunch,HerdrWorkspaceCreate,HerdrWorktreeCreate,type AgentLaunchRequest} from './HerdrWorkspaceCreateDialog';
 import AgentStartFolder from './AgentStartFolder';
 import {knownDirectories} from './herdrCreate';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
@@ -51,9 +51,9 @@ type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: Agent
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion, onOpenTerminal}: {
   sessionId: string; shown: boolean; tmux: boolean; /** The tmux session the terminal is attached to: the New agent flow opens its windows there. */tmuxSession?: string; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
-  onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
+  onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;/** Opens the new terminal session of a New agent launch in a session with no multiplexer. */onOpenTerminal?:(request:AgentLaunchRequest)=>Promise<void>;
 }) {
   useUi();
   useAccessSnapshot();
@@ -238,7 +238,9 @@ export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSe
   const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={known} disabled={!shown} onStaged={onShowTerminal}/>;
   // The session's own multiplexer starts the agent; without one (or a Herdr that predates the launcher) only the staged command is left.
   const multiplexer=tmux && tmuxSession ? {kind:'tmux' as const,name:tmuxSession} : zellijSession ? {kind:'zellij' as const,name:zellijSession} : herdrSession && herdrLaunch ? {kind:'herdr' as const,name:navigation.data?.server ?? herdrSession} : undefined;
-  const newAgent=(compact:boolean)=>multiplexer && <AgentLaunch sessionId={sessionId} lease={access} multiplexer={multiplexer} tree={navigation.data?.snapshot} projects={known} disabled={!shown} label={t('agentViewNewAgent')} compact={compact} onCreated={id=>{if(multiplexer.kind==='herdr')focusCreated(id);}}/>;
+  // A session with no multiplexer at all opens the agent in a new terminal session of its own.
+  const launch=multiplexer ? {multiplexer} : !tmux && !zellijSession && !herdrSession && onOpenTerminal ? {openTerminal:onOpenTerminal} : undefined;
+  const newAgent=(compact:boolean)=>launch && <AgentLaunch sessionId={sessionId} lease={access} {...launch} tree={navigation.data?.snapshot} projects={known} disabled={!shown} label={t('agentViewNewAgent')} compact={compact} onCreated={id=>{if(multiplexer?.kind==='herdr')focusCreated(id);}}/>;
   // One compact row: what the chat belongs to and its state. Everything else waits behind the options button.
   const enter=selected?.enter && onEnterHerdr;
   const unlinked=!!herdrSession && !!selected && !selected.linked && !selected.history;
@@ -290,7 +292,7 @@ export default function AgentView({sessionId, shown, tmux, tmuxSession, zellijSe
       <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
-        {binding.kind === 'none' && <><StartButtons sessionId={sessionId}/>{multiplexer ? newAgent(false) : startFolder}</>}
+        {binding.kind === 'none' && <><StartButtons sessionId={sessionId}/>{launch ? newAgent(false) : startFolder}</>}
       </div>
     </div>}
     {!selected && !herdrSession && (!reader || choosing) && access.current() && sessions.length>0 && <section className="agent-view-picker" aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>

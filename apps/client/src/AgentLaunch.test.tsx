@@ -3,7 +3,7 @@ import {cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/r
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import {captureAccess} from './access';
-import {AgentLaunch} from './HerdrWorkspaceCreateDialog';
+import {AgentLaunch,type AgentLaunchRequest} from './HerdrWorkspaceCreateDialog';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
@@ -14,13 +14,16 @@ const kinds=[
 ];
 const repository={root:'/srv/app',main:'/srv/app',head:'main',detached:false,worktrees:['/srv/app','/srv/app-worktrees/old']};
 const plan={steps:[{stage:'agentCheck',argv:['command'],command:"'command' '-v' '--' 'codex'"},{stage:'window',argv:['tmux'],command:"'tmux' 'new-window'"}]};
+const terminalPlan={steps:[plan.steps[0],{stage:'terminal',argv:['sh'],command:"'sh' '-c' 'cd \"$1\" && shift && exec \"$@\"' 'sh' '/srv/api' 'codex'"}]};
 let outcome:Record<string,unknown>;
 const calls=(name:string)=>vi.mocked(invoke).mock.calls.filter(([command])=>command===name).map(([,args])=>args);
 const typing=(element:HTMLElement,value:string)=>fireEvent.change(element,{target:{value}});
 const created=vi.fn();
-type Multiplexer=Parameters<typeof AgentLaunch>[0]['multiplexer'];
-async function open(multiplexer:Multiplexer={kind:'tmux',name:'work'}) {
-  render(<AgentLaunch sessionId="ssh" lease={captureAccess()} multiplexer={multiplexer} disabled={false} label="New agent" onCreated={created}/>);
+const terminal=vi.fn<(request:AgentLaunchRequest)=>Promise<void>>();
+type Multiplexer=NonNullable<Extract<Parameters<typeof AgentLaunch>[0],{multiplexer:object}>['multiplexer']>;
+/** A session with a multiplexer, or none: then the launch opens a new terminal session. */
+async function open(multiplexer:Multiplexer|'terminal'={kind:'tmux',name:'work'}) {
+  render(<AgentLaunch sessionId="ssh" lease={captureAccess()} {...(multiplexer==='terminal'?{openTerminal:terminal}:{multiplexer})} disabled={false} label="New agent" onCreated={created}/>);
   fireEvent.click(screen.getByRole('button',{name:'New agent'}));
   const dialog=await screen.findByRole('dialog',{name:'New agent'});
   await within(dialog).findByRole('combobox',{name:'Agent'});
@@ -35,13 +38,14 @@ const name=expect.stringMatching(/^[a-z]+-[0-9a-f]{8}$/);
 
 beforeEach(()=>{
   localStorage.clear();created.mockReset();vi.mocked(invoke).mockReset();access();
-  outcome={paneId:'%7'};
+  outcome={paneId:'%7'};terminal.mockReset().mockResolvedValue();
   vi.mocked(invoke).mockImplementation(async(command)=>{
     switch(command) {
       case 'herdr_agent_kinds':return kinds;
       case 'herdr_repository':return repository;
       case 'multiplexer_launch_plan':case 'herdr_workspace_plan':return plan;
-      case 'multiplexer_launch':case 'herdr_workspace_create':return outcome;
+      case 'terminal_launch_plan':return terminalPlan;
+      case 'multiplexer_launch':case 'herdr_workspace_create':case 'terminal_launch_prepare':return outcome;
       default:throw new Error(`Unexpected ${command}`);
     }
   });
@@ -160,5 +164,56 @@ describe('the New agent launcher',()=>{
     fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
     await waitFor(()=>expect(created).toHaveBeenCalledWith('w9'));
     expect(calls('herdr_workspace_create')).toEqual([{sessionId:'ssh',name:'default',request}]);
+  });
+
+  describe('in a session with no multiplexer',()=>{
+    const request={target:{type:'directory',label:'api',directory:'/srv/api'},agent:{kind:'codex',name,prompt:'two\nlines'}};
+    const start=async()=>{
+      const dialog=await open('terminal');
+      choose(dialog);folder(dialog,'/srv/api');
+      // The prompt is one argument of the agent, so it may span lines.
+      expect(within(dialog).getByRole('textbox',{name:'Initial prompt (optional)'}).tagName).toBe('TEXTAREA');
+      typing(within(dialog).getByRole('textbox',{name:'Initial prompt (optional)'}),'two\nlines');
+      await review(dialog);
+      return dialog;
+    };
+
+    it('reviews the plan, prepares the folder, then opens the new terminal session with the same request',async()=>{
+      const dialog=await start();
+      expect(calls('terminal_launch_plan')).toEqual([{request}]);
+      expect(calls('multiplexer_launch_plan')).toEqual([]);
+      expect(within(dialog).getAllByRole('code').map(code=>code.textContent)).toEqual(terminalPlan.steps.map(step=>step.command));
+      expect(within(dialog).getByText(/opens as its own tab/)).toBeTruthy();
+      expect(calls('terminal_launch_prepare')).toEqual([]);expect(terminal).not.toHaveBeenCalled();
+      terminal.mockImplementation(async()=>{expect(calls('terminal_launch_prepare')).toHaveLength(1);});
+      fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
+      await waitFor(()=>expect(terminal).toHaveBeenCalledExactlyOnceWith(request));
+      expect(calls('terminal_launch_prepare')).toEqual([{sessionId:'ssh',request}]);
+      expect(calls('multiplexer_launch')).toEqual([]);expect(created).not.toHaveBeenCalled();
+      await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    it('opens no terminal and keeps what exists when the folder or worktree step failed',async()=>{
+      const dialog=await start();
+      outcome={worktree:'/srv/app-worktrees/x',failure:{stage:'worktree',message:'fatal: invalid reference'}};
+      fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
+      const alert=await within(dialog).findByRole('alert');
+      expect(alert.textContent).toContain('/srv/app-worktrees/x');expect(alert.textContent).toContain('fatal: invalid reference');
+      expect(terminal).not.toHaveBeenCalled();
+    });
+
+    it('reports the terminal stage and the folder it created when the session cannot be opened',async()=>{
+      const dialog=await open('terminal');
+      choose(dialog);where(dialog,'A new folder');folder(dialog,'/srv/fresh');
+      await review(dialog);
+      outcome={folder:'/srv/fresh'};
+      terminal.mockRejectedValue({kind:'timeout',message:'Opening terminal timed out'});
+      fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
+      const alert=await within(dialog).findByRole('alert');
+      expect(alert.textContent).toContain('The folder /srv/fresh exists on the host.');
+      expect(alert.textContent).toContain('Open a terminal session in the folder running the agent');
+      expect(alert.textContent).toContain('Opening terminal timed out');
+      expect(created).not.toHaveBeenCalled();
+    });
   });
 });

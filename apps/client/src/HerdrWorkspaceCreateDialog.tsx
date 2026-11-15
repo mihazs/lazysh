@@ -13,11 +13,14 @@ import './HerdrWorkspaceCreateDialog.css';
 
 type AgentKind={kind:string;label:string;executable:string;prompt:boolean;installed:boolean};
 type Repository={root:string;main:string;head:string;detached:boolean;worktrees:string[]};
-type Stage='folder'|'folderCheck'|'worktree'|'workspace'|'window'|'pane'|'agentCheck'|'agent';
+type Stage='folder'|'folderCheck'|'worktree'|'workspace'|'window'|'pane'|'terminal'|'agentCheck'|'agent';
 type Step={stage:Stage;argv:string[];command:string};
 type Outcome={folder?:string;worktree?:string;workspaceId?:string;paneId?:string;agent?:string;failure?:{stage:Stage;message:string}};
 type Target={type:'directory';label:string;directory:string;create?:boolean}|{type:'worktree';repository:string;branch:string;base:string;path:string};
 type Request={target:Target;agent?:{kind:string;name:string;prompt?:string}};
+export type AgentLaunchRequest=Request;
+/** Opens the new terminal session of a launch that has no multiplexer; it rejects when the session cannot be opened. */
+type OpenTerminal=(request:Request)=>Promise<void>;
 /** The session's tmux or Zellij, which the launcher starts the agent in; Herdr is addressed by `server`. */
 type Multiplexer={kind:'tmux'|'zellij';name:string};
 type Location='folder'|'new'|'worktree';
@@ -25,7 +28,7 @@ type Shared={sessionId:string;server:string;lease:AccessLease;disabled:boolean;t
 type Source={workspace_id:string;label:string;directory:string};
 type Invalid='herdrCreateInvalidLabel'|'herdrCreateInvalidDirectory'|'herdrCreateNotRepository'|'herdrCreateInvalidBranch'|'herdrCreateInvalidBase'|'herdrCreateAgentRequired'|'herdrCreateInvalidPrompt'|'agentLaunchAgentRequired'|'agentLaunchInvalidPrompt';
 
-const stageKeys={folder:'agentLaunchStageFolder',folderCheck:'agentLaunchStageFolderCheck',worktree:'herdrCreateStageWorktree',workspace:'herdrCreateStageWorkspace',window:'agentLaunchStageWindow',pane:'agentLaunchStagePane',agentCheck:'herdrCreateStageAgentCheck',agent:'herdrCreateStageAgent'} as const;
+const stageKeys={folder:'agentLaunchStageFolder',folderCheck:'agentLaunchStageFolderCheck',worktree:'herdrCreateStageWorktree',workspace:'herdrCreateStageWorkspace',window:'agentLaunchStageWindow',pane:'agentLaunchStagePane',terminal:'agentLaunchStageTerminal',agentCheck:'herdrCreateStageAgentCheck',agent:'herdrCreateStageAgent'} as const;
 const locationKeys={folder:'agentLaunchFolderExisting',new:'agentLaunchFolderNew',worktree:'agentLaunchWorktree'} as const;
 
 /** Opens the "New workspace" flow; nothing runs before the reviewed commands are confirmed. `agentFirst` opens it with "start an agent" already chosen. */
@@ -48,15 +51,15 @@ export function HerdrWorktreeCreate({label,tree,...props}:Shared&{tree:HerdrTree
     {open && <CreateFlow {...props} tree={tree} source={source} agentFirst close={()=>setOpen(false)}/>}
   </>;
 }
-/** The Agent view's New agent flow: the attached multiplexer, an existing or new folder or a new worktree, and an agent that must be chosen. Nothing runs before the reviewed commands are confirmed. */
-export function AgentLaunch({label,compact,multiplexer,...props}:Omit<Shared,'server'>&{label:string;/** An icon button for a toolbar. */compact?:boolean;multiplexer:{kind:'herdr'|'tmux'|'zellij';name:string}}) {
+/** The Agent view's New agent flow: the attached multiplexer, or a new terminal session when there is none (`openTerminal`), an existing or new folder or a new worktree, and an agent that must be chosen. Nothing runs before the reviewed commands are confirmed. */
+export function AgentLaunch({label,compact,multiplexer,openTerminal,...props}:Omit<Shared,'server'>&{label:string;/** An icon button for a toolbar. */compact?:boolean}&({multiplexer:{kind:'herdr'|'tmux'|'zellij';name:string};openTerminal?:undefined}|{multiplexer?:undefined;openTerminal:OpenTerminal})) {
   useUi();
   const [open,setOpen]=useState(false);
   return <>
     {compact
       ? <button type="button" className="icon-button" title={label} aria-label={label} disabled={props.disabled} onClick={()=>setOpen(true)}><SquarePlus size={18} aria-hidden="true"/></button>
       : <button type="button" className="subtle-button herdr-create-trigger" disabled={props.disabled} onClick={()=>setOpen(true)}><SquarePlus size={16} aria-hidden="true"/>{label}</button>}
-    {open && <CreateFlow {...props} server={multiplexer.name} multiplexer={multiplexer.kind==='herdr'?undefined:{kind:multiplexer.kind,name:multiplexer.name}} launcher close={()=>setOpen(false)}/>}
+    {open && <CreateFlow {...props} server={multiplexer?.name??''} multiplexer={multiplexer && multiplexer.kind!=='herdr'?{kind:multiplexer.kind,name:multiplexer.name}:undefined} openTerminal={openTerminal} launcher close={()=>setOpen(false)}/>}
   </>;
 }
 /** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. Escape is handled while capturing so the phone sidebar's own Escape (close the sidebar) never sees it. */
@@ -120,7 +123,7 @@ export function Modal({title,close,step,children}:{title:string;close:()=>void;s
   </div>,document.body);
 }
 
-function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,onCreated,close,agentFirst,multiplexer,launcher}:Shared&{source?:Source;close:()=>void;agentFirst?:boolean;multiplexer?:Multiplexer;launcher?:boolean}) {
+function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,onCreated,close,agentFirst,multiplexer,openTerminal,launcher}:Shared&{source?:Source;close:()=>void;agentFirst?:boolean;multiplexer?:Multiplexer;openTerminal?:OpenTerminal;launcher?:boolean}) {
   useUi();
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const alive=useRef(true);
@@ -149,8 +152,8 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
   const selected=kinds?.state==='ready'?kinds.value.find(item=>item.kind===kind && item.installed):undefined;
   // A new worktree branches from a repository: the workspace's own, or the folder the launcher read.
   const worktree=!!source || (!!launcher && location==='worktree');
-  // tmux and Zellij hand the prompt to the agent as one argument, so it may span lines.
-  const multiline=!!multiplexer;
+  // tmux, Zellij and a new terminal hand the prompt to the agent as one argument, so it may span lines.
+  const multiline=!!multiplexer || !!openTerminal;
   const projects=known ?? (reports?.available && reports.host===sessionId && reports.lease.current()?[...reports.rows].sort((a,b)=>Date.parse(b.updatedAt)-Date.parse(a.updatedAt)).map(row=>row.project):[]);
   const recent=knownDirectories(tree,projects);
   function readRepository(directory:string,name:string) {
@@ -200,7 +203,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     const request:Request={target:value,...(startAgent && selected?{agent:{kind:selected.kind,name:nameFor(selected.kind),...(selected.prompt && prompt.trim()?{prompt}:{})}}:{})};
     setProblem('');
     try {
-      const plan=await invoke<{steps:Step[]}>(multiplexer?'multiplexer_launch_plan':'herdr_workspace_plan',multiplexer?{multiplexer,request}:{name:server,request});
+      const plan=await invoke<{steps:Step[]}>(openTerminal?'terminal_launch_plan':multiplexer?'multiplexer_launch_plan':'herdr_workspace_plan',openTerminal?{request}:multiplexer?{multiplexer,request}:{name:server,request});
       if(owns()){setReview({request,steps:plan.steps});setPhase('review');}
     } catch(error){if(owns())setProblem(captureUiError(error));}
   }
@@ -209,8 +212,14 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     if(!review || phase!=='review' || running.current)return;
     running.current=true;setPhase('running');setProblem('');
     try {
-      const result=await invoke<Outcome>(multiplexer?'multiplexer_launch':'herdr_workspace_create',multiplexer?{sessionId,multiplexer,request:review.request}:{sessionId,name:server,request:review.request});
+      const result=await invoke<Outcome>(openTerminal?'terminal_launch_prepare':multiplexer?'multiplexer_launch':'herdr_workspace_create',openTerminal?{sessionId,request:review.request}:multiplexer?{sessionId,multiplexer,request:review.request}:{sessionId,name:server,request:review.request});
       if(!owns())return;
+      // The folder and worktree exist; the new terminal session is the last step, run by the app.
+      if(openTerminal && !result.failure) {
+        try{await openTerminal(review.request);close();}
+        catch(error){if(owns()){setOutcome({...result,failure:{stage:'terminal',message:uiErrorText(captureUiError(error))}});setPhase('result');}}
+        return;
+      }
       const created=result.workspaceId??result.paneId;
       if(!result.failure && created){close();onCreated(created);return;}
       setOutcome(result);setPhase('result');
@@ -233,7 +242,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     {startAgent && agentFields}
   </fieldset>;
   const picker=<DirectoryPicker sessionId={sessionId} invoke={invoke} owns={owns} value={directory} onChange={chooseDirectory} recent={recent} label={launcher?t(location==='worktree'?'agentLaunchRepository':'agentLaunchFolder'):undefined}/>;
-  const stepNote=multiplexer?t(multiplexer.kind==='tmux'?'agentLaunchNoteTmux':'agentLaunchNoteZellij'):t('herdrCreatePanePlaceholder');
+  const stepNote=openTerminal?t('agentLaunchNoteTerminal'):multiplexer?t(multiplexer.kind==='tmux'?'agentLaunchNoteTmux':'agentLaunchNoteZellij'):t('herdrCreatePanePlaceholder');
   // Closing while the host runs would hide what was created, so wait for the outcome.
   return <Modal title={title} close={()=>{if(!running.current)close();}} step={phase}>
     {phase==='form' && <form className="form-stack herdr-create-form" onSubmit={event=>void submit(event)} noValidate>

@@ -106,6 +106,7 @@ import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
 import type {UploadedAttachment} from "./AttachmentPanel";
+import type {AgentLaunchRequest} from "./HerdrWorkspaceCreateDialog";
 import {stageComposerAttachment} from "./composerTokens";
 import {bothMinWidth,readSessionViews,saveSessionView,sessionViewKey,type SessionView} from "./sessionView";
 import {useEdgeGestureMode} from "./edgeGestures";
@@ -2034,34 +2035,31 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       if (mounted.current) setError(t("appCouldNotConfirmTheConnectionCheckThisTerminalBefore"));
     });
   }
-  async function attachTmux(
+  /** Opens a new terminal beside `source` on its connection and makes it the active session. */
+  async function openChildSession(
     source: LiveSession,
-    name: string,
-    kind: "tmux" | "herdr" | "zellij" = "tmux",
-    tmuxServer?: string,
+    title: string,
+    open: (api: typeof nativeApi, onEvent: (event: SshEvent) => void) => Promise<{sessionId: string}>,
+    target: LiveSession["attached"],
     owner:AccessLease=lease,
     beforePublish?:()=>void,
     attached?:(session:LiveSession)=>void,
     /** False when a switch from navigation, not the user opening this terminal to type, attaches it. */
     typing=true,
   ) {
-    if (kind === 'herdr' && !muxTools[source.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')) throw new LocalUiError('muxLimitedHerdr');
     const sourceApi=bindProtectedApi(nativeApi,owner);
     const pending = await prepareSession(
       source.hostId,
-      `${source.name} / ${name}`,
+      `${source.name} / ${title}`,
       source.destination,
       owner,
     );
     const ownership = new PendingSessions();
     try {
-      const result =
-        kind === "tmux"
-          ? await sourceApi.attachTmux(source.id, name, pending.onEvent, tmuxServer)
-          : await sourceApi.attachMultiplexer(source.id, kind, name, pending.onEvent);
+      const result = await open(sourceApi, pending.onEvent);
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
-      pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
+      if (target) pending.session.attached = target;
       owner.assert();
       beforePublish?.();
       sessionConnected(pending.session,undefined,typing);
@@ -2073,6 +2071,25 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       throw error;
     }
   }
+  async function attachTmux(
+    source: LiveSession,
+    name: string,
+    kind: "tmux" | "herdr" | "zellij" = "tmux",
+    tmuxServer?: string,
+    owner:AccessLease=lease,
+    beforePublish?:()=>void,
+    attached?:(session:LiveSession)=>void,
+    typing=true,
+  ) {
+    if (kind === 'herdr' && !muxTools[source.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')) throw new LocalUiError('muxLimitedHerdr');
+    await openChildSession(source, name, (api, onEvent) => kind === "tmux"
+      ? api.attachTmux(source.id, name, onEvent, tmuxServer)
+      : api.attachMultiplexer(source.id, kind, name, onEvent),
+    { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) }, owner, beforePublish, attached, typing);
+  }
+  /** After a confirmed launch in a session with no multiplexer: a new terminal on the same connection runs the agent, opens as a session tab and shows its Agent view. */
+  const openAgentTerminal=(source:LiveSession,request:AgentLaunchRequest)=>openChildSession(source,request.target.type==='worktree'?request.target.branch:request.target.label,
+    (api,onEvent)=>api.agentTerminal(source.id,request,onEvent),undefined,lease,undefined,session=>chooseSessionView(session,'agent'),false);
   async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean,fromAgent=false) {
     const selectedNavigation=navigationState.current[source.id];
     if(!selectedNavigation && !fromAgent)throw new LocalUiError('herdrNavigationChanged');
@@ -2545,7 +2562,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   <Suspense key={session.id} fallback={null}>
                   <AgentView sessionId={session.id} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
                     tmux={native && session.attached?.kind==='tmux'} tmuxSession={native && session.attached?.kind==='tmux' ? session.attached.name : undefined} zellijSession={native && session.attached?.kind==='zellij' ? session.attached.name : undefined} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id],true)} terminal={session.adapter} onShowTerminal={()=>chooseSessionView(session,'terminal')}
-                    onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
+                    onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} onOpenTerminal={request=>openAgentTerminal(session,request)} />
                   </Suspense>
                 ))}
                 {active.connected && view === "usage" && (

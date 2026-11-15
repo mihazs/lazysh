@@ -874,6 +874,205 @@ fn a_launch_reports_the_new_pane_and_keeps_what_it_created_when_the_pane_fails()
     }
 }
 
+fn terminal_plan(request: CreateRequest) -> Result<Vec<(&'static str, Vec<String>)>> {
+    let plan = terminal_launch_plan(request)?;
+    Ok(plan.steps.into_iter().map(|s| (s.stage, s.argv)).collect())
+}
+
+#[test]
+fn a_terminal_plan_ends_with_one_sh_whose_arguments_are_the_folder_and_the_agent_argv() {
+    let plan = terminal_plan(hostile_launch()).unwrap();
+    assert_eq!(
+        plan,
+        [
+            ("agentCheck", args(&["command", "-v", "--", "claude"])),
+            ("folderCheck", args(&["test", "-d", "/srv/it's #{y};"])),
+            (
+                "terminal",
+                args(&[
+                    "sh",
+                    "-c",
+                    TERMINAL_WRAPPER,
+                    "sh",
+                    "/srv/it's #{y};",
+                    "claude",
+                    "say 'hi'\n$(id);",
+                ])
+            ),
+        ]
+    );
+    // The review shows the argv exactly as the host's login shell will read it.
+    let shown = terminal_launch_plan(hostile_launch()).unwrap().steps;
+    assert_eq!(
+        shown[2].command,
+        "'sh' '-c' 'cd \"$1\" && shift && exec \"$@\"' 'sh' '/srv/it'\\''s #{y};' 'claude' 'say '\\''hi'\\''\n$(id);'"
+    );
+    // A new folder or a worktree is prepared before the terminal, as for a multiplexer.
+    let stages =
+        |plan: Vec<(&'static str, Vec<String>)>| plan.iter().map(|s| s.0).collect::<Vec<_>>();
+    assert_eq!(
+        stages(terminal_plan(folder_launch(true)).unwrap()),
+        ["agentCheck", "folder", "terminal"]
+    );
+    let worktree = worktree_request(serde_json::json!({"kind":"codex","name":"codex-a1"}));
+    assert_eq!(
+        stages(terminal_plan(worktree).unwrap()),
+        ["agentCheck", "worktree", "terminal"]
+    );
+}
+
+#[test]
+fn a_terminal_launch_needs_an_agent_and_refuses_what_a_multiplexer_launch_refuses() {
+    let bare =
+        request(serde_json::json!({"target":{"type":"directory","label":"x","directory":"/x"}}));
+    assert_eq!(
+        terminal_plan(bare).unwrap_err().message(),
+        "Choose an agent to start"
+    );
+    for directory in ["relative", "/srv/../etc", "/srv/./x"] {
+        let bad = request(serde_json::json!({
+            "target":{"type":"directory","label":"x","directory":directory},
+            "agent":{"kind":"codex","name":"codex-a1"},
+        }));
+        assert!(terminal_command(&bad).is_err(), "{directory}");
+        assert!(terminal_plan(bad).is_err(), "{directory}");
+    }
+    let prompted = |kind: &str, prompt: &str| {
+        terminal_command(&request(serde_json::json!({
+            "target":{"type":"directory","label":"x","directory":"/x"},
+            "agent":{"kind":kind,"name":"agent-1","prompt":prompt},
+        })))
+    };
+    assert!(prompted("codex", "one\n\ttwo").is_ok());
+    for (kind, prompt) in [
+        ("codex", "back\\slash"),
+        ("codex", "-p"),
+        ("opencode", "no argv prompt"),
+    ] {
+        assert!(
+            prompted(kind, prompt).is_err(),
+            "{kind} accepted {prompt:?}"
+        );
+    }
+}
+
+/// What the new terminal runs, through every login shell the SSH exec channel could start: the agent
+/// becomes the terminal's process in the chosen folder and gets its prompt as one literal argument.
+#[cfg(unix)]
+#[test]
+fn the_terminal_command_starts_the_agent_in_the_folder_with_every_word_literal() {
+    use std::os::unix::fs::PermissionsExt;
+    const AGENT: &str = "#!/bin/sh\nprintf '%s|' \"$PWD\" \"$@\"\n";
+    // Names the launch accepts (no control character or backslash) that a shell would read specially.
+    const WORDS: &[&str] = &[
+        "it's",
+        "a'; touch INJECTED1 #",
+        "$(touch INJECTED2)",
+        "`touch INJECTED3`",
+        "; | & < > ! #",
+        "\"q\" $HOME ~ * ? [a] {b,c} (d) %self $status",
+        "say 'hi'\n$(touch INJECTED4);\tx",
+    ];
+    for login in login_shells() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let stub = bin.join("claude");
+        std::fs::write(&stub, AGENT).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for (index, prompt) in WORDS.iter().enumerate() {
+            let name = WORDS[(index + 1) % WORDS.len()].replace(['\n', '\t'], " ");
+            let folder = root.path().join(&name);
+            std::fs::create_dir_all(&folder).unwrap();
+            let directory = folder.canonicalize().unwrap().to_str().unwrap().to_owned();
+            let command = terminal_command(&request(serde_json::json!({
+                "target":{"type":"directory","label":"x","directory":directory},
+                "agent":{"kind":"claude","name":"claude-1a2b","prompt":prompt},
+            })))
+            .unwrap();
+            let output = Command::new(&login[0])
+                .args(&login[1..])
+                .arg("-c")
+                .arg(&command)
+                .current_dir(cwd.path())
+                .env("HOME", home.path())
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .output()
+                .unwrap();
+            assert_eq!(
+                (
+                    output.status.success(),
+                    String::from_utf8_lossy(&output.stdout).into_owned()
+                ),
+                (true, format!("{directory}|{prompt}|")),
+                "{login:?} {prompt:?}"
+            );
+        }
+        let root_files: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("INJECTED"))
+            .collect();
+        let cwd_files: Vec<_> = std::fs::read_dir(cwd.path()).unwrap().collect();
+        assert!(
+            root_files.is_empty() && cwd_files.is_empty(),
+            "{login:?} created {root_files:?} {cwd_files:?}"
+        );
+    }
+}
+
+#[test]
+fn a_terminal_launch_prepares_the_folder_and_worktree_and_leaves_the_terminal_to_the_caller() {
+    let replies = |replies: &[(i32, &str)]| Scripted {
+        replies: replies.iter().map(|(s, t)| (*s, (*t).to_owned())).collect(),
+        ..Default::default()
+    };
+    let mut remote = replies(&[(0, "/usr/bin/codex\n"), (0, "")]);
+    let outcome = now(execute(&mut remote, &Host::Terminal, &folder_launch(true))).unwrap();
+    assert_eq!(outcome.failure, None);
+    assert_eq!(outcome.folder.as_deref(), Some("/srv/new 'dir"));
+    assert_eq!(
+        remote.calls,
+        [
+            args(&["command", "-v", "--", "codex"]),
+            args(&["mkdir", "-p", "--", "/srv/new 'dir"]),
+        ]
+    );
+    // A missing agent or folder stops the launch before anything exists on the host.
+    let error = now(execute(
+        &mut replies(&[(1, "")]),
+        &Host::Terminal,
+        &folder_launch(false),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        error.message(),
+        "codex was not found on the host PATH (command -v)"
+    );
+    let error = now(execute(
+        &mut replies(&[(0, "/usr/bin/codex\n"), (1, "")]),
+        &Host::Terminal,
+        &folder_launch(false),
+    ))
+    .unwrap_err();
+    assert_eq!(error.message(), "/srv/new 'dir is not a folder on the host");
+    // A worktree is created before the terminal, whose step the caller runs: it is not run here.
+    let mut remote = replies(&[(0, "/usr/bin/codex\n"), (0, "")]);
+    let outcome = now(execute(
+        &mut remote,
+        &Host::Terminal,
+        &worktree_request(serde_json::json!({"kind":"codex","name":"codex-a1"})),
+    ))
+    .unwrap();
+    assert_eq!(
+        outcome.worktree.as_deref(),
+        Some("/srv/repo-worktrees/feat-x")
+    );
+    assert_eq!(remote.calls.len(), 2);
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "requires git and herdr on PATH; runs an isolated headless server"]
