@@ -36,6 +36,9 @@ pub struct Pane {
     pub tab_id: String,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The manual label set by `pane rename`; absent while the pane has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub focused: bool,
     pub agent_status: String,
 }
@@ -196,6 +199,20 @@ fn parse(output: &str) -> Result<HerdrTree> {
             return Err(invalid());
         }
     }
+    // A label is user text (the TUI accepts any); show it bounded and without control characters instead of refusing the tree.
+    for p in &mut tree.panes {
+        p.label = p
+            .label
+            .take()
+            .map(|label| {
+                label
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(200)
+                    .collect::<String>()
+            })
+            .filter(|label| !label.is_empty());
+    }
     for agent in tree.agents.iter_mut().flatten() {
         if agent
             .agent_session
@@ -250,6 +267,30 @@ pub enum HerdrAction {
     ZoomPane {
         target: String,
     },
+    ClosePane {
+        target: String,
+    },
+    CloseWorkspace {
+        target: String,
+    },
+    RenamePane {
+        target: String,
+        label: String,
+    },
+    /// Moves a divider of the pane's split by `amount` percentage points of the split (1 to 50).
+    ResizePane {
+        target: String,
+        direction: ResizeDirection,
+        amount: u8,
+    },
+}
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
     let text_arg = |value: &str, max| -> Result<String> {
@@ -335,6 +376,52 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
             target(value, Some('p'))?;
             format!("pane zoom --pane {} --toggle", quote(value))
         }
+        HerdrAction::ClosePane { target: value } => {
+            target(value, Some('p'))?;
+            format!("pane close {}", quote(value))
+        }
+        // Never `--group`: a primary workspace with linked worktree workspaces is refused by Herdr, not widened.
+        HerdrAction::CloseWorkspace { target: value } => {
+            target(value, None)?;
+            format!("workspace close {}", quote(value))
+        }
+        HerdrAction::RenamePane {
+            target: value,
+            label,
+        } => {
+            target(value, Some('p'))?;
+            // `pane rename <id> --clear` removes the label, so that exact word is never a label.
+            if label == "--clear" {
+                return Err(SshError::new(
+                    "invalid_target",
+                    "Invalid Herdr name or path",
+                ));
+            }
+            format!("pane rename {} {}", quote(value), text_arg(label, 200)?)
+        }
+        HerdrAction::ResizePane {
+            target: value,
+            direction,
+            amount,
+        } => {
+            target(value, Some('p'))?;
+            if !(1..=50).contains(amount) {
+                return Err(SshError::new(
+                    "invalid_target",
+                    "Resize by 1 to 50 percent of the split",
+                ));
+            }
+            format!(
+                "pane resize --pane {} --direction {} --amount 0.{amount:02}",
+                quote(value),
+                match direction {
+                    ResizeDirection::Left => "left",
+                    ResizeDirection::Right => "right",
+                    ResizeDirection::Up => "up",
+                    ResizeDirection::Down => "down",
+                }
+            )
+        }
     };
     command(session, args)
 }
@@ -342,6 +429,8 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
 /// 0.9.3 and 0.9.5 use these codes; 0.9.4+ also returns them for out-of-range
 /// workspace numbers instead of crashing the server. Exact pane focus goes
 /// through the companion, which reports Herdr's `pane_not_found` as its own class.
+/// Closing a primary workspace that has linked worktree workspaces is refused
+/// with `workspace_group_close_required`; lazysh never widens that to the group.
 fn missing_target(error: SshError) -> SshError {
     #[derive(Deserialize)]
     struct Failure {
@@ -351,18 +440,27 @@ fn missing_target(error: SshError) -> SshError {
     struct Code {
         code: String,
     }
+    let code = (error.kind() == "remote_command_failed")
+        .then(|| serde_json::from_str::<Failure>(error.message()).ok())
+        .flatten()
+        .map(|failure| failure.error.code);
     let missing = error.kind() == "remote_command_failed"
         && (error.message() == "lazysh-agent: HerdrFocusMissing: operation failed"
-            || serde_json::from_str::<Failure>(error.message()).is_ok_and(|failure| {
-                matches!(
-                    failure.error.code.as_str(),
+            || matches!(
+                code.as_deref(),
+                Some(
                     "workspace_not_found" | "tab_not_found" | "pane_not_found" | "agent_not_found"
                 )
-            }));
+            ));
     if missing {
         SshError::new(
             "herdr_target_missing",
             "The Herdr workspace, tab or pane no longer exists",
+        )
+    } else if code.as_deref() == Some("workspace_group_close_required") {
+        SshError::new(
+            "herdr_group_close_required",
+            "The Herdr workspace has linked worktree workspaces; close those first",
         )
     } else {
         error
@@ -593,7 +691,7 @@ pub async fn herdr_action(
                 command
             };
             let command = crate::herdr_path::select(&command, crate::herdr_path::admit(&session, &access).await?);
-            // Closing a tab moves the view like a focus does, so the input turn bound to the old view is retired first.
+            // Closing a tab, pane or workspace moves the view like a focus does, so the input turn bound to the old view is retired first.
             let moves_view = matches!(
                 action,
                 HerdrAction::FocusWorkspace { .. }
@@ -601,6 +699,8 @@ pub async fn herdr_action(
                     | HerdrAction::FocusPane { .. }
                     | HerdrAction::FocusAgent { .. }
                     | HerdrAction::CloseTab { .. }
+                    | HerdrAction::ClosePane { .. }
+                    | HerdrAction::CloseWorkspace { .. }
             );
             let retained = if moves_view {
                 crate::herdr_guard::retire_for_view(&session, &access)
@@ -872,6 +972,169 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+    #[test]
+    fn closes_renames_and_resizes_a_pane_by_exact_id_with_a_literal_label() {
+        let command = |action| action_command("owned", &action).unwrap();
+        assert_eq!(
+            command(HerdrAction::ClosePane {
+                target: "w1:p3".into()
+            }),
+            "herdr --session 'owned' pane close 'w1:p3'"
+        );
+        assert_eq!(
+            command(HerdrAction::CloseWorkspace {
+                target: "w2".into()
+            }),
+            "herdr --session 'owned' workspace close 'w2'"
+        );
+        assert_eq!(
+            command(HerdrAction::RenamePane {
+                target: "w1:p3".into(),
+                label: "build 'x' $(touch nope) `id`;".into()
+            }),
+            "herdr --session 'owned' pane rename 'w1:p3' 'build '\\''x'\\'' $(touch nope) `id`;'"
+        );
+        for (direction, word, amount, ratio) in [
+            (ResizeDirection::Left, "left", 5, "0.05"),
+            (ResizeDirection::Right, "right", 50, "0.50"),
+            (ResizeDirection::Up, "up", 1, "0.01"),
+            (ResizeDirection::Down, "down", 25, "0.25"),
+        ] {
+            assert_eq!(
+                command(HerdrAction::ResizePane {
+                    target: "w1:p3".into(),
+                    direction,
+                    amount
+                }),
+                format!("herdr --session 'owned' pane resize --pane 'w1:p3' --direction {word} --amount {ratio}")
+            );
+        }
+    }
+    #[test]
+    fn refuses_a_workspace_tab_alias_or_injected_id_and_unusable_values_for_the_new_actions() {
+        let refused = |action| action_command("owned", &action).is_err();
+        for bad in [
+            "",
+            "w1",
+            "w1:t2",
+            "p3",
+            "w1:p3;id",
+            "w1:p3 w1:p4",
+            "-a",
+            "w1:p",
+        ] {
+            assert!(
+                refused(HerdrAction::ClosePane { target: bad.into() }),
+                "close {bad}"
+            );
+            assert!(
+                refused(HerdrAction::RenamePane {
+                    target: bad.into(),
+                    label: "x".into()
+                }),
+                "rename {bad}"
+            );
+            assert!(
+                refused(HerdrAction::ResizePane {
+                    target: bad.into(),
+                    direction: ResizeDirection::Up,
+                    amount: 5
+                }),
+                "resize {bad}"
+            );
+        }
+        for bad in ["", "w1:p3", "w1:t2", "x1", "w1;id", "-a"] {
+            assert!(
+                refused(HerdrAction::CloseWorkspace { target: bad.into() }),
+                "workspace {bad}"
+            );
+        }
+        // Herdr reads a label of exactly `--clear` as "remove the label".
+        for label in ["", "--clear", "a\nb", &"x".repeat(201)] {
+            assert!(
+                refused(HerdrAction::RenamePane {
+                    target: "w1:p3".into(),
+                    label: label.into()
+                }),
+                "label {label:?}"
+            );
+        }
+        for amount in [0, 51, 255] {
+            assert!(
+                refused(HerdrAction::ResizePane {
+                    target: "w1:p3".into(),
+                    direction: ResizeDirection::Left,
+                    amount
+                }),
+                "amount {amount}"
+            );
+        }
+        let ok = |label: &str| {
+            action_command(
+                "owned",
+                &HerdrAction::RenamePane {
+                    target: "w1:p3".into(),
+                    label: label.into(),
+                },
+            )
+            .is_ok()
+        };
+        assert!(ok("--clear-me") && ok("-x") && ok(&"x".repeat(200)));
+    }
+    #[test]
+    fn the_bridge_accepts_only_the_listed_pane_and_workspace_actions_and_directions() {
+        let action = |value| serde_json::from_value::<HerdrAction>(value);
+        for ok in [
+            serde_json::json!({"type":"closePane","target":"w1:p1"}),
+            serde_json::json!({"type":"closeWorkspace","target":"w1"}),
+            serde_json::json!({"type":"renamePane","target":"w1:p1","label":"x"}),
+            serde_json::json!({"type":"resizePane","target":"w1:p1","direction":"down","amount":5}),
+        ] {
+            assert!(action(ok.clone()).is_ok(), "{ok}");
+        }
+        for bad in [
+            serde_json::json!({"type":"closePane","target":"w1:p1","force":true}),
+            serde_json::json!({"type":"closeWorkspace","target":"w1","group":true}),
+            serde_json::json!({"type":"renamePane","target":"w1:p1"}),
+            serde_json::json!({"type":"resizePane","target":"w1:p1","direction":"sideways","amount":5}),
+            serde_json::json!({"type":"resizePane","target":"w1:p1","direction":"left","amount":-1}),
+            serde_json::json!({"type":"resizePane","target":"w1:p1","direction":"left","amount":300}),
+            serde_json::json!({"type":"resizePane","target":"w1:p1","direction":"left","amount":0.5}),
+        ] {
+            assert!(action(bad.clone()).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn shows_a_pane_label_bounded_and_without_control_characters() {
+        let label = |value: serde_json::Value| {
+            let mut source = reported_snapshot();
+            source["result"]["snapshot"]["panes"][0]["label"] = value;
+            parse(&source.to_string()).unwrap().panes[0].label.clone()
+        };
+        assert_eq!(label("build".into()).as_deref(), Some("build"));
+        assert_eq!(label("a\nb\u{1b}[31m".into()).as_deref(), Some("ab[31m"));
+        assert_eq!(label("x".repeat(300).into()).unwrap().len(), 200);
+        assert_eq!(label("\n\t".into()), None);
+        assert_eq!(label(serde_json::Value::Null), None);
+        let unlabeled = parse(&reported_snapshot().to_string()).unwrap();
+        assert_eq!(unlabeled.panes[0].label, None);
+        assert!(serde_json::to_value(&unlabeled.panes[0])
+            .unwrap()
+            .get("label")
+            .is_none());
+    }
+    #[test]
+    fn closing_a_workspace_with_linked_worktrees_is_one_recognizable_refusal() {
+        // The exact stderr of Herdr 0.9.5 for `workspace close` of a primary workspace with a linked worktree.
+        let refusal = r#"{"error":{"code":"workspace_group_close_required","message":"workspace has linked worktree workspaces; use --group (close_group=true in the API) to close the group"},"id":"cli:workspace:close"}"#;
+        assert_eq!(
+            missing_target(SshError::new("remote_command_failed", refusal)).kind(),
+            "herdr_group_close_required"
+        );
+        // A refusal text from another failure class is not rewritten.
+        let other = SshError::new("transport_closed", refusal);
+        assert_eq!(missing_target(other).kind(), "transport_closed");
     }
     #[test]
     fn accepts_legacy_snapshots_and_absent_null_or_known_directories() {
@@ -1232,6 +1495,19 @@ mod tests {
         let tree = snapshot();
         assert_eq!(tree.workspaces.len(), 2);
         // Stale exact targets fail as one recognizable error and the server survives.
+        let refused = |action: &HerdrAction| {
+            let output = herdr
+                .command("sh")
+                .arg("-c")
+                .arg(action_command(session, action).unwrap())
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            missing_target(SshError::new(
+                "remote_command_failed",
+                String::from_utf8(output.stderr).unwrap().trim(),
+            ))
+        };
         let gone = |kind: char| format!("{}:{kind}999", tree.workspaces[0].workspace_id);
         for action in [
             HerdrAction::FocusWorkspace {
@@ -1242,21 +1518,192 @@ mod tests {
             HerdrAction::FocusPane { target: gone('p') },
             HerdrAction::FocusAgent { target: gone('p') },
             HerdrAction::ZoomPane { target: gone('p') },
+            HerdrAction::ClosePane { target: gone('p') },
+            HerdrAction::RenamePane {
+                target: gone('p'),
+                label: "x".into(),
+            },
+            HerdrAction::ResizePane {
+                target: gone('p'),
+                direction: ResizeDirection::Left,
+                amount: 5,
+            },
+            HerdrAction::CloseWorkspace {
+                target: "w999".into(),
+            },
         ] {
-            let output = herdr
-                .command("sh")
-                .arg("-c")
-                .arg(action_command(session, &action).unwrap())
-                .output()
-                .unwrap();
-            assert!(!output.status.success());
-            let failure = SshError::new(
-                "remote_command_failed",
-                String::from_utf8(output.stderr).unwrap().trim(),
-            );
-            assert_eq!(missing_target(failure).kind(), "herdr_target_missing");
+            assert_eq!(refused(&action).kind(), "herdr_target_missing");
         }
         assert_eq!(snapshot().workspaces.len(), 2);
+        // Rename, resize and close a pane; each result is read from the product, the geometry from `pane layout`.
+        let first = tree.workspaces[0].workspace_id.clone();
+        let second = tree.workspaces[1].workspace_id.clone();
+        let (left, right) = {
+            let panes: Vec<_> = tree
+                .panes
+                .iter()
+                .filter(|p| p.workspace_id == first)
+                .collect();
+            assert_eq!(panes.len(), 2);
+            (panes[0].pane_id.clone(), panes[1].pane_id.clone())
+        };
+        run(action_command(
+            session,
+            &HerdrAction::RenamePane {
+                target: left.clone(),
+                label: "build 'x' $(touch nope) #{y};".into(),
+            },
+        )
+        .unwrap());
+        let labels = |tree: &HerdrTree| -> Vec<Option<String>> {
+            tree.panes
+                .iter()
+                .filter(|p| p.workspace_id == first)
+                .map(|p| p.label.clone())
+                .collect()
+        };
+        assert_eq!(
+            labels(&snapshot()),
+            [Some("build 'x' $(touch nope) #{y};".to_string()), None]
+        );
+        assert!(!temp.join("nope").exists());
+        // The ratio of the one split of the first workspace's tab, read through `pane layout`.
+        let split = || -> (f64, [u64; 2]) {
+            let layout: serde_json::Value = serde_json::from_str(&run(command(
+                session,
+                format!("pane layout --pane {}", quote(&left)),
+            )
+            .unwrap()))
+            .unwrap();
+            let layout = &layout["result"]["layout"];
+            assert_eq!(layout["splits"].as_array().unwrap().len(), 1);
+            let width = |pane: &str| {
+                layout["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["pane_id"] == pane)
+                    .unwrap()["rect"]["width"]
+                    .as_u64()
+                    .unwrap()
+            };
+            (
+                layout["splits"][0]["ratio"].as_f64().unwrap(),
+                [width(&left), width(&right)],
+            )
+        };
+        let (ratio, widths) = split();
+        for (direction, amount) in [(ResizeDirection::Right, 10), (ResizeDirection::Left, 5)] {
+            let before = split();
+            run(action_command(
+                session,
+                &HerdrAction::ResizePane {
+                    target: left.clone(),
+                    direction,
+                    amount,
+                },
+            )
+            .unwrap());
+            let after = split();
+            let signed = if amount == 10 { 0.10 } else { -0.05 };
+            assert!(
+                (after.0 - (before.0 + signed)).abs() < 0.001,
+                "{before:?} {after:?}"
+            );
+            assert_eq!(after.1[0] + after.1[1], widths[0] + widths[1]);
+            assert_eq!(after.1[0] > before.1[0], amount == 10);
+        }
+        assert!(split().0 > ratio);
+        run(action_command(
+            session,
+            &HerdrAction::ClosePane {
+                target: right.clone(),
+            },
+        )
+        .unwrap());
+        let closed = snapshot();
+        assert!(closed.panes.iter().all(|p| p.pane_id != right));
+        assert_eq!(
+            closed
+                .panes
+                .iter()
+                .filter(|p| p.workspace_id == first)
+                .count(),
+            1
+        );
+        assert_eq!(closed.workspaces.len(), 2);
+        assert_eq!(
+            refused(&HerdrAction::ClosePane { target: right }).kind(),
+            "herdr_target_missing"
+        );
+        // A primary workspace with a linked worktree workspace is refused, never widened to the group.
+        let repository = temp.join("repository");
+        std::fs::create_dir(&repository).unwrap();
+        let git = |args: &[&str]| {
+            lazysh_common::test_support::successful_output(
+                std::process::Command::new("git")
+                    .args([
+                        "-C",
+                        repository.to_str().unwrap(),
+                        "-c",
+                        "user.email=a@b.c",
+                        "-c",
+                        "user.name=n",
+                    ])
+                    .args(args),
+            )
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        run(action_command(
+            session,
+            &HerdrAction::CreateWorkspace {
+                label: "primary".into(),
+                directory: repository.to_str().unwrap().into(),
+            },
+        )
+        .unwrap());
+        let primary = snapshot()
+            .workspaces
+            .iter()
+            .find(|w| w.label == "primary")
+            .unwrap()
+            .workspace_id
+            .clone();
+        run(command(
+            session,
+            format!(
+                "worktree create --workspace {} --branch linked --path {} --trust-repository --no-focus",
+                quote(&primary),
+                quote(temp.join("linked").to_str().unwrap())
+            ),
+        )
+        .unwrap());
+        assert_eq!(snapshot().workspaces.len(), 4);
+        assert_eq!(
+            refused(&HerdrAction::CloseWorkspace { target: primary }).kind(),
+            "herdr_group_close_required"
+        );
+        assert_eq!(snapshot().workspaces.len(), 4);
+        // Closing the other workspace removes it and its panes and leaves the first untouched.
+        run(action_command(
+            session,
+            &HerdrAction::CloseWorkspace {
+                target: second.clone(),
+            },
+        )
+        .unwrap());
+        let tree = snapshot();
+        assert!(tree.workspaces.iter().all(|w| w.workspace_id != second));
+        assert!(tree.panes.iter().all(|p| p.workspace_id != second));
+        assert_eq!(tree.workspaces.len(), 3);
+        assert_eq!(
+            tree.panes
+                .iter()
+                .filter(|p| p.workspace_id == first)
+                .count(),
+            1
+        );
         run(command(session, "server stop".into()).unwrap());
     }
     // The fake `codex` is a POSIX shell script made executable with a Unix mode.

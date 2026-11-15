@@ -17,7 +17,7 @@ export type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab
 export type HerdrTree = {
   workspaces: {workspace_id:string;label:string;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   tabs: {workspace_id:string;tab_id:string;label:string;number:number;focused:boolean;agent_status:LiveAgent['agent_status']}[];
-  panes: {workspace_id:string;tab_id:string;pane_id:string;terminal_id?:string;cwd?:string|null;focused:boolean;agent_status:LiveAgent['agent_status']}[];
+  panes: {workspace_id:string;tab_id:string;pane_id:string;terminal_id?:string;cwd?:string|null;label?:string;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   agents?:Omit<LiveAgent,'cwd'>[];
 };
 /** Where the guarded Herdr client attached through this terminal shows itself, in the server's public identifiers. */
