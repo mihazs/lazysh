@@ -17,7 +17,7 @@ beforeEach(async () => { fake = await createFakeAdb(); Object.assign(process.env
 afterEach(async () => { for (const name of Object.keys(LIVE)) delete process.env[name]; await rm(fake.directory, {recursive: true, force: true}); });
 
 const stub = (port: number, events: string[], name: string, failure?: string): Fixture => ({
-  ssh: {port, username: 'tester', fingerprint: 'SHA256:x', privateKey: 'KEY', prompt: 'P>'},
+  ssh: {port, username: 'tester', fingerprint: 'SHA256:x', privateKey: 'KEY', prompt: 'P>', directory: '/tmp/stub'},
   stop: async () => { events.push(`${name}:stop reverses=${(await reverses()).length}`); if (failure) throw new Error(failure); },
 });
 
@@ -79,9 +79,11 @@ test('host names carry the run nonce, and the kinds of a run are validated', () 
   expect(() => hostKinds('ssh,zellij')).toThrow('Unknown LAZYSH_E2E_HOSTS entries: zellij');
 });
 
-test('Herdr joins the default hosts only when all three of its binaries are given', () => {
+test('Herdr joins the default hosts only when all three of its binaries are given, and tmux when the pinned tmux is', () => {
   const tools = {LAZYSH_TEST_HERDR: '/h', LAZYSH_TEST_AGENT_BIN: '/a', LAZYSH_TEST_RECEIVER_BIN: '/r'};
   expect(defaultHostKinds({})).toBe('ssh');
   expect(defaultHostKinds({...tools, LAZYSH_TEST_RECEIVER_BIN: ''})).toBe('ssh');
   expect(defaultHostKinds(tools)).toBe('ssh,herdr');
+  expect(defaultHostKinds({LAZYSH_TEST_TMUX: '/usr/bin/tmux'})).toBe('ssh,tmux');
+  expect(defaultHostKinds({...tools, LAZYSH_TEST_TMUX: '/usr/bin/tmux'})).toBe('ssh,herdr,tmux');
 });

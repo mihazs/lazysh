@@ -1,5 +1,7 @@
+import {execFile} from 'node:child_process';
 import {join} from 'node:path';
-import {lstat,readdir,readlink} from 'node:fs/promises';
+import {chmod,lstat,mkdir,readdir,readlink,writeFile} from 'node:fs/promises';
+import {promisify} from 'node:util';
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,descendants,identity,type OwnedPid} from './ownedProcess';
 import {SshFixture,stopOwnedTree} from './sshFixture';
@@ -73,9 +75,10 @@ export class TmuxFixture {
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
   private constructor(readonly ssh:SshFixture) {}
-  static async start(binary=process.env.LAZYSH_TEST_TMUX) {
+  /** `agentLaunch` adds what the app's New agent flow needs on the host: SFTP folder browsing, a stub `codex` on the PATH and a Git repository. */
+  static async start(binary=process.env.LAZYSH_TEST_TMUX,options:{agentLaunch?:boolean}={}) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
-    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary});
+    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary,sftp:options.agentLaunch});
     const owned=new TmuxFixture(ssh);
     try {
       const version=(await owned.run(['-V'],false)).trim();
@@ -112,6 +115,7 @@ export class TmuxFixture {
           await delay(10);
         }
       }
+      if(options.agentLaunch)await agentLaunchHost(ssh);
       await owned.observe();
       return owned;
     } catch(error) {
@@ -247,6 +251,26 @@ export class TmuxFixture {
     for(const item of survivors)if(await present(item))try{process.kill(item.pid,'SIGKILL');}catch{/* Already gone. */}
     throw new Error('Owned tmux process survived teardown');
   }
+}
+
+const run=promisify(execFile);
+/** The file the stub agent appends to: one `argc`, `cwd` and `arg1` line per start, so a host check reads what the app really ran. */
+export const agentLaunchLog='agent-launches';
+/** The Git repository a New agent worktree is made from, and the folder New agent creates folders in. */
+export const agentLaunchRepository='launch/repo';
+/**
+ * A stub `codex` in the fixture's `bin`, which `command -v` finds like a real agent: it records its working directory and first
+ * argument, prints `AGENT_STUB` and the folder's name (short, so a phone screen does not wrap it) and stays alive as the only process of its tmux window.
+ */
+async function agentLaunchHost(ssh:SshFixture) {
+  const stub=join(ssh.directory,'bin/codex');
+  await writeFile(stub,`#!/bin/sh\nprintf 'argc=%s\\ncwd=%s\\narg1=%s\\n' "$#" "$PWD" "$1" >> '${join(ssh.directory,agentLaunchLog)}'\nprintf 'AGENT_STUB %s\\n' "\${PWD##*/}"\nexec sleep 3600\n`,{flag:'wx',mode:0o700});
+  await chmod(stub,0o700);
+  const repository=join(ssh.directory,agentLaunchRepository);
+  await mkdir(repository,{recursive:true,mode:0o700});
+  const git=(...args:string[])=>run('git',['-C',repository,'-c','user.name=lazysh','-c','user.email=owned@lazysh.invalid',...args],{env:{PATH:'/usr/bin:/bin',HOME:ssh.directory},timeout:10_000});
+  await git('init','-q','-b','main');
+  await git('commit','-q','--allow-empty','-m','Owned fixture repository');
 }
 
 async function socketCount(saved:OwnedPid) {

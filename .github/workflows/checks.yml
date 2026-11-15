@@ -1146,6 +1146,12 @@ jobs:
       - *stock-herdr-verify
       - *android-owned-host-dependencies
       - *android-owned-namespace
+      # The New agent journey drives an owned tmux host, which the suite starts when LAZYSH_TEST_TMUX names the pinned tmux.
+      - name: Install the distribution tmux and pinned tmux build dependencies
+        run: sudo sh .github/scripts/apt-install.sh --no-update tmux libevent-dev bison
+      - name: Build the pinned official tmux fixture outside the checkout
+        timeout-minutes: 10
+        run: *pinned-tmux-build
       - *android-cache-identity
       - *android-owned-cache
       - *android-owned-companion

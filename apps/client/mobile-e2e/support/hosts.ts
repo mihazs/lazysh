@@ -12,9 +12,12 @@ import type {Adb} from './device';
 
 export type HostKind = 'ssh' | 'herdr' | 'tmux';
 export const HOST_KINDS: readonly HostKind[] = ['ssh', 'herdr', 'tmux'];
-/** What a spec needs to reach one owned host. `privateKey` is a secret: never log it or put it on a screen that is captured. */
-export interface Endpoint {kind: HostKind; host: string; port: number; username: string; fingerprint: string; privateKey: string; prompt: string}
-export interface Fixture {ssh: Pick<SshFixture, 'port' | 'username' | 'fingerprint' | 'privateKey' | 'prompt'>; stop(): Promise<void>}
+/**
+ * What a spec needs to reach one owned host. `privateKey` is a secret: never log it or put it on a screen that is captured.
+ * `directory` is the host's own folder, which a spec reads to check what the app did there (support/agentHost.ts).
+ */
+export interface Endpoint {kind: HostKind; host: string; port: number; username: string; fingerprint: string; privateKey: string; prompt: string; directory: string}
+export interface Fixture {ssh: Pick<SshFixture, 'port' | 'username' | 'fingerprint' | 'privateKey' | 'prompt' | 'directory'>; stop(): Promise<void>}
 export type FixtureFactories = Partial<Record<HostKind, () => Promise<Fixture>>>;
 
 // Variables that point at a live Herdr or tmux. They are removed from this process while the fixtures run, so no child can inherit them.
@@ -23,7 +26,7 @@ const LIVE_VARIABLES = ['HERDR_SOCKET_PATH', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERD
 export const defaultFixtures: FixtureFactories = {
   ssh: async () => { const ssh = await SshFixture.start(); return {ssh, stop: () => ssh.stop()}; },
   herdr: async () => { const herdr = await HerdrFixture.start(herdrTools()); return {ssh: herdr.ssh, stop: () => herdr.stop()}; },
-  tmux: async () => { const tmux = await TmuxFixture.start(); return {ssh: tmux.ssh, stop: () => tmux.stop()}; },
+  tmux: async () => { const tmux = await TmuxFixture.start(undefined, {agentLaunch: true}); return {ssh: tmux.ssh, stop: () => tmux.stop()}; },
 };
 
 export interface OwnedHosts {
@@ -69,7 +72,7 @@ export async function startHosts({adb, kinds, fixtures = defaultFixtures}: Start
       // --no-rebind: never replace a forward somebody else owns.
       await adb('reverse', '--no-rebind', `tcp:${ssh.port}`, `tcp:${ssh.port}`);
       reversed.push(ssh.port);
-      endpoints[kind] = {kind, host: '127.0.0.1', port: ssh.port, username: ssh.username, fingerprint: ssh.fingerprint, privateKey: ssh.privateKey, prompt: ssh.prompt};
+      endpoints[kind] = {kind, host: '127.0.0.1', port: ssh.port, username: ssh.username, fingerprint: ssh.fingerprint, privateKey: ssh.privateKey, prompt: ssh.prompt, directory: ssh.directory};
     }
     const endpointFile = join(directory, 'endpoints.json');
     await writeFile(endpointFile, JSON.stringify({nonce, endpoints}), {mode: 0o600});
@@ -99,9 +102,15 @@ export const runNonce = (nonce = process.env.LAZYSH_E2E_NONCE) => {
 /** A per-run unique host name, so tests never collide with each other or with a leftover from an earlier run. */
 export const hostName = (label: string, nonce = runNonce()) => `e2e-${nonce}-${label}`;
 
-/** The hosts a run starts when LAZYSH_E2E_HOSTS is unset: SSH, plus Herdr when its three binaries are given (the Agent view journey needs it). */
-export const defaultHostKinds = (env: NodeJS.ProcessEnv = process.env) =>
-  ['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? 'ssh,herdr' : 'ssh';
+/**
+ * The hosts a run starts when LAZYSH_E2E_HOSTS is unset: SSH, plus Herdr when its three binaries are given (the Agent view journey
+ * needs it) and plus tmux when the pinned tmux is given (the New agent journey needs it).
+ */
+export const defaultHostKinds = (env: NodeJS.ProcessEnv = process.env) => [
+  'ssh',
+  ...(['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? ['herdr'] : []),
+  ...(env.LAZYSH_TEST_TMUX ? ['tmux'] : []),
+].join(',');
 
 export function hostKinds(value = process.env.LAZYSH_E2E_HOSTS ?? defaultHostKinds()): HostKind[] {
   const kinds = value.split(',').map(kind => kind.trim()).filter(Boolean);
