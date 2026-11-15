@@ -304,8 +304,21 @@ struct Piped {
 }
 
 /// Both pipe ends the browser inherits: it reads commands on fd 3 and writes replies and events on fd 4.
-#[cfg(unix)]
+// shortcut: no pipe transport off Unix, so no browser there; Windows hosts are not supported, and the viewer
+// says so. Upgrade only if a Windows host is ever required. One signature serves both builds, so the stub
+// cannot drift from the real function (it did, and broke the Windows build).
 fn spawn_piped(command: &mut Command) -> Result<Piped> {
+    #[cfg(not(unix))]
+    {
+        let _ = command;
+        Err(Error::Browser("HostBrowserUnsupported"))
+    }
+    #[cfg(unix)]
+    spawn_piped_unix(command)
+}
+
+#[cfg(unix)]
+fn spawn_piped_unix(command: &mut Command) -> Result<Piped> {
     use std::os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::process::CommandExt,
@@ -341,12 +354,6 @@ fn spawn_piped(command: &mut Command) -> Result<Piped> {
         to_browser: Box::new(commands_out),
         from_browser: Box::new(replies_in),
     })
-}
-// shortcut: no pipe transport off Unix, so no browser there; Windows hosts are not supported, and the viewer
-// says so. Upgrade only if a Windows host is ever required.
-#[cfg(not(unix))]
-fn spawn_piped(_: &mut Command) -> Result<(Child, Box<dyn Write + Send>, Box<dyn Read + Send>)> {
-    Err(Error::Browser("HostBrowserUnsupported"))
 }
 
 /// "HeadlessChrome/120.0.6099.109" and "Chrome/120.0.6099.109" are version 120.
