@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
 import {listening,OwnedProcess} from './support/androidSsh';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
@@ -21,6 +21,24 @@ test('tmux host readback admits only the owned two-window topology and display c
   for(const invalid of ['0\n','12a\n','1\n'.repeat(9),'/dev/pts/1\n'])expect(()=>tmuxClientCount(invalid)).toThrow('Owned tmux client readback invalid');
   expect(tmuxAttachHistoryVerified([0,1,0,1,0])).toBe(true);
   for(const history of [[0,1,0],[0,1,0,1],[0,1,2,1,0],[1,0,1,0],[0,1,0,1,0,1,0]])expect(tmuxAttachHistoryVerified(history)).toBe(false);
+});
+
+test('tmux window readback follows only the one added window and refuses a touched original',()=>{
+  const originals=[{windowId:'@1',name:'alpha'},{windowId:'@2',name:'beta'}],base='@1|alpha\n@2|beta';
+  const fold=(text:string,seen?:Parameters<typeof tmuxWindowLifecycle>[2])=>tmuxWindowLifecycle(tmuxWindowRows(text),originals,seen);
+  let seen=fold(base);
+  expect(seen).toBeUndefined();
+  seen=fold(`${base}\n@3|scratch`,seen);
+  expect(seen).toEqual({windowId:'@3',names:['scratch'],closed:false});
+  expect(fold(`${base}\n@3|scratch`,seen)).toBe(seen);
+  seen=fold(`${base}\n@3|renamed`,seen);
+  expect(seen?.names).toEqual(['scratch','renamed']);
+  expect(fold(base,seen)).toEqual({windowId:'@3',names:['scratch','renamed'],closed:true});
+  // A closed or renamed original, a second added window, a replaced or reappearing one: never the app's window.
+  for(const text of ['@1|alpha','@1|alpha\n@2|renamed',`${base}\n@3|a\n@4|b`])expect(()=>fold(text)).toThrow(/Owned tmux (original window|window topology) changed/);
+  expect(()=>fold(`${base}\n@4|b`,{windowId:'@3',names:['a'],closed:false})).toThrow('Owned tmux window topology changed');
+  expect(()=>fold(`${base}\n@3|a`,{windowId:'@3',names:['a'],closed:true})).toThrow('Owned tmux window topology changed');
+  for(const invalid of ['','private text','@3|bad name','@3|'+'x'.repeat(33),`${base}\n@3|a|private`])expect(()=>tmuxWindowRows(invalid)).toThrow('Owned tmux window topology changed');
 });
 
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
@@ -97,6 +115,31 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
   expect(await listening(owned.ssh.port)).toBe(false);
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the app-style create, rename and close of one added window',async()=>{
+  const owned=await TmuxFixture.start();
+  try {
+    const tmux=async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux window action',5000);
+    // Nothing happened yet, then a window that is still open: neither is the app's final state.
+    await expect(owned.verifyWindowLifecycle()).rejects.toThrow('Owned tmux window create, rename and close were not observed');
+    const [created,renamed]=owned.metadata().lifecycle;
+    // The exact commands the app sends for New window (Workspaces panel), Rename window and the tab strip's Close.
+    const session=(await tmux("list-sessions -F '#{session_id}'")).trim();
+    await tmux(`new-window -d -t '${session}' -n '${created}' -c '${owned.ssh.directory}'`);
+    await owned.observe();
+    const added=(await tmux("list-windows -F '#{window_id}|#{window_name}'")).split('\n').find(line=>line.endsWith(`|${created}`))!.split('|')[0];
+    await expect(owned.verifyWindowLifecycle()).rejects.toThrow('Owned tmux window create, rename and close were not observed');
+    await tmux(`rename-window -t '${added}' '${renamed}'`);
+    await owned.observe();
+    await expect(owned.verifyWindowLifecycle()).rejects.toThrow('Owned tmux window create, rename and close were not observed');
+    await tmux(`kill-window -t '${added}'`);
+    await owned.verifyWindowLifecycle();
+    // The original windows and panes were never touched.
+    expect(owned.diagnostic().windows).toBe(2);
+  } finally {
+    await owned.stop();
+  }
 },60_000);
 
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux teardown detaches a running control-mode client through the server before retiring SSH',async()=>{
