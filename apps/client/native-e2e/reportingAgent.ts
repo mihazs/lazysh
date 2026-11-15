@@ -1,6 +1,6 @@
 import {chmod,mkdir,readFile,symlink,writeFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
-import {vi} from 'vitest';
+import {expect,vi} from 'vitest';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {SshFixture} from '../../../tests/support/sshFixture';
 import {NativeGui} from './fixture';
@@ -13,6 +13,8 @@ type Fixture=ReturnType<typeof ownedSshGui>;
 const lines=(path:string)=>readFile(path,'utf8').then(text=>text.split('\n').filter(Boolean),()=>[] as string[]);
 /** The session id the stand-in writes in every record of its transcript. */
 const session='5f0c1d2e-0000-4000-8000-0000000000aa';
+/** Output a pane prints before its agent starts; the agent only clears the visible screen, so this is the scrollback a switch must not lose. */
+const earlierOutput='i=0; while [ "$i" -lt 120 ]; do echo EARLIER_OUTPUT_$i; i=$((i+1)); done';
 /** What the multiplexer says about the pane the GUI shows: a byte lazysh wrote to it or a reflow would change `pane`, and a reconnect would change `clients`. */
 export type PaneObservation={pane:string;clients:string;count:number};
 
@@ -66,7 +68,7 @@ export abstract class ReportingAgent {
   }
 }
 
-/** The stand-in in a real tmux pane. It runs the real companion's `ingest --reported-history` hook with the pane's `TMUX_PANE`, so the Agent view binds to its conversation the way it does to a Claude Code pane. */
+/** The stand-in in a real tmux pane. It runs the real companion's `ingest` hook with the pane's `TMUX_PANE`, so the Agent view binds to its conversation the way it does to a pane of the agent it stands in for: `claude` writes a Claude Code transcript and reports its path (`--reported-history`), `opencode` writes OpenCode 2.2's database under `XDG_DATA_HOME` and reports only its status, which the view matches to the database's session. */
 export class TmuxReportingAgent extends ReportingAgent {
   private constructor(gui:NativeGui,ssh:SshFixture,browser:Browser,terminal:ReportingAgent['terminal'],readonly name:string) {super(gui,ssh,browser,terminal);}
   /** The tmux server's view of the pane the GUI shows. */
@@ -78,12 +80,13 @@ export class TmuxReportingAgent extends ReportingAgent {
     return {pane,clients,count:await tmuxClients(this.ssh)};
   }
 
-  static async start(fixture:Fixture) {
+  static async start(fixture:Fixture,flavour:'claude'|'opencode'='claude') {
     fixture.captureSafe=false;
     const {ssh,companion}=await ownedCompanionSsh(fixture,undefined,{tmux:process.env.LAZYSH_TEST_TMUX??true});
     const script=await this.install(ssh.directory);
     // A short command to type: the pane's shell replaces itself with the agent.
-    await writeFile(join(ssh.directory,'launch.sh'),`d=$(dirname "$0")\nexec bash '${script}' "$d/session.jsonl" "$d/agent.log" '${companion}' "$d/state" report\n`,{mode:0o700,flag:'wx'});
+    const [transcript,report]=flavour==='opencode'?['data/opencode/opencode.db','opencode']:['session.jsonl','report'];
+    await writeFile(join(ssh.directory,'launch.sh'),`d=$(dirname "$0")\n${earlierOutput}\nexec bash '${script}' "$d/${transcript}" "$d/agent.log" '${companion}' "$d/state" ${report}\n`,{mode:0o700,flag:'wx'});
     await chmod(join(ssh.directory,'launch.sh'),0o700);
     const gui=fixture.gui=await NativeGui.start();
     const name=`agent-${ssh.nonce.slice(0,12)}`;
@@ -92,6 +95,7 @@ export class TmuxReportingAgent extends ReportingAgent {
     gui.stage='owned reporting agent launch';
     await agent.type(`exec bash ${ssh.directory}/launch.sh`);
     await agent.waitFor('READY');
+    expect(Number(await ssh.tmux(['display-message','-p','-t',name,'#{history_size}']))).toBeGreaterThan(0);
     return agent;
   }
 }
@@ -131,7 +135,7 @@ export class HerdrReportingAgent extends ReportingAgent {
     const tab=JSON.parse(await herdr.run(['tab','create','--workspace',herdr.metadata().agent.workspaceId,'--cwd',directory,'--label','OWNED_AGENT','--focus'])).result;
     const pane:string=tab.root_pane.pane_id;
     // Output before the agent starts is the scrollback a switch must not lose; the agent only clears the visible screen.
-    await herdr.run(['pane','run',pane,`i=0; while [ "$i" -lt 120 ]; do echo EARLIER_OUTPUT_$i; i=$((i+1)); done; exec '${directory}/bin/claude' '${script}' '${transcript}' '${directory}/agent.log' '${directory}/bin/lazysh-agent' '${directory}/state' keys`]);
+    await herdr.run(['pane','run',pane,`${earlierOutput}; exec '${directory}/bin/claude' '${script}' '${transcript}' '${directory}/agent.log' '${directory}/bin/lazysh-agent' '${directory}/state' keys`]);
     // Herdr admits a session report only while it detects the agent, which it does a moment after the process starts.
     await vi.waitFor(async()=>{
       const agents:{pane_id:string;agent:string}[]=JSON.parse(await herdr.run(['api','snapshot'])).result.snapshot.agents;
