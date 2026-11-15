@@ -194,9 +194,10 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const taskable = tmux && !selected && !!row && row.state !== 'needs_attention';
   useEffect(() => {publishTaskGuard(sessionId, taskable ? taskGuard : undefined); return () => publishTaskGuard(sessionId, undefined);}, [sessionId, taskable, taskGuard]);
   // The followed agent of a Herdr pane: its permission requests and questions (Claude Code) and its dialogs are answered here; Herdr names the pane, not a tmux id.
-  const followed = herdrSession && selected?.linked && selected.conversation.agent !== 'opencode' ? selected.conversation.herdr : undefined;
-  const herdrAgent = useMemo<HerdrAgentTarget | undefined>(() => followed && selected && selected.conversation.agent !== 'opencode' ? {server: followed.herdrSession, pane: followed.paneId, terminal: followed.terminalId, agent: selected.conversation.agent, agentSessionId: selected.conversation.path} : undefined,
-    [followed?.herdrSession, followed?.paneId, followed?.terminalId, selected?.conversation.agent, selected?.conversation.path]);
+  const followedAgent = selected?.conversation.agent === 'claude' || selected?.conversation.agent === 'codex' ? selected.conversation.agent : undefined;
+  const followed = herdrSession && selected?.linked && followedAgent ? selected.conversation.herdr : undefined;
+  const herdrAgent = useMemo<HerdrAgentTarget | undefined>(() => followed && selected && followedAgent ? {server: followed.herdrSession, pane: followed.paneId, terminal: followed.terminalId, agent: followedAgent, agentSessionId: selected.conversation.path} : undefined,
+    [followed?.herdrSession, followed?.paneId, followed?.terminalId, followedAgent, selected?.conversation.path]);
   const herdrClaude = herdrAgent?.agent === 'claude' ? herdrAgent : undefined;
   const herdrGuard = useCallback(async () => !!herdrClaude && shown && access.current() && await herdrStillWaits(invoke, sessionId, herdrClaude) && access.current(), [herdrClaude, shown, access, invoke, sessionId]);
   // The dialog card reads the agent pane's own screen from the host, only while the agent is not busy with a turn.
