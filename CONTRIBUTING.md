@@ -114,14 +114,12 @@ It completes within minutes, runs no native, emulator or end-to-end job, and its
 from the required `client`, `agent` and `release-tools` jobs on purpose: it is not a required status
 check, because it only runs after the merge. `tests/main-verdict.test.ts` pins this behavior.
 
-A red verdict means `main` is broken: fix forward with a PR that restores a green `tsc -b`, and do not
-merge the version PR until the verdict of the new tip is green. **Merge procedure for the version PR
-(`chore(release): version lazysh packages`):** besides its own `release-tools` check, the
-`main-verdict` run for its base commit must have completed with all three jobs green. The base commit
-is the `main` tip the PR was generated from, and it must still be the tip (the `version` workflow
-regenerates the PR after every push to `main`). Check it with
-`gh run list --workflow main-verdict.yml --commit "$(git rev-parse origin/main)"`. A running verdict
-is not green: wait for it.
+The verdict is evidence, not a gate. A red verdict means `main` is broken: fix forward with a PR that
+restores a green `tsc -b`. **Merge procedure for the version PR
+(`chore(release): version lazysh packages`):** merge it once its own `release-tools` check is green
+and its changesets match the ones pending on `main` (the `version` workflow regenerates the PR after
+every push to `main`). The verdict of its base commit is not required, so a slow or failed verdict
+never holds a release.
 
 GitHub's merge queue was evaluated as the alternative and is not enabled. A queue tests every pull
 request on top of the queued commits, which closes the gap before the merge instead of after it, but
@@ -129,7 +127,7 @@ it needs a ruleset change and a `merge_group` trigger on every required workflow
 full native matrix (Android emulators, macOS, Windows, iOS simulator on a few hosted runners) once per
 queue entry, serially. Merge latency would move from minutes to hours, and each known flake ejects an
 entry and requeues the ones behind it. "Require branches to be up to date" has the same cost per pull
-request. `main-verdict` detects the same class of break within minutes and gates the release, so the
+request. `main-verdict` detects the same class of break within minutes, so the
 queue stays an option to revisit if post-merge breaks recur; it would then run only the fast verdict
 set on `merge_group`.
 
