@@ -11,6 +11,7 @@ import { exactlyOne, windowsNsisBinaryDigest } from '../.changeset/release-platf
 import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, installWebViewArguments, launch, mainWindow, parseHostState,
   parseProcessTable, pinnedTools, powershell, processTable, quote, removeWebViewArguments, requireOwnedWindowsRunner, sameImage, killOwned, until,
   WebDriver, WebDriverError, type HostState, type ProcessRow } from './support/windowsGui';
+import { startOwnedSshServer } from './support/windowsSshServer';
 
 const root = join(import.meta.dir, '..');
 const results = join(root, 'test-results/windows-gui');
@@ -348,4 +349,54 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
       expect(connections()).toBe(0);
     });
   } finally { await rm(caller, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }
+}, 900_000);
+
+const button = (label: string) => `.//button[normalize-space()='${label}']`;
+
+actual('actual Windows installed GUI saves a host, trusts the exact host key of an owned Windows OpenSSH server and runs a typed command in its SSH terminal', async () => {
+  const server = await startOwnedSshServer();
+  try {
+    await withInstalledGui('ssh', async ({ browser, app, owned }) => {
+      const name = 'Owned SSH GUI host';
+      const need = async (selector: string, within?: string, using?: 'xpath') => (await browser.find(selector, within, using))!;
+      await browser.click(await until('Add host', () => browser.find('button[aria-label="Add host"]')));
+      const editor = await until('host editor', () => browser.find('[role="dialog"][aria-label="Add a host"]'));
+      await browser.type(await need('input[placeholder="Home workstation"]', editor), name);
+      await browser.type(await need('input[placeholder="workstation.local"]', editor), '127.0.0.1');
+      await browser.type(await need('label.port-field input', editor), String(server.port));
+      await browser.type(await need('input[placeholder="Your SSH username"]', editor), server.username);
+      await browser.click(await need(".//label[contains(., 'Preferred transport')]//option[@value='ssh']", editor, 'xpath'));
+      await browser.click(await need(button('Save host'), editor, 'xpath'));
+      await until('host editor closed', async () => (await browser.find('[role="dialog"][aria-label="Add a host"]')) ? undefined : true);
+
+      // The key is typed by the user into the connection dialog; it is never remembered.
+      await browser.click(await until('saved host', () => browser.find(`button[aria-label="Connect to ${name}"]`)));
+      const connect = await until('connection dialog', () => browser.find(`[role="dialog"][aria-label="Connect to ${name}"]`));
+      await browser.click(await need(button('Private key'), connect, 'xpath'));
+      const key = await need('textarea', connect);
+      await browser.type(key, server.privateKey);
+      expect((await browser.property(key, 'value') as string).replaceAll('\r\n', '\n')).toBe(server.privateKey);
+      await browser.click(await need(button('Connect'), connect, 'xpath'));
+
+      // Trust is explicit and names the server's own fingerprint.
+      const trust = await until('host verification', () => browser.find('[role="dialog"][aria-label="Verify this host"]'), 60_000);
+      expect(await browser.text(trust)).toContain(server.fingerprint);
+      await browser.click(await need(button('Trust key and connect'), trust, 'xpath'));
+
+      const screen = await until('SSH terminal', async () => {
+        const alert = await browser.find('[role="dialog"] .inline-error[role="alert"]');
+        if (alert) throw new Error(`SSH connection failed: ${(await browser.text(alert)).slice(0, 200)}`);
+        return browser.find(`.terminal-canvas[aria-label="Terminal for ${name}"] .xterm-screen`);
+      }, 60_000);
+      const shown = async () => (await browser.text(screen)).replaceAll(/\s*\n\s*/g, ' ');
+      await until('remote shell prompt', async () => (await shown()).toLowerCase().includes(`${server.username.toLowerCase()}>`) ? true : undefined, 30_000);
+
+      // The Windows shell computes the answer, so it is not in the text typed.
+      await browser.click(screen);
+      await browser.keys('set /a 1234*5678\uE007');
+      await until('challenge answer', async () => (await shown()).includes('7006652') ? true : undefined, 30_000);
+      expect(server.output()).toContain(`Accepted publickey for ${server.username}`);
+      expect(await owned()).toEqual([app]);
+    });
+  } finally { await server.stop(); }
 }, 900_000);
