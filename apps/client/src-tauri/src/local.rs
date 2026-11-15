@@ -33,6 +33,7 @@ pub struct Tools {
     attachments: bool,
     previews: bool,
     /// Which of those it is, for the companion panel; `None` exactly when `companion` is false.
+    #[cfg(desktop)]
     companion_source: Option<crate::companion::local::Source>,
 }
 #[tauri::command]
