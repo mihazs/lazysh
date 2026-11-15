@@ -24,7 +24,17 @@ const QUIET: Duration = Duration::from_secs(20);
 /// How often the selected Herdr agent is checked to still be the same pane's agent.
 const RECHECK: Duration = Duration::from_secs(10);
 const MAX_WATCHES: usize = 4;
-const FRAME_TYPES: [&str; 5] = ["hello", "snapshot", "delta", "heartbeat", "end"];
+/// The transcript stream's frames and the Herdr event stream's (`status`, `changed`, `unsupported`).
+const FRAME_TYPES: [&str; 8] = [
+    "hello",
+    "snapshot",
+    "delta",
+    "heartbeat",
+    "end",
+    "status",
+    "changed",
+    "unsupported",
+];
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -54,6 +64,19 @@ pub enum WatchTarget {
         #[serde(default)]
         allow_large_history: bool,
     },
+    /// The agent-status changes of one Herdr server (`lazysh-agent herdr-events`, #1692).
+    #[serde(rename_all = "camelCase")]
+    HerdrEvents { herdr_session: String },
+}
+impl WatchTarget {
+    /// A view's watches replace each other only within the same slot, so the Herdr event stream and a
+    /// conversation stream of one session run side by side.
+    fn slot(&self) -> &'static str {
+        match self {
+            Self::HerdrEvents { .. } => "herdrEvents",
+            _ => "transcript",
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -71,6 +94,7 @@ pub enum WatchEvent {
 pub struct TranscriptWatches(Mutex<HashMap<String, Watch>>);
 struct Watch {
     session_id: String,
+    slot: &'static str,
     cancel: watch::Sender<bool>,
     done: watch::Receiver<bool>,
 }
@@ -86,6 +110,13 @@ impl TranscriptWatches {
 
 fn target_command(target: &WatchTarget) -> Result<String> {
     let (agent, source, large) = match target {
+        WatchTarget::HerdrEvents { herdr_session } => {
+            crate::herdr::text(herdr_session, 200)?;
+            return Ok(format!(
+                "lazysh-agent herdr-events --session {}",
+                quote(herdr_session)
+            ));
+        }
         WatchTarget::Path {
             agent,
             path,
@@ -200,6 +231,8 @@ fn judge(line: &[u8]) -> Result<Verdict> {
         Some(value) if value["type"] == "hello" && value["protocol"] != 1 => {
             Verdict::Unavailable("unsupported_protocol")
         }
+        // The host's Herdr cannot stream (an old Herdr, or too many panes): poll, and ask again later.
+        Some(value) if value["type"] == "unsupported" => Verdict::Unavailable("events_unsupported"),
         Some(value) => Verdict::Send(value),
     })
 }
@@ -215,6 +248,7 @@ async fn run(
     session: Arc<Session>,
     command: String,
     herdr: Option<HerdrCheck>,
+    herdr_path: Option<bool>,
     events: Channel<WatchEvent>,
     mut cancel: watch::Receiver<bool>,
 ) -> Result<WatchEvent> {
@@ -231,6 +265,11 @@ async fn run(
         _=cancel.changed()=>return Ok(closed("stopped")),
         _=disconnected.changed()=>return Ok(closed("disconnected")),
         result=crate::companion::required_command(&session,command,COMPANION_REQUIRED,&access)=>result?,
+    };
+    // `herdr session list` runs in the companion: give it the same PATH fallback as the app's own Herdr reads.
+    let command = match herdr_path {
+        Some(admitted) => crate::herdr_path::select(&command, admitted),
+        None => command,
     };
     let mut channel = tokio::select! {biased;
         _=access.cancelled()=>return Ok(closed("stopped")),
@@ -309,6 +348,17 @@ async fn run(
     outcome
 }
 
+/// A view that rebinds replaces its own watch of that slot; another session's or slot's watch stays.
+fn retire(entries: &mut HashMap<String, Watch>, session_id: &str, slot: &str) {
+    entries.retain(|_, watch| {
+        let same = watch.session_id == session_id && watch.slot == slot;
+        if same {
+            watch.cancel.send_replace(true);
+        }
+        !same && !*watch.done.borrow()
+    });
+}
+
 #[tauri::command]
 pub async fn agent_watch_start(
     access: AccessLease,
@@ -350,17 +400,17 @@ pub async fn agent_watch_start(
                     .await?;
                     Some(pane)
                 }
-                WatchTarget::Path { .. } => None,
+                WatchTarget::Path { .. } | WatchTarget::HerdrEvents { .. } => None,
             };
-            let mut entries = watches.0.lock().await;
-            // A view that rebinds replaces its own watch; another session's watch stays.
-            entries.retain(|_, watch| {
-                let same = watch.session_id == session_id;
-                if same {
-                    watch.cancel.send_replace(true);
+            let herdr_path = match target {
+                WatchTarget::HerdrEvents { .. } => {
+                    Some(crate::herdr_path::admit(&session, &access).await?)
                 }
-                !same && !*watch.done.borrow()
-            });
+                _ => None,
+            };
+            let slot = target.slot();
+            let mut entries = watches.0.lock().await;
+            retire(&mut entries, &session_id, slot);
             if entries.len() >= MAX_WATCHES {
                 return Err(SshError::new(
                     "busy",
@@ -376,6 +426,7 @@ pub async fn agent_watch_start(
                     token.clone(),
                     Watch {
                         session_id,
+                        slot,
                         cancel,
                         done: completion,
                     },
@@ -388,6 +439,7 @@ pub async fn agent_watch_start(
                     session,
                     command,
                     herdr,
+                    herdr_path,
                     events.clone(),
                     request,
                 )
@@ -533,6 +585,82 @@ mod tests {
     }
 
     #[test]
+    fn the_herdr_event_stream_names_one_quoted_server_and_no_agent() {
+        let events = |name: &str| WatchTarget::HerdrEvents {
+            herdr_session: name.into(),
+        };
+        assert_eq!(
+            target_command(&events("work")).unwrap(),
+            "lazysh-agent herdr-events --session 'work'"
+        );
+        assert_eq!(
+            target_command(&events("a'$(echo x); b")).unwrap(),
+            "lazysh-agent herdr-events --session 'a'\\''$(echo x); b'"
+        );
+        for bad in ["", "a\nb", &"x".repeat(201)] {
+            assert!(target_command(&events(bad)).is_err(), "{bad:?}");
+        }
+        let parsed: WatchTarget =
+            serde_json::from_value(json!({"kind":"herdrEvents","herdrSession":"work"})).unwrap();
+        assert!(
+            matches!(parsed, WatchTarget::HerdrEvents { herdr_session } if herdr_session == "work")
+        );
+        assert!(serde_json::from_value::<WatchTarget>(
+            json!({"kind":"herdrEvents","herdrSession":"work","agent":"claude"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn herdr_event_frames_pass_and_a_herdr_that_cannot_stream_is_not_retried_soon() {
+        for kind in ["status", "changed"] {
+            assert!(matches!(
+                judge(json!({"type":kind}).to_string().as_bytes()).unwrap(),
+                Verdict::Send(_)
+            ));
+        }
+        assert!(matches!(
+            judge(
+                json!({"type":"unsupported","reason":"events_subscribe"})
+                    .to_string()
+                    .as_bytes()
+            )
+            .unwrap(),
+            Verdict::Unavailable("events_unsupported")
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_rebinding_view_replaces_only_its_own_slot_of_its_own_session() {
+        let mut entries = HashMap::new();
+        let mut cancels = HashMap::new();
+        for (token, session, slot) in [
+            ("a", "one", "transcript"),
+            ("b", "one", "herdrEvents"),
+            ("c", "two", "herdrEvents"),
+        ] {
+            let (cancel, cancelled) = watch::channel(false);
+            let (_done, done) = watch::channel(false);
+            cancels.insert(token, cancelled);
+            entries.insert(
+                token.to_owned(),
+                Watch {
+                    session_id: session.into(),
+                    slot,
+                    cancel,
+                    done,
+                },
+            );
+        }
+        retire(&mut entries, "one", "herdrEvents");
+        let mut left: Vec<_> = entries.keys().cloned().collect();
+        left.sort();
+        assert_eq!(left, ["a", "c"]);
+        assert!(*cancels["b"].borrow());
+        assert!(!*cancels["a"].borrow() && !*cancels["c"].borrow());
+    }
+
+    #[test]
     fn lines_are_known_frames_the_old_marker_or_an_error() {
         assert!(matches!(
             judge(json!({"type":"hello","protocol":1}).to_string().as_bytes()).unwrap(),
@@ -614,6 +742,7 @@ mod tests {
             "token".into(),
             Watch {
                 session_id: "session".into(),
+                slot: "transcript",
                 cancel,
                 done,
             },

@@ -4103,6 +4103,8 @@ mod tests {
     #[cfg(unix)]
     #[path = "host_browser_fixture.rs"]
     mod host_browser_fixture;
+    #[path = "herdr_events_fixture.rs"]
+    mod herdr_events_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
     #[cfg(target_os = "linux")]
@@ -7655,6 +7657,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH, herdr on PATH and a current-source companion binary with herdr-events"]
+    async fn openssh_herdr_events_report_a_blocked_and_a_finished_agent_within_a_bound() {
+        openssh_interoperability(OpenSshCheck::HerdrEvents).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
     async fn openssh_companion_install_and_managed_path() {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
@@ -7720,6 +7729,7 @@ mod tests {
         TranscriptWatch,
         AuthListeners,
         HostBrowser,
+        HerdrEvents,
         TemporaryAttachments,
         CompanionInstall,
         CompanionUnsupportedArchitecture,
@@ -7812,6 +7822,8 @@ mod tests {
             OpenSshCheck::CompanionInstall | OpenSshCheck::CompanionUnsupportedArchitecture
         ) {
             companion_fixture::environment(dir.path())
+        } else if matches!(check, OpenSshCheck::HerdrEvents) {
+            herdr_events_fixture::environment(dir.path())
         } else if matches!(
             check,
             OpenSshCheck::TranscriptImages
@@ -7916,6 +7928,9 @@ mod tests {
             app.manage(crate::host_browser::HostBrowsers::default());
             // Boxed: its future would otherwise inflate this check's, and overflow a debug test thread's stack.
             Box::pin(host_browser_fixture::verify(&app, &id, dir.path())).await;
+        if matches!(check, OpenSshCheck::HerdrEvents) {
+            app.manage(crate::transcript_watch::TranscriptWatches::default());
+            herdr_events_fixture::verify(&app, &id, dir.path()).await;
             return;
         }
         if matches!(check, OpenSshCheck::TemporaryAttachments) {
