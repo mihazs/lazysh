@@ -24,6 +24,17 @@ lazysh-agent settings update --expected-revision 0 \
 
 Replace `0` with the revision actually returned by `show`; review all three values before writing. A stale revision returns `SettingsConflict`. On `SettingsBusy`, reread after the other writer finishes. Confirm the returned values with `lazysh-agent settings show`. Do not delete malformed settings to bypass a refusal.
 
+## Host browser switch
+
+[Host browser](host-browser.md) is **off by default** and is the only switch that is, because it is the only one that can reach the signed-in web sessions of the browser it starts. It is not one of the three switches above and not part of `settings show`: it has its own file and revision (`host-browser.json`), so that a released lazysh client or companion that shares the host keeps reading and updating the other three. Nothing in the app turns it on yet; the browser view and its first-use confirmation ship with the Chrome viewer ([#1254](https://github.com/mihazs/lazysh/issues/1254)). From the host terminal:
+
+```sh
+lazysh-agent settings host-browser show
+lazysh-agent settings host-browser update --expected-revision 0 --host-browser-enabled true
+```
+
+While it is off, or its file is unreadable, every host-browser command refuses before it starts a process. Turning it off does not stop a browser that already runs. `lazysh-agent host-browser --clear-data` removes the profile that **Keep profile** left, and works with the switch off. See the [reference](reference/companion-settings.md) for the file, the errors and the profile lifetime.
+
 ## Companion updates (planned)
 
 **Not released yet** ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)). The three switches above do not change. Update behavior is a separate setting with its own revision, kept in `auto-update.json` in the same state directory so that an older companion that shares the directory keeps reading `settings.json`.
