@@ -753,7 +753,11 @@ pub(crate) fn action_command_for(
     action: &TmuxAction,
     server: &crate::tmux_server::TmuxServer,
 ) -> Result<String> {
-    let quote = |value: &str| tmux_arg(&value.replace('#', "##"));
+    // tmux expands formats in names and paths, so a literal `#` is doubled; rmux 0.10.0 stores names as typed.
+    let quote = |value: &str| match server.binary() {
+        crate::tmux_server::Binary::Tmux => tmux_arg(&value.replace('#', "##")),
+        crate::tmux_server::Binary::Rmux => tmux_arg(value),
+    };
     let directory = |value: &str| -> Result<String> {
         text(value, 4096)?;
         Ok(quote(value))
@@ -1330,6 +1334,18 @@ esac
             .unwrap(),
             "rmux -u -L 'lab' select-window -t '@3'"
         );
+        // tmux expands `#` in names, so it is doubled for tmux; rmux stores what it is given.
+        let create = TmuxAction::CreateSession {
+            name: "a#(b)".into(),
+            directory: "/w#1".into(),
+        };
+        assert_eq!(
+            action_command_for(&create, &rmux).unwrap(),
+            "rmux -u -L 'lab' new-session -d -s 'a#(b)' -c '/w#1'"
+        );
+        assert!(action_command(&create)
+            .unwrap()
+            .ends_with("new-session -d -s 'a##(b)' -c '/w##1'"));
         assert!(persistent_sessions(MultiplexerKind::Rmux, "").is_err());
     }
     #[test]
@@ -1410,11 +1426,13 @@ esac
             if matches!(binary, Binary::Rmux) {
                 let product = parse_tree(&run(discovery_command(&server, false))).unwrap();
                 let product = serde_json::to_value(&product).unwrap();
-                // A pane's command changes from the multiplexer to its shell while it starts, so two reads never compare it.
+                // A pane's command changes from the multiplexer to its shell while it starts, and rmux names an unnamed
+                // window after that command, so two reads never compare either; an explicit window name is asserted below.
                 let stable = |value: serde_json::Value| {
                     let mut sessions = value["sessions"].clone();
                     for session in sessions.as_array_mut().unwrap() {
                         for window in session["windows"].as_array_mut().unwrap() {
+                            window["name"] = serde_json::Value::Null;
                             for pane in window["panes"].as_array_mut().unwrap() {
                                 pane["command"] = serde_json::Value::Null;
                             }
@@ -1502,11 +1520,14 @@ esac
         assert_eq!(tree.sessions[0].name, "renamed");
         assert_eq!(tree.sessions[0].windows.len(), 2);
         // Selecting a pane that is not in the shown window brings its window forward and makes that pane the active one.
-        run(action_command(&TmuxAction::SplitPane {
-            target: tree.sessions[0].windows[1].panes[0].id.clone(),
-            horizontal: false,
-            directory: temp.path().to_str().unwrap().to_owned(),
-        })
+        run(action_command_for(
+            &TmuxAction::SplitPane {
+                target: tree.sessions[0].windows[1].panes[0].id.clone(),
+                horizontal: false,
+                directory: temp.path().to_str().unwrap().to_owned(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert!(tree.sessions[0].windows[0].active && !tree.sessions[0].windows[1].active);
@@ -1517,9 +1538,12 @@ esac
             .unwrap()
             .id
             .clone();
-        run(action_command(&TmuxAction::SelectPane {
-            target: hidden.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::SelectPane {
+                target: hidden.clone(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert!(!tree.sessions[0].windows[0].active && tree.sessions[0].windows[1].active);
@@ -1551,9 +1575,12 @@ esac
             "new #{session_name} title;"
         );
         let first = tree.sessions[0].windows[0].id.clone();
-        run(action_command(&TmuxAction::CloseWindow {
-            target: window.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::CloseWindow {
+                target: window.clone(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert_eq!(
@@ -1566,9 +1593,12 @@ esac
         );
         // The window is gone: closing it again fails and takes nothing else with it.
         let again = scoped(
-            action_command(&TmuxAction::CloseWindow {
-                target: window.clone(),
-            })
+            action_command_for(
+                &TmuxAction::CloseWindow {
+                    target: window.clone(),
+                },
+                &server,
+            )
             .unwrap(),
         )
         .output()
