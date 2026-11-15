@@ -4818,6 +4818,14 @@ class NativeWorkspaceTest {
         pasteOwnedText(scenario, parityKey, privateKey, label)
     }
 
+    /**
+     * A saved host starts on Auto, which tries Mosh first. An owned sshd that runs commands would start a real
+     * mosh-server for that attempt, and a Mosh startup that ends early surfaces as a refusal instead of the SSH
+     * fallback (CI: "Mosh connection ended before startup completed"). Cases that prove SSH features pick SSH.
+     */
+    private fun chooseOwnedSshTransport(scenario: ActivityScenario<MainActivity>, parity: OwnedParity) =
+        selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
+
     /** Waits for this refusal in the open dialog with no terminal; unlike awaitDocument, an alert is the goal. */
     private fun awaitOwnedRefusal(scenario: ActivityScenario<MainActivity>, stage: String, text: String) {
         val expected = """(()=>{const alert=document.querySelector('[role=dialog] [role=alert]');
@@ -5053,6 +5061,7 @@ class NativeWorkspaceTest {
             addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("preview"))
             parity.mark("preview")
             openOwnedConnect(scenario, name)
+            chooseOwnedSshTransport(scenario, parity)
             chooseOwnedPrivateKey(scenario, preview.getString("privateKey"), parity.label)
             submitOwnedConnect(scenario)
             trustOwnedHostKey(scenario, parity.fingerprint("preview"), "127.0.0.1:${parity.port("preview")}")
@@ -5112,6 +5121,7 @@ class NativeWorkspaceTest {
             addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("files"))
             parity.mark("files")
             openOwnedConnect(scenario, name)
+            chooseOwnedSshTransport(scenario, parity)
             chooseOwnedPrivateKey(scenario, files.getString("privateKey"), parity.label)
             submitOwnedConnect(scenario)
             trustOwnedHostKey(scenario, parity.fingerprint("files"), "127.0.0.1:${parity.port("files")}")
