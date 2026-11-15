@@ -29,19 +29,22 @@ permissions:
 
 jobs:
   companion:
-    if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'companion')
+    if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'companion' || inputs.platform == 'desktop')
     uses: ./.github/workflows/companion-artifacts.yml
     with:
       stage: true
 
+  # Each desktop package bundles the companion this run's `companion` job built and verified for its
+  # platform (never a second build of it), so the desktop builds start once those artifacts exist.
   desktop:
+    needs: companion
     if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'desktop')
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-24.04, target: linux-x64, bundles: 'deb,appimage'}
-          - {os: windows-2025, target: windows-x64, bundles: nsis}
+          - {os: ubuntu-24.04, target: linux-x64, bundles: 'deb,appimage', companion: linux-agent-x64}
+          - {os: windows-2025, target: windows-x64, bundles: nsis, companion: windows-agent-x64}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -75,9 +78,17 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Verify exact trusted source and synchronized version
         run: bun .changeset/release-artifacts.ts identity "${{ runner.temp }}/release-identity"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.companion }}
+          path: ${{ runner.temp }}/published-companion
+      - name: Stage the verified companion where the Tauri bundler picks up its sidecar
+        run: bun .changeset/release-bundle.ts stage ${{ matrix.target }} "${{ runner.temp }}/published-companion"
       - name: Build native installation packages without debug flags
-        run: bun run --cwd apps/client tauri build --bundles ${{ matrix.bundles }} -- --locked
-      - name: Validate native packages, accept Windows install and repair, and record exact bytes
+        run: bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles ${{ matrix.bundles }} -- --locked
+      - name: Validate native packages, require the verified companion in each, accept Windows install and repair, and record exact bytes
+        env:
+          LAZYSH_COMPANION_DIR: ${{ runner.temp }}/published-companion
         run: bun .changeset/release-platform.ts ${{ matrix.target }} "${{ runner.temp }}/installation-files"
       - uses: actions/upload-artifact@v4
         with:
