@@ -426,6 +426,19 @@ A long press on a tab with both actions opens a two-item menu (**Rename**, **Clo
 The **+** and **Rename** drop a small prompt over the terminal (it takes no layout space): a name, and for a new tab a directory (`.` is the shell's own start directory, as in the Spaces and tmux panels). The prompt is the one thing in the strip that opens the soft keyboard, on purpose, because the user is typing a name. A Herdr workspace or tab that has gone since the strip last read is refused, as a focus is, never renamed or closed by guess. A failed command is reported and keeps the prompt open. A half-typed name ends only with Escape, Cancel or Save, so a stray tap on the terminal does not lose it. The long press is 0.5 s without moving more than 10 px; the tap that ends it does not also select the chip.
 
 
+## Clipboard (OSC 52)
+
+Text copied inside a multiplexer reaches the device clipboard as an OSC 52 write. The terminal pane turns it into a **Remote clipboard request** that shows the text, and nothing touches the clipboard until you choose **Allow this copy**. Requests are write-only and bounded to 64 KiB, a read request (`?`) is ignored, and a request for the primary selection (`p`) is ignored. The clipboard letters `c` and `s`, or no letter, are accepted. The DCS-wrapped forms that tmux and GNU screen use for passthrough reach the same prompt. These rules belong to the pane, so they are the same for every multiplexer. What differs is whether the multiplexer sends the copy to your terminal at all:
+
+| Multiplexer | Option on the host | Notes |
+| --- | --- | --- |
+| tmux | `set -g set-clipboard on`, and `set -g allow-passthrough on` (tmux 3.3 or newer) for programs that send OSC 52 wrapped for passthrough | The default, `set-clipboard external`, already forwarded a copy-mode copy to an `xterm-256color` client in a local check with tmux 3.8, and `off` blocked it. It needs the client's `TERM` to advertise the clipboard. For another `TERM`, add `set -as terminal-features ',TERM:clipboard'`. `on` additionally accepts a program's plain OSC 52 into tmux's buffer. The browser cases set `set-clipboard on` and `allow-passthrough on` (plus an `Ms` override for terminfo entries without the clipboard capability). |
+| Zellij | None | With no `copy_command`, Zellij copies through OSC 52, and `copy_on_select true` (the default) copies when you release the mouse button. Leave `copy_clipboard` at `system`: `primary` sends the `p` selection, which lazysh ignores. A `copy_command` such as `wl-copy` sends the copy to a clipboard tool on the host instead. Programs in panes can write OSC 52; `dangerously_enable_paste_buffer_read` stays off and lazysh never answers a read request. |
+| Herdr | None over SSH | Herdr writes OSC 52 when `SSH_CONNECTION`, `SSH_TTY` or `VSCODE_IPC_HOOK_CLI` is set (sshd sets the first two), under WSL, and whenever no native clipboard tool (`wl-copy` under Wayland, `xclip` or `xsel` under X11) can take the copy. `[ui] copy_on_select = true` (the default) copies when you release the mouse button. A Herdr started locally on a desktop with a working native tool writes that desktop's clipboard and sends no OSC 52. |
+| rmux | Not available | rmux is not supported yet ([#1140](https://github.com/mihazs/lazysh/issues/1140)). |
+
+tmux copies with its keyboard copy mode (Copy mode, then search, select and Enter); Zellij and Herdr copy with a mouse selection. The browser cases in `apps/client/e2e/tmux-clipboard.spec.ts` and `apps/client/e2e/multiplexer-clipboard.spec.ts` start each real multiplexer with exactly the options in this table, show its client in the terminal pane and assert that the consent prompt shows the copied text, that the clipboard still holds the old text until **Allow this copy**, and that Allow writes the exact text. For each multiplexer one case copies a selection and another has a program in a pane write OSC 52. The Zellij and Herdr cases select with SGR mouse reports written to the client, not with a touch gesture, so they run in the `desktop` project only. The Windows client has no real-multiplexer job ([#1747](https://github.com/mihazs/lazysh/issues/1747)); its job runs the unit tests of the handler itself (`bun run --cwd apps/client test:osc52`).
+
 ## Supported versions and degraded capabilities
 
 The Sessions panel shows each multiplexer's version and a **Supported** or **Limited** badge. A Limited multiplexer keeps ordinary terminal access; the capabilities it lacks are not offered, and a notice names the version that adds them. One Rust table (`multiplexer.rs`, `tool`) maps the version to the badge; the frontend never decides from the version string.
@@ -452,6 +465,14 @@ bun run test:multiplexers
 ```
 
 The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run stock Herdr build and the checksum-verified official Zellij 0.45.1 release. The Zellij case waits for the attached client's first render before it probes `list-sessions`: Zellij 0.45.1's server panics when a probe disconnects before its first client has created the session, and each later action is observed until its tab or pane state appears, because Zellij applies CLI actions asynchronously.
+
+The OSC 52 copy cases ([Clipboard](#clipboard-osc-52)) run in Chromium against real clients. `native-linux-runtimes` runs them with Ubuntu's tmux, the checksum-verified Zellij 0.45.1 and the same-run stock Herdr. Locally:
+
+```sh
+LAZYSH_TEST_ZELLIJ=/path/to/zellij LAZYSH_TEST_HERDR=/path/to/herdr bun run --cwd apps/client test:e2e:multiplexers
+```
+
+Each case runs a private multiplexer server and client in a temporary directory, with every `HERDR_`, `ZELLIJ` and `TMUX` variable removed, so it never reaches a live session. A Zellij or Herdr case is skipped when its variable is unset (the `client` job installs only tmux) and tmux's is skipped without `tmux` and util-linux `script`, unless `CI` is set, where a missing binary fails.
 
 The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
 
