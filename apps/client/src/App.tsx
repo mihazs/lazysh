@@ -250,7 +250,7 @@ async function selectTransport(
       }
       const result = kind==='ssh' && entry
         ? entry.createIfMissing
-          ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
+          ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name,...(entry.tmuxServer===undefined?{}:{tmuxServer:entry.tmuxServer})},child.onEvent)
           : entry.kind==='tmux'
             ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
             : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent,...serverArgument(entry.tmuxServer))
@@ -1239,6 +1239,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(() => registry.sessions.length ? [] : readWorkspace());
   const [restoring, setRestoring] = useState(false);
+  /** Saved rmux sessions that are gone from their host, each waiting for the person to recreate it or let it go. */
+  const [recreateOffers, setRecreateOffers] = useState<{intent: SessionIntent; host: Host}[]>([]);
   const [restoreDetails, setRestoreDetails] = useState(false);
   const restoringRef = useRef(false);
   const mounted = useRef(true);
@@ -1723,7 +1725,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   /** Opens one saved remote intent with saved credentials, reattaching tmux or Herdr the way restore does.
    * `owned` tracks every native session it opens; a failure closes and forgets them before rethrowing. */
-  async function openSavedIntent(intent: SessionIntent, host: Host, owned: PendingSessions): Promise<LiveSession> {
+  async function openSavedIntent(intent: SessionIntent, host: Host, owned: PendingSessions, recreate = false): Promise<LiveSession> {
     let shell: Prepared | undefined;
     let child: Prepared | undefined;
     try {
@@ -1740,12 +1742,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
         child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
           intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, lease, ()=>mounted.current && lease.current(),
-          id=>owned.add(id),id=>owned.delete(id),intent.attached);
+          id=>owned.add(id),id=>owned.delete(id),recreate&&intent.attached?{...intent.attached,createIfMissing:true}:intent.attached);
         return child.session;
       }
       if (!intent.attached) return shell.session;
       child = await prepareSession(host.id, `${host.name} / ${intent.attached.name}`, shell.session.destination, lease);
-      const attached = intent.attached.kind === "tmux"
+      const attached = recreate
+        ? await api.attachDefaultMultiplexer(shell.session.id, {kind: intent.attached.kind, name: intent.attached.name, ...(intent.attached.tmuxServer === undefined ? {} : {tmuxServer: intent.attached.tmuxServer})}, child.onEvent)
+        : intent.attached.kind === "tmux"
         ? await api.attachTmux(shell.session.id, intent.attached.name, child.onEvent, intent.attached.tmuxServer)
         : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent, ...serverArgument(intent.attached.tmuxServer));
       child.establish(attached.sessionId);
@@ -1774,6 +1778,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     const restored: LiveSession[] = [];
     const remaining: SessionIntent[] = [];
     const failures: string[] = [];
+    const vanished: {intent: SessionIntent; host: Host}[] = [];
     for (const intent of previousWorkspace) {
       if (!mounted.current) break;
       if(intent.local) {
@@ -1800,7 +1805,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         restored.push(await openSavedIntent(intent, host, restoringSessions.current));
       } catch (error) {
         remaining.push(intent);
-        failures.push(`${host.name}: ${errorMessage(error)}`);
+        if (intent.attached?.kind === "rmux" && (error as {kind?: unknown} | null)?.kind === "multiplexer_session_missing") vanished.push({intent, host});
+        else failures.push(`${host.name}: ${errorMessage(error)}`);
       }
     }
     if (!mounted.current) {
@@ -1820,10 +1826,48 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       setView("terminal");
     }
     setPreviousWorkspace(remaining);
+    setRecreateOffers(vanished);
     setRestoring(false);
     restoringRef.current = false;
     if (restored.length) persistWorkspace([...next, ...remaining]);
     if (failures.length) setError(failures.join("\n"));
+  }
+  /** Creates the vanished session under its saved name and server, then opens it in place of the failed restore. */
+  async function recreateSession(offer: {intent: SessionIntent; host: Host}) {
+    if (restoringRef.current) return;
+    restoringRef.current = true;
+    setRestoring(true);
+    setError("");
+    try {
+      const fresh = await openSavedIntent(offer.intent, offer.host, restoringSessions.current, true);
+      if (!mounted.current) {
+        await restoringSessions.current.close(fresh.id).catch(()=>{});
+        disposeTerminal(fresh);
+        restoringSessions.current.clear();
+        return;
+      }
+      restoringSessions.current.clear();
+      const next = [...sessionsRef.current, fresh];
+      const remaining = previousWorkspace.filter(intent => intent !== offer.intent);
+      setSessions(next);
+      adoptRetained(fresh);
+      setActiveId(fresh.id);
+      setView("terminal");
+      setPreviousWorkspace(remaining);
+      setRecreateOffers(offers => offers.filter(item => item !== offer));
+      persistWorkspace([...next, ...remaining]);
+    } catch (error) {
+      if (mounted.current) setError(errorMessage(error));
+    } finally {
+      if (mounted.current) setRestoring(false);
+      restoringRef.current = false;
+    }
+  }
+  function forgetSavedSession(offer: {intent: SessionIntent; host: Host}) {
+    const remaining = previousWorkspace.filter(intent => intent !== offer.intent);
+    setPreviousWorkspace(remaining);
+    setRecreateOffers(offers => offers.filter(item => item !== offer));
+    persistWorkspace([...sessionsRef.current, ...remaining]);
   }
 
   useEffect(() => {
@@ -2147,10 +2191,18 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       disabled={restoring}
       onClick={() => {
         setPreviousWorkspace([]);
+        setRecreateOffers([]);
         persistWorkspace(sessionsRef.current);
       }}
     ><X size={18} aria-hidden="true" /></button>
     </div>
+    {recreateOffers.map(offer => <div className="workspace-recreate-offer" key={`${offer.host.id}:${offer.intent.attached?.tmuxServer ?? ""}:${offer.intent.attached?.name}`}>
+      <p className="workspace-restore-help" role="status">{t("appRecreateVanishedSession", {name: offer.intent.attached?.name ?? "", host: offer.host.name})}</p>
+      <div className="workspace-restore-row">
+        <button type="button" disabled={restoring} onClick={() => void recreateSession(offer)}>{t("appRecreateSession")}</button>
+        <button type="button" disabled={restoring} onClick={() => forgetSavedSession(offer)}>{t("appForgetSavedSession")}</button>
+      </div>
+    </div>)}
     {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
   </>;
   /** The tool groups of the phone control surfaces: the Workspace tools sheet pages them, the side menu stacks them. */

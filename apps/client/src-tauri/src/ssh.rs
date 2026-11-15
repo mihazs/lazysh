@@ -2926,6 +2926,23 @@ pub(crate) async fn exec_for_access(
     )
     .await
 }
+/// One bounded host command whose exit status the caller interprets.
+pub(crate) async fn exec_status_for_access(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+) -> Result<ExecOutput> {
+    exec_status(
+        session,
+        command,
+        lease,
+        OP_TIMEOUT,
+        FILE_LIMIT as usize,
+        None,
+        &mut |_| {},
+    )
+    .await
+}
 pub(crate) async fn exec_bounded(
     session: &Session,
     command: String,
@@ -3685,11 +3702,20 @@ pub async fn attach_multiplexer(
 ) -> AccessResult<Connected> {
     lease
         .run(async {
-            if create_if_missing.unwrap_or(false) {
+            let create = create_if_missing.unwrap_or(false);
+            // A saved rmux session lives in its daemon's memory: check it before attaching so a vanished one is reported
+            // as such (restore then offers to recreate it) instead of opening a terminal that exits at once.
+            if create || matches!(kind, crate::multiplexer::MultiplexerKind::Rmux) {
                 check_size(cols, rows)?;
-                if tmux_server.is_some() {return Err(SshError::new("invalid_tmux_server","Default entry uses the default multiplexer server"));}
-                let parent=state.session(&session_id).await?;
-                crate::multiplexer::prepare_default_entry(&parent,&lease,kind,&name).await?;
+                let parent = state.session(&session_id).await?;
+                crate::multiplexer::Entry {
+                    kind,
+                    name: name.clone(),
+                    tmux_server: tmux_server.clone(),
+                    create_if_missing: create,
+                }
+                .prepare(&parent, &lease)
+                .await?;
             }
             // Both public tmux attachment entry points must establish the same
             // native display binding; frontend routing is not the authority.
