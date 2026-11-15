@@ -1,21 +1,29 @@
-import {chmod,readFile,writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
-import {NativeGui} from './fixture';
+import {chmod,mkdir,readFile,symlink,writeFile} from 'node:fs/promises';
+import {dirname,join} from 'node:path';
+import {vi} from 'vitest';
+import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {SshFixture} from '../../../tests/support/sshFixture';
+import {NativeGui} from './fixture';
+import {socketInventory} from './socketOwner';
 import {openOwnedSsh,ownedCompanionSsh,ownedSshGui,typeText} from './sshUi';
 import {tmuxClients} from './tmuxPane';
 
 type Browser=NonNullable<NativeGui['browser']>;
+type Fixture=ReturnType<typeof ownedSshGui>;
 const lines=(path:string)=>readFile(path,'utf8').then(text=>text.split('\n').filter(Boolean),()=>[] as string[]);
+/** The session id the stand-in writes in every record of its transcript. */
+const session='5f0c1d2e-0000-4000-8000-0000000000aa';
+/** What the multiplexer says about the pane the GUI shows: a byte lazysh wrote to it or a reflow would change `pane`, and a reconnect would change `clients`. */
+export type PaneObservation={pane:string;clients:string;count:number};
 
 /**
  * The shared fixture agent (`src-tauri/src/tmux_agent_session_agent.sh`, also driven by the Rust scripted session) running in a
- * real tmux pane of an owned SSH server. It runs the real companion's `ingest --reported-history` hook with the pane's `TMUX_PANE`,
- * so the Agent view binds to its conversation the way it does to a Claude Code pane.
+ * real multiplexer pane of an owned SSH server, behind the real GUI. It logs every key its pane receives, so a byte nobody typed
+ * and the Agent view did not send shows up there.
  */
-export class ReportingAgent {
+export abstract class ReportingAgent {
   static readonly switcher='div[role="group"][aria-label="Session view"]';
-  private constructor(readonly gui:NativeGui,readonly ssh:SshFixture,readonly browser:Browser,readonly terminal:Awaited<ReturnType<Browser['$']>>,readonly name:string) {}
+  protected constructor(readonly gui:NativeGui,readonly ssh:SshFixture,readonly browser:Browser,readonly terminal:Awaited<ReturnType<Browser['$']>>) {}
   private path(name:string) {return join(this.ssh.directory,name);}
   /** What the agent logged: READY, SUBMIT <prompt>, HOLD, HOLD_ENDED and the other events of the stand-in. */
   log() {return lines(this.path('agent.log'));}
@@ -29,7 +37,21 @@ export class ReportingAgent {
   }
   /** Lets a `hold` turn finish. */
   release() {return writeFile(this.path('agent.log.release'),'');}
-  /** The tmux server's view of the pane the GUI shows; any byte lazysh wrote to or reflowed in the pane would change it. */
+  abstract pane():Promise<PaneObservation>;
+  /** Types into the visible terminal as a user does and presses Enter. */
+  async type(text:string) {await this.terminal.click();await typeText(this.browser,`${text}\n`);}
+  /** Copies the stand-in into the owned root; the multiplexer's pane runs it from there. */
+  protected static async install(directory:string) {
+    const script=join(directory,'agent.sh');
+    await writeFile(script,await readFile(join(import.meta.dirname,'../src-tauri/src/tmux_agent_session_agent.sh')),{mode:0o700,flag:'wx'});
+    return script;
+  }
+}
+
+/** The stand-in in a real tmux pane. It runs the real companion's `ingest --reported-history` hook with the pane's `TMUX_PANE`, so the Agent view binds to its conversation the way it does to a Claude Code pane. */
+export class TmuxReportingAgent extends ReportingAgent {
+  private constructor(gui:NativeGui,ssh:SshFixture,browser:Browser,terminal:ReportingAgent['terminal'],readonly name:string) {super(gui,ssh,browser,terminal);}
+  /** The tmux server's view of the pane the GUI shows. */
   async pane() {
     const [pane,clients]=await Promise.all([
       this.ssh.tmux(['display-message','-p','-t',this.name,'#{pane_id}:#{pane_pid}:#{pane_tty}:#{history_size}:#{cursor_x}:#{cursor_y}']),
@@ -37,24 +59,71 @@ export class ReportingAgent {
     ]);
     return {pane,clients,count:await tmuxClients(this.ssh)};
   }
-  /** Types into the visible terminal as a user does and presses Enter. */
-  async type(text:string) {await this.terminal.click();await typeText(this.browser,`${text}\n`);}
 
-  static async start(fixture:ReturnType<typeof ownedSshGui>) {
+  static async start(fixture:Fixture) {
     fixture.captureSafe=false;
     const {ssh,companion}=await ownedCompanionSsh(fixture,undefined,{tmux:process.env.LAZYSH_TEST_TMUX??true});
-    const root=join(import.meta.dirname,'../src-tauri/src/tmux_agent_session_agent.sh');
-    await writeFile(join(ssh.directory,'agent.sh'),await readFile(root),{mode:0o700,flag:'wx'});
+    const script=await this.install(ssh.directory);
     // A short command to type: the pane's shell replaces itself with the agent.
-    await writeFile(join(ssh.directory,'launch.sh'),`d=$(dirname "$0")\nexec bash "$d/agent.sh" "$d/session.jsonl" "$d/agent.log" '${companion}' "$d/state" report\n`,{mode:0o700,flag:'wx'});
+    await writeFile(join(ssh.directory,'launch.sh'),`d=$(dirname "$0")\nexec bash '${script}' "$d/session.jsonl" "$d/agent.log" '${companion}' "$d/state" report\n`,{mode:0o700,flag:'wx'});
     await chmod(join(ssh.directory,'launch.sh'),0o700);
     const gui=fixture.gui=await NativeGui.start();
     const name=`agent-${ssh.nonce.slice(0,12)}`;
     const {browser,terminal}=await openOwnedSsh(gui,ssh,'ssh',ssh.port,{kind:'tmux',name});
-    const agent=new ReportingAgent(gui,ssh,browser,terminal,name);
+    const agent=new TmuxReportingAgent(gui,ssh,browser,terminal,name);
     gui.stage='owned reporting agent launch';
     await agent.type(`exec bash ${ssh.directory}/launch.sh`);
-    await browser.waitUntil(async()=>(await agent.log()).includes('READY'),{timeout:20_000,timeoutMsg:'Reporting agent did not start in its pane'});
+    await agent.waitFor('READY');
+    return agent;
+  }
+}
+
+/** Every established connection to the owned server as its sshd sees it (port, the client's port, the socket's inode): a reconnect changes the row. */
+async function sshConnections(port:number) {
+  const address=`0100007F:${port.toString(16).toUpperCase().padStart(4,'0')}`;
+  const rows=(await socketInventory()).split('\n').slice(1).map(row=>row.trim().split(/\s+/)).filter(fields=>fields[1]===address && fields[3]==='01');
+  return rows.map(fields=>[fields[1],fields[2],fields[9]].join(' ')).sort();
+}
+
+/**
+ * The stand-in in a real guarded Herdr pane, started under the name `claude` because Herdr detects an agent by its process. Herdr
+ * links the conversation of the focused pane by the session that agent reports, which the transcript below answers to; the
+ * stand-in reports its state to Herdr's own CLI (see its `hook`).
+ */
+export class HerdrReportingAgent extends ReportingAgent {
+  private constructor(gui:NativeGui,private readonly herdr:HerdrFixture,browser:Browser,terminal:ReportingAgent['terminal'],private readonly paneId:string) {super(gui,herdr.ssh,browser,terminal);}
+  /** Herdr's view of the pane (its terminal, tab and scrollback length) and the server's SSH connections; the fixture's original receiver pane must stay empty. */
+  async pane() {
+    const info=JSON.parse(await this.herdr.run(['pane','get',this.paneId])).result.pane;
+    await this.herdr.expectBytes(Buffer.alloc(0));
+    const connections=await sshConnections(this.ssh.port);
+    return {pane:[info.pane_id,info.terminal_id,info.tab_id,info.scroll.max_offset_from_bottom].join(':'),clients:connections.join('\n'),count:connections.length};
+  }
+
+  static async start(fixture:Fixture) {
+    fixture.captureSafe=false;
+    const herdr=await HerdrFixture.start(herdrTools());fixture.ssh=herdr;
+    const {ssh}=herdr,directory=ssh.directory;
+    const script=await this.install(directory);
+    // Herdr resolves a reported Claude session in the agent's own home: `$HOME/.claude/projects/<folder>/<session>.jsonl`.
+    const transcript=join(directory,'.claude','projects','-work-fixture',`${session}.jsonl`);
+    await mkdir(dirname(transcript),{recursive:true,mode:0o700});
+    await symlink('/bin/bash',join(directory,'bin','claude'));
+    // The agent's tab is the focused one, so the attached client types into it and the Agent view follows it.
+    const tab=JSON.parse(await herdr.run(['tab','create','--workspace',herdr.metadata().agent.workspaceId,'--cwd',directory,'--label','OWNED_AGENT','--focus'])).result;
+    const pane:string=tab.root_pane.pane_id;
+    // Output before the agent starts is the scrollback a switch must not lose; the agent only clears the visible screen.
+    await herdr.run(['pane','run',pane,`i=0; while [ "$i" -lt 120 ]; do echo EARLIER_OUTPUT_$i; i=$((i+1)); done; exec '${directory}/bin/claude' '${script}' '${transcript}' '${directory}/agent.log' '${directory}/bin/lazysh-agent' '${directory}/state' keys`]);
+    // Herdr admits a session report only while it detects the agent, which it does a moment after the process starts.
+    await vi.waitFor(async()=>{
+      const agents:{pane_id:string;agent:string}[]=JSON.parse(await herdr.run(['api','snapshot'])).result.snapshot.agents;
+      if(!agents.some(row=>row.pane_id===pane && row.agent==='claude'))throw new Error('Owned Claude stand-in was not detected');
+    },{timeout:15_000,interval:100});
+    await herdr.run(['pane','report-agent-session',pane,'--source','herdr:claude','--agent','claude','--agent-session-id',session]);
+    const gui=fixture.gui=await NativeGui.start();
+    const {browser,terminal}=await openOwnedSsh(gui,ssh,'ssh',ssh.port,{kind:'herdr',name:herdr.name});
+    const agent=new HerdrReportingAgent(gui,herdr,browser,terminal,pane);
+    await agent.waitFor('READY');
     return agent;
   }
 }
