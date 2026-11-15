@@ -515,6 +515,113 @@ fn agent_detection_lists_only_executables_found_by_command_v() {
     }
 }
 
+/// Steps and reads on this device run through the real local host: argv stays literal,
+/// the exit status is data, and the shell builtin `command` resolves as it does over SSH.
+mod local {
+    use super::*;
+    use crate::host::tests::local::{lease, Isolated};
+    use tauri::Manager;
+
+    async fn step(host: &crate::host::Host, argv: &[&str]) -> Output {
+        let access = lease();
+        OnHost {
+            host,
+            access: &access,
+        }
+        .run(&args(argv), Duration::from_secs(20))
+        .await
+        .unwrap()
+    }
+    async fn resolved(
+        home: &Isolated,
+    ) -> (tauri::App<tauri::test::MockRuntime>, crate::host::Host) {
+        let (app, id) = home.session().await;
+        let host = crate::host::Host::resolve(&app.state(), &app.state(), &id, &lease())
+            .await
+            .unwrap();
+        (app, host)
+    }
+
+    #[tokio::test]
+    async fn steps_run_as_literal_argv_with_their_status_and_resolve_the_command_builtin() {
+        let home = Isolated::new();
+        let (_app, host) = resolved(&home).await;
+        let literal = "a b 'c' \"d\" $(touch nope);#";
+        let done = step(&host, &["printf", "%s", literal]).await;
+        assert_eq!((done.status, done.text.as_str()), (0, literal));
+        assert!(!home.path().join("nope").exists());
+        let done = step(&host, &["sh", "-c", "echo out; echo err >&2; exit 3"]).await;
+        assert_eq!(done.status, 3);
+        assert!(done.text.contains("out") && done.text.contains("err"));
+        let found = step(&host, &["command", "-v", "--", "sh"]).await;
+        assert_eq!(found.status, 0);
+        assert!(found.text.trim().ends_with("/sh"), "{}", found.text);
+        let missing = step(&host, &["command", "-v", "--", "lazysh-no-such-tool-1660"]).await;
+        assert_ne!(missing.status, 0);
+        let access = lease();
+        for kind in agent_kinds(&mut OnHost {
+            host: &host,
+            access: &access,
+        })
+        .await
+        .unwrap()
+        {
+            assert_eq!(
+                step(&host, &["command", "-v", "--", kind.executable])
+                    .await
+                    .status,
+                0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_repository_reports_its_root_head_and_worktrees() {
+        let home = Isolated::new();
+        let (_app, host) = resolved(&home).await;
+        let root = home.path().join("repo dir 'q'");
+        let path = |p: &std::path::Path| p.to_str().unwrap().to_owned();
+        let git = |dir: &std::path::Path, rest: &[&str]| {
+            let output = home
+                .command("git")
+                .args([
+                    "-C",
+                    &path(dir),
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.com",
+                ])
+                .args(rest)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        };
+        std::fs::create_dir(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "trunk"]);
+        git(&root, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let linked = home.path().join("linked");
+        git(
+            &root,
+            &["worktree", "add", "-q", "-b", "feature", &path(&linked)],
+        );
+        let access = lease();
+        let mut on = OnHost {
+            host: &host,
+            access: &access,
+        };
+        let found = repository(&mut on, &path(&linked)).await.unwrap();
+        // Git reports the resolved paths, so compare with the canonical ones.
+        let canonical = |p: &std::path::Path| path(&std::fs::canonicalize(p).unwrap());
+        assert_eq!(found.root, canonical(&linked));
+        assert_eq!((found.head.as_str(), found.detached), ("feature", false));
+        assert_eq!(found.main, canonical(&root));
+        assert_eq!(found.worktrees, [canonical(&root), canonical(&linked)]);
+        let error = repository(&mut on, &path(home.path())).await.unwrap_err();
+        assert_eq!(error.kind(), "not_a_repository");
+    }
+}
+
 #[test]
 fn bounded_keeps_host_text_but_strips_controls() {
     assert_eq!(bounded("  a\u{1b}[31mb\nc\r "), "a [31mb\nc");

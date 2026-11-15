@@ -103,8 +103,23 @@ pub(crate) mod local {
         }
         /// An adopted local session, with its application state beside the isolated home.
         pub(crate) async fn session(&self) -> (App<MockRuntime>, String) {
+            self.session_with(&[]).await
+        }
+        /// The same session with the test process's own `PATH`: a CI runner adds its tools
+        /// there, and the login shell the host tools normally read drops them.
+        pub(crate) async fn session_on_process_path(&self) -> (App<MockRuntime>, String) {
+            let path = std::env::var("PATH").unwrap();
+            self.session_with(&[("PATH", &path)]).await
+        }
+        async fn session_with(&self, extra: &[(&str, &str)]) -> (App<MockRuntime>, String) {
             let (app, id) = app(self.path()).await;
-            app.state::<LocalState>().set_test_env(self.variables());
+            let mut variables = self.variables();
+            variables.extend(
+                extra
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+            );
+            app.state::<LocalState>().set_test_env(variables);
             (app, id)
         }
         /// A program started as the session's host tools start one, for setup and teardown.
@@ -1567,5 +1582,48 @@ mod sdk {
         adb_in(&bin);
         assert!(adb_resolves(None, &path, temp.path()));
         assert!(!adb_resolves(sdk_root(&empty_sdk), &path, temp.path()));
+    }
+}
+
+/// A local companion run answers the marker where the SSH wrapper does, and fails otherwise.
+mod companion_answer {
+    use crate::{host::companion_answer, ssh::ExecOutput};
+
+    fn exit(status: Option<u32>, stdout: &str, stderr: &str) -> ExecOutput {
+        ExecOutput {
+            status,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
+    #[test]
+    fn a_missing_or_older_companion_answers_the_marker_and_a_real_failure_keeps_its_message() {
+        for status in [2, 126, 127] {
+            assert_eq!(
+                companion_answer(exit(Some(status), "", "usage"), "marker").unwrap(),
+                "marker"
+            );
+        }
+        assert_eq!(
+            companion_answer(exit(Some(0), "{\"ok\":true}", ""), "marker").unwrap(),
+            "{\"ok\":true}"
+        );
+        let failed = companion_answer(
+            exit(
+                Some(1),
+                "",
+                "lazysh-agent: HerdrFocusMissing: operation failed\n",
+            ),
+            "marker",
+        )
+        .unwrap_err();
+        assert_eq!(failed.kind(), "remote_command_failed");
+        assert_eq!(
+            failed.message(),
+            "lazysh-agent: HerdrFocusMissing: operation failed"
+        );
+        // A companion ended by a signal has no status and is not a marker.
+        assert!(companion_answer(exit(None, "", ""), "marker").is_err());
     }
 }

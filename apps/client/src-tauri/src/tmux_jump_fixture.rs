@@ -3647,6 +3647,25 @@ async fn owned_terminal_output(
     .await
     .expect("owned terminal did not expose expected marker")
 }
+/// The Herdr tree of `name` on the host of `source`, read as the renderer reads it.
+async fn herdr_snapshot(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+    name: &str,
+) -> crate::herdr::HerdrTree {
+    crate::herdr::herdr_tree(
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+        name.to_owned(),
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap()
+}
 async fn herdr_source_probe(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
@@ -3864,7 +3883,7 @@ async fn herdr_advanced(path: &std::path::Path, prior: u64) -> u64 {
 #[ignore = "requires owned local OpenSSH sshd and absolute LAZYSH_TEST_HERDR pointing to Herdr 0.9.3 to 0.9.5"]
 async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     use super::test_support::{ready_lease, unlocked_access};
-    use crate::herdr::{herdr_action, herdr_tree, HerdrAction};
+    use crate::herdr::{herdr_action, HerdrAction};
     use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
     let binary = PathBuf::from(
         std::env::var("LAZYSH_TEST_HERDR").expect("set an absolute supported Herdr binary path"),
@@ -3946,16 +3965,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         .all(|row| matches!(row["name"].as_str(), Some("aaa-first" | "zzz-selected"))));
     let selected = rows[1]["name"].as_str().unwrap().to_owned();
     assert_ne!(selected, rows[0]["name"].as_str().unwrap());
-    let tree = herdr_tree(
-        app.state(),
-        source.session_id.clone(),
-        selected.clone(),
-        lease.clone(),
-    )
-    .await
-    .unwrap()
-    .into_inner()
-    .unwrap();
+    let tree = herdr_snapshot(&app, &lease, &source, &selected).await;
     assert_eq!(tree.workspaces.len(), 1);
     assert_eq!(tree.panes.len(), 1);
     let workspace = tree.workspaces[0].workspace_id.clone();
@@ -3970,6 +3980,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         },
     ] {
         herdr_action(
+            app.state(),
             app.state(),
             source.session_id.clone(),
             selected.clone(),
@@ -4037,16 +4048,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     herdr_advanced(&heartbeat, detached).await;
     assert_eq!(herdr_counter(&pidfile).await, Some(workload_pid));
     servers.assert_running();
-    let after = herdr_tree(
-        app.state(),
-        source.session_id.clone(),
-        selected.clone(),
-        lease.clone(),
-    )
-    .await
-    .unwrap()
-    .into_inner()
-    .unwrap();
+    let after = herdr_snapshot(&app, &lease, &source, &selected).await;
     assert_eq!(after.panes[0].pane_id, pane);
     assert_eq!(after.workspaces[0].workspace_id, workspace);
     herdr_source_probe(
@@ -4208,20 +4210,12 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
         .await
         .unwrap();
     herdr_retired(&state, &child.session_id, &session, true).await;
-    let tree = crate::herdr::herdr_tree(
-        app.state(),
-        source.session_id.clone(),
-        "owned-default".into(),
-        lease.clone(),
-    )
-    .await
-    .unwrap()
-    .into_inner()
-    .unwrap();
+    let tree = herdr_snapshot(&app, &lease, &source, "owned-default").await;
     let pane = tree.panes[0].pane_id.clone();
     authority.lock().unwrap();
     assert!(crate::herdr_path::admit(&parent, &lease).await.is_err());
     assert!(crate::herdr::herdr_action(
+        app.state(),
         app.state(),
         source.session_id.clone(),
         "owned-default".into(),
@@ -4338,6 +4332,7 @@ async fn real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one(
             .contains(&"owned-managed".to_owned()));
         let tree = crate::herdr::herdr_tree(
             app.state(),
+            app.state(),
             source.session_id.clone(),
             "owned-managed".into(),
             lease.clone(),
@@ -4350,6 +4345,7 @@ async fn real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one(
             target: tree.workspaces[0].workspace_id.clone(),
         };
         crate::herdr::herdr_action(
+            app.state(),
             app.state(),
             source.session_id.clone(),
             "owned-managed".into(),
@@ -4392,6 +4388,7 @@ async fn real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one(
     let (app, source) = managed_herdr_source(&f, &lease).await;
     assert!(!herdr_discovery_reports_herdr(&app, &lease, &source).await);
     assert!(crate::herdr::herdr_tree(
+        app.state(),
         app.state(),
         source.session_id.clone(),
         "owned-managed".into(),

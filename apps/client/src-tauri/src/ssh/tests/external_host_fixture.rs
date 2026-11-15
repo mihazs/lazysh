@@ -203,12 +203,22 @@ impl ExternalHost {
         );
     }
     async fn herdr_tree(&self, name: &str) -> crate::herdr::HerdrTree {
-        done(herdr_tree(self.app.state(), self.id(), name.into(), self.lease.clone()).await)
+        done(
+            herdr_tree(
+                self.app.state(),
+                self.app.state(),
+                self.id(),
+                name.into(),
+                self.lease.clone(),
+            )
+            .await,
+        )
     }
     async fn herdr(&self, name: &str, action: Value) {
         let action = serde_json::from_value(action).unwrap();
         done(
             herdr_action(
+                self.app.state(),
                 self.app.state(),
                 self.id(),
                 name.into(),

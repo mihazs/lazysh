@@ -1,5 +1,7 @@
 use crate::app_lock::AccessLease;
-use crate::ssh::{quote, AppState, Result, SshError};
+use crate::host::{Cmd, Host};
+use crate::local::LocalState;
+use crate::ssh::{quote, AppState, Result, SshError, FILE_LIMIT, OP_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -104,9 +106,13 @@ fn target(value: &str, kind: Option<char>) -> Result<()> {
     }
     Ok(())
 }
-fn command(session: &str, args: String) -> Result<String> {
+/// `herdr --session <session> <args…>` as argv: the remote arm renders it into one command
+/// line, the local arm runs it directly, so no label or path is ever shell syntax.
+fn command(session: &str, args: &[&str]) -> Result<Cmd> {
     text(session, 200)?;
-    Ok(format!("herdr --session {} {args}", quote(session)))
+    let mut argv = vec!["herdr", "--session", session];
+    argv.extend(args);
+    Ok(Cmd::new(&[], &argv).herdr())
 }
 fn parse(output: &str) -> Result<HerdrTree> {
     #[derive(Deserialize)]
@@ -292,31 +298,37 @@ pub enum ResizeDirection {
     Up,
     Down,
 }
-fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
-    let text_arg = |value: &str, max| -> Result<String> {
-        text(value, max)?;
-        Ok(quote(value))
-    };
-    let args = match action {
-        HerdrAction::CreateWorkspace { label, directory } => format!(
-            "workspace create --no-focus --label {} --cwd {}",
-            text_arg(label, 200)?,
-            text_arg(directory, 4096)?
-        ),
+/// The command an action runs; exact pane focus is the one action that is a companion
+/// command (`lazysh-agent`) and not a Herdr one.
+fn action_command(session: &str, action: &HerdrAction) -> Result<Cmd> {
+    match action {
+        HerdrAction::CreateWorkspace { label, directory } => {
+            text(label, 200)?;
+            text(directory, 4096)?;
+            command(
+                session,
+                &[
+                    "workspace",
+                    "create",
+                    "--no-focus",
+                    "--label",
+                    label,
+                    "--cwd",
+                    directory,
+                ],
+            )
+        }
         HerdrAction::RenameWorkspace {
             target: value,
             label,
         } => {
             target(value, None)?;
-            format!(
-                "workspace rename {} {}",
-                quote(value),
-                text_arg(label, 200)?
-            )
+            text(label, 200)?;
+            command(session, &["workspace", "rename", value, label])
         }
         HerdrAction::FocusWorkspace { target: value } => {
             target(value, None)?;
-            format!("workspace focus {}", quote(value))
+            command(session, &["workspace", "focus", value])
         }
         HerdrAction::CreateTab {
             workspace,
@@ -324,11 +336,21 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
             directory,
         } => {
             target(workspace, None)?;
-            format!(
-                "tab create --no-focus --workspace {} --label {} --cwd {}",
-                quote(workspace),
-                text_arg(label, 200)?,
-                text_arg(directory, 4096)?
+            text(label, 200)?;
+            text(directory, 4096)?;
+            command(
+                session,
+                &[
+                    "tab",
+                    "create",
+                    "--no-focus",
+                    "--workspace",
+                    workspace,
+                    "--label",
+                    label,
+                    "--cwd",
+                    directory,
+                ],
             )
         }
         HerdrAction::RenameTab {
@@ -336,28 +358,35 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
             label,
         } => {
             target(value, Some('t'))?;
-            format!("tab rename {} {}", quote(value), text_arg(label, 200)?)
+            text(label, 200)?;
+            command(session, &["tab", "rename", value, label])
         }
         HerdrAction::CloseTab { target: value } => {
             target(value, Some('t'))?;
-            format!("tab close {}", quote(value))
+            command(session, &["tab", "close", value])
         }
         HerdrAction::FocusTab { target: value } => {
             target(value, Some('t'))?;
-            format!("tab focus {}", quote(value))
+            command(session, &["tab", "focus", value])
         }
         HerdrAction::FocusPane { target: value } => {
             target(value, Some('p'))?;
             text(session, 200)?;
-            return Ok(format!(
-                "lazysh-agent herdr-focus-pane --session {} --pane {}",
-                quote(session),
-                quote(value)
-            ));
+            Ok(Cmd::new(
+                &[],
+                &[
+                    "lazysh-agent",
+                    "herdr-focus-pane",
+                    "--session",
+                    session,
+                    "--pane",
+                    value,
+                ],
+            ))
         }
         HerdrAction::FocusAgent { target: value } => {
             target(value, Some('p'))?;
-            format!("agent focus {}", quote(value))
+            command(session, &["agent", "focus", value])
         }
         HerdrAction::SplitPane {
             target: value,
@@ -365,25 +394,34 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
             directory,
         } => {
             target(value, Some('p'))?;
-            format!(
-                "pane split --pane {} --direction {} --cwd {} --no-focus",
-                quote(value),
-                if *horizontal { "right" } else { "down" },
-                text_arg(directory, 4096)?
+            text(directory, 4096)?;
+            command(
+                session,
+                &[
+                    "pane",
+                    "split",
+                    "--pane",
+                    value,
+                    "--direction",
+                    if *horizontal { "right" } else { "down" },
+                    "--cwd",
+                    directory,
+                    "--no-focus",
+                ],
             )
         }
         HerdrAction::ZoomPane { target: value } => {
             target(value, Some('p'))?;
-            format!("pane zoom --pane {} --toggle", quote(value))
+            command(session, &["pane", "zoom", "--pane", value, "--toggle"])
         }
         HerdrAction::ClosePane { target: value } => {
             target(value, Some('p'))?;
-            format!("pane close {}", quote(value))
+            command(session, &["pane", "close", value])
         }
         // Never `--group`: a primary workspace with linked worktree workspaces is refused by Herdr, not widened.
         HerdrAction::CloseWorkspace { target: value } => {
             target(value, None)?;
-            format!("workspace close {}", quote(value))
+            command(session, &["workspace", "close", value])
         }
         HerdrAction::RenamePane {
             target: value,
@@ -397,7 +435,8 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
                     "Invalid Herdr name or path",
                 ));
             }
-            format!("pane rename {} {}", quote(value), text_arg(label, 200)?)
+            text(label, 200)?;
+            command(session, &["pane", "rename", value, label])
         }
         HerdrAction::ResizePane {
             target: value,
@@ -411,29 +450,41 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
                     "Resize by 1 to 50 percent of the split",
                 ));
             }
-            format!(
-                "pane resize --pane {} --direction {} --amount 0.{amount:02}",
-                quote(value),
-                match direction {
-                    ResizeDirection::Left => "left",
-                    ResizeDirection::Right => "right",
-                    ResizeDirection::Up => "up",
-                    ResizeDirection::Down => "down",
-                }
+            command(
+                session,
+                &[
+                    "pane",
+                    "resize",
+                    "--pane",
+                    value,
+                    "--direction",
+                    match direction {
+                        ResizeDirection::Left => "left",
+                        ResizeDirection::Right => "right",
+                        ResizeDirection::Up => "up",
+                        ResizeDirection::Down => "down",
+                    },
+                    "--amount",
+                    &format!("0.{amount:02}"),
+                ],
             )
         }
-    };
-    command(session, args)
+    }
 }
 /// The newest `lines` rows of one pane (soft wraps joined); Herdr serves at most 1000 of them.
-fn history_command(session: &str, pane: &str, lines: usize) -> Result<String> {
+fn history_command(session: &str, pane: &str, lines: usize) -> Result<Cmd> {
     target(pane, Some('p'))?;
     command(
         session,
-        format!(
-            "pane read {} --source recent-unwrapped --lines {lines}",
-            quote(pane)
-        ),
+        &[
+            "pane",
+            "read",
+            pane,
+            "--source",
+            "recent-unwrapped",
+            "--lines",
+            &lines.to_string(),
+        ],
     )
 }
 fn focused_pane(tree: &HerdrTree) -> Result<&Pane> {
@@ -449,11 +500,13 @@ pub(crate) async fn focused_history_command(
     lines: usize,
     access: &AccessLease,
 ) -> Result<String> {
-    let tree = read_tree(session, name, access).await?;
-    Ok(crate::herdr_path::select(
-        &history_command(name, &focused_pane(&tree)?.pane_id, lines)?,
-        crate::herdr_path::admit(session, access).await?,
-    ))
+    let tree = read_tree_ssh(session, name, access).await?;
+    crate::herdr_backend::resolve(
+        session,
+        access,
+        &history_command(name, &focused_pane(&tree)?.pane_id, lines)?.render(),
+    )
+    .await
 }
 /// Herdr reports a stale exact target as one JSON error line on stderr. Both
 /// 0.9.3 and 0.9.5 use these codes; 0.9.4+ also returns them for out-of-range
@@ -497,14 +550,23 @@ pub(crate) fn missing_target(error: SshError) -> SshError {
     }
 }
 
-async fn read_tree(
+async fn read_tree(host: &Host, name: &str, access: &AccessLease) -> Result<HerdrTree> {
+    parse(
+        &host
+            .run(access, &command(name, &["api", "snapshot"])?)
+            .await?,
+    )
+}
+async fn read_tree_ssh(
     session: &crate::ssh::Session,
     name: &str,
     access: &AccessLease,
 ) -> Result<HerdrTree> {
-    let command = command(name, "api snapshot".into())?;
-    let command = crate::herdr_backend::resolve(session, access, &command).await?;
-    parse(&crate::ssh::exec_for_access(session, command, access).await?)
+    parse(
+        &command(name, &["api", "snapshot"])?
+            .exec_ssh(session, access, OP_TIMEOUT, FILE_LIMIT as usize)
+            .await?,
+    )
 }
 
 fn selected_agent(tree: &HerdrTree, pane: &str, terminal: &str, agent: &str, id: &str) -> bool {
@@ -568,6 +630,36 @@ pub(crate) async fn conversation_read(
     }
 }
 
+/// [`conversation_read`] on the host of a session: a local companion answers the same markers the SSH wrapper does.
+async fn conversation_read_on(
+    host: &Host,
+    original: String,
+    allow_large_history: bool,
+    access: &AccessLease,
+) -> Result<String> {
+    match host {
+        Host::Remote(session) => {
+            conversation_read(session, original, allow_large_history, access).await
+        }
+        #[cfg(desktop)]
+        Host::Local(_) => {
+            let requested = if allow_large_history {
+                format!("{original} --allow-large-history")
+            } else {
+                original.clone()
+            };
+            let raw = host
+                .companion_required(access, requested, CONVERSATION_COMPANION_REQUIRED)
+                .await?;
+            if allow_large_history && raw.trim() == CONVERSATION_COMPANION_REQUIRED {
+                host.companion_required(access, original, CONVERSATION_COMPANION_REQUIRED)
+                    .await
+            } else {
+                Ok(raw)
+            }
+        }
+    }
+}
 fn conversation_page(raw: &str, agent: &str) -> Result<serde_json::Value> {
     if raw.trim() == CONVERSATION_COMPANION_REQUIRED {
         return Err(SshError::new(
@@ -597,7 +689,7 @@ pub(crate) async fn check_selected(
 ) -> Result<()> {
     target(pane, Some('p'))?;
     text(terminal, 256)?;
-    let tree = read_tree(session, name, access).await?;
+    let tree = read_tree_ssh(session, name, access).await?;
     if selected_agent(&tree, pane, terminal, agent, id) {
         return Ok(());
     }
@@ -623,6 +715,7 @@ pub struct HerdrConversationTarget {
 #[tauri::command]
 pub async fn agent_herdr_conversation(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     target: HerdrConversationTarget,
     access: AccessLease,
@@ -651,7 +744,7 @@ pub async fn agent_herdr_conversation(
                     "Invalid agent session reference",
                 ));
             }
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             let command = format!(
                 "lazysh-agent herdr-conversation --agent {} --session-id {}",
                 quote(&agent),
@@ -660,8 +753,8 @@ pub async fn agent_herdr_conversation(
             // The check of the pane and the read of the conversation do not depend on each other, so they overlap; what the
             // check found still decides first, and the tree is read again after the conversation (below).
             let (before, raw) = tokio::join!(
-                read_tree(&session, &herdr_session, &access),
-                conversation_read(&session, command, allow_large_history, &access)
+                read_tree(&host, &herdr_session, &access),
+                conversation_read_on(&host, command, allow_large_history, &access)
             );
             if !selected_agent(&before?, &pane_id, &terminal_id, &agent, &agent_session_id) {
                 return Err(SshError::new(
@@ -671,9 +764,17 @@ pub async fn agent_herdr_conversation(
             }
             let raw = raw?;
             let page = conversation_page(&raw, &agent)?;
-            let after = read_tree(&session, &herdr_session, &access).await?;
+            let after = read_tree(&host, &herdr_session, &access).await?;
+            // A local session cannot be swapped for another one under the same id; closing it cancels the read.
+            let same_session = match &host {
+                Host::Remote(session) => {
+                    std::sync::Arc::ptr_eq(session, &state.session(&session_id).await?)
+                }
+                #[cfg(desktop)]
+                Host::Local(_) => true,
+            };
             if !selected_agent(&after, &pane_id, &terminal_id, &agent, &agent_session_id)
-                || !std::sync::Arc::ptr_eq(&session, &state.session(&session_id).await?)
+                || !same_session
             {
                 return Err(SshError::new(
                     "herdr_target_missing",
@@ -687,20 +788,25 @@ pub async fn agent_herdr_conversation(
 #[tauri::command]
 pub async fn herdr_tree(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     name: String,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<HerdrTree> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            read_tree(&session, &name, &access).await
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            read_tree(&host, &name, &access).await
         })
         .await
 }
+/// Printed instead of the focus reply when the host companion predates `herdr-focus-pane`.
+const FOCUS_COMPANION_REQUIRED: &str = "lazysh-herdr-companion-required";
+
 #[tauri::command]
 pub async fn herdr_action(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     name: String,
     action: HerdrAction,
@@ -708,45 +814,49 @@ pub async fn herdr_action(
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
-            let command = action_command(&name, &action)?;
-            let session = state.session(&session_id).await?;
+            let cmd = action_command(&name, &action)?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             let pane = match &action {
                 HerdrAction::FocusPane { target } => Some(target.as_str()),
                 _ => None,
             };
-            let command = if pane.is_some() {
-                crate::companion::required_command(&session, command, "lazysh-herdr-companion-required", &access).await?
-            } else {
-                command
-            };
-            let command = crate::herdr_backend::resolve(&session, &access, &command).await?;
-            // Closing a tab, pane or workspace moves the view like a focus does, so the input turn bound to the old view is retired first.
-            let moves_view = matches!(
-                action,
-                HerdrAction::FocusWorkspace { .. }
-                    | HerdrAction::FocusTab { .. }
-                    | HerdrAction::FocusPane { .. }
-                    | HerdrAction::FocusAgent { .. }
-                    | HerdrAction::CloseTab { .. }
-                    | HerdrAction::ClosePane { .. }
-                    | HerdrAction::CloseWorkspace { .. }
-            );
-            let retained = if moves_view {
-                crate::herdr_guard::retire_for_view(&session, &access)
-                    .await?
-                    .map(|permit| permit as std::sync::Arc<dyn Send + Sync>)
-            } else {
-                None
-            };
-            let output = crate::ssh::exec_bounded(
-                &session,
-                command,
-                &access,
-                crate::ssh::OP_TIMEOUT,
-                crate::ssh::FILE_LIMIT as usize,
-                retained,
-            )
-            .await
+            let output = match &host {
+                Host::Remote(session) => {
+                    let command = cmd.render();
+                    let command = if pane.is_some() {
+                        crate::companion::required_command(session, command, FOCUS_COMPANION_REQUIRED, &access).await?
+                    } else {
+                        command
+                    };
+                    let command = crate::herdr_backend::resolve(session, &access, &command).await?;
+                    // Closing a tab, pane or workspace moves the view like a focus does, so the input turn bound to the old view is retired first.
+                    let moves_view = matches!(
+                        action,
+                        HerdrAction::FocusWorkspace { .. }
+                            | HerdrAction::FocusTab { .. }
+                            | HerdrAction::FocusPane { .. }
+                            | HerdrAction::FocusAgent { .. }
+                            | HerdrAction::CloseTab { .. }
+                            | HerdrAction::ClosePane { .. }
+                            | HerdrAction::CloseWorkspace { .. }
+                    );
+                    let retained = if moves_view {
+                        crate::herdr_guard::retire_for_view(session, &access)
+                            .await?
+                            .map(|permit| permit as std::sync::Arc<dyn Send + Sync>)
+                    } else {
+                        None
+                    };
+                    crate::ssh::exec_bounded(session, command, &access, OP_TIMEOUT, FILE_LIMIT as usize, retained).await
+                }
+                // No input guard is bound to a local session yet, so a view change has no turn to retire.
+                #[cfg(desktop)]
+                Host::Local(_) if pane.is_some() => {
+                    host.companion_required(&access, cmd.render(), FOCUS_COMPANION_REQUIRED).await
+                }
+                #[cfg(desktop)]
+                Host::Local(_) => host.run(&access, &cmd).await,
+            }
             .map_err(missing_target)?;
             if let Some(pane) = pane {
                 #[derive(Deserialize)]
@@ -756,7 +866,9 @@ pub async fn herdr_action(
                     status: String,
                     pane_id: String,
                 }
-                if output.trim()=="lazysh-herdr-companion-required" {return Err(SshError::new("herdr_focus_companion_required","Install or update the companion from Agents for exact Herdr pane navigation"));}
+                if output.trim() == FOCUS_COMPANION_REQUIRED {
+                    return Err(SshError::new("herdr_focus_companion_required","Install or update the companion from Agents for exact Herdr pane navigation"));
+                }
                 let reply: Focused = serde_json::from_str(&output)?;
                 if reply.schema_version != 1 || reply.status != "focused" || reply.pane_id != pane {
                     return Err(SshError::new(
@@ -819,6 +931,10 @@ mod tests {
     }
 
     use super::*;
+    #[cfg(unix)]
+    use crate::host::tests::local::{lease, ok, Isolated};
+    #[cfg(unix)]
+    use tauri::Manager;
 
     #[test]
     fn conversation_target_requires_exact_ipc_fields() {
@@ -1010,8 +1126,9 @@ mod tests {
                         target: pane.clone()
                     }
                 )
-                .unwrap(),
-                format!("lazysh-agent herdr-focus-pane --session 'owned' --pane '{pane}'")
+                .unwrap()
+                .render(),
+                format!("lazysh-agent herdr-focus-pane --session owned --pane {pane}")
             );
             assert_eq!(
                 action_command(
@@ -1020,8 +1137,9 @@ mod tests {
                         target: pane.clone()
                     }
                 )
-                .unwrap(),
-                format!("herdr --session 'owned' agent focus '{pane}'")
+                .unwrap()
+                .render(),
+                format!("herdr --session owned agent focus {pane}")
             );
         }
         for suffix in ["I", "L", "O", "U", "a", "é", "-", "_", "1;id", "1:2", ""] {
@@ -1038,8 +1156,9 @@ mod tests {
                     target: "w1:t2".into()
                 }
             )
-            .unwrap(),
-            "herdr --session 'owned' tab close 'w1:t2'"
+            .unwrap()
+            .render(),
+            "herdr --session owned tab close w1:t2"
         );
         for bad in ["", "w1", "w1:p2", "w1:t", "t2", "w1:t2;id", "-a"] {
             assert!(
@@ -1050,25 +1169,25 @@ mod tests {
     }
     #[test]
     fn closes_renames_and_resizes_a_pane_by_exact_id_with_a_literal_label() {
-        let command = |action| action_command("owned", &action).unwrap();
+        let command = |action| action_command("owned", &action).unwrap().render();
         assert_eq!(
             command(HerdrAction::ClosePane {
                 target: "w1:p3".into()
             }),
-            "herdr --session 'owned' pane close 'w1:p3'"
+            "herdr --session owned pane close w1:p3"
         );
         assert_eq!(
             command(HerdrAction::CloseWorkspace {
                 target: "w2".into()
             }),
-            "herdr --session 'owned' workspace close 'w2'"
+            "herdr --session owned workspace close w2"
         );
         assert_eq!(
             command(HerdrAction::RenamePane {
                 target: "w1:p3".into(),
                 label: "build 'x' $(touch nope) `id`;".into()
             }),
-            "herdr --session 'owned' pane rename 'w1:p3' 'build '\\''x'\\'' $(touch nope) `id`;'"
+            "herdr --session owned pane rename w1:p3 'build '\\''x'\\'' $(touch nope) `id`;'"
         );
         for (direction, word, amount, ratio) in [
             (ResizeDirection::Left, "left", 5, "0.05"),
@@ -1082,7 +1201,7 @@ mod tests {
                     direction,
                     amount
                 }),
-                format!("herdr --session 'owned' pane resize --pane 'w1:p3' --direction {word} --amount {ratio}")
+                format!("herdr --session owned pane resize --pane w1:p3 --direction {word} --amount {ratio}")
             );
         }
     }
@@ -1331,6 +1450,22 @@ mod tests {
             );
         }
     }
+    /// Polls until the isolated Herdr server behind `herdr` answers a snapshot.
+    fn wait_until_ready(herdr: impl Fn() -> std::process::Command) {
+        let ready = (0..100).any(|_| {
+            let ready = herdr()
+                .args(["--session", "default", "api", "snapshot"])
+                .output()
+                .unwrap()
+                .status
+                .success();
+            if !ready {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            ready
+        });
+        assert!(ready, "isolated Herdr server did not become ready");
+    }
     /// One isolated stock Herdr server; `bin` precedes PATH for pane programs.
     struct RealHerdr {
         temp: tempfile::TempDir,
@@ -1354,20 +1489,7 @@ mod tests {
                 .spawn()
                 .unwrap();
             let herdr = Self { temp, server };
-            let ready = (0..100).any(|_| {
-                let ready = herdr
-                    .command("herdr")
-                    .args(["--session", "default", "api", "snapshot"])
-                    .output()
-                    .unwrap()
-                    .status
-                    .success();
-                if !ready {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                ready
-            });
-            assert!(ready, "isolated Herdr server did not become ready");
+            wait_until_ready(|| herdr.command("herdr"));
             herdr
         }
         fn configured(home: &std::path::Path, program: &str) -> std::process::Command {
@@ -1392,8 +1514,11 @@ mod tests {
         fn command(&self, program: &str) -> std::process::Command {
             Self::configured(self.temp.path(), program)
         }
-        fn run(&self, text: String) -> String {
-            lazysh_common::test_support::successful_output(self.command("sh").arg("-c").arg(text))
+        /// The command as the remote arm sends it, run through `sh`.
+        fn run(&self, cmd: Cmd) -> String {
+            lazysh_common::test_support::successful_output(
+                self.command("sh").arg("-c").arg(cmd.render()),
+            )
         }
         fn path(&self) -> &std::path::Path {
             self.temp.path()
@@ -1417,7 +1542,7 @@ mod tests {
             temp.join("bin").join("lazysh-agent"),
         )
         .unwrap();
-        let run = |text: String| herdr.run(text);
+        let run = |cmd: Cmd| herdr.run(cmd);
         let session = "default";
         run(action_command(
             session,
@@ -1427,7 +1552,7 @@ mod tests {
             },
         )
         .unwrap());
-        let snapshot = || parse(&run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let snapshot = || parse(&run(command(session, &["api", "snapshot"]).unwrap())).unwrap();
         let tree = snapshot();
         let workspace = tree.workspaces[0].workspace_id.clone();
         let pane = tree.panes[0].pane_id.clone();
@@ -1435,10 +1560,17 @@ mod tests {
         let tab = tree.panes[0].tab_id.clone();
         run(command(
             session,
-            format!(
-                "pane report-agent --source lazysh-test --agent codex --state blocked {}",
-                quote(&pane)
-            ),
+            &[
+                "pane",
+                "report-agent",
+                "--source",
+                "lazysh-test",
+                "--agent",
+                "codex",
+                "--state",
+                "blocked",
+                &pane,
+            ],
         )
         .unwrap());
         let reported = snapshot();
@@ -1453,8 +1585,19 @@ mod tests {
         assert_eq!(agent.pane_id, pane);
         run(command(
             session,
-            format!("pane report-agent-session {} --source herdr:codex --agent codex --agent-session-id lazysh-owned-634", quote(&pane)),
-        ).unwrap());
+            &[
+                "pane",
+                "report-agent-session",
+                &pane,
+                "--source",
+                "herdr:codex",
+                "--agent",
+                "codex",
+                "--agent-session-id",
+                "lazysh-owned-634",
+            ],
+        )
+        .unwrap());
         let referenced = snapshot();
         let projected = referenced
             .agents
@@ -1573,7 +1716,7 @@ mod tests {
             let output = herdr
                 .command("sh")
                 .arg("-c")
-                .arg(action_command(session, action).unwrap())
+                .arg(action_command(session, action).unwrap().render())
                 .output()
                 .unwrap();
             assert!(!output.status.success());
@@ -1643,12 +1786,11 @@ mod tests {
         assert!(!temp.join("nope").exists());
         // The ratio of the one split of the first workspace's tab, read through `pane layout`.
         let split = || -> (f64, [u64; 2]) {
-            let layout: serde_json::Value = serde_json::from_str(&run(command(
-                session,
-                format!("pane layout --pane {}", quote(&left)),
-            )
-            .unwrap()))
-            .unwrap();
+            let layout: serde_json::Value =
+                serde_json::from_str(&run(
+                    command(session, &["pane", "layout", "--pane", &left]).unwrap()
+                ))
+                .unwrap();
             let layout = &layout["result"]["layout"];
             assert_eq!(layout["splits"].as_array().unwrap().len(), 1);
             let width = |pane: &str| {
@@ -1746,11 +1888,18 @@ mod tests {
             .clone();
         run(command(
             session,
-            format!(
-                "worktree create --workspace {} --branch linked --path {} --trust-repository --no-focus",
-                quote(&primary),
-                quote(temp.join("linked").to_str().unwrap())
-            ),
+            &[
+                "worktree",
+                "create",
+                "--workspace",
+                &primary,
+                "--branch",
+                "linked",
+                "--path",
+                temp.join("linked").to_str().unwrap(),
+                "--trust-repository",
+                "--no-focus",
+            ],
         )
         .unwrap());
         assert_eq!(snapshot().workspaces.len(), 4);
@@ -1778,7 +1927,7 @@ mod tests {
                 .count(),
             1
         );
-        run(command(session, "server stop".into()).unwrap());
+        run(command(session, &["server", "stop"]).unwrap());
     }
     // The fake `codex` is a POSIX shell script made executable with a Unix mode.
     #[cfg(unix)]
@@ -1819,7 +1968,7 @@ mod tests {
             .unwrap(),
         );
         let snapshot =
-            || parse(&herdr.run(command(session, "api snapshot".into()).unwrap())).unwrap();
+            || parse(&herdr.run(command(session, &["api", "snapshot"]).unwrap())).unwrap();
         let tree = snapshot();
         let workspace = &tree
             .workspaces
@@ -1834,7 +1983,7 @@ mod tests {
             .unwrap()
             .pane_id
             .clone();
-        herdr.run(command(session, format!("pane run {} codex", quote(&pane))).unwrap());
+        herdr.run(command(session, &["pane", "run", &pane, "codex"]).unwrap());
         let expect = |status: &str| {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             loop {
@@ -1861,7 +2010,7 @@ mod tests {
         };
         // Herdr 0.9.3 has no idle rule for an idle Codex prompt and reports
         // Unknown; 0.9.4 and later settle the same prompt to Idle.
-        let version = herdr.run("herdr --version".into());
+        let version = herdr.run(Cmd::new(&[], &["herdr", "--version"]));
         let idle = if version.trim() == "herdr 0.9.3" {
             "unknown"
         } else {
@@ -1882,10 +2031,17 @@ mod tests {
         herdr.run(
             command(
                 session,
-                format!(
-                    "pane report-agent-session {} --source herdr:codex --agent codex --agent-session-id lazysh-owned-990",
-                    quote(&pane)
-                ),
+                &[
+                    "pane",
+                    "report-agent-session",
+                    &pane,
+                    "--source",
+                    "herdr:codex",
+                    "--agent",
+                    "codex",
+                    "--agent-session-id",
+                    "lazysh-owned-990",
+                ],
             )
             .unwrap(),
         );
@@ -1894,7 +2050,107 @@ mod tests {
             serde_json::to_value(&agent.agent_session).unwrap(),
             serde_json::json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"lazysh-owned-990"})
         );
-        herdr.run(command(session, "server stop".into()).unwrap());
+        herdr.run(command(session, &["server", "stop"]).unwrap());
+    }
+    /// Stops the isolated Herdr server a local-session test started.
+    #[cfg(unix)]
+    struct LocalServer(std::process::Child);
+    #[cfg(unix)]
+    impl Drop for LocalServer {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires herdr on PATH; runs an isolated headless server"]
+    async fn real_local_session_shows_the_tree_focuses_a_tab_and_creates_workspaces_with_literal_names(
+    ) {
+        let home = Isolated::new();
+        let (app, id) = home.session_on_process_path().await;
+        // The session's host tools and this server see the same temporary HOME and XDG_CONFIG_HOME.
+        let server = home
+            .command("herdr")
+            .arg("server")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let _server = LocalServer(server);
+        wait_until_ready(|| home.command("herdr"));
+        let tree = || {
+            ok(herdr_tree(
+                app.state(),
+                app.state(),
+                id.clone(),
+                "default".into(),
+                lease(),
+            ))
+        };
+        let act = |action| {
+            ok(herdr_action(
+                app.state(),
+                app.state(),
+                id.clone(),
+                "default".into(),
+                action,
+                lease(),
+            ))
+        };
+        assert!(tree().await.workspaces.is_empty());
+        let work = home.path().join("work dir 'q'");
+        std::fs::create_dir(&work).unwrap();
+        let directory = work.to_str().unwrap().to_owned();
+        let label = "literal 'quote' \"double\" $(touch nope)#;";
+        let created = ok(crate::herdr_create::herdr_workspace_create(
+            app.state(),
+            app.state(),
+            id.clone(),
+            "default".into(),
+            serde_json::from_value(serde_json::json!({"target":{"type":"directory","label":label,"directory":directory}})).unwrap(),
+            lease(),
+        ))
+        .await;
+        let created = serde_json::to_value(created).unwrap();
+        let snapshot = tree().await;
+        assert_eq!(snapshot.workspaces.len(), 1);
+        assert_eq!(snapshot.workspaces[0].label, label);
+        assert_eq!(created["workspaceId"], snapshot.workspaces[0].workspace_id);
+        assert_eq!(snapshot.panes[0].cwd.as_deref(), Some(directory.as_str()));
+        let workspace = snapshot.workspaces[0].workspace_id.clone();
+        act(HerdrAction::CreateTab {
+            workspace,
+            label: "tab 'two' $(touch nope);".into(),
+            directory: directory.clone(),
+        })
+        .await;
+        let snapshot = tree().await;
+        assert_eq!(snapshot.tabs.len(), 2);
+        assert!(snapshot.tabs[0].focused && !snapshot.tabs[1].focused);
+        assert_eq!(snapshot.tabs[1].label, "tab 'two' $(touch nope);");
+        act(HerdrAction::FocusTab {
+            target: snapshot.tabs[1].tab_id.clone(),
+        })
+        .await;
+        let focused = tree().await;
+        assert!(!focused.tabs[0].focused && focused.tabs[1].focused);
+        // A stale exact target is one recognizable error and the server survives.
+        let gone = herdr_action(
+            app.state(),
+            app.state(),
+            id.clone(),
+            "default".into(),
+            HerdrAction::FocusWorkspace {
+                target: "w999".into(),
+            },
+            lease(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(gone.into_inner().unwrap().kind(), "herdr_target_missing");
+        assert_eq!(tree().await.tabs.len(), 2);
+        assert!(!home.path().join("nope").exists());
     }
     #[test]
     fn maps_only_herdr_missing_target_failures() {
@@ -1933,8 +2189,8 @@ mod tests {
     #[test]
     fn history_reads_one_exact_pane_of_a_literal_session() {
         assert_eq!(
-            history_command("a'$(touch nope)", "w1:p2", 1000).unwrap(),
-            "herdr --session 'a'\\''$(touch nope)' pane read 'w1:p2' --source recent-unwrapped --lines 1000"
+            history_command("a'$(touch nope)", "w1:p2", 1000).unwrap().render(),
+            "herdr --session 'a'\\''$(touch nope)' pane read w1:p2 --source recent-unwrapped --lines 1000"
         );
         for pane in ["", "p1; touch nope", "w1:t2", "$(touch nope)"] {
             assert!(history_command("s", pane, 1).is_err(), "{pane:?}");
@@ -1968,9 +2224,9 @@ mod tests {
             )
             .unwrap(),
         );
-        let tree = parse(&herdr.run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let tree = parse(&herdr.run(command(session, &["api", "snapshot"]).unwrap())).unwrap();
         let pane = focused_pane(&tree).unwrap().pane_id.clone();
-        herdr.run(command(session, format!("pane run {} 'seq 1 5000'", quote(&pane))).unwrap());
+        herdr.run(command(session, &["pane", "run", &pane, "seq 1 5000"]).unwrap());
         let history = read_numbered_5000(
             || herdr.run(history_command(session, &pane, HERDR_LINES).unwrap()),
             Some(HERDR_LINES),
@@ -1980,7 +2236,7 @@ mod tests {
         assert!(history.lines <= HERDR_LINES);
         assert!(history.text.lines().any(|line| line == "4999"));
         assert!(!history.text.lines().any(|line| line == "1"));
-        herdr.run(command(session, "server stop".into()).unwrap());
+        herdr.run(command(session, &["server", "stop"]).unwrap());
     }
     #[test]
     fn rejects_nonexact_targets_and_quotes_session_and_labels() {
@@ -2006,8 +2262,9 @@ mod tests {
                     label: "a;$(echo x)".into()
                 }
             )
-            .unwrap(),
-            "herdr --session 'a'\\''$(echo x)' tab rename 'w1:t2' 'a;$(echo x)'"
+            .unwrap()
+            .render(),
+            "herdr --session 'a'\\''$(echo x)' tab rename w1:t2 'a;$(echo x)'"
         );
     }
 
@@ -2030,10 +2287,12 @@ mod tests {
         let mut commands: Vec<String> = actions
             .into_iter()
             .map(|action| {
-                action_command("owned", &serde_json::from_value(action).unwrap()).unwrap()
+                action_command("owned", &serde_json::from_value(action).unwrap())
+                    .unwrap()
+                    .render()
             })
             .collect();
-        commands.push(command("owned", "api snapshot".into()).unwrap());
+        commands.push(command("owned", &["api", "snapshot"]).unwrap().render());
         crate::herdr_backend::sandbox::assert_both_backends(&commands);
     }
 }
