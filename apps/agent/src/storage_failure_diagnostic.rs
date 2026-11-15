@@ -22,6 +22,7 @@ fn describe(phase: Phase, error: &Error) -> Failure {
         Error::Io(_) => ResultClass::IoError,
         Error::InvalidEvent => ResultClass::InvalidEvent,
         Error::InvalidArgument => ResultClass::InvalidArgument,
+        Error::TooLarge => ResultClass::OtherError,
         Error::UnsupportedStateFilesystem => ResultClass::UnsupportedStateFilesystem,
         // These variants contain extensible static strings. Do not expose them here.
         Error::Relay(_)

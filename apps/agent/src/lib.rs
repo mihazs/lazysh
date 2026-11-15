@@ -87,6 +87,8 @@ const HOOK_EVENTS: [&str; 8] = [
 pub enum Error {
     InvalidEvent,
     InvalidArgument,
+    /// A source that is over the size a reader takes in: a transcript past its byte or record bound.
+    TooLarge,
     Installation(&'static str),
     UnsupportedStateFilesystem,
     Device(&'static str),
@@ -103,6 +105,7 @@ impl Error {
         match self {
             Self::InvalidEvent => "InvalidEvent",
             Self::InvalidArgument => "InvalidArgument",
+            Self::TooLarge => "TooLarge",
             Self::Installation(kind) => kind,
             Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
             Self::Device(kind) | Self::Herdr(kind) => kind,

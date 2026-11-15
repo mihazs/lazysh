@@ -338,6 +338,75 @@ fn codex_legacy_rollbacks_remove_turns_without_replaying_model_context_or_privat
     assert!(!serde_json::to_string(&page).unwrap().contains("PRIVATE"));
 }
 #[test]
+fn codex_records_of_megabytes_are_cut_not_refused_so_the_turns_after_them_still_open() {
+    // Real rollouts hold a whole heredoc command, a command's output and a compaction's replaced history in one line each.
+    let multi_megabyte = "y".repeat(3 * 1024 * 1024);
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        codex_event("user_message", json!({"message":"run it"})),
+        codex_event(
+            "exec_command_end",
+            json!({"call_id":"call-1","command":["sh","-c",multi_megabyte.clone()],"aggregated_output":multi_megabyte,"exit_code":0}),
+        ),
+        codex_record(
+            "compacted",
+            json!({"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"x".repeat(2 * 1024 * 1024)}]}]}),
+        ),
+        codex_turn("two"),
+        codex_event("user_message", json!({"message":"after the big records"})),
+        codex_event("agent_message", json!({"message":"still here"})),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    let text = codex_text(&page);
+    assert!(text.contains("after the big records|still here"));
+    assert!(text.contains("more bytes not shown"));
+    assert!(!text.contains(&"x".repeat(1024)), "model context stays out");
+    // One page stays inside its 512 KiB budget however large the records were, and no block is past the 256 KiB the app accepts.
+    assert!(serde_json::to_vec(&page).unwrap().len() < 512 * 1024);
+    for block in page
+        .messages
+        .iter()
+        .flat_map(|m| m["blocks"].as_array().unwrap())
+    {
+        assert!(block["text"]
+            .as_str()
+            .is_none_or(|text| text.len() <= 262_144));
+    }
+    for message in &page.messages {
+        assert!(serde_json::to_vec(message).unwrap().len() < 512 * 1024);
+    }
+}
+#[test]
+fn codex_text_that_escapes_to_a_larger_message_still_fits_one_page() {
+    // Control characters serialize to six bytes each, so the cut follows the serialized size, not the text length.
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        codex_event("user_message", json!({"message":"\u{1}".repeat(250_000)})),
+        codex_event("agent_message", json!({"message":"answer"})),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    assert!(codex_text(&page).ends_with("|answer"));
+    assert!(page
+        .messages
+        .iter()
+        .all(|message| serde_json::to_vec(message).unwrap().len() < 512 * 1024));
+}
+#[test]
+fn a_rollout_over_the_size_bound_is_reported_as_too_large() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rollout.jsonl");
+    fs::File::create(&path)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    for agent in [TranscriptAgent::Codex, TranscriptAgent::Claude] {
+        let error = conversation(&path, agent, 100).unwrap_err();
+        assert_eq!(error.class(), "TooLarge");
+    }
+}
+#[test]
 fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("recorded.jsonl");
