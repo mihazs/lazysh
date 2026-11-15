@@ -17,7 +17,7 @@ const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
 // Jobs that are not required to merge: pull requests never select them, pushes to main always do.
 const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios'];
-const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-mosh', 'native-android-herdr-navigation',
+const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-windows-linux-host', 'native-android-mosh', 'native-android-herdr-navigation',
   'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator'];
 const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
 const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
@@ -88,13 +88,13 @@ async function runningJobs(outputs: Outputs, event = 'push') {
 
 const neverNightly = "github.event_name != 'schedule'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
-const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
+const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
-const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-desktop': 2,
+const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
-const agentRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
+const agentRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
   'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-appium': 1 };
 const androidRun = { ...alwaysRun, 'herdr-native': 1, 'native-android': 1, 'native-android-runtime': 1,
   'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };

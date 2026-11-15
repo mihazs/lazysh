@@ -3828,6 +3828,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "connection_parity_fixture.rs"]
     mod connection_parity_fixture;
+    #[path = "external_host_fixture.rs"]
+    mod external_host_fixture;
     #[cfg(unix)]
     #[path = "file_download_fixture.rs"]
     mod file_download_fixture;
