@@ -52,10 +52,30 @@ Shell quoting alone does not protect tmux arguments: tmux parses trailing semico
 ### In-session Jump To
 
 A tmux terminal attached through lazysh offers **Jump To** with its session/window
-tree and an exact **Current** marker. Choosing Current closes the panel without
-sending a command. List, accordion and grid share the existing saved layout
-preference. A successful switch remembers the destination's human session name;
-numeric IDs and navigation generations are never saved for reconnect.
+tree and an exact **Current** marker. Each window lists its panes, numbered like
+tmux numbers them, with the pane's title (blank while it still has tmux's default,
+the host name) or else its running command, the agent a companion report names in
+that pane (matched by `TMUX_PANE`, like the Agent view and the status bar; a
+session that ended names none) and **Zoomed** on the active pane of a zoomed window.
+Exactly one row carries the Current marker: the displayed pane, not also its window.
+Choosing Current closes the panel without sending a command. List, accordion and
+grid share the existing saved layout preference. A successful switch remembers the
+destination's human session name; numeric IDs and navigation generations are never
+saved for reconnect.
+
+Choosing a pane row moves the retained control client's display to that exact pane:
+one `switch-client` to `session:window.pane`, on the server the terminal is attached
+to, after a fresh read confirms the pane is still in that window. A pane that closed
+or moved since the list was read is refused with a message and leaves the display and
+the binding as they were; **Refresh** reads the tree again. Like `select-pane`, it
+brings the pane's window forward and, in a zoomed window, un-zooms it so the pane
+shows. Pane titles and commands are program-controlled: control characters show as
+`?` and each is cut to 64 columns before it reaches the client. The tree has one row
+per pane, so the 4096-row limit below counts panes: a host with more panes than that
+fails Jump To explicitly instead of listing a part of them. A binding that sends no
+`panes` keeps the window-only tree. An agent label is matched by pane id alone, so two
+tmux servers on one host that both run an agent in `%7` can show the same label; the
+companion's server label (#1146) is not used by this panel yet.
 
 Display labels are separate from exact restoration names. Only a native-validated,
 control-free name of at most 200 UTF-8 bytes is saved. Unsupported destinations
