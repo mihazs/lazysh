@@ -7798,7 +7798,8 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::HostBrowser) {
             app.manage(crate::host_browser::HostBrowsers::default());
-            host_browser_fixture::verify(&app, &id, dir.path()).await;
+            // Boxed: its future would otherwise inflate this check's, and overflow a debug test thread's stack.
+            Box::pin(host_browser_fixture::verify(&app, &id, dir.path())).await;
             return;
         }
         if matches!(check, OpenSshCheck::TemporaryAttachments) {

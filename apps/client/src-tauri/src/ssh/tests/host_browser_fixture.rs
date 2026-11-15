@@ -7,14 +7,7 @@ use crate::host_browser::{
     host_browser_start, host_browser_stop,
 };
 use serde_json::{json, Value};
-use std::{
-    io::{Read, Write},
-    net::TcpListener,
-    os::unix::fs::PermissionsExt,
-    path::Path,
-    process::Command,
-    time::Instant,
-};
+use std::{os::unix::fs::PermissionsExt, path::Path, process::Command};
 use tauri::{
     ipc::{InvokeResponseBody, IpcResponse},
     Manager,
@@ -93,32 +86,6 @@ pub(super) fn environment(directory: &Path) -> String {
         directory.display(),
         state.display()
     )
-}
-
-/// A page on loopback that is one solid green, titled `Green`.
-fn page() -> (u16, std::thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    listener.set_nonblocking(true).unwrap();
-    let server = std::thread::spawn(move || {
-        let body =
-            "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
-        let deadline = Instant::now() + Duration::from_secs(120);
-        while Instant::now() < deadline {
-            let Ok((mut stream, _)) = listener.accept() else {
-                std::thread::sleep(Duration::from_millis(20));
-                continue;
-            };
-            let mut request = [0u8; 2048];
-            let _ = stream.read(&mut request);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-    });
-    (port, server)
 }
 
 /// Whether any process on this machine has `needle` in its command line.
@@ -209,7 +176,8 @@ fn enable(state: &Path) {
 
 pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     let state = directory.join("host-browser-state");
-    let (port, _server) = page();
+    let (port, _server) =
+        lazysh_common::test_support::loopback_page(lazysh_common::test_support::GREEN_PAGE, 120);
     let url = format!("http://127.0.0.1:{port}/");
 
     // The switch is off on a new host: the relay says so and nothing starts.
