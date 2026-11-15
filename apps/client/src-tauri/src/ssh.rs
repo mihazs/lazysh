@@ -4573,6 +4573,8 @@ mod tests {
         authorized_key: Arc<StdMutex<Option<russh::keys::PublicKey>>>,
         clipboard_mode: Arc<AtomicUsize>,
         legacy_exec: Arc<std::sync::atomic::AtomicBool>,
+        /// A Windows OpenSSH server under `cmd.exe`: no `sh`, and `powershell.exe -EncodedCommand` answers.
+        windows_exec: Arc<std::sync::atomic::AtomicBool>,
         /// Stdout chunks and exit status the next exec requests answer with.
         scripted_exec: Arc<StdMutex<Option<ScriptedExec>>>,
         clipboard_eof: Arc<tokio::sync::Notify>,
@@ -4767,6 +4769,44 @@ mod tests {
                 for chunk in chunks {
                     session.data(channel, chunk)?;
                 }
+                session.exit_status_request(channel, status)?;
+                session.close(channel)?;
+                return Ok(());
+            }
+            if self.windows_exec.load(Ordering::SeqCst) {
+                let status = if let Some(encoded) = text
+                    .strip_prefix("powershell.exe ")
+                    .and_then(|rest| rest.rsplit(' ').next())
+                {
+                    let bytes =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+                            .unwrap();
+                    let units = bytes
+                        .chunks(2)
+                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+                    let script = char::decode_utf16(units)
+                        .map(|c| c.unwrap())
+                        .collect::<String>();
+                    session.data(
+                        channel,
+                        if script.contains("lazysh-windows-v1") {
+                            "lazysh-windows-v1\r\nAMD64\r\nS-1-5-21-1-2-3-1001\r\nQzpcVXNlcnNcb3duZWRcQXBwRGF0YVxMb2NhbA==\r\n"
+                        } else {
+                            "windows-companion-ran\r\n"
+                        }
+                        .as_bytes()
+                        .to_vec(),
+                    )?;
+                    0
+                } else {
+                    // What cmd.exe says for a program it cannot find.
+                    session.extended_data(
+                        channel,
+                        1,
+                        b"'sh' is not recognized as an internal or external command,\r\n".to_vec(),
+                    )?;
+                    1
+                };
                 session.exit_status_request(channel, status)?;
                 session.close(channel)?;
                 return Ok(());
@@ -5080,6 +5120,7 @@ mod tests {
         let test_server = TestServer {
             authorized_key: Arc::new(StdMutex::new(None)),
             legacy_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            windows_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scripted_exec: Arc::new(StdMutex::new(None)),
             clipboard_mode: Arc::new(AtomicUsize::new(0)),
             clipboard_eof: Arc::new(tokio::sync::Notify::new()),
@@ -5675,6 +5716,53 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn a_windows_host_is_identified_once_after_the_posix_probe_fails_and_runs_encoded_commands(
+    ) {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        fixture.server.windows_exec.store(true, Ordering::SeqCst);
+        let sent = || fixture.server.commands.lock().unwrap().clone();
+        for original in [
+            "lazysh-agent snapshot --limit 50",
+            r"lazysh-agent transcript --path 'C:\Users\owned\opaque file.jsonl' --limit 50",
+        ] {
+            let result = crate::companion::exec(&fixture.session, original.into(), &lease)
+                .await
+                .unwrap();
+            assert_eq!(result.trim_end(), "windows-companion-ran");
+        }
+        let sent = sent();
+        assert_eq!(
+            sent.len(),
+            4,
+            "one POSIX probe, one Windows probe, then the two commands"
+        );
+        assert!(sent[0].starts_with("sh -c "));
+        assert!(sent[1..]
+            .iter()
+            .all(|command| command.starts_with("powershell.exe -NoProfile ")));
+        assert!(sent[2..]
+            .iter()
+            .all(|command| command != &sent[1] && !command.contains("snapshot")));
+        assert!(!crate::companion::positive_unix(&fixture.session, &lease)
+            .await
+            .unwrap());
+        let required = crate::companion::required_command(
+            &fixture.session,
+            "lazysh-agent account-usage --watch-channel".into(),
+            "owned-marker",
+            &lease,
+        )
+        .await
+        .unwrap();
+        assert!(required.starts_with("powershell.exe "));
+        assert_eq!(
+            fixture.server.commands.lock().unwrap().len(),
+            4,
+            "the answer is remembered"
+        );
+    }
+    #[tokio::test]
     async fn exec_status_returns_a_failing_exit_with_streamed_stdout_where_exec_bounded_discards_it(
     ) {
         let lease = access_lease();
@@ -5728,11 +5816,15 @@ mod tests {
         assert!(!crate::herdr_path::admit(&fixture.session, &lease)
             .await
             .unwrap());
-        assert_eq!(probes(), 1, "the first admission probes the host");
+        assert_eq!(
+            probes(),
+            2,
+            "the first admission asks the POSIX probe, then the Windows one"
+        );
         assert!(!crate::herdr_path::admit(&fixture.session, &lease)
             .await
             .unwrap());
-        assert_eq!(probes(), 1, "a negative result is reused");
+        assert_eq!(probes(), 2, "a negative result is reused");
         let reconnected = fixture.reconnect().await;
         assert_eq!(crate::herdr_path::cached(&reconnected), None);
     }
