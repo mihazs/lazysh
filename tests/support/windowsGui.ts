@@ -23,6 +23,8 @@ export async function until<T>(stage: string, probe: () => Promise<T | undefined
   throw new Error(`Windows installed GUI deadline: ${stage}`);
 }
 
+export const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
 export async function powershell(script: string, timeout = 60_000) {
   const encoded = Buffer.from(`$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'\n${script}`, 'utf16le').toString('base64');
   try {
@@ -38,7 +40,16 @@ export async function powershell(script: string, timeout = 60_000) {
 
 export interface HostState { runtime: string; paths: Record<string, string>; present: string[] }
 const stateNames = ['roaming', 'local', 'localLegacy', 'desktopShortcut', 'programsShortcut',
-  'manufacturerKey', 'uninstallKey', 'protocolKey', 'machineUninstallKey', 'autostart'];
+  'manufacturerKey', 'uninstallKey', 'protocolKey', 'machineUninstallKey', 'webViewArguments', 'autostart'];
+/**
+ * A hosted runner is elevated, and an elevated WebView2 host ignores `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, the variable
+ * EdgeDriver uses to open the debugging port; the session then fails with "DevToolsActivePort file doesn't exist". Only a
+ * machine (HKLM) policy reaches an elevated host (Microsoft, "Develop secure WebView2 apps"), and the entry named after the
+ * compiled executable reaches no other application.
+ */
+export const webViewArgumentsKey = String.raw`HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments`;
+export const webViewArgumentsName = 'lazysh.exe';
+export const webViewArgumentsValue = '--remote-debugging-port=0';
 export const hostStateScript = String.raw`
 $webview = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
 $runtime = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\', 'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\') |
@@ -56,6 +67,7 @@ $keys = [ordered]@{
   uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh'
   protocolKey = 'HKCU:\Software\Classes\lazysh'
   machineUninstallKey = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh'
+  webViewArguments = '${webViewArgumentsKey}'
 }
 $present = @()
 foreach ($name in $paths.Keys) { if (Get-Item -Force -LiteralPath $paths[$name] -ErrorAction SilentlyContinue) { $present += $name } }
@@ -73,6 +85,21 @@ export function parseHostState(stdout: string): HostState {
   return state;
 }
 export const hostState = async () => parseHostState(await powershell(hostStateScript));
+const policyVariables = `$key = ${quote(webViewArgumentsKey)}; $name = ${quote(webViewArgumentsName)}`;
+/** Add the policy entry; the caller has already required the key to be absent, so a present key is refused rather than adopted. */
+export const installWebViewArguments = () => powershell(String.raw`
+${policyVariables}
+if (Test-Path -LiteralPath $key) { throw 'Ambient WebView2 browser arguments policy' }
+$null = New-Item -Path $key -Force
+$null = New-ItemProperty -LiteralPath $key -Name $name -Value ${quote(webViewArgumentsValue)} -PropertyType String`);
+/** Remove only the key holding exactly the entry installed above; empty parent policy keys are left on the disposable VM. */
+export const removeWebViewArguments = () => powershell(String.raw`
+${policyVariables}
+if (Test-Path -LiteralPath $key) {
+  $item = Get-Item -LiteralPath $key
+  if (@($item.GetValueNames()).Count -ne 1 -or $item.GetValue($name) -ne ${quote(webViewArgumentsValue)} -or $item.SubKeyCount) { throw 'Foreign WebView2 browser arguments policy' }
+  Remove-Item -LiteralPath $key
+}`);
 
 // ---- Pinned tools. ----
 
