@@ -1,0 +1,35 @@
+name: probe-windows-linux-host
+on:
+  push:
+    branches: [ci/probe-windows-linux-host-cases]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: probe-windows-linux-host
+          save-if: true
+      - run: bun install --frozen-lockfile
+      - run: bun run build:native
+      # A throwaway: an unexpired Herdr executable that an earlier main run uploaded, unverified here.
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 14177135718
+          run-id: 43741465924
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/lazysh-stock-herdr
+      - uses: ./.github/actions/windows-linux-host
+        with:
+          herdr: ${{ runner.temp }}\lazysh-stock-herdr\herdr
