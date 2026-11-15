@@ -1,5 +1,6 @@
 //! The real Windows `sshd.exe` under each default shell, reached by the app's own SSH client.
-//! Needs Windows with the OpenSSH Server capability and administrator rights (it sets `DefaultShell`).
+//! Needs Windows with the OpenSSH Server capability and administrator rights: a case sets `DefaultShell` under
+//! `HKLM\SOFTWARE\OpenSSH`, and the user's `Path` and `LAZYSH_STATE_DIR` under `HKCU\Environment`, then puts them back.
 use super::*;
 use std::{path::Path, process::Command};
 
