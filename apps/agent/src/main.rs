@@ -79,6 +79,11 @@ enum Command {
         #[command(subcommand)]
         command: UsageCollectionCommand,
     },
+    /// Record account quota samples on a timer while no app is open (off until you enable it).
+    UsageCollector {
+        #[command(subcommand)]
+        command: lazysh_agent::usage_collector::Command,
+    },
     /// Open a URL on the attached device, or with the next real opener (what the managed
     /// `xdg-open` and `lazysh-open` wrappers run).
     BrowserOpen {
@@ -466,6 +471,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             };
             Some(settings.map_err(|_| Error::InvalidEvent)?)
         }
+        Command::UsageCollector { .. } => unreachable!("handled before execute"),
         Command::UsageCollection { command } => {
             let directory = lazysh_agent::state_directory()?;
             let policy = match command {
@@ -475,7 +481,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     account_quota_enabled,
                 } => lazysh_agent::usage_collection::update(
                     &directory,
-                    expected_revision,
+                    Some(expected_revision),
                     |policy| {
                         policy.account_quota_enabled = account_quota_enabled;
                     },
@@ -860,6 +866,9 @@ fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     if let Command::Update(args) = cli.command {
         return lazysh_agent::update::run(args);
+    }
+    if let Command::UsageCollector { command } = cli.command {
+        return lazysh_agent::usage_collector::run(command);
     }
     if let Command::BrowserOpen { args } = &cli.command {
         return lazysh_agent::browser::open("browser-open", args);

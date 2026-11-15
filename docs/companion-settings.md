@@ -48,6 +48,20 @@ Replace `0` with the revision `show` returned. While the switch is off, the AI a
 
 The switch binds the host companion. A companion older than this switch ignores it, and the desktop app's own read of its local machine does not use the companion. It is stored in `usage-collection.json`, separate from the three switches above. See the [reference](reference/companion-settings.md#usage-collection-policy).
 
+## Record account quota samples in the background
+
+By default nothing is collected while the app is closed, so a refresh shows no history. To record one bounded sample of each account's quota on a schedule, run on the host:
+
+```sh
+lazysh-agent usage-collector enable --interval-minutes 30
+lazysh-agent usage-collector status --limit 5
+lazysh-agent usage-collector disable
+```
+
+**Read this first:** enabling makes the host contact each configured provider every interval, with the sign-ins the quota read already uses, while no lazysh app is open. That is why it is off by default and the shortest interval is 5 minutes. A sample holds only percentages, resets and staleness per account: no plan name, balance, credential, prompt or path. At most 1000 samples, 7 days and 1 MiB are kept, oldest first, in `usage-samples.json` in the companion state directory; delete that file to erase them. If account quota reads are [forbidden](#forbid-account-quota-reads-on-a-host), the collector reads nothing and records the skipped run.
+
+`enable` installs a user-level timer without sudo: a systemd user timer on Linux, a launchd agent on macOS, a Scheduled Task on Windows. `disable` removes only what `enable` wrote. Exit 41 means this account cannot hold a timer (no user service manager or login session) and nothing was changed; exit 42 means the system or a file of another origin refused it and the collector stays off. On Linux the user manager stops when the last session ends unless you run `loginctl enable-linger USER` yourself; `status` shows `linger`. While the host is suspended or off nothing is recorded; the first tick afterwards records one sample, so a gap stays a gap. An interval is rounded up to a multiple of five minutes. The app does not show the collector yet; `status` is the view. See the [reference](reference/companion-settings.md#usage-collector) for the schema, bounds, per-system details and what was and was not tested.
+
 ## Companion updates (planned)
 
 **Not released yet** ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)). The three switches above do not change. Update behavior is a separate setting with its own revision, kept in `auto-update.json` in the same state directory so that an older companion that shares the directory keeps reading `settings.json`.

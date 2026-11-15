@@ -3889,6 +3889,8 @@ dependencies = [
  "lazysh-notification-client",
  "lazysh-notifications",
  "libc",
+ "plist",
+ "quick-xml",
  "rcgen",
  "reqwest 0.12.28",
  "rusqlite",

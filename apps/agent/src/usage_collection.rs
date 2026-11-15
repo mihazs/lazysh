@@ -58,27 +58,37 @@ pub fn read(directory: &Path) -> Result<Policy> {
     Ok(policy)
 }
 
-/// Apply `change` when the stored revision is still `expected_revision`, under the policy lock.
+/// Apply `change` under the policy lock. With `expected_revision` the stored revision must still match it
+/// (`SettingsConflict` otherwise); `None` changes whatever is stored, for the collector's own enable and disable.
 pub fn update(
     directory: &Path,
-    expected_revision: u64,
+    expected_revision: Option<u64>,
     change: impl FnOnce(&mut Policy),
 ) -> Result<Policy> {
-    if expected_revision >= MAX_REVISION {
+    if expected_revision.is_some_and(|revision| revision >= MAX_REVISION) {
         return Err(Error::InvalidArgument);
     }
-    let _lock = private_json::lock(directory, LOCK)?.ok_or(Error::Settings("SettingsBusy"))?;
+    let _lock = lock(directory)?.ok_or(Error::Settings("SettingsBusy"))?;
     let mut policy = read(directory)?;
-    if policy.revision != expected_revision {
+    if expected_revision.is_some_and(|revision| policy.revision != revision) {
         return Err(Error::Settings("SettingsConflict"));
     }
     change(&mut policy);
     policy.revision += 1;
+    write(directory, &policy)?;
+    Ok(policy)
+}
+
+/// The policy lock: held while the policy is changed, and by the collector between its last check and its write.
+pub(crate) fn lock(directory: &Path) -> Result<Option<private_json::Lock>> {
+    private_json::lock(directory, LOCK)
+}
+
+fn write(directory: &Path, policy: &Policy) -> Result<()> {
     policy.validate()?;
     private_json::write(
         directory,
         FILE,
-        &serde_json::to_vec(&policy).map_err(|_| Error::InvalidArgument)?,
-    )?;
-    Ok(policy)
+        &serde_json::to_vec(policy).map_err(|_| Error::InvalidArgument)?,
+    )
 }

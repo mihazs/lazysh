@@ -45,6 +45,8 @@ Credentials remain on the host. The app receives a bounded report with provider 
 
 A host owner can turn off account quota reads with `lazysh-agent usage-collection update --expected-revision R --account-quota-enabled false` ([how to](companion-settings.md#forbid-account-quota-reads-on-a-host)). The status-bar item and this page then say that the host does not allow account usage reads and show **no percentage**: the quota is unknown, not zero, and nothing reads a credential or contacts a provider. The default is on, so hosts that never set it keep today's behavior.
 
+A host can also opt in to **recording** bounded samples of this quota on a timer while no app is open ([how to](companion-settings.md#record-account-quota-samples-in-the-background)). It is off by default and honors the switch above.
+
 ## Configuration
 
 Sign in with the provider's existing CLI or configure its host-side API key. Without a usage configuration file, the companion enables providers with locally available credentials in memory. For automatic [Codex discovery](https://learn.chatgpt.com/docs/auth), a nonempty host `CODEX_HOME` selects its `auth.json`; otherwise the normal home-directory default applies. Whitespace-only values use that default. Nonempty overrides must be absolute, bounded paths without control or dot/parent components; invalid overrides report usage as unavailable instead of silently choosing another account. Explicit usage profiles retain their configured paths, accounts and disabled providers; set `openai.codex_auth_path` there for a nonstandard Codex home. No login or quota success is inferred just from finding a file.
