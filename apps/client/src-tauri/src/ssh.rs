@@ -3780,7 +3780,7 @@ async fn attach_tmux_inner(
     )
     .await
 }
-/// Attaches a tmux-family server: tmux gets its Jump To control client, rmux a plain terminal on its labelled server.
+/// Attaches a tmux-family server: tmux and rmux each get their Jump To control client on the labelled server.
 #[allow(clippy::too_many_arguments)]
 async fn attach_family_inner(
     state: &AppState,
@@ -3808,11 +3808,10 @@ async fn attach_family_inner(
         open_terminal_for(&parent.handle, &creation, cols, rows, Some(command)).await?;
     let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker).await;
     let control = match identity {
-        // The Jump To control client waits for a real rmux to verify it (#1675); rmux attaches as a plain terminal.
-        Some(identity) if matches!(binary, crate::tmux_server::Binary::Tmux) => {
+        Some(identity) => {
             crate::tmux_jump::prepare(&parent.handle, identity, &name, &server, &creation).await
         }
-        _ => None,
+        None => None,
     };
     let connected = spawn_terminal(
         state,

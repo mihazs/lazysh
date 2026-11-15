@@ -3,6 +3,7 @@ import {useMountedAccess,useProtectedApi,useProtectedInvoke} from './access';
 import {api as nativeApi} from './bridge';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import {herdrFocusAction,herdrStrip,muxEditAction,tmuxStrip,zellijStrip,type MuxEdit,type MuxRef,type MuxStrip,type ZellijTabRow} from './multiplexerTabs';
+import {isTmuxFamily} from './multiplexerFamily';
 import {useHerdrNavigation,type HerdrTree} from './useHerdrNavigation';
 import type {SessionAttachment} from './workspace';
 
@@ -41,10 +42,11 @@ export function useMultiplexerStrip({sessionId,attached,enabled,onError}:{sessio
   const kind=attached?.kind,name=attached?.name??'';
   const herdr=useHerdrNavigation({sessionId,herdrSession:kind==='herdr'?name:undefined,visible:enabled && kind==='herdr'});
   const zellij=usePolled(enabled && kind==='zellij',`${sessionId}:${name}`,()=>invoke<ZellijTabRow[]>('zellij_tabs',{sessionId,name}));
-  const tmux=usePolled(enabled && kind==='tmux',sessionId,()=>api.tmuxJumpSnapshot(sessionId));
+  const tmuxFamily=isTmuxFamily(kind);
+  const tmux=usePolled(enabled && tmuxFamily,sessionId,()=>api.tmuxJumpSnapshot(sessionId));
   const herdrTree=herdr.data?.snapshot;
-  const read=useMemo(()=>kind==='herdr'?herdrTree && herdrStrip(herdrTree):kind==='zellij'?zellij.value && zellijStrip(name,zellij.value):kind==='tmux'?tmux.value && tmuxStrip(tmux.value):undefined,
-    [kind,name,herdrTree,zellij.value,tmux.value]);
+  const read=useMemo(()=>kind==='herdr'?herdrTree && herdrStrip(herdrTree):kind==='zellij'?zellij.value && zellijStrip(name,zellij.value):tmuxFamily?tmux.value && tmuxStrip(tmux.value):undefined,
+    [kind,tmuxFamily,name,herdrTree,zellij.value,tmux.value]);
   // Returning to a terminal shows what it last read while the new reading is on its way, so the strip does not blink in and out.
   const owner=`${kind}:${sessionId}:${name}`,last=useRef<{owner:string;strip:MuxStrip}|undefined>(undefined);
   if(read)last.current={owner,strip:read};

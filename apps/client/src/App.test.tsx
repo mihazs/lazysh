@@ -2490,12 +2490,16 @@ it('restores a Herdr session when discovery confirms restore support', async () 
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
 });
 
-it('restores an rmux session on its labelled server without offering Jump To', async () => {
+it.each([
+  ['an untested rmux version', 'degraded', ['jump','confirmedInput'], false],
+  ['a supported rmux', 'full', [], true],
+] as const)('restores an rmux session on its labelled server and offers Jump To only for %s', async (_name, support, missing, jumpTo) => {
   vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'rmux',name:'work',tmuxServer:'lab'}}]));
   mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
   mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'restored-rmux'});
+  mocks.api.tmuxJumpSnapshot.mockResolvedValue(navigationSnapshot);
   const original=mocks.invoke.getMockImplementation()!;
-  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:false,zellijAvailable:false,rmuxAvailable:true,tools:[{kind:'rmux',version:'0.10.0',support:'degraded',missing:['jump','confirmedInput']}],sessions:[]}) : original(command,...args));
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:false,zellijAvailable:false,rmuxAvailable:true,tools:[{kind:'rmux',version:'0.10.0',support,missing}],sessions:[]}) : original(command,...args));
   const user=userEvent.setup();render(<App/>);
   await screen.findByRole('button',{name:'Connect to Home'});
   await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
@@ -2503,7 +2507,40 @@ it('restores an rmux session on its labelled server without offering Jump To', a
   expect(mocks.api.attachTmux).not.toHaveBeenCalled();
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
   await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'restored-rmux',tmuxServer:'lab'},expect.anything()));
-  expect(screen.queryByRole('button',{name:'Jump To'})).toBeNull();
+  if(!jumpTo){expect(screen.queryByRole('button',{name:'Jump To'})).toBeNull();return;}
+  await chooseWorkspaceTool(user,'Jump To');
+  await waitFor(()=>expect(mocks.api.tmuxJumpSnapshot).toHaveBeenCalledWith('restored-rmux'));
+});
+
+it.each([
+  ['an untested rmux version', 'degraded', ['jump','confirmedInput'], false],
+  ['a supported rmux', 'full', [], true],
+] as const)('offers explicit terminal input on a restored rmux session only for %s and sends it through the tmux channel', async (_name, support, missing, offered) => {
+  const source=tmuxChatReaderSource('claude');
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'rmux',name:'work',tmuxServer:'lab'}}]));
+  mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'restored-rmux'});
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:false,herdrAvailable:false,zellijAvailable:false,rmuxAvailable:true,tools:[{kind:'rmux',version:'0.10.0',support,missing}],sessions:[]});
+    if(command==='agent_transcript')return Promise.resolve(tmuxChatReaderPage('claude'));
+    if(command==='tmux_chat')return tmuxChatReply(command,args);
+    return Promise.resolve(false);
+  });
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  await screen.findByText('Live SSH terminal');
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'restored-rmux',tmuxServer:'lab'},expect.anything()));
+  await chooseWorkspaceTool(user,'Transcript');await user.selectOptions(await screen.findByLabelText('Agent'),'claude');const path=screen.getByLabelText('Transcript path');await user.click(path);await user.paste(source.path);
+  await user.click(screen.getByRole('button',{name:'Open transcript'}));
+  await screen.findByRole('button',{name:t('chatRefreshMessages')});
+  if(!offered){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();return;}
+  await user.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));const input=screen.getByRole('region',{name:t('chatTerminalTitle')});
+  await within(input).findByText('Agent work');
+  await user.click(within(input).getByRole('button',{name:t('chatTerminalConfirm')}));await user.type(screen.getByLabelText('Draft for this terminal'),'explicit input');
+  await user.click(within(input).getByRole('button',{name:t('chatTerminalSend')}));await within(input).findByText(t('chatTerminalSent'));
+  expect(mocks.invoke).toHaveBeenCalledWith('tmux_chat',expect.objectContaining({sessionId:'restored-rmux',action:expect.objectContaining({kind:'input',source,operation:1,input:{kind:'send',text:'explicit input'}})}),{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
 /** #1380 and #1435: on a phone in gesture navigation the left handle opens the navigation page, and Android Back always closes it first. */

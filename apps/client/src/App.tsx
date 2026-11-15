@@ -333,10 +333,10 @@ const views = () => [
 
 /** The optional `-L` label of an rmux attach; Herdr and Zellij calls keep their exact argument list. */
 const serverArgument=(tmuxServer?:string)=>tmuxServer===undefined ? [] as const : [tmuxServer] as const;
-/** Confirmed input is offered for native tmux and Herdr terminals, and for Zellij only to the Agent view, which names the pane. */
+/** Confirmed input is offered for native tmux, rmux and Herdr terminals, and for Zellij only to the Agent view, which names the pane. rmux shares tmux's control channel, so its backend is `tmux`. */
 function terminalInputFor(session:LiveSession, tools?:MultiplexerTool[], zellij=false) {
   const kind=session.attached?.kind;
-  return native && (kind==='tmux' || kind==='herdr' || (zellij && kind==='zellij')) && tools?.some(tool=>tool.kind===kind && !tool.missing.includes('confirmedInput')) ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
+  return native && (isTmuxFamily(kind) || kind==='herdr' || (zellij && kind==='zellij')) && tools?.some(tool=>tool.kind===kind && !tool.missing.includes('confirmedInput')) ? {backend:kind==='rmux'?'tmux' as const:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
 }
 function Dialog({
   title,
@@ -1525,8 +1525,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
-  const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind==='tmux' && !tool.missing.includes('jump'));
-  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
+  const jumpKind=active?.attached?.kind;
+  const jumpSupported=isTmuxFamily(jumpKind) && !!muxTools[active?.id ?? '']?.some(tool=>tool.kind===jumpKind && !tool.missing.includes('jump'));
+  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && jumpSupported && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
@@ -1658,12 +1659,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   function tmuxJumped(sessionId: string, snapshot: import('./bridge').TmuxJumpSnapshot) {
     if (!mounted.current || currentView.current.activeId !== sessionId) return;
-    const session = sessionsRef.current.find(item => item.id === sessionId && item.connected && item.attached?.kind === 'tmux');
+    const session = sessionsRef.current.find(item => item.id === sessionId && item.connected && isTmuxFamily(item.attached?.kind));
     const destination = snapshot.sessions.find(item => item.id === snapshot.current.sessionId);
     if (!session?.attached || !destination) return;
     const suffix = ` / ${session.attached.name}`;
     if (session.name.endsWith(suffix)) session.name = `${session.name.slice(0, -suffix.length)} / ${destination.name}`;
-    session.attached = {...session.attached, kind:'tmux', name:destination.name, restoreName:destination.restoreName};
+    session.attached = {...session.attached, name:destination.name, restoreName:destination.restoreName};
     persistWorkspace(sessionsRef.current);
     setSessions([...sessionsRef.current]);
   }
@@ -2163,7 +2164,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-        {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+        {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">

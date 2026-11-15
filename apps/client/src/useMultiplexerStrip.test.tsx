@@ -57,11 +57,11 @@ it('lists Zellij tabs and goes to one by its 1-based position through the existi
   expect(sent('zellij_tabs')[0]).toEqual(['zellij_tabs',{sessionId:'ssh:1',name:"my 'session"}]);
   expect(sent('zellij_action')[0]).toEqual(['zellij_action',{sessionId:'ssh:1',name:"my 'session",action:{type:'goToTab',index:2}}]);
 });
-it('selects a tmux window with the snapshot generation of the list the chip was drawn from',async()=>{
+it.each(['tmux','rmux'] as const)('selects a %s window with the snapshot generation of the list the chip was drawn from',async kind=>{
   const generation='a'.repeat(36);
   const snapshot=(windowId:string)=>({generation,current:{sessionId:'$1',windowId},sessions:[{id:'$1',name:'work',restoreName:null,windows:[{id:'@1',index:0,name:'zsh'},{id:'@2',index:1,name:'vim'}]}]});
   vi.mocked(invoke).mockImplementation(async(command,args)=>command==='tmux_jump_snapshot'?snapshot('@1'):command==='tmux_jump'?snapshot((args as {windowId:string}).windowId):undefined);
-  render(<Strip attached={{kind:'tmux',name:'work'}}/>);
+  render(<Strip attached={{kind,name:'work'}}/>);
   fireEvent.click(await screen.findByRole('button',{name:/^vim/}));
   await waitFor(()=>expect(sent('tmux_jump')).toHaveLength(1));
   expect(sent('tmux_jump')[0]).toEqual(['tmux_jump',{sessionId:'ssh:1',generation,targetSessionId:'$1',windowId:'@2'}]);
