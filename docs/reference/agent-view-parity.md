@@ -133,6 +133,7 @@ screen-reading command: the terminal snapshot of the confirmed input
 | Codex | Background terminals count (`/ps`), sub-agent threads | `exec_command` sessions and `spawn_agent` calls; their record shapes are not yet confirmed against a real session, so no fixture exists | Gap: tracked in [#1285](https://github.com/mihazs/lazysh/issues/1285); the panel's derivation is Claude-only until synthetic fixtures exist |
 | OpenCode | Footer: model, agent (build or plan), context used, cost | The OpenCode database messages (model, tokens, cost) | Partial ([#1125](https://github.com/mihazs/lazysh/issues/1125)): on tmux the Agent view binds the pane's OpenCode session through the database and reads it (messages, usage). Send and Stop work through the confirmed terminal input with an OpenCode key profile (see below). Tool calls draw as tool cards (checked with a recorded `shell` call), and the companion reads the model, agent (`build` or `plan`), tokens of the last reply (context in use, no limit: the catalog is not read), cost and folder into the `session` object for the header and options sheet. Not yet: the context limit, plan cards, live updates (it polls), background work |
 | Gemini CLI | Footer: folder, sandbox state, model, context left, approval mode (default, auto-edit, YOLO) | The session file (`chats/session-*.jsonl`): the last recorded `model` and the prompt size. Folder, sandbox, approval mode and the window are not recorded | Partial: the model and tokens used show; the rest is on screen only ([#1125](https://github.com/mihazs/lazysh/issues/1125)) |
+| Grok Build | Status line (its contents are on screen only) | The session log (`updates.jsonl`) records neither a model nor token usage that was verified against a real session | Gap: the header shows the agent's name and its reported state; the conversation, tool cards and plan card come from the log ([#1657](https://github.com/mihazs/lazysh/issues/1657)). Questions, approvals and Stop stay in the terminal until their keys are checked on a real Grok Build |
 
 ### OpenCode input
 
@@ -148,7 +149,7 @@ lives in the companion (`apps/agent/src/transcript/interaction.rs` for plans and
 
 | Element | Claude Code | Codex | OpenCode | Gemini CLI | Grok Build |
 | --- | --- | --- | --- | --- | --- |
-| Plan or todo list | `TodoWrite` | `update_plan` | `todowrite` | `write_todos` (also `blocked`) | ACP `plan` updates read as labeled text, not a card |
+| Plan or todo list | `TodoWrite` | `update_plan` | `todowrite` | `write_todos` (also `blocked`) | ACP `plan` updates read as the shared plan card ([#1576](https://github.com/mihazs/lazysh/pull/1576)) |
 | Sub-agent | `Agent` or `Task` calls | `SubAgentActivity` items | `task` calls (V1 and V2) | `invoke_agent` calls | No verified record shape: not mapped |
 | Background job | `Bash` with `run_in_background`, `Monitor` | Background terminals: not mapped | A background `task` only | `run_shell_command` with `is_background` (no recorded end) | No verified record shape: not mapped |
 | File edit as a diff | `Edit`, `Write` | `apply_patch` (`FileChange` items) | `patch` parts: not mapped | `replace`, `write_file` | Recorded diffs show as tool output |

@@ -353,7 +353,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const composing = useRef(false);
   const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
-  const conversation = ['claude','opencode','codex','gemini'].includes(opened?.agent??'') && opened?.view === 'conversation';
+  // Grok Build's conversation is a recorded display with no Follow of its own; the Agent view still follows it for the pane.
+  const conversation = (['claude','opencode','codex','gemini'].includes(opened?.agent??'') || (!!bound && opened?.agent==='grok-acp')) && opened?.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
   const followable = conversation || recorded;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;

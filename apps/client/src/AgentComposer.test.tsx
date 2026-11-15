@@ -43,6 +43,20 @@ it('binds to the proven pane without a confirmation step and delivers a message 
   expect(screen.getByText(t('agentReceiptSending'))).toBeTruthy();
 });
 
+it('sends a Grok Build prompt through the same guarded input and offers no key beyond it',async()=>{
+  mount({conversation:{agent:'grok-acp',path:'/home/owner/.grok/sessions/work/s1/updates.jsonl',report:{sessionId:'g1',agent:'Grok Build',paneId:'%3'}},cwd:'/home/owner/work'});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
+  // Escape, the Stop key, is not known to interrupt Grok Build, and an @ or / is typed as text: nothing is suggested.
+  expect(screen.queryByRole('button',{name:t('chatTerminalStop')})).toBeNull();
+  type('@src and /clear');
+  expect(screen.queryByRole('listbox')).toBeNull();
+  type('Fix the parser');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(inputs()).toEqual([expect.objectContaining({source:{agent:'grok-acp',path:'/home/owner/.grok/sessions/work/s1/updates.jsonl',view:'conversation',inlineImages:false},input:{kind:'send',text:'Fix the parser'}})]);
+});
+
 it('sends with Enter on a hardware keyboard, keeps Shift+Enter as a new line and ignores Enter while composing text',async()=>{
   mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
   type('第一');fireEvent.compositionStart(box());fireEvent.keyDown(box(),{key:'Enter'});
