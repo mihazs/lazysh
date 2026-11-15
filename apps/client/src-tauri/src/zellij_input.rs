@@ -543,7 +543,10 @@ mod tests {
             rows = screen_rows(&String::from_utf8_lossy(
                 &run(&screen_command(&asker)).stdout,
             ));
-            if rows.iter().any(|row| row.contains("to interrupt")) {
+            // The whole last row, not a piece of it: the pane's first resize reflows the line and can drop the space at its wrap.
+            if rows.iter().any(|row| {
+                row.trim_end() == "  tab to add notes | enter to submit answer | esc to interrupt"
+            }) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
