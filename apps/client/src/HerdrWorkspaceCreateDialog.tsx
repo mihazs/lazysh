@@ -222,7 +222,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     {kinds?.state==='loading' && <p role="status">{t('herdrCreateDetecting')}</p>}
     {kinds?.state==='failed' && <p className="inline-error" role="alert">{uiErrorText(kinds.cause)}</p>}
     {kinds?.state==='ready' && (!kinds.value.some(item=>item.installed)?<p role="status">{t('herdrCreateNoAgents')}</p>:<>
-      <label>{t('herdrCreateAgent')}<select required value={kind} onChange={event=>{setKind(event.target.value);setInvalid(undefined);}}><option value="">{t('herdrCreateChooseAgent')}</option>{kinds.value.filter(item=>launcher || item.installed).map(item=><option key={item.kind} value={item.kind} disabled={!item.installed}>{item.label} ({item.executable}){item.installed?'':` · ${t('agentLaunchNotInstalled')}`}</option>)}</select></label>
+      <label>{t('herdrCreateAgent')}<select required data-testid="agent-launch-agent" value={kind} onChange={event=>{setKind(event.target.value);setInvalid(undefined);}}><option value="">{t('herdrCreateChooseAgent')}</option>{kinds.value.filter(item=>launcher || item.installed).map(item=><option key={item.kind} value={item.kind} disabled={!item.installed}>{item.label} ({item.executable}){item.installed?'':` · ${t('agentLaunchNotInstalled')}`}</option>)}</select></label>
       {selected?.prompt && <label>{t('herdrCreatePrompt')}{multiline?<textarea rows={3} value={prompt} maxLength={2000} onChange={event=>setPrompt(event.target.value)}/>:<input value={prompt} maxLength={2000} onChange={event=>setPrompt(event.target.value)}/>}</label>}
     </>)}
   </>;
@@ -269,7 +269,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     </form>}
     {(phase==='review' || phase==='running') && review && <div className="form-stack herdr-create-review">
       <p>{t('herdrCreateConfirmIntro')}</p>
-      <ol>{review.steps.map((step,index)=><li key={index}><strong>{t(stageKeys[step.stage])}</strong><pre className="herdr-create-output"><code>{step.command}</code></pre></li>)}</ol>
+      <ol data-testid="agent-launch-plan">{review.steps.map((step,index)=><li key={index}><strong>{t(stageKeys[step.stage])}</strong><pre className="herdr-create-output"><code>{step.command}</code></pre></li>)}</ol>
       {review.request.agent?<p className="muted">{stepNote}</p>:<p><strong>{t('herdrCreateNoAgentNote')}</strong></p>}
       {phase==='running' && <p role="status">{t('herdrCreateRunning')}</p>}
       {problem && <div role="alert"><p>{t('herdrCreateFailedNothing')}</p><pre className="herdr-create-output">{uiErrorText(problem)}</pre></div>}

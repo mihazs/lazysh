@@ -513,7 +513,7 @@ Known unverified points (Android documents none of them): whether the 200 dp exc
 The `native-android-appium` job of `checks.yml` runs the Appium and WebdriverIO suite ([ADR 0002](architecture/adr-0002-appium-webdriverio-android-e2e.md))
 on the same API 36 x86_64 emulator, runner action and Rust, Gradle and download caches as `native-android-runtime`. It builds the
 x86_64 debug APK first (`bun run build:android:emulator`), so the emulator's minutes go to the suite, starts the owned SSH host
-and the same-run stock Herdr with the real companion, and runs `bun run test:mobile-e2e:ci` (`moon run client:test-mobile-e2e-ci`).
+and the same-run stock Herdr with the real companion, builds the pinned tmux for the owned tmux host of the New agent journey, and runs `bun run test:mobile-e2e:ci` (`moon run client:test-mobile-e2e-ci`).
 
 | Event | Tiers | Jobs |
 | --- | --- | --- |

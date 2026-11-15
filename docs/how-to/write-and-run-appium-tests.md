@@ -48,7 +48,11 @@ Specs that need a host call `connectOwnedHost()` (`pageobjects/connect-owned-hos
 `after`. It adds a host named `e2e-<run nonce>-<label>` through the real editor, signs in with the fixture's generated key
 (pasted from the clipboard) and trusts the fingerprint only when it equals the generated one. The launcher starts the owned hosts
 and forwards their ports with `adb reverse`; `LAZYSH_E2E_HOSTS=ssh,herdr,tmux` selects them (see the
-[README](../../apps/client/mobile-e2e/README.md)). The live `HERDR_*` and `TMUX*` variables are removed from the launcher while
+[README](../../apps/client/mobile-e2e/README.md)). The tmux host also has the host's SFTP server, a stub `codex` on its `PATH` that
+records the folder it ran in and its first argument, and a Git repository (`launch/repo`) for worktrees; a spec reads what the app did
+there through `support/agentHost.ts` (the host's own folder, log and tmux window list), never from the app's screen, as the
+`journeys/new-agent-owned-tmux.e2e.ts` journey does for the Agent view's New agent. With `LAZYSH_TEST_TMUX` set to an absolute tmux
+path the launcher starts the tmux host by default. The live `HERDR_*` and `TMUX*` variables are removed from the launcher while
 the fixtures run, so no child can reach a personal Herdr or tmux.
 
 The shared guest may be in use by another run. The suite takes an advisory lock per serial and waits for it for 10 minutes

@@ -23,7 +23,7 @@ export default function DirectoryPicker({sessionId,invoke,owns,value,onChange,re
   return <>
     <label>{label??t('herdrDirectory')}<input value={value} maxLength={4096} placeholder="/home/user/project" onChange={event=>onChange(event.target.value)}/></label>
     <div className="herdr-create-row">
-      <button type="button" className="subtle-button" onClick={()=>openDirectory(validAbsolutePath(value)?value:'/')}><FolderOpen size={15} aria-hidden="true"/>{t('herdrCreateBrowse')}</button>
+      <button type="button" className="subtle-button" data-testid="directory-browse" onClick={()=>openDirectory(validAbsolutePath(value)?value:'/')}><FolderOpen size={15} aria-hidden="true"/>{t('herdrCreateBrowse')}</button>
       {recent.length>0 && <label>{t('herdrCreateRecent')}<select value={recent.includes(value)?value:''} onChange={event=>onChange(event.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{recent.map(item=><option key={item} value={item}>{item}</option>)}</select></label>}
     </div>
     {browse && <section className="herdr-create-browser" aria-label={t('herdrCreateBrowse')}>

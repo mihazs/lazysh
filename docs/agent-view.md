@@ -329,7 +329,11 @@ one tap away; the launcher never types into an existing pane.
 Not covered yet: opening a plain terminal session in the folder when no multiplexer runs, resuming
 an earlier session through the launcher ([#1545](https://github.com/mihazs/lazysh/issues/1545)),
 rmux ([#1679](https://github.com/mihazs/lazysh/issues/1679)), local sessions
-([#1133](https://github.com/mihazs/lazysh/issues/1133)) and an Android runtime case.
+([#1133](https://github.com/mihazs/lazysh/issues/1133)). The Android runtime case (the Appium journey
+`new-agent-owned-tmux`, [#1683](https://github.com/mihazs/lazysh/issues/1683)) starts a stub Codex from the
+dialog on an owned SSH tmux host, in a new folder and in a new worktree, and checks the host; the stub
+sends no hook report, so the Agent view following the launched agent on Android is still open
+([#1868](https://github.com/mihazs/lazysh/issues/1868)).
 
 ## Per-agent capabilities
 

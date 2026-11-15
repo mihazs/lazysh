@@ -83,6 +83,9 @@ the attribute; the Playwright locators never use these.
 | `toolbar-page-dot-<keys\|tools\|snippets>` | one page dot of the terminal toolbar | the dots and the pages they select share the accessible names `Keys page` and `Tools page` |
 | `agent-view` | the Agent view of a session (one per session stays in the page, hidden when not in front) | its name `Agent view` is also the title of the header inside it |
 | `herdr-agent-row` | a live agent row in the Agents section of the side menu | the row has no label, its name is the agent kind and workspace text |
+| `agent-launch-agent` | the agent `<select>` of the New agent dialog | its label wraps the select, so `aria/` names the label |
+| `agent-launch-plan` | the reviewed commands of the New agent dialog | the list has no label of its own |
+| `directory-browse` | the Browse host folders button of the folder field | the folder browser it opens has the same accessible name |
 
 ## Waiting
 

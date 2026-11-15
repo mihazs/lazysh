@@ -12,6 +12,7 @@ class SideMenuComponent extends Page {
   get workspacesSection() { return $('aria/Workspaces'); }
   get connectionsSection() { return $('aria/Connections'); }
   get returnToTerminal() { return $('aria/Return to terminal'); }
+  get sessionManager() { return $('aria/Open session manager'); }
   get terminalView() { return $('[data-testid="session-view-terminal"]'); }
   get agentView() { return $('[data-testid="session-view-agent"]'); }
   endConnection(host: string) { return $(`aria/End ${host} connection`); }
@@ -29,7 +30,10 @@ class SideMenuComponent extends Page {
       return this.in(() => this.root.waitForDisplayed({withinViewport: true, timeout: 1500}).then(() => true, () => false));
     }, {timeout: 20_000, timeoutMsg: 'The side menu did not open from the left-edge swipe'});
   }
+  async showWorkspaces() { await this.tap(() => this.workspacesSection); }
   async showConnections() { await this.tap(() => this.connectionsSection); }
+  /** Opens the host's session manager over the terminal, where tmux, Zellij and Herdr servers can be attached. */
+  async openSessionManager() { await this.tap(() => this.sessionManager); }
   async close() { await this.tap(() => this.returnToTerminal); }
   /** Choosing a view ends the visit: the menu closes over the view it chose. */
   async chooseTerminalView() { await this.tap(() => this.terminalView); }
