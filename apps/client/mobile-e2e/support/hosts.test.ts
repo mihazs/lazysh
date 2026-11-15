@@ -5,7 +5,7 @@ import {OwnedProcess} from '../../../../tests/support/ownedProcess';
 import {SshFixture, listening} from '../../../../tests/support/sshFixture';
 import {adbFor} from './device';
 import {createFakeAdb} from './fakeAdb';
-import {hostKinds, hostName, readEndpoint, startHosts, type Fixture} from './hosts';
+import {defaultHostKinds, hostKinds, hostName, readEndpoint, startHosts, type Fixture} from './hosts';
 
 const SERIAL = 'fake:5555';
 const LIVE: Record<string, string> = {HERDR_SOCKET_PATH: '/live/herdr.sock', HERDR_ENV: '1', HERDR_PANE_ID: 'p-live', HERDR_TAB_ID: 't-live', HERDR_WORKSPACE_ID: 'w-live', TMUX: '/live/tmux,1,0'};
@@ -77,4 +77,11 @@ test('host names carry the run nonce, and the kinds of a run are validated', () 
   expect(() => hostName('smoke', undefined)).toThrow('LAZYSH_E2E_NONCE is unset');
   expect(hostKinds('ssh, tmux')).toEqual(['ssh', 'tmux']);
   expect(() => hostKinds('ssh,zellij')).toThrow('Unknown LAZYSH_E2E_HOSTS entries: zellij');
+});
+
+test('Herdr joins the default hosts only when all three of its binaries are given', () => {
+  const tools = {LAZYSH_TEST_HERDR: '/h', LAZYSH_TEST_AGENT_BIN: '/a', LAZYSH_TEST_RECEIVER_BIN: '/r'};
+  expect(defaultHostKinds({})).toBe('ssh');
+  expect(defaultHostKinds({...tools, LAZYSH_TEST_RECEIVER_BIN: ''})).toBe('ssh');
+  expect(defaultHostKinds(tools)).toBe('ssh,herdr');
 });
