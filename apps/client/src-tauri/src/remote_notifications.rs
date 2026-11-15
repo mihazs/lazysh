@@ -450,6 +450,8 @@ mod tests {
         );
         state.stop();
         assert_eq!(state.snapshot(), (false, None));
+        // A request sent just before the stop may still reach the server; count only after it landed.
+        tokio::time::sleep(Duration::from_millis(100)).await;
         let stopped = server.requests.load(Ordering::SeqCst);
         *server.messages.lock().unwrap() = page(&[(5, "build: needs_attention")]);
         tokio::time::sleep(Duration::from_millis(150)).await;
