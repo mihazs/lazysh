@@ -25,6 +25,7 @@ pub mod notification_policy;
 mod pane_server;
 pub use pane_server::pane_server;
 mod private_json;
+pub mod rejected_dialog;
 pub mod relay;
 pub mod reported_history;
 pub mod review;
