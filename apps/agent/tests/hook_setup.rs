@@ -563,7 +563,9 @@ struct ProfileFixture {
 impl ProfileFixture {
     fn new(agent: record::Agent) -> Self {
         use std::{fs, os::unix::fs::PermissionsExt};
-        let root = tempfile::tempdir().unwrap();
+        // The companion namespace must be physical: macOS keeps its temp dir behind the
+        // /var symlink, which admission refuses to follow.
+        let root = tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let profile = root.path().join("selected profile");
         fs::create_dir(&profile).unwrap();
         fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
@@ -2057,7 +2059,8 @@ fn discovery_distinguishes_unavailable_profile_metadata_and_never_searches_cwd()
     assert_eq!(result["agents"].as_array().unwrap().len(), 1);
 }
 
-#[cfg(unix)]
+// Darwin's PATH_MAX is 1024 bytes, so no path can make a result large enough to reach the cap.
+#[cfg(target_os = "linux")]
 #[test]
 fn discovery_caps_serialized_result_bytes_and_marks_partial_metadata() {
     use std::fs;
