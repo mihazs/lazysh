@@ -1,5 +1,11 @@
 # @lazysh/companion-release
 
+## 1.66.1
+
+### Patch Changes
+
+- @lazysh/common@1.66.1
+
 ## 1.66.0
 
 ### Patch Changes

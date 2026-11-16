@@ -1,5 +1,15 @@
 # @lazysh/agent
 
+## 1.66.1
+
+### Patch Changes
+
+- dd9725a: Build the Windows companion again: the host browser relay's stand-in for Windows (which has no pipe transport) returned a tuple while its caller expected the relay's pipe struct, so `lazysh-agent` did not compile for Windows and no release could be verified. One function signature now serves every platform, so the two cannot drift. Windows hosts still report the host browser as unsupported. The Android idle-frame tests no longer parse a frame that is still being written.
+- @lazysh/account-usage@1.66.1
+  - @lazysh/common@1.66.1
+  - @lazysh/companion-release@1.66.1
+  - @lazysh/notification-client@1.66.1
+
 ## 1.66.0
 
 ### Minor Changes
