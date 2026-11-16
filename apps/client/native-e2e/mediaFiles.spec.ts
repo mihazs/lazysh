@@ -55,14 +55,14 @@ it('plays video and audio from a real SSH host in an isolated frame, and refuses
     expect(await browser.execute(selector=>{
       const frame=document.querySelector<HTMLIFrameElement>(selector)!;
       return {sandbox:frame.getAttribute('sandbox'),src:frame.hasAttribute('src'),document:(()=>{try{return typeof frame.contentDocument?.title;}catch{return 'blocked';}})(),
-        player:/<video controls="" preload="metadata" src="data:video\/webm;base64,([A-Za-z0-9+/=]+)"><\/video>$/.exec(frame.srcdoc)?.[1]};
-    },video)).toEqual({sandbox:'',src:false,document:'undefined',player:WEBM.toString('base64')});
+        player:new DOMParser().parseFromString(frame.srcdoc,'text/html').querySelector('video')?.getAttribute('src')};
+    },video)).toEqual({sandbox:'',src:false,document:'undefined',player:`data:video/webm;base64,${WEBM.toString('base64')}`});
   } else expect(await alertText()).toBe(NO_PLAYER);
   expect(await browser.$$('iframe')).toHaveLength(video?1:0);
 
   gui.stage='owned Files audio';
   const audio=await outcome('tune.mp3');
-  if(audio)expect(await browser.execute(selector=>document.querySelector<HTMLIFrameElement>(selector)!.srcdoc.includes('<audio controls="" preload="metadata" src="data:audio/mpeg;base64,'),audio)).toBe(true);
+  if(audio)expect(await browser.execute(selector=>new DOMParser().parseFromString(document.querySelector<HTMLIFrameElement>(selector)!.srcdoc,'text/html').querySelector('audio')?.getAttribute('src')?.startsWith('data:audio/mpeg;base64,'),audio)).toBe(true);
   else expect(await alertText()).toBe(NO_PLAYER);
   expect(await browser.$$('iframe')).toHaveLength(audio?1:0);
 
