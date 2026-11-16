@@ -1,5 +1,11 @@
 # @lazysh/share-service
 
+## 1.67.0
+
+### Patch Changes
+
+- @lazysh/common@1.67.0
+
 ## 1.66.1
 
 ### Patch Changes
