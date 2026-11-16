@@ -151,6 +151,32 @@ fn the_browser_only_ever_receives_allow_listed_commands() {
     );
 }
 
+/// This adapter reports `control: false`: a client that turns Control on anyway, and every valid input message,
+/// is refused and counted, and nothing but the view's own commands reaches the browser.
+#[test]
+fn control_and_input_are_refused_while_the_adapter_cannot_take_them() {
+    let fixture = fixture();
+    let mut relay = serve(&fixture, "", "160.0");
+    relay.next("frame");
+    relay.control(true);
+    for message in one_of_each_input() {
+        relay.send(message);
+    }
+    // Six messages: a reply at count 1, 2 and 4.
+    for count in [1, 2, 4] {
+        assert_eq!(relay.refused(), ("OperationRefused".to_string(), count));
+    }
+    relay.stop();
+    assert!(
+        !fixture
+            .methods()
+            .iter()
+            .any(|method| method.starts_with("input.")),
+        "input reached the browser: {:?}",
+        fixture.methods()
+    );
+}
+
 #[test]
 fn a_page_that_stopped_changing_is_not_sent_again_but_is_still_watched() {
     let fixture = fixture();

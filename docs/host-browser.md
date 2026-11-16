@@ -347,7 +347,8 @@ the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
   checks are off; these were set, and their effect on the network was not observed. Firefox keeps its crash
   reports and a few cache files in the host user's own directories (`~/.config/mozilla`, `~/.cache/mozilla`),
   outside the profile; the crash reporter is turned off for the relay's Firefox.
-- **Not yet.** Input (taps, scrolling, text), tabs, navigation, history, dialogs, the file chooser report and the
+- **Not yet.** Input (taps, scrolling, text; a `control` message and every input message is refused as
+  `OperationRefused` and counted while the capability record says `control: false`), tabs, navigation, history, dialogs, the file chooser report and the
   quality ladder for Firefox, a reconnect after the WebSocket drops (a Firefox whose connection dropped holds a
   leaked session, so the relay ends the session instead), a Firefox older than 159, Firefox from a snap or a
   Flatpak (its profile and port may sit behind the sandbox), Windows and macOS hosts, and a headed Firefox were not
