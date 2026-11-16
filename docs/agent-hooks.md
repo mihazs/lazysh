@@ -422,7 +422,9 @@ attributed to a subagent likewise cannot finish the parent row. The configuratio
 preToolUse because observational failures there can deny a tool. It also omits
 permissionRequest because that fires before automatic rules and does not prove
 that a human prompt is waiting. No approval decision or additional context is
-returned. This targets Copilot CLI; notification and shell-free execution
+returned. Answering a Copilot permission request from the app is a separate,
+opt-in hook, `lazysh-agent approval-config --agent copilot`; see
+[Remote decisions](approvals.md#copilot-cli). This targets Copilot CLI; notification and shell-free execution
 support differ in the cloud agent. Contracts follow the current
 [official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference).
 

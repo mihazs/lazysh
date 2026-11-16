@@ -121,7 +121,7 @@ enum Command {
         #[command(subcommand)]
         command: lazysh_agent::devices::DeviceCommand,
     },
-    /// Wait for a decision for this exact originating Claude or Codex permission hook.
+    /// Wait for a decision for this exact originating Claude Code, Codex or Copilot permission hook.
     ApprovalRequest {
         #[arg(long, value_enum)]
         agent: lazysh_agent::approvals::ApprovalAgent,
