@@ -532,44 +532,54 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
 
 
 
-test('Herdr panel readback admits one renamed workspace with a split, zoomed tab and nothing else',()=>{
+test('Herdr panel readback admits one renamed workspace with a split, zoomed tab, a created tab and nothing else',()=>{
   const snapshot=(over:Record<string,unknown>={})=>({
     workspaces:[{workspace_id:'w1',label:'HERDR'},{workspace_id:'w3',label:'RENAMED'}],
-    tabs:[{workspace_id:'w1',tab_id:'w1:t1'},{workspace_id:'w3',tab_id:'w3:t1'}],
-    panes:[{workspace_id:'w1',tab_id:'w1:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'}],
-    layouts:[{workspace_id:'w1',tab_id:'w1:t1',zoomed:false},{workspace_id:'w3',tab_id:'w3:t1',zoomed:true}],...over});
-  expect(herdrPanelRows(snapshot(),'RENAMED')).toEqual({workspaceId:'w3',tabId:'w3:t1',zoomed:true,paneCwds:['/a','/a']});
-  expect(herdrPanelRows(snapshot({layouts:[{workspace_id:'w3',tab_id:'w3:t1',zoomed:false}]}),'RENAMED').zoomed).toBe(false);
+    tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:'one'},{workspace_id:'w3',tab_id:'w3:t1',label:'1'},{workspace_id:'w3',tab_id:'w3:t2',label:'TAB'}],
+    panes:[{workspace_id:'w1',tab_id:'w1:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t2',cwd:'/b'}],
+    layouts:[{workspace_id:'w1',tab_id:'w1:t1',zoomed:false},{workspace_id:'w3',tab_id:'w3:t1',zoomed:true},{workspace_id:'w3',tab_id:'w3:t2',zoomed:false}],...over});
+  expect(herdrPanelRows(snapshot(),'RENAMED','TAB')).toEqual({workspaceId:'w3',tabId:'w3:t1',paneCwds:['/a','/a'],createdTab:{tabId:'w3:t2',paneCwds:['/b']}});
+  const [original]=snapshot().tabs.filter(value=>value.workspace_id==='w3');
+  const without={tabs:[snapshot().tabs[0],original],panes:snapshot().panes.slice(0,3),layouts:snapshot().layouts.slice(0,2)};
   const bad:[string,Record<string,unknown>][]=[
     ['Owned Herdr panel workspace not observed',{workspaces:[{workspace_id:'w1',label:'HERDR'}]}],
     ['Owned Herdr panel workspace not observed',{workspaces:[{workspace_id:'w3',label:'RENAMED'},{workspace_id:'w4',label:'RENAMED'}]}],
-    ['Owned Herdr panel topology changed',{panes:[{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'}]}],
-    ['Owned Herdr panel topology changed',{tabs:[{workspace_id:'w3',tab_id:'w3:t1'},{workspace_id:'w3',tab_id:'w3:t2'}]}],
+    ['Owned Herdr panel topology changed',{panes:[snapshot().panes[1],snapshot().panes[3]]}],
+    ['Owned Herdr panel topology changed',{tabs:[...snapshot().tabs,{workspace_id:'w3',tab_id:'w3:t3',label:'extra'}]}],
     ['Owned Herdr panel topology changed',{layouts:[]}],
-    ['Owned Herdr panel topology changed',{layouts:[{workspace_id:'w3',tab_id:'w3:t2',zoomed:true}]}],
+    ['Owned Herdr panel topology changed',{layouts:[{workspace_id:'w3',tab_id:'w3:t3',zoomed:true},snapshot().layouts[2]]}],
+    ['Owned Herdr panel zoom was not observed',{layouts:[{workspace_id:'w3',tab_id:'w3:t1',zoomed:false},snapshot().layouts[2]]}],
+    // The state without the tab, a tab in the wrong workspace, a second tab with the typed label and a tab that split itself.
+    ['Owned Herdr panel tab not observed',without],
+    ['Owned Herdr panel tab not observed',{...without,tabs:[...without.tabs,{workspace_id:'w1',tab_id:'w1:t2',label:'TAB'}]}],
+    ['Owned Herdr panel topology changed',{tabs:[...snapshot().tabs,{workspace_id:'w3',tab_id:'w3:t3',label:'TAB'}]}],
+    ['Owned Herdr panel topology changed',{panes:[...snapshot().panes,{workspace_id:'w3',tab_id:'w3:t2',cwd:'/b'}]}],
   ];
-  for(const [message,over] of bad)expect(()=>herdrPanelRows(snapshot(over),'RENAMED')).toThrow(message);
+  for(const [message,over] of bad)expect(()=>herdrPanelRows(snapshot(over),'RENAMED','TAB')).toThrow(message);
 });
 
-test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr host readback requires the panel create, rename, split down and zoom on the real server',async()=>{
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr host readback requires the panel create, rename, split down, zoom and new tab on the real server',async()=>{
   const owned=await HerdrFixture.start(herdrTools(),undefined,true);
   try {
-    const created='ANDROID_CREATED_'+owned.ssh.nonce,renamed='ANDROID_RENAMED_'+owned.ssh.nonce;
+    const created='ANDROID_CREATED_'+owned.ssh.nonce,renamed='ANDROID_RENAMED_'+owned.ssh.nonce,tab='ANDROID_TAB_'+owned.ssh.nonce;
     const snapshot=async()=>JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
     const workspace=async(label:string)=>(await snapshot()).workspaces.find((value:Record<string,string>)=>value.label===label)?.workspace_id as string;
-    await expect(owned.verifyPanelActions(created,renamed)).rejects.toThrow('Owned Herdr panel workspace not observed');
+    await expect(owned.verifyPanelActions(created,renamed,tab)).rejects.toThrow('Owned Herdr panel workspace not observed');
     // The exact commands the panel sends, each against the owned server only.
     await owned.run(['workspace','create','--no-focus','--label',created,'--cwd',owned.ssh.directory]);
     const id=await workspace(created);
     await owned.run(['workspace','rename',id,renamed]);
-    await expect(owned.verifyPanelActions(created,renamed)).rejects.toThrow('Owned Herdr panel topology changed');
+    await expect(owned.verifyPanelActions(created,renamed,tab)).rejects.toThrow('Owned Herdr panel topology changed');
     const pane=(await snapshot()).panes.find((value:Record<string,string>)=>value.workspace_id===id).pane_id as string;
     await owned.run(['pane','split','--pane',pane,'--direction','down','--cwd',owned.ssh.directory,'--no-focus']);
-    await expect(owned.verifyPanelActions(created,renamed)).rejects.toThrow('Owned Herdr panel zoom was not observed');
+    await expect(owned.verifyPanelActions(created,renamed,tab)).rejects.toThrow('Owned Herdr panel zoom was not observed');
     await owned.run(['pane','zoom','--pane',pane,'--toggle']);
-    await owned.verifyPanelActions(created,renamed);
+    // Without the tab the readback refuses; the zoomed pane is not enough.
+    await expect(owned.verifyPanelActions(created,renamed,tab)).rejects.toThrow('Owned Herdr panel tab not observed');
+    await owned.run(['tab','create','--no-focus','--workspace',id,'--label',tab,'--cwd',owned.ssh.directory]);
+    await owned.verifyPanelActions(created,renamed,tab);
     // A rename that never happened leaves the created label in place.
-    await expect(owned.verifyPanelActions(renamed,renamed)).rejects.toThrow('Owned Herdr panel rename was not observed');
+    await expect(owned.verifyPanelActions(renamed,renamed,tab)).rejects.toThrow('Owned Herdr panel rename was not observed');
     await owned.expectNavigationBytes();
   } finally {await owned.stop();}
 },30_000);

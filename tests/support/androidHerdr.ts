@@ -19,19 +19,25 @@ export function ownedHerdrContext(snapshot:{workspaces:Record<string,unknown>[];
   return [workspaces[0].label,tabs[0].label,cwd].join(' / ');
 }
 /**
- * What the Android Herdr panel leaves behind: one workspace with the given label, its single tab split into exactly two
- * panes and the tab's zoom flag on. Anything else is a changed topology.
+ * What the Android Herdr panel leaves behind: one workspace with the given label whose original tab is split into exactly two
+ * panes with its zoom flag on, plus one more tab that carries the panel-created label and a single pane. Anything else is a
+ * changed topology, a missing zoom or a missing tab.
  */
-export function herdrPanelRows(snapshot:{workspaces?:Record<string,unknown>[];tabs?:Record<string,unknown>[];panes?:Record<string,unknown>[];layouts?:Record<string,unknown>[]},label:string) {
+export function herdrPanelRows(snapshot:{workspaces?:Record<string,unknown>[];tabs?:Record<string,unknown>[];panes?:Record<string,unknown>[];layouts?:Record<string,unknown>[]},label:string,tabLabel:string) {
   const workspaces=(snapshot.workspaces??[]).filter(value=>value.label===label);
   if(workspaces.length!==1 || typeof workspaces[0].workspace_id!=='string')throw new Error('Owned Herdr panel workspace not observed');
   const id=workspaces[0].workspace_id;
-  const tabs=(snapshot.tabs??[]).filter(value=>value.workspace_id===id);
-  const panes=(snapshot.panes??[]).filter(value=>value.workspace_id===id);
-  const layouts=(snapshot.layouts??[]).filter(value=>value.workspace_id===id);
+  const labelled=(snapshot.tabs??[]).filter(value=>value.label===tabLabel);
+  const inOriginal=(value:Record<string,unknown>)=>value.workspace_id===id && !labelled.some(tab=>tab.tab_id===value.tab_id);
+  const tabs=(snapshot.tabs??[]).filter(inOriginal),panes=(snapshot.panes??[]).filter(inOriginal),layouts=(snapshot.layouts??[]).filter(inOriginal);
   if(tabs.length!==1 || panes.length!==2 || layouts.length!==1 || layouts[0].tab_id!==tabs[0].tab_id || panes.some(value=>value.tab_id!==tabs[0].tab_id))
     throw new Error('Owned Herdr panel topology changed');
-  return {workspaceId:id,tabId:tabs[0].tab_id as string,zoomed:layouts[0].zoomed===true,paneCwds:panes.map(value=>value.cwd)};
+  if(layouts[0].zoomed!==true)throw new Error('Owned Herdr panel zoom was not observed');
+  if(labelled.length>1)throw new Error('Owned Herdr panel topology changed');
+  if(labelled.length!==1 || labelled[0].workspace_id!==id || typeof labelled[0].tab_id!=='string')throw new Error('Owned Herdr panel tab not observed');
+  const tabPanes=(snapshot.panes??[]).filter(value=>value.tab_id===labelled[0].tab_id);
+  if(tabPanes.length!==1 || tabPanes[0].workspace_id!==id)throw new Error('Owned Herdr panel topology changed');
+  return {workspaceId:id,tabId:tabs[0].tab_id as string,paneCwds:panes.map(value=>value.cwd),createdTab:{tabId:labelled[0].tab_id,paneCwds:tabPanes.map(value=>value.cwd)}};
 }
 export function herdrHistoryFailureStage(error:unknown) {
   try {
@@ -368,18 +374,17 @@ export class HerdrFixture {
       throw new Error('Owned remote history did not scroll and restore');
   }
   /**
-   * The Android Herdr panel created a workspace in the fixture directory, renamed it, split its pane down and zoomed it.
-   * Herdr itself is read back: the label, directory, pane count and zoom flag, with the three navigation workspaces and panes kept.
+   * The Android Herdr panel created a workspace in the fixture directory, renamed it, split its pane down, zoomed it and created a tab in it.
+   * Herdr itself is read back: the labels, directories, pane and tab counts and zoom flag, with the three navigation workspaces and panes kept.
    */
-  async verifyPanelActions(created:string,renamed:string) {
+  async verifyPanelActions(created:string,renamed:string,tab:string) {
     const snapshot=JSON.parse(await this.run(['api','snapshot'])).result.snapshot;
     if((snapshot.workspaces as Record<string,unknown>[]).some(value=>value.label===created))throw new Error('Owned Herdr panel rename was not observed');
-    const rows=herdrPanelRows(snapshot,renamed);
+    const rows=herdrPanelRows(snapshot,renamed,tab);
     const directory=await realpath(this.ssh.directory);
-    for(const cwd of rows.paneCwds)if(typeof cwd!=='string' || await realpath(cwd)!==directory)throw new Error('Owned Herdr panel directory differs');
-    if(!rows.zoomed)throw new Error('Owned Herdr panel zoom was not observed');
+    for(const cwd of [...rows.paneCwds,...rows.createdTab.paneCwds])if(typeof cwd!=='string' || await realpath(cwd)!==directory)throw new Error('Owned Herdr panel directory differs');
     const labels=(snapshot.workspaces as Record<string,unknown>[]).map(value=>value.label).sort();
-    if(JSON.stringify(labels)!==JSON.stringify([renamed,'HERDR_'+this.ssh.nonce,'NAV_WORKSPACE_'+this.ssh.nonce].sort()) || snapshot.panes.length!==5)
+    if(JSON.stringify(labels)!==JSON.stringify([renamed,'HERDR_'+this.ssh.nonce,'NAV_WORKSPACE_'+this.ssh.nonce].sort()) || snapshot.panes.length!==6 || snapshot.tabs.length!==5)
       throw new Error('Owned Herdr panel changed an original workspace');
   }
   /** Ids from the real server: the reported agent and the second tab's pane (outside navigation mode). */
