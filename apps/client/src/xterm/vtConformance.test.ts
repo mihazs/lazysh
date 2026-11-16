@@ -44,7 +44,7 @@ describeSent<KeyFixture>('xterm.js 5.5.0 key encoding', 'keys.json', observeXter
 describeSent<MouseFixture>('xterm.js 5.5.0 mouse reports', 'mouse.json', observeXtermMouse);
 
 describe('Mosh frame fixtures', () => {
-  const captured = JSON.parse(readFileSync(join(__dirname, '../e2e/fixtures/mosh-resize-frames.json'), 'utf8')) as {
+  const captured = JSON.parse(readFileSync(join(__dirname, '../../e2e/fixtures/mosh-resize-frames.json'), 'utf8')) as {
     frames: {frameId: number; cols: number; rows: number; bytesHex: string; expectedCursor: [number, number]; expectedLongRow: string; expectedFirstRowBoldRed: boolean}[];
   };
   const fixtures: Fixture[] = JSON.parse(readFileSync(join(dir, 'mosh-frames.json'), 'utf8'));

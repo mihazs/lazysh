@@ -39,7 +39,7 @@ export function dense(expect: Partial<Observation>): Observation {
 export type Step = {write: string} | {writeBase64: string} | {writeFile: string} | {resize: [number, number]} | {paste: string};
 
 /** Fixtures live in packages/terminal-runtime/fixtures; `writeFile` paths are relative to it. */
-export const fixturesDir = join(__dirname, '../../../packages/terminal-runtime/fixtures');
+export const fixturesDir = join(__dirname, '../../../../packages/terminal-runtime/fixtures');
 
 export type Fixture = {
   id: string; about: string; cols: number; rows: number; scrollback: number;

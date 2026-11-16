@@ -3,7 +3,7 @@
 Replayable byte streams with the screen, cursor, modes, terminal replies and events they must produce
 ([#1314](https://github.com/mihazs/lazysh/issues/1314)). One set of files, two engines:
 
-- **xterm.js 5.5.0** (the behaviour lazysh ships today): `apps/client/src/vtConformance.test.ts`, in the
+- **xterm.js 5.5.0** (the behaviour lazysh ships today): `apps/client/src/xterm/vtConformance.test.ts`, in the
   normal `client` vitest run, on a terminal mounted in jsdom as the app mounts it (only a mounted terminal has a
   theme to answer colour queries with). `expect` is what xterm produced; the test fails if xterm changes.
 - **The core** (`lazysh-terminal-runtime` on libghostty-vt): `tests/vt_fixtures.rs`, in the
@@ -33,7 +33,7 @@ entries of `divergences.json`; a test fails if a divergence is unused, unlisted,
 Edit the JSON, then regenerate xterm's side and review the diff like any other change:
 
 ```sh
-cd apps/client && UPDATE_VT_FIXTURES=1 bunx vitest run src/vtConformance.test.ts   # rewrites `expect` (xterm)
+cd apps/client && UPDATE_VT_FIXTURES=1 bunx vitest run src/xterm/vtConformance.test.ts   # rewrites `expect` (xterm)
 ```
 
 For the core, run `tests/vt_fixtures.rs` (the README at `packages/terminal-runtime` has the build recipe);

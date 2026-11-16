@@ -1,6 +1,6 @@
 //! Replays every fixture in `fixtures/vt` through the core and compares what a renderer, the
 //! transport and the host would observe with the fixture's `expect`. The same files are replayed
-//! through xterm.js 5.5.0 by `apps/client/src/vtConformance.test.ts`, so any difference between the
+//! through xterm.js 5.5.0 by `apps/client/src/xterm/vtConformance.test.ts`, so any difference between the
 //! two engines is a recorded `core` divergence with a reason, never a silent edit.
 
 mod support;
@@ -448,7 +448,7 @@ fn mouse_fixtures() -> Vec<MouseFixture> {
     serde_json::from_slice(&std::fs::read(path).expect("mouse.json")).expect("parse")
 }
 
-/// An event spec (see `apps/client/src/vtConformance.ts`) as the core's input.
+/// An event spec (see `apps/client/src/xterm/vtConformance.ts`) as the core's input.
 fn mouse_input(spec: &str) -> MouseInput {
     let mut parts = spec.split(' ');
     let (kind, button, cell) = (
