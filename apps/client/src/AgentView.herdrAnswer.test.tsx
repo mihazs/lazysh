@@ -12,16 +12,18 @@ vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import
 const SESSION='00000001-0000-4000-8000-000000000000';
 useAgentViewHarness();
 
-const request=(id:string,sessionId=SESSION)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
-type Host={pane:string;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];agent:'claude'|'codex';status:string;screen:string[];summary?:string;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
-/** The focused Herdr pane runs Claude Code `SESSION`; `pane` is where Herdr says that session runs now, `waiting` what the companion's report of it says. */
+const request=(id:string,sessionId=SESSION,paneId:string|null=null)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+type Host={pane:string;terminal:string;focused:boolean;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];agent:'claude'|'codex';status:string;screen:string[];summary?:string;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
+/** The focused Herdr pane runs Claude Code `SESSION`; `pane` is where Herdr says that session runs now, `focused` whether Herdr still reports that pane as the focused one, `waiting` what the companion's report of it says. */
 function herdr(host:Partial<Host>={}) {
-  const state:Host={pane:'w2E:pF',requests:[],messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],waiting:true,guard:false,session:SESSION,decided:[],agent:'claude',status:'idle',screen:[],...host};
+  const state:Host={pane:'w2E:pF',terminal:'term-one',focused:true,requests:[],messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],waiting:true,guard:false,session:SESSION,decided:[],agent:'claude',status:'idle',screen:[],...host};
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='multiplexer_sessions')return [{name:'owned'}];
     if(command==='herdr_tree'){
-      const agent={...herdrNavigationTree.agents[0],pane_id:state.pane,agent:state.agent,agent_status:state.status,agent_session:{source:`herdr:${state.agent}`,agent:state.agent,kind:'id',value:state.session}};
-      return {...herdrNavigationTree,agents:[agent]};
+      const agent={...herdrNavigationTree.agents[0],pane_id:state.pane,terminal_id:state.terminal,agent:state.agent,agent_status:state.status,agent_session:{source:`herdr:${state.agent}`,agent:state.agent,kind:'id',value:state.session}};
+      // Focus on another pane of the same tab: the followed agent's pane is still live but no longer the focused one.
+      const pane={...herdrNavigationTree.panes[0],terminal_id:state.terminal,focused:state.focused};
+      return {...herdrNavigationTree,panes:state.focused?[pane]:[pane,{...pane,pane_id:'w2E:pG',terminal_id:'term-two',focused:true}],agents:[agent]};
     }
     if(command==='agent_herdr_conversation')return {schemaVersion:1,agent:state.agent,view:'active_branch',messages:state.messages,nextOffset:0,hasMore:false,activity:'waiting'};
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:SESSION,agent:state.agent==='claude'?'Claude Code':'Codex',project:'/work',state:state.waiting?'needs_attention':'working',updatedAt:new Date().toISOString(),summary:state.summary??'Answer requested',paneId:null,eventCount:3}]};
@@ -56,6 +58,28 @@ describe('permission requests of the agent followed in a Herdr pane',()=>{
     const host=herdr({requests:[request('11111111-1111-4111-8111-111111111111')]});
     await mount();await advance(400);
     host.session='another-session';
+    await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
+    expect(calls('resolve_agent_approval')).toEqual([]);expect(within(dock()).getByRole('alert')).toBeTruthy();
+  });
+  const first='11111111-1111-4111-8111-111111111111';
+  it('shows a request that names exactly this pane and sends the decision with that pane unchanged',async()=>{
+    herdr({requests:[request(first,SESSION,'herdr:owned:w2E:pF')]});
+    await mount();await advance(400);
+    expect(dock().textContent).toContain('run 11111111');
+    await act(async()=>{fireEvent.click(within(dock()).getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
+    expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:first,expectedHash:'a'.repeat(64),agentSessionId:SESSION,paneId:'herdr:owned:w2E:pF',decision:'allow'}]);
+    expect(keys()).toEqual([]);
+  });
+  it.each([['another pane of this server','herdr:owned:w2E:pG'],['another Herdr session','herdr:other:w2E:pF'],['a tmux pane','%7'],['a Zellij pane','zellij:work:3']])('shows no request of the same session that names %s',async(_,paneId)=>{
+    herdr({requests:[request(first,SESSION,paneId)]});
+    await mount();await advance(400);
+    expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
+    expect(calls('resolve_agent_approval')).toEqual([]);
+  });
+  it.each([['Herdr no longer reports the pane as focused',(host:Host)=>{host.focused=false;}],['another terminal replaced the pane',(host:Host)=>{host.terminal='term-two';}]])('sends nothing when %s between the list and the decision',async(_,change)=>{
+    const host=herdr({requests:[request(first,SESSION,'herdr:owned:w2E:pF')]});
+    await mount();await advance(400);
+    change(host);
     await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
     expect(calls('resolve_agent_approval')).toEqual([]);expect(within(dock()).getByRole('alert')).toBeTruthy();
   });

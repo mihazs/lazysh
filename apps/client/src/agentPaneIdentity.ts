@@ -4,6 +4,9 @@ export function zellijPane(id:string|null|undefined):{session:string;pane:number
   return match ? {session:match[1],pane:Number(match[2])} : undefined;
 }
 
+/** The identity a hook in the Herdr pane `pane` of server `server` records: `herdr:<session>:<pane id>`. */
+export const herdrPaneIdentity=(server:string,pane:string)=>`herdr:${server}:${pane}`;
+
 const herdrPane=/^herdr:([\w.-]{1,64}):(w[1-9A-HJKMNP-TV-Z0]+:p[1-9A-HJKMNP-TV-Z0]+)$/;
 /** The panes a companion hook can name, as the companion validates them: tmux `%7`, Zellij `zellij:<session>:<pane>` and Herdr `herdr:<session>:<pane id>`.
  * An approval is answered with this identity unchanged, so anything else is refused rather than shown. */

@@ -674,14 +674,13 @@ const richConversation=[
   {id:'t1',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'gh pr list'},{type:'tool_use',name:'Monitor',text:'watch'}]},
   {id:'a1',role:'assistant',blocks:[{type:'text',text:'v0.158.0 is published.'}],usage:{inputTokens:2,outputTokens:114,cacheReadTokens:153532,cacheWriteTokens:472}},
 ];
-/** The followed Claude Code agent of pane `w2:p1` waits for the user: its hook report says so, it has one permission request and the conversation ends on a question. */
-function herdrClaudeWaits() {
+/** The followed Claude Code agent of pane `w2:p1` waits for the user: its hook report says so, it has one permission request (from the hook of pane `pane`, null for a companion that records none) and the conversation ends on a question. */
+function herdrClaudeWaits(pane:string|null) {
   const base=window.nativeFixtureInvoke!,session='00000002-0000-4000-8000-000000000000';
   window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[],gone:false};
   window.nativeFixtureInvoke=async(command,args)=>{
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:session,agent:'Claude Code',project:'/home/owner/dev/project-2',state:'needs_attention',updatedAt:new Date().toISOString(),summary:'Answer requested',paneId:null,eventCount:3}]};
-    // A Herdr pane has no tmux pane id: the hook names the session only.
-    if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:session,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
+    if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:session,project:'/work',paneId:pane,toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
     if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
     if(command==='agent_herdr_conversation')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,activity:'waiting',messages:[
       {id:'p',role:'user',blocks:[{type:'text',text:'Ask me a question'}]},
@@ -707,7 +706,7 @@ function herdrModelDialog() {
 
 /** Stock Herdr host: six live agents (one per workspace `w0`..`w5`), fifty ended hook reports without pane identity, and a companion that may predate conversation reading.
  * `focus` is the focused pane (`w2:p1`); the page can move it later through `herdrFixture.focus`. `agents` limits how many agents run. */
-async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean;waits?:boolean;dialog?:boolean}={}) {
+async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean;waits?:boolean;requestPane?:string|null;dialog?:boolean}={}) {
   await installBaseHost(page);
   await page.addInitScript(({companion,rich,richConversation,start})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'herdr',name:'owned'}}]));
@@ -758,7 +757,7 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
   },{companion,rich,richConversation,start});
-  if(start.waits)await page.addInitScript(herdrClaudeWaits);
+  if(start.waits)await page.addInitScript(herdrClaudeWaits,start.requestPane===undefined?'herdr:owned:w2:p1':start.requestPane);
   if(start.dialog)await page.addInitScript(herdrModelDialog);
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
@@ -809,7 +808,7 @@ test('stock Herdr: the composer sends through Herdr\'s own agent input, and a re
   expect((await herdrFixture(page)).inputs).toHaveLength(1);
 });
 
-test('stock Herdr: a permission request of the followed Claude Code agent is answered through the hook, with no key',async({page})=>{
+test('stock Herdr: a permission request that names the followed pane is answered through the hook, with no key',async({page})=>{
   await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
   const agent=agentView(page);
   const dock=agent.getByRole('region',{name:'Pending approvals',exact:true});
@@ -819,8 +818,25 @@ test('stock Herdr: a permission request of the followed Claude Code agent is ans
   expect((await deny.boundingBox())!.height).toBeGreaterThanOrEqual(36);
   await deny.click();
   await expect(dock).toHaveCount(0);
-  expect(await decided(page)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'00000002-0000-4000-8000-000000000000',paneId:null,decision:'deny'})]);
+  expect(await decided(page)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'00000002-0000-4000-8000-000000000000',paneId:'herdr:owned:w2:p1',decision:'deny'})]);
   expect((await herdrFixture(page)).inputs).toEqual([]);
+});
+
+test('stock Herdr: a request from a companion that names no pane is still answered by its session id',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true,requestPane:null});
+  const dock=agentView(page).getByRole('region',{name:'Pending approvals',exact:true});
+  await expect(dock).toContainText('git push',{timeout:8000});
+  await dock.getByRole('button',{name:'Deny request',exact:true}).click();
+  await expect(dock).toHaveCount(0);
+  expect(await decided(page)).toEqual([expect.objectContaining({paneId:null,decision:'deny'})]);
+});
+
+for(const pane of ['herdr:owned:w2:p2','herdr:other:w2:p1','%7'])test(`stock Herdr: a request of the followed session that names ${pane} is not shown`,async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true,requestPane:pane});
+  await expect(agentView(page).getByRole('region',{name:'Question',exact:true})).toBeVisible({timeout:8000});
+  await page.waitForTimeout(1500);
+  await expect(agentView(page).getByRole('region',{name:'Pending approvals',exact:true})).toHaveCount(0);
+  expect(await decided(page)).toEqual([]);
 });
 
 test('stock Herdr: the open question of the followed Claude Code agent is answered with its digit through Herdr\'s own agent input',async({page})=>{
