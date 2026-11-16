@@ -1,94 +1,35 @@
+use super::owned_server::{pinned_binary, private_directory, ready, spawn, tls};
 use super::*;
-use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    os::unix::fs::{MetadataExt, PermissionsExt},
-    path::PathBuf,
-    process::Stdio,
-};
 
 #[tokio::test]
 #[ignore = "requires the immutable owned official Gotify 3.1.1 Linux binary in LAZYSH_GOTIFY_SERVER"]
 async fn real_gotify_server_stores_all_finite_relay_states_over_verified_tls() {
-    let directory = tempfile::tempdir().unwrap();
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let binary =
-        PathBuf::from(std::env::var_os("LAZYSH_GOTIFY_SERVER").expect("owned Gotify binary"));
-    assert!(binary.is_absolute());
-    let metadata = fs::symlink_metadata(&binary).unwrap();
-    assert!(metadata.is_file() && metadata.nlink() == 1 && metadata.mode() & 0o222 == 0);
-    assert_eq!(
-        metadata.uid(),
-        fs::metadata(directory.path()).unwrap().uid()
+    let directory = private_directory();
+    let binary = pinned_binary(
+        "LAZYSH_GOTIFY_SERVER",
+        "7c5fbcce5fa130c8e7bf643fee4f069a3aed974ead16bc5a84a168e31930e7b7",
+        directory.path(),
     );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(fs::read(&binary).unwrap())),
-        "7c5fbcce5fa130c8e7bf643fee4f069a3aed974ead16bc5a84a168e31930e7b7"
-    );
-    let identity = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-    let certificate = directory.path().join("server.pem");
-    let key = directory.path().join("server-key.pem");
-    client::write_private(&certificate, identity.cert.pem().as_bytes()).unwrap();
-    client::write_private(&key, identity.signing_key.serialize_pem().as_bytes()).unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
+    let tls = tls(directory.path()).await;
     let password = Uuid::new_v4().to_string();
-    let mut server = tokio::process::Command::new(&binary)
-        .current_dir(directory.path())
-        .env_clear()
-        .env("GOTIFY_CONFIG_FILE", "/dev/null")
-        .env("GOTIFY_SERVER_LISTENADDR", "127.0.0.1")
-        .env("GOTIFY_SERVER_PORT", "0")
-        .env("GOTIFY_SERVER_SSL_ENABLED", "true")
-        .env("GOTIFY_SERVER_SSL_REDIRECTTOHTTPS", "false")
-        .env("GOTIFY_SERVER_SSL_LISTENADDR", "127.0.0.1")
-        .env("GOTIFY_SERVER_SSL_PORT", port.to_string())
-        .env("GOTIFY_SERVER_SSL_CERTFILE", &certificate)
-        .env("GOTIFY_SERVER_SSL_CERTKEY", &key)
-        .env("GOTIFY_DEFAULTUSER_PASS", &password)
-        .env("GOMAXPROCS", "2")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let origin = format!("https://localhost:{port}");
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .add_root_certificate(
-            reqwest::Certificate::from_pem(identity.cert.pem().as_bytes()).unwrap(),
-        )
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
-            assert!(
-                server.try_wait().unwrap().is_none(),
-                "owned Gotify exited before readiness"
-            );
-            if client
-                .get(format!("{origin}/health"))
-                .send()
-                .await
-                .is_ok_and(|r| r.status().is_success())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("owned Gotify readiness deadline");
-    assert!(http_client()
-        .unwrap()
-        .get(format!("{origin}/health"))
-        .send()
-        .await
-        .is_err());
+    let mut server = spawn(
+        tokio::process::Command::new(&binary)
+            .current_dir(directory.path())
+            .env_clear()
+            .env("GOTIFY_CONFIG_FILE", "/dev/null")
+            .env("GOTIFY_SERVER_LISTENADDR", "127.0.0.1")
+            .env("GOTIFY_SERVER_PORT", "0")
+            .env("GOTIFY_SERVER_SSL_ENABLED", "true")
+            .env("GOTIFY_SERVER_SSL_REDIRECTTOHTTPS", "false")
+            .env("GOTIFY_SERVER_SSL_LISTENADDR", "127.0.0.1")
+            .env("GOTIFY_SERVER_SSL_PORT", tls.port.to_string())
+            .env("GOTIFY_SERVER_SSL_CERTFILE", &tls.certificate)
+            .env("GOTIFY_SERVER_SSL_CERTKEY", &tls.key)
+            .env("GOTIFY_DEFAULTUSER_PASS", &password)
+            .env("GOMAXPROCS", "2"),
+    );
+    let (origin, client) = (tls.origin, tls.client);
+    ready(&mut server, &client, &format!("{origin}/health")).await;
     let rejected = client
         .post(format!("{origin}/message"))
         .header("X-Gotify-Key", "owned-invalid-token")
@@ -187,7 +128,7 @@ async fn real_gotify_server_stores_all_finite_relay_states_over_verified_tls() {
         .unwrap();
     assert_eq!(
         desktop.poll().await.unwrap_err(),
-        lazysh_notification_client::gotify::PollError::Unauthorized
+        lazysh_notification_client::remote::PollError::Unauthorized
     );
     server.kill().await.unwrap();
     assert!(server.try_wait().unwrap().is_some());

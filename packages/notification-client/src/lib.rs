@@ -1,6 +1,8 @@
 pub mod client;
 pub mod gotify;
+pub mod ntfy;
 mod private_files;
+pub mod remote;
 mod wire;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
