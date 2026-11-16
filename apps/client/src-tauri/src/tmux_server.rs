@@ -18,6 +18,22 @@ impl Binary {
             Self::Rmux => "rmux",
         }
     }
+    /// A session, window or pane name as a literal: tmux expands formats in it, so each `#` is doubled; rmux 0.10.0 stores a name as typed.
+    pub(crate) fn literal_name(self, value: &str) -> String {
+        match self {
+            Self::Tmux => value.replace('#', "##"),
+            Self::Rmux => value.to_owned(),
+        }
+    }
+    /// A start directory (`-c`) as a literal: tmux doubles each `#`. rmux 0.10.0 does too in `new-session`, but `new-window` and
+    /// `split-window` expand formats in a directory only when it holds `#{` (then `##` is `#`) and take any other as typed.
+    /// shortcut: a `new-session` directory holding a style such as `#[b]` is not reached by doubling on rmux 0.10.0, upgrade with a measured escape for it.
+    pub(crate) fn literal_directory(self, value: &str, new_session: bool) -> String {
+        match self {
+            Self::Rmux if !new_session && !value.contains("#{") => value.to_owned(),
+            Self::Tmux | Self::Rmux => value.replace('#', "##"),
+        }
+    }
 }
 /// A `-L` label on one binary; `None` is the default server.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -126,6 +142,31 @@ mod tests {
             TmuxServer::parse(Some("a'b")).unwrap().prefix(),
             "tmux -u -L 'a'\\''b'"
         );
+    }
+    #[test]
+    fn rmux_doubles_the_hashes_of_a_window_directory_only_when_it_expands_formats() {
+        for (typed, rmux) in [
+            ("a#{x}b", "a##{x}b"),
+            ("a##{x}b", "a####{x}b"),
+            ("a#{x}##b", "a##{x}####b"),
+            ("a##b", "a##b"),
+            ("a#b", "a#b"),
+            ("a#(echo hi)b", "a#(echo hi)b"),
+        ] {
+            assert_eq!(Binary::Rmux.literal_directory(typed, false), rmux);
+            assert_eq!(Binary::Rmux.literal_name(typed), typed);
+            for (binary, new_session) in [
+                (Binary::Tmux, false),
+                (Binary::Tmux, true),
+                (Binary::Rmux, true),
+            ] {
+                assert_eq!(
+                    binary.literal_directory(typed, new_session),
+                    typed.replace('#', "##")
+                );
+            }
+            assert_eq!(Binary::Tmux.literal_name(typed), typed.replace('#', "##"));
+        }
     }
     #[test]
     fn rmux_servers_use_the_same_validated_labels_with_their_own_binary() {

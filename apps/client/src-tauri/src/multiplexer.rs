@@ -760,14 +760,11 @@ pub(crate) fn action_command_for(
     action: &TmuxAction,
     server: &crate::tmux_server::TmuxServer,
 ) -> Result<String> {
-    // tmux expands formats in names and paths, so a literal `#` is doubled; rmux 0.10.0 stores names as typed.
-    let quote = |value: &str| match server.binary() {
-        crate::tmux_server::Binary::Tmux => tmux_arg(&value.replace('#', "##")),
-        crate::tmux_server::Binary::Rmux => tmux_arg(value),
-    };
-    let directory = |value: &str| -> Result<String> {
+    let binary = server.binary();
+    let quote = |value: &str| tmux_arg(&binary.literal_name(value));
+    let directory = |value: &str, new_session: bool| -> Result<String> {
         text(value, 4096)?;
-        Ok(quote(value))
+        Ok(tmux_arg(&binary.literal_directory(value, new_session)))
     };
     let command = match action {
         TmuxAction::CreateSession {
@@ -775,7 +772,11 @@ pub(crate) fn action_command_for(
             directory: path,
         } => {
             name(value)?;
-            format!("new-session -d -s {} -c {}", quote(value), directory(path)?)
+            format!(
+                "new-session -d -s {} -c {}",
+                quote(value),
+                directory(path, true)?
+            )
         }
         TmuxAction::RenameSession {
             target,
@@ -796,7 +797,7 @@ pub(crate) fn action_command_for(
                 "new-window -d -t {} -n {} -c {}",
                 quote(target),
                 quote(value),
-                directory(path)?
+                directory(path, false)?
             )
         }
         TmuxAction::RenameWindow {
@@ -830,7 +831,7 @@ pub(crate) fn action_command_for(
                 "split-window -d {} -t {} -c {}",
                 if *horizontal { "-h" } else { "-v" },
                 quote(target),
-                directory(path)?
+                directory(path, false)?
             )
         }
         TmuxAction::ZoomPane { target } => {
@@ -1347,8 +1348,26 @@ esac
         };
         assert_eq!(
             action_command_for(&create, &rmux).unwrap(),
-            "rmux -u -L 'lab' new-session -d -s 'a#(b)' -c '/w#1'"
+            "rmux -u -L 'lab' new-session -d -s 'a#(b)' -c '/w##1'"
         );
+        // rmux expands `#{...}` in a start directory (and then `##`), so a directory that holds one has every `#` doubled.
+        let split = |directory: &str| {
+            action_command_for(
+                &TmuxAction::SplitPane {
+                    target: "%1".into(),
+                    horizontal: true,
+                    directory: directory.into(),
+                },
+                &rmux,
+            )
+            .unwrap()
+        };
+        assert!(split("/w#{x}##").ends_with("-c '/w##{x}####'"));
+        assert!(split("/w#(y)##").ends_with("-c '/w#(y)##'"));
+        // `new-session` expands formats in its directory whatever it holds.
+        assert!(action_command_for(&create, &rmux)
+            .unwrap()
+            .ends_with("-c '/w##1'"));
         assert!(action_command(&create)
             .unwrap()
             .ends_with("new-session -d -s 'a##(b)' -c '/w##1'"));
@@ -1611,6 +1630,86 @@ esac
         .unwrap();
         assert!(!again.status.success());
         assert_eq!(read_tree().sessions[0].windows.len(), 1);
+        // A directory whose name holds a format, a quote, a trailing `;` or a `#` that is no format is the one a new session, window and split pane start in.
+        let panes_start_in =
+            |directory: &str, count: usize, select: &dyn Fn(&MultiplexerTree) -> Vec<String>| {
+                let expected = vec![directory.to_owned(); count];
+                let mut found = select(&read_tree());
+                // A new pane reports its directory once its shell has started.
+                for _ in 0..50 {
+                    if found == expected {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    found = select(&read_tree());
+                }
+                assert_eq!(found, expected, "{binary:?}");
+            };
+        let paths = |panes: &[MuxPane]| {
+            panes
+                .iter()
+                .map(|pane| pane.path.clone())
+                .collect::<Vec<_>>()
+        };
+        for (index, odd) in [
+            "it's #{x};",
+            "w#{pane_id}#(echo hi)##b",
+            "no#(echo hi)##format",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let odd = temp.path().canonicalize().unwrap().join(odd);
+            std::fs::create_dir(&odd).unwrap();
+            let odd = odd.to_str().unwrap().to_owned();
+            let label = format!("odd{index}");
+            run(action_command_for(
+                &TmuxAction::CreateSession {
+                    name: label.clone(),
+                    directory: odd.clone(),
+                },
+                &server,
+            )
+            .unwrap());
+            panes_start_in(&odd, 1, &|tree| {
+                let session = tree.sessions.iter().find(|session| session.name == label);
+                paths(&session.unwrap().windows[0].panes)
+            });
+            let session = read_tree().sessions[0].id.clone();
+            run(action_command_for(
+                &TmuxAction::CreateWindow {
+                    target: session,
+                    name: label.clone(),
+                    directory: odd.clone(),
+                },
+                &server,
+            )
+            .unwrap());
+            let window = |tree: &MultiplexerTree| {
+                let window = tree.sessions[0]
+                    .windows
+                    .iter()
+                    .find(|window| window.name == label);
+                window
+                    .unwrap()
+                    .panes
+                    .iter()
+                    .map(|pane| (pane.id.clone(), pane.path.clone()))
+                    .collect::<Vec<_>>()
+            };
+            run(action_command_for(
+                &TmuxAction::SplitPane {
+                    target: window(&read_tree())[0].0.clone(),
+                    horizontal: true,
+                    directory: odd.clone(),
+                },
+                &server,
+            )
+            .unwrap());
+            panes_start_in(&odd, 2, &|tree| {
+                window(tree).into_iter().map(|pane| pane.1).collect()
+            });
+        }
     }
 
     #[test]

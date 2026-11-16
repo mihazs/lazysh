@@ -283,7 +283,7 @@ rmux 0.10.0 is discovered, attached, browsed and acted on through the tmux code 
 | Discovery | implemented | implemented | implemented | L: `NLR` `multiplexer::tests::real_rmux_lifecycle_and_literal_names` (the parsed tree equals `rmux list-panes -a`) and `ssh::tmux_jump_fixture::real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` (a probe leaves no daemon or socket behind). Unit tests cover capability parsing and the `-N` probe. Android and Windows run the same Rust code; no case drives them. |
 | Attach and reattach | implemented | implemented | implemented | L: `NLR` `real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` attaches a labelled server over OpenSSH and closing the tab leaves the session. Android case: #1676. |
 | Navigation, Jump To, current marker | missing | missing | missing | #1675. |
-| Create | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` creates sessions and windows with names containing spaces, quotes, `#` and a trailing `;`. A new Git worktree: #1141. |
+| Create | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` creates sessions and windows with names containing spaces, quotes, `#` and a trailing `;`, and a session, window and split pane in directories whose names hold `#{x}`, `#(…)`, `##` and a trailing `;` (#1865). A new Git worktree: #1141. |
 | Agent launch | missing | missing | missing | #1141. |
 | Layout actions | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` renames, splits, zooms and selects. Close and resize: #1144. |
 | History and clipboard | missing | missing | missing | #1147. |
