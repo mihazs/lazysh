@@ -660,6 +660,16 @@ mod tests {
         }
     }
 
+    // The agent is built for Windows too, where the relay only answers that the host has no browser pipe.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_host_has_no_browser_pipe_and_says_so() {
+        assert!(matches!(
+            spawn_piped(&mut Command::new("cmd.exe")),
+            Err(Error::Browser("HostBrowserUnsupported"))
+        ));
+    }
+
     #[test]
     fn a_write_to_a_browser_that_has_gone_reports_the_browser_exiting() {
         let (reader, writer) = io::pipe().unwrap();
