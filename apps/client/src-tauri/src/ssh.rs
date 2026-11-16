@@ -6726,6 +6726,7 @@ mod tests {
             "update_companion_settings",
             "get_host_browser_settings",
             "update_host_browser_settings",
+            "host_browser_clear_data",
         ] {
             let policy = context.runtime_authority_mut();
             assert!(policy.resolve_access(command, "main", "main", &tauri::ipc::Origin::Local).is_some(), "the documented command must be admitted by the generated local-main policy: {command}");
@@ -6759,6 +6760,7 @@ mod tests {
                 crate::companion_settings::update_companion_settings,
                 crate::companion_settings::get_host_browser_settings,
                 crate::companion_settings::update_host_browser_settings,
+                crate::companion_settings::host_browser_clear_data,
                 crate::companion::install_companion,
                 crate::companion::install_companion_from_device
             ])
@@ -6876,6 +6878,7 @@ mod tests {
             ("update_companion_settings", update.clone()),
             ("get_host_browser_settings", browser.clone()),
             ("update_host_browser_settings", browser_update.clone()),
+            ("host_browser_clear_data", browser.clone()),
         ] {
             let error = tauri::test::get_ipc_response(&main, request(local_url, command, body))
                 .unwrap_err();
@@ -6889,8 +6892,9 @@ mod tests {
             ("install_companion_from_device", installer),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
-            ("get_host_browser_settings", browser),
+            ("get_host_browser_settings", browser.clone()),
             ("update_host_browser_settings", browser_update),
+            ("host_browser_clear_data", browser),
             ("list_hosts", serde_json::json!({})),
             ("clipboard_read", clipboard_read),
             ("clipboard_cancel", clipboard_cancel),

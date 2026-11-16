@@ -198,6 +198,7 @@ fn main() {
         "update_companion_settings",
         "get_host_browser_settings",
         "update_host_browser_settings",
+        "host_browser_clear_data",
         "agent_transcript",
         "agent_usage",
         "account_usage",

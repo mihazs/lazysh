@@ -333,6 +333,7 @@ pub fn run() {
                 companion_settings::update_companion_settings,
                 companion_settings::get_host_browser_settings,
                 companion_settings::update_host_browser_settings,
+                companion_settings::host_browser_clear_data,
                 ssh::agent_transcript,
                 ssh::agent_usage,
                 ssh::agent_transcripts,

@@ -7,6 +7,7 @@ import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inact
 export function mountAgentBoard(host?:{key:string;label:string}){
   const calls:{command:string;args:unknown}[]=[];
   let hostBrowser={schemaVersion:1,revision:0,hostBrowserEnabled:false};
+  let keptProfile=true;
   let reports=[agentBoardRecord];
   const approval=agentApproval();let decided=false;let finish!:(value:unknown)=>void;
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic agent board authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'c'.repeat(64)});
@@ -19,6 +20,7 @@ export function mountAgentBoard(host?:{key:string;label:string}){
     if(command==='update_companion_settings'){const {expectedRevision:_,...settings}=(args as {settings:typeof companionSettings & {expectedRevision:number}}).settings;return {...companionSettings,...settings,revision:8};}
     if(command==='get_host_browser_settings')return hostBrowser;
     if(command==='update_host_browser_settings'){const {hostBrowserEnabled}=(args as {settings:{hostBrowserEnabled:boolean}}).settings;hostBrowser={...hostBrowser,revision:hostBrowser.revision+1,hostBrowserEnabled};return hostBrowser;}
+    if(command==='host_browser_clear_data'){const answer={schemaVersion:1,cleared:keptProfile};keptProfile=false;return answer;}
     if(command==='resolve_agent_approval')return new Promise(resolve=>{finish=resolve;});
     if(command==='board_keep_awake_status')return inactiveBoardDisplay;
     throw new Error('Unexpected agent board fixture command');

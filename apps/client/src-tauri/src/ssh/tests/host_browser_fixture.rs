@@ -2,6 +2,7 @@
 //! SSH exec channel, a real headless Chrome or Chromium, the app's own commands, and a companion that answers as
 //! an older one or with the switch off does. The page is a solid color served from loopback; no account is used.
 use super::*;
+use crate::companion_settings::host_browser_clear_data;
 use crate::host_browser::{
     host_browser_ack, host_browser_next, host_browser_pause, host_browser_resume,
     host_browser_start, host_browser_stop,
@@ -97,7 +98,7 @@ fn running(needle: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn start(app: &App, id: &str, url: &str) -> String {
+async fn start(app: &App, id: &str, url: &str, keep_profile: bool) -> String {
     host_browser_start(
         access_lease(),
         app.state(),
@@ -105,6 +106,7 @@ async fn start(app: &App, id: &str, url: &str) -> String {
         id.into(),
         serde_json::from_value(json!({"width": 412, "height": 915})).unwrap(),
         Some(url.into()),
+        Some(keep_profile),
     )
     .await
     .unwrap()
@@ -124,20 +126,37 @@ async fn pull(app: &App, id: &str, token: &str) -> Option<(u8, Vec<u8>)> {
     (bytes[0] != 0).then(|| (bytes[0], bytes[1..].to_vec()))
 }
 
-/// Pulls until the browser's closing message and returns its reason.
-async fn closing_reason(app: &App, id: &str, token: &str) -> String {
-    timeout(Duration::from_secs(60), async {
+/// Pulls JSON messages until `wanted` takes one, within `limit`; `what` says what never came.
+async fn until_json<T>(
+    app: &App,
+    id: &str,
+    token: &str,
+    (limit, what): (Duration, &str),
+    wanted: impl Fn(&Value) -> Option<T>,
+) -> T {
+    timeout(limit, async {
         loop {
             if let Some((1, body)) = pull(app, id, token).await {
-                let message: Value = serde_json::from_slice(&body).unwrap();
-                if message["type"] == "closed" {
-                    return message["reason"].as_str().unwrap().to_string();
+                if let Some(found) = wanted(&serde_json::from_slice(&body).unwrap()) {
+                    return found;
                 }
             }
         }
     })
     .await
-    .expect("the browser never said why it ended")
+    .unwrap_or_else(|_| panic!("{what}"))
+}
+
+/// Pulls until the browser's closing message and returns its reason.
+async fn closing_reason(app: &App, id: &str, token: &str) -> String {
+    let wait = (
+        Duration::from_secs(60),
+        "the browser never said why it ended",
+    );
+    until_json(app, id, token, wait, |message| {
+        (message["type"] == "closed").then(|| message["reason"].as_str().unwrap().to_string())
+    })
+    .await
 }
 
 /// Pauses or resumes the screencast and returns the `state` the relay answers with, which names only `state`.
@@ -148,30 +167,76 @@ async fn pause_or_resume(app: &App, id: &str, token: &str, pause: bool) -> Strin
         host_browser_resume(access_lease(), app.state(), id.into(), token.into()).await
     };
     sent.map_err(|_| "a pause or resume failed").unwrap();
-    timeout(Duration::from_secs(30), async {
-        loop {
-            if let Some((1, body)) = pull(app, id, token).await {
-                let message: Value = serde_json::from_slice(&body).unwrap();
-                match message["type"].as_str() {
-                    Some("state") => return message["state"].as_str().unwrap().to_string(),
-                    Some("closed") => panic!("the relay ended the session: {message}"),
-                    _ => {}
-                }
-            }
+    let wait = (Duration::from_secs(30), "the relay never answered");
+    until_json(app, id, token, wait, |message| {
+        match message["type"].as_str() {
+            Some("state") => Some(message["state"].as_str().unwrap().to_string()),
+            Some("closed") => panic!("the relay ended the session: {message}"),
+            _ => None,
         }
     })
     .await
-    .expect("the relay never answered")
 }
 
-fn enable(state: &Path) {
+fn switch(state: &Path, revision: &str, enabled: &str) {
     let output = Command::new(agent())
         .args(["settings", "host-browser", "update"])
-        .args(["--expected-revision", "0", "--host-browser-enabled", "true"])
+        .args(["--expected-revision", revision])
+        .args(["--host-browser-enabled", enabled])
         .env("LAZYSH_STATE_DIR", state)
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
+}
+
+/// Pulls until the browser reports the fixture page: it is up and has written its profile.
+async fn until_page(app: &App, id: &str, token: &str) {
+    let wait = (
+        Duration::from_secs(90),
+        "the fixture page never reached the app",
+    );
+    until_json(app, id, token, wait, |message| {
+        match message["type"].as_str() {
+            Some("page") if message["title"] == "Green" => Some(()),
+            Some("closed") => panic!("the browser ended: {message}"),
+            _ => None,
+        }
+    })
+    .await
+}
+
+/// Waits until no browser process of this host's profiles is left: closing the channel must end it.
+async fn browser_ended(profiles: &Path) {
+    timeout(Duration::from_secs(10), async {
+        while running(profiles.to_str().unwrap()) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("closing the channel must end the browser");
+}
+
+/// **Clear browser data** through the app's command: whether a kept profile was removed.
+async fn clear_data(app: &App, id: &str) -> std::result::Result<bool, SshError> {
+    match host_browser_clear_data(app.state(), app.state(), id.into(), access_lease()).await {
+        Ok(answer) => {
+            Ok(serde_json::to_value(answer.into_inner().unwrap()).unwrap()["cleared"] == true)
+        }
+        Err(error) => Err(error.into_inner().unwrap()),
+    }
+}
+
+/// Every path under `directory`, to show that a refused command wrote nothing.
+fn listing(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        found.push(entry.path());
+        if entry.path().is_dir() {
+            found.extend(listing(&entry.path()));
+        }
+    }
+    found.sort();
+    found
 }
 
 pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
@@ -181,7 +246,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     let url = format!("http://127.0.0.1:{port}/");
 
     // The switch is off on a new host: the relay says so and nothing starts.
-    let token = start(app, id, &url).await;
+    let token = start(app, id, &url, false).await;
     assert_eq!(closing_reason(app, id, &token).await, "HostBrowserDisabled");
     host_browser_stop(app.state(), id.into(), token)
         .await
@@ -189,8 +254,8 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     assert!(!state.join("host-browser").exists(), "a profile was made");
 
     // The real relay streams a real browser's pixels, and its title and address as text.
-    enable(&state);
-    let token = start(app, id, &url).await;
+    switch(&state, "0", "true");
+    let token = start(app, id, &url, false).await;
     let (mut version, mut page_seen, mut green) = (None, false, None);
     timeout(Duration::from_secs(90), async {
         while version.is_none() || !page_seen || green.is_none() {
@@ -251,13 +316,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     host_browser_stop(app.state(), id.into(), token)
         .await
         .unwrap();
-    timeout(Duration::from_secs(10), async {
-        while running(profiles.to_str().unwrap()) {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("closing the channel must end the browser");
+    browser_ended(&profiles).await;
     let left: Vec<_> = std::fs::read_dir(&profiles)
         .map(|entries| {
             entries
@@ -268,13 +327,55 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         .unwrap_or_default();
     assert!(left.is_empty(), "a profile directory stayed: {left:?}");
 
-    // A companion that predates the relay answers with a usage error: named once, never retried.
+    // Keep profile: the one kept profile outlives the session with what the browser wrote, Clear browser data is
+    // refused while a browser uses it, removes it afterwards even with the switch off, and then has nothing left.
+    let kept = profiles.join("kept");
+    let token = start(app, id, &url, true).await;
+    until_page(app, id, &token).await;
+    let refused = clear_data(app, id).await.unwrap_err();
+    assert_eq!(refused.kind(), "remote_command_failed");
+    assert!(
+        refused.message().contains("BrowserProfileInUse"),
+        "{}",
+        refused.message()
+    );
+    host_browser_stop(app.state(), id.into(), token)
+        .await
+        .unwrap();
+    browser_ended(&profiles).await;
+    assert!(
+        std::fs::read_dir(&kept).unwrap().count() > 0,
+        "the kept profile did not survive the session"
+    );
+    switch(&state, "1", "false");
+    assert!(
+        clear_data(app, id).await.unwrap(),
+        "a kept profile was there"
+    );
+    assert!(!kept.exists(), "Clear browser data left the profile");
+    assert!(
+        !clear_data(app, id).await.unwrap(),
+        "nothing was left to clear"
+    );
+
+    // A companion that predates the relay answers with a usage error: named once, never retried. One that
+    // predates Clear browser data answers it the same way, which the app names as an update, writing nothing.
     let executable = directory.join("bin/lazysh-agent");
     let held = directory.join("bin/held-companion");
     std::fs::rename(&executable, &held).unwrap();
-    std::fs::write(&executable, "#!/bin/sh\nexit 2\n").unwrap();
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\necho \"error: unrecognized subcommand 'host-browser'\" >&2\nexit 2\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let token = start(app, id, &url).await;
+    let before = listing(&state);
+    assert_eq!(
+        clear_data(app, id).await.unwrap_err().kind(),
+        "host_browser_companion_required"
+    );
+    assert_eq!(listing(&state), before, "a refused command wrote");
+    let token = start(app, id, &url, false).await;
     assert_eq!(closing_reason(app, id, &token).await, "CompanionRequired");
     host_browser_stop(app.state(), id.into(), token)
         .await
