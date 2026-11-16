@@ -90,8 +90,8 @@ lazysh-agent settings notifications update --expected-revision 0 \
   --suppress-while-desktop-unlocked false
 ```
 
-- **Nested agents.** An agent that another agent started (a Claude Code session that runs `codex exec`, a hook that starts a headless agent) no longer pages you for work you never see, and its permission requests are not offered for a decision. Events are still recorded and shown on the board. A launcher can mark a nested start with `LAZYSH_PARENT_SESSION_ID`; on Linux and macOS the companion also recognizes known agents above the reporting one.
-- **Unlocked desktop (Linux only).** No notification while you sit at the host's unlocked desktop that already shows the agent. If the lock state is unknown (macOS, Windows, no `loginctl`, a remote or inactive session) you are notified.
+- **Nested agents.** An agent that another agent started (a Claude Code session that runs `codex exec`, a hook that starts a headless agent) no longer pages you for work you never see, and its permission requests are not offered for a decision. Events are still recorded and shown on the board. A launcher can mark a nested start with `LAZYSH_PARENT_SESSION_ID`; the companion also recognizes known agents above the reporting one (on Windows only those whose program carries the agent's name, such as `claude.exe`).
+- **Unlocked desktop (Linux, macOS, Windows).** No notification while you sit at the host's unlocked desktop that already shows the agent. If the lock state is unknown (no `loginctl`, a hook that does not run in the desktop session you are signed in to, such as one started over SSH, a remote or inactive session) you are notified.
 
 Both apply to the next hook run. The [reference](reference/companion-settings.md#notification-policy-nested-agents-and-an-unlocked-desktop) lists exactly which agents, platforms and cases are covered and which validation could not be run.
 
