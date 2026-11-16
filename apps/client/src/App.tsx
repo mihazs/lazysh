@@ -56,6 +56,7 @@ import {
   Ellipsis,
   Bell,
   Smartphone,
+  AppWindow,
   Pencil,
   Plus,
   Search,
@@ -86,6 +87,7 @@ import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
 import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
 import {useCurrentPaneAgent} from "./useCurrentPaneAgent";
+import {useHostBrowserOffered} from "./useHostBrowserOffered";
 import {usageTarget} from "./usageAgentProvider";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import HerdrNavigation,{type HerdrContentReceipt} from "./HerdrNavigation";
@@ -125,6 +127,7 @@ const SyncPanel = lazy(() => import("./SyncPanel"));
 const SharePanel = lazy(() => import("./SharePanel"));
 const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
+const HostBrowserPanel = lazy(() => import('./HostBrowserPanel'));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
 const AppleStatusPanel = lazy(() => import('./AppleStatusPanel'));
 const TmuxJumpPanel = lazy(() => import('./TmuxJumpPanel'));
@@ -305,6 +308,7 @@ type View =
   | "attachments"
   | "voice"
   | "devices"
+  | "hostBrowser"
   | "apple";
 type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:{files?:boolean;repository?:boolean}}[]};
 const localViewTools:Partial<Record<View,'files'|'repository'>>={files:'files',diff:'repository'};
@@ -327,6 +331,7 @@ const views = () => [
   { id: "attachments" as const, label: t("appAttach"), Icon: Paperclip },
   { id: "voice" as const, label: t("appDictate"), Icon: Mic },
   { id: "devices" as const, label: t("appDevices"), Icon: Smartphone },
+  { id: "hostBrowser" as const, label: t("appHostBrowser"), Icon: AppWindow },
 ];
 
 /** Confirmed input is offered for native tmux and Herdr terminals, and for Zellij only to the Agent view, which names the pane. */
@@ -1470,7 +1475,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationEntry=navigation[activeId??'']??{mode:agentsFirst?'agents' as const:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
-  const sessionViews=active ? views().filter(({id})=>!active.local || localView(localCapability,id)) : [];
+  const hostBrowserOffered=useHostBrowserOffered(remoteActive ? active.id : undefined,active?.hostId);
+  const sessionViews=active ? views().filter(({id})=>(!active.local || localView(localCapability,id)) && (id!=='hostBrowser' || (remoteActive && hostBrowserOffered))) : [];
+  // Once opened, the Host browser keeps running, paused while another tool shows, until the session changes or the switch goes off.
+  const [hostBrowserKept,setHostBrowserKept]=useState<string>();
+  useEffect(()=>{setHostBrowserKept(kept=>view==='hostBrowser' && active ? active.id : kept===active?.id ? kept : undefined);},[view,active?.id]);
+  useEffect(()=>{if(view==='hostBrowser' && !(remoteActive && hostBrowserOffered))setView('terminal');},[view,remoteActive,hostBrowserOffered]);
   const voiceReady=sessionViews.some(tool=>tool.id==='voice');
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
@@ -2578,6 +2588,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 )}
                 {active.connected && !active.local && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
+                )}
+                {remoteActive && hostBrowserOffered && hostBrowserKept === active.id && (
+                  <HostBrowserPanel key={active.id} sessionId={active.id} visible={view === "hostBrowser"} />
                 )}
                 {active.connected && (!active.local || localView(localCapability,'files')) && view === "files" && (
                   <FilesPanel key={active.id} sessionId={active.id} />

@@ -134,7 +134,16 @@ jobs:
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
+      # e2e/host-browser-viewer.spec.ts drives the real relay (`lazysh-agent host-browser serve`) with the Chromium above;
+      # with CI set it fails instead of skipping when the companion binary is missing.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked -p lazysh-agent --bin lazysh-agent
       - run: bunx moon run client:test-e2e
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4

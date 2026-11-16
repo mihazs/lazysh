@@ -2,7 +2,7 @@ import {useEffect,useId,useRef,useState} from 'react';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useProtectedInvoke} from './access';
-import {confirmHostBrowser,isHostBrowserConfirmed} from './hostBrowserConfirmation';
+import {announceHostBrowserSwitch,confirmHostBrowser,isHostBrowserConfirmed} from './hostBrowserConfirmation';
 
 type HostBrowser={schemaVersion:1;revision:number;hostBrowserEnabled:boolean};
 export function parseHostBrowserSettings(value:unknown):HostBrowser {
@@ -59,7 +59,7 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
     const current=++request.current;setBusy(true);setError('');setSaved(false);setConfirming(false);
     try {
       const value=parseHostBrowserSettings(await invoke('update_host_browser_settings',{sessionId,settings:{expectedRevision:settings.revision,hostBrowserEnabled:draft}}));
-      if(owns(current)){setSettings(value);setDraft(value.hostBrowserEnabled);setSaved(true);if(value.hostBrowserEnabled)confirmHostBrowser(hostKey);}
+      if(owns(current)){setSettings(value);setDraft(value.hostBrowserEnabled);setSaved(true);if(value.hostBrowserEnabled)confirmHostBrowser(hostKey);announceHostBrowserSwitch();}
     } catch(failure) {if(owns(current))fail(failure,true);}
     finally {if(owns(current))setBusy(false);}
   }
