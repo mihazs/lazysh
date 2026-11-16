@@ -188,9 +188,6 @@ impl Entry {
         session: &crate::ssh::Session,
         lease: &AccessLease,
     ) -> Result<()> {
-        let unavailable = || {
-            SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
-        };
         let positive_unix = if matches!(self.kind, MultiplexerKind::Herdr) {
             crate::herdr_path::admit(session, lease).await?
         } else {
@@ -198,37 +195,95 @@ impl Entry {
         };
         crate::ssh::exec_for_access(session, self.preflight_command(positive_unix)?, lease)
             .await
-            .map_err(|error| {
-                if error.kind() == "remote_command_failed" {
-                    unavailable()
-                } else {
-                    error
-                }
-            })?;
+            .map_err(unavailable_if_failed)?;
         if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
-            let command = match self.kind {
-                MultiplexerKind::Herdr => "herdr session list --json",
-                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
-                MultiplexerKind::Tmux => unreachable!(),
-            };
+            let command = list_cmd(self.kind)?.render();
             let output = crate::ssh::exec_for_access(
                 session,
                 if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
-                    crate::herdr_path::with_path(command)
+                    crate::herdr_path::with_path(&command)
                 } else {
-                    command.into()
+                    command
                 },
                 lease,
             )
             .await?;
-            if !persistent_sessions(self.kind, &output)?
-                .iter()
-                .any(|target| target.name == self.name)
-            {
-                return Err(unavailable());
-            }
+            self.require_listed(&output)?;
         }
         Ok(())
+    }
+    /// `prepare` on this device, before a local terminal exists: the tool runs, and the named
+    /// session can be attached. Argv with no shell in between; tmux creates a missing session
+    /// itself (`new-session -A`), so only an attach needs the session to exist.
+    #[cfg(desktop)]
+    pub(crate) async fn prepare_local(&self, host: &Host, lease: &AccessLease) -> Result<()> {
+        self.validate()?;
+        let (tool, flag) = match self.kind {
+            MultiplexerKind::Tmux => ("tmux", "-V"),
+            MultiplexerKind::Herdr => ("herdr", "--version"),
+            MultiplexerKind::Zellij => ("zellij", "--version"),
+        };
+        let probe = Cmd::new(&[], &[tool, flag]);
+        let probe = if matches!(self.kind, MultiplexerKind::Herdr) {
+            probe.herdr()
+        } else {
+            probe
+        };
+        host.run(lease, &probe)
+            .await
+            .map_err(unavailable_if_failed)?;
+        if self.create_if_missing {
+            return Ok(());
+        }
+        if matches!(self.kind, MultiplexerKind::Tmux) {
+            let exists =
+                self.server()?
+                    .cmd(&["has-session", "-t", &tmux_word(&format!("={}", self.name))]);
+            host.run(lease, &exists)
+                .await
+                .map_err(unavailable_if_failed)?;
+            return Ok(());
+        }
+        let output = host.run(lease, &list_cmd(self.kind)?).await?;
+        self.require_listed(&output)
+    }
+    fn require_listed(&self, output: &str) -> Result<()> {
+        if persistent_sessions(self.kind, output)?
+            .iter()
+            .any(|target| target.name == self.name)
+        {
+            Ok(())
+        } else {
+            Err(unavailable())
+        }
+    }
+}
+fn unavailable() -> SshError {
+    SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
+}
+/// A command that exits non-zero, or cannot start, means the tool or the session is not there;
+/// a closed session, a revoked lease or a timeout stays what it is.
+fn unavailable_if_failed(error: SshError) -> SshError {
+    if error.kind() == "remote_command_failed" {
+        unavailable()
+    } else {
+        error
+    }
+}
+/// The running Herdr or Zellij sessions, for the commands that cannot attach one by name.
+fn list_cmd(kind: MultiplexerKind) -> Result<Cmd> {
+    match kind {
+        MultiplexerKind::Herdr => {
+            Ok(Cmd::new(&[], &["herdr", "session", "list", "--json"]).herdr())
+        }
+        MultiplexerKind::Zellij => Ok(Cmd::new(
+            &[],
+            &["zellij", "list-sessions", "--short", "--no-formatting"],
+        )),
+        MultiplexerKind::Tmux => Err(SshError::new(
+            "invalid_target",
+            "Use the tmux workspace tree",
+        )),
     }
 }
 // Saved defaults create only their explicitly named target in the default namespace.
@@ -310,22 +365,7 @@ pub async fn multiplexer_sessions(
     access
         .run(async {
             let host = Host::resolve(&state, &local, &session_id, &access).await?;
-            let cmd = match kind {
-                MultiplexerKind::Herdr => {
-                    Cmd::new(&[], &["herdr", "session", "list", "--json"]).herdr()
-                }
-                MultiplexerKind::Zellij => Cmd::new(
-                    &[],
-                    &["zellij", "list-sessions", "--short", "--no-formatting"],
-                ),
-                MultiplexerKind::Tmux => {
-                    return Err(SshError::new(
-                        "invalid_target",
-                        "Use the tmux workspace tree",
-                    ))
-                }
-            };
-            persistent_sessions(kind, &host.run(&access, &cmd).await?)
+            persistent_sessions(kind, &host.run(&access, &list_cmd(kind)?).await?)
         })
         .await
 }

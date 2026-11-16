@@ -711,7 +711,14 @@ mod desktop {
             return Err("Choose a folder or a multiplexer session, not both".into());
         }
         #[cfg_attr(not(test), allow(unused_mut))]
-        let mut command = attach_command(&entry).await?;
+        let mut command =
+            attach_command(&entry, crate::host::login_path().await.cloned(), home_dir())?;
+        // No terminal exists yet; the sender stays open so the check is not cancelled.
+        let (_open, cancel) = watch::channel(false);
+        entry
+            .prepare_local(&crate::host::Host::device(state, cancel), &creation)
+            .await
+            .map_err(|error| error.message().to_owned())?;
         #[cfg(test)]
         for (name, value) in state.test_env() {
             command.env(name, value);
@@ -727,7 +734,12 @@ mod desktop {
         Ok(connected)
     }
     /// The PTY command that attaches `entry` directly: a typed argv, never a shell string.
-    async fn attach_command(entry: &crate::multiplexer::Entry) -> Result<CommandBuilder, String> {
+    /// Herdr also searches its owner-checked user install directory after `path`.
+    pub(super) fn attach_command(
+        entry: &crate::multiplexer::Entry,
+        path: Option<std::ffi::OsString>,
+        home: Option<std::path::PathBuf>,
+    ) -> Result<CommandBuilder, String> {
         // tmux has no native Windows build, and native Zellij and Herdr need their own slice.
         if cfg!(windows) {
             return Err(
@@ -742,10 +754,15 @@ mod desktop {
         for name in crate::host::INHERITED {
             command.env_remove(name);
         }
-        if let Some(path) = crate::host::login_path().await {
+        let path = if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Herdr) {
+            crate::host::with_herdr_install(path, home.clone())
+        } else {
+            path
+        };
+        if let Some(path) = path {
             command.env("PATH", path);
         }
-        if let Some(home) = crate::local::home_dir() {
+        if let Some(home) = home {
             command.cwd(home);
         }
         Ok(command)

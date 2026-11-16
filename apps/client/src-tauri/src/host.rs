@@ -115,13 +115,7 @@ impl Host {
         if id.starts_with("local:") {
             #[cfg(desktop)]
             return crate::local::usage_session(local, id, lease)
-                .map(|cancel| {
-                    Self::Local(LocalHost {
-                        cancel,
-                        #[cfg(test)]
-                        env: local.test_env(),
-                    })
-                })
+                .map(|cancel| Self::device(local, cancel))
                 .map_err(|error| SshError::new("disconnected", error));
             #[cfg(not(desktop))]
             {
@@ -133,6 +127,18 @@ impl Host {
             }
         }
         Ok(Self::Remote(state.session(id).await?))
+    }
+    /// This device. `cancel` ends its commands: a session's close signal, or, for a check that
+    /// runs before any local terminal exists, a channel whose sender the caller keeps open.
+    #[cfg(desktop)]
+    pub(crate) fn device(local: &LocalState, cancel: tokio::sync::watch::Receiver<bool>) -> Self {
+        #[cfg(not(test))]
+        let _ = local;
+        Self::Local(LocalHost {
+            cancel,
+            #[cfg(test)]
+            env: local.test_env(),
+        })
     }
     /// Resolves a session for a tool that names `dir`; local Windows sessions refuse
     /// UNC and device paths here, before Git could open an SMB share with them.
@@ -432,8 +438,6 @@ impl LocalHost {
         for name in INHERITED {
             command.env_remove(name);
         }
-        #[cfg(test)]
-        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         lease
             .check()
             .map_err(|_| SshError::new("app_locked", "App access changed"))?;
@@ -454,6 +458,9 @@ impl LocalHost {
         if let Some(path) = path {
             command.env("PATH", path);
         }
+        // After the login PATH, so a test can choose the tools a command finds.
+        #[cfg(test)]
+        command.envs(self.env.iter().map(|(name, value)| (name, value)));
         // Relative paths mean the home directory, as they do over SSH.
         if let Some(home) = crate::local::home_dir() {
             command.current_dir(home);
@@ -598,7 +605,7 @@ fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
 /// The PATH Herdr runs with: a Herdr on the PATH always wins; otherwise its owner-checked
 /// user install directory is appended, as the remote `with_path` wrapper does.
 #[cfg(desktop)]
-fn with_herdr_install(
+pub(crate) fn with_herdr_install(
     path: Option<std::ffi::OsString>,
     home: Option<std::path::PathBuf>,
 ) -> Option<std::ffi::OsString> {
