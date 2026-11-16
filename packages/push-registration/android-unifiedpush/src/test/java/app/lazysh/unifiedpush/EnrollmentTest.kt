@@ -58,9 +58,10 @@ class EnrollmentTest {
         val queue=Queue()
         var stored:EnrollmentState?=null
         var failStorage=false
+        var failReads=false
         val store=object:EnrollmentStore {
             override var value:EnrollmentState?
-                get()=stored
+                get() { if (failReads) error("private storage failure"); return stored }
                 set(value) { if (failStorage) error("private storage failure"); stored=value }
         }
         val calls=mutableListOf<String>()
@@ -161,6 +162,46 @@ class EnrollmentTest {
         assertTrue(f.queue.tasks.isEmpty())
         assertEquals(EnrollmentPhase.VERIFY,f.stored!!.phase)
         assertEquals(listOf("bootstrap","subscribe"),f.calls)
+    }
+    @Test fun everyPushedChallengeIsCountedByItsOutcomeWithBoundedCountsAndNoValues() {
+        val f=Fixture()
+        val instance=f.registered()
+        val proof=f.proof()
+        f.enrollment.message(instance,proof)
+        for (attempt in 1..3) f.enrollment.message(f.id(),proof)
+        f.endpoint(instance)
+        f.enrollment.message(instance,proof.copy(deviceId=f.id()))
+        f.queue.next()
+        f.enrollment.message(instance,proof.copy(challengeId=f.id()))
+        f.enrollment.message(instance,proof)
+        f.enrollment.message(instance,proof)
+        f.queue.next()
+        assertEquals(EnrollmentPhase.CONFIRMED,f.stored!!.phase)
+        assertEquals(mapOf(MessageOutcome.GATE to 2,MessageOutcome.BINDING to 1,MessageOutcome.PHASE to 1,
+            MessageOutcome.CHALLENGE to 1,MessageOutcome.CONFIRMING to 1,MessageOutcome.BUSY to 1),f.enrollment.deliveries())
+        f.enrollment.record(MessageOutcome.OTHER)
+        assertEquals(1,f.enrollment.deliveries()[MessageOutcome.OTHER])
+        val snapshot=f.enrollment.deliveries()
+        f.enrollment.record(MessageOutcome.OTHER)
+        assertEquals(1,snapshot[MessageOutcome.OTHER])
+    }
+    @Test fun anEarlyChallengeIsCountedBufferedAndThenReplayedAsConfirming() {
+        val f=Fixture()
+        val instance=f.registered()
+        f.endpoint(instance)
+        f.enrollment.message(instance,f.proof())
+        assertEquals(mapOf(MessageOutcome.BUFFERED to 1),f.enrollment.deliveries())
+        f.queue.next()
+        f.queue.next()
+        assertEquals(EnrollmentPhase.CONFIRMED,f.stored!!.phase)
+        assertEquals(mapOf(MessageOutcome.BUFFERED to 1,MessageOutcome.CONFIRMING to 1),f.enrollment.deliveries())
+    }
+    @Test fun aChallengeThatCannotReadPrivateStorageIsCountedAsAnErrorAndStillFails() {
+        val f=Fixture()
+        val instance=f.registered()
+        f.failReads=true
+        try {f.enrollment.message(instance,f.proof());fail("Storage failure must still propagate")} catch (_:IllegalStateException) {}
+        assertEquals(mapOf(MessageOutcome.ERROR to 1),f.enrollment.deliveries())
     }
     @Test fun pauseBeforeDequeueCancelsBootstrapWithoutSendingAndKeepsCleanupSingleFlight() {
         val f=Fixture()
