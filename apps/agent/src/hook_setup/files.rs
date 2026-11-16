@@ -4,24 +4,40 @@ use super::{
     render,
     state::{self, Observation},
 };
-use crate::{managed_directory::Directory, Error, Result};
+use crate::{
+    managed_directory::{open, Directory},
+    Error, Result,
+};
 use lazysh_common::storage_filesystem;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::{
     io::{self, Read},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
+
+/// The mode a freshly staged file reports: owner-only on POSIX hosts, an ordinary writable file on Windows,
+/// where access is the DACL's and the read-only attribute is the only mode there is.
+#[cfg(unix)]
+pub(super) const NEW_FILE_MODE: u32 = 0o600;
+#[cfg(windows)]
+pub(super) const NEW_FILE_MODE: u32 = 0o666;
 
 pub(super) fn rejected(kind: &'static str) -> Error {
     Error::Installation(kind)
 }
 /// Admission is intentionally limited to retained leaf descriptors, not ancestors.
 /// Native macOS ACL absence semantics still require runtime qualification.
-pub(super) fn ordinary_acl(file: &std::fs::File) -> Result<()> {
+///
+/// `private` asks for a file nobody but the owner, the system and the administrators can open at all; the other
+/// level only keeps foreign accounts from changing it. A POSIX host enforces `private` through the mode.
+pub(super) fn ordinary_acl(file: &std::fs::File, private: bool) -> Result<()> {
+    #[cfg(unix)]
+    let _ = private;
     #[cfg(target_os = "linux")]
     {
         for name in [c"system.posix_acl_access", c"system.posix_acl_default"] {
@@ -40,7 +56,18 @@ pub(super) fn ordinary_acl(file: &std::fs::File) -> Result<()> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        crate::managed_directory::admit(
+            file,
+            if private {
+                lazysh_common::windows_acl::Need::Private
+            } else {
+                lazysh_common::windows_acl::Need::NoForeignChange
+            },
+        )
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = file;
         Err(rejected("HooksAclUnsupported"))
@@ -48,7 +75,7 @@ pub(super) fn ordinary_acl(file: &std::fs::File) -> Result<()> {
 }
 pub(super) fn directory_admission(directory: &Directory) -> Result<()> {
     directory.check()?;
-    ordinary_acl(&directory.file)
+    ordinary_acl(&directory.file, false)
 }
 #[derive(Clone)]
 pub(super) struct Target {
@@ -90,6 +117,7 @@ pub(super) struct ReadFile {
     pub contents: Option<String>,
     pub group: Option<u32>,
 }
+#[cfg(unix)]
 pub(super) fn identity(metadata: &std::fs::Metadata) -> Identity {
     Identity {
         device: metadata.dev(),
@@ -102,13 +130,73 @@ pub(super) fn identity(metadata: &std::fs::Metadata) -> Identity {
         changed: [metadata.ctime(), metadata.ctime_nsec()],
     }
 }
+/// What the open file is, by its handle or descriptor: the same object whatever its name does later.
+pub(super) fn file_identity(file: &std::fs::File) -> io::Result<Identity> {
+    #[cfg(unix)]
+    {
+        Ok(identity(&file.metadata()?))
+    }
+    #[cfg(windows)]
+    {
+        let info = crate::managed_directory::info(file)?;
+        // 100 ns ticks since 1601 as whole seconds and nanoseconds, the shape the record keeps for times.
+        let time = |ticks: i64| {
+            [
+                ticks.div_euclid(10_000_000),
+                ticks.rem_euclid(10_000_000) * 100,
+            ]
+        };
+        Ok(Identity {
+            device: info.volume,
+            inode: info.index,
+            // The SID is admitted from the DACL at every read, not remembered here.
+            owner: 0,
+            mode: if info.is_read_only() { 0o444 } else { 0o666 },
+            links: info.links,
+            bytes: info.bytes,
+            modified: time(info.written),
+            changed: time(info.changed),
+        })
+    }
+}
+/// Device and file number of an open file, to tell a staged file from a replacement of its name.
+pub(super) fn file_id(file: &std::fs::File) -> Option<[u64; 2]> {
+    file_identity(file)
+        .ok()
+        .map(|identity| [identity.device, identity.inode])
+}
+/// A provider file must be a plain file only its owner can change, and for the record only its owner can open.
+fn unsafe_file(file: &std::fs::File, identity: &Identity, private_file: bool) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = file;
+        identity.owner != unsafe { libc::geteuid() }
+            || identity.links != 1
+            || identity.mode & 0o7022 != 0
+            || (private_file && identity.mode & 0o777 != 0o600)
+    }
+    #[cfg(windows)]
+    {
+        let _ = private_file;
+        identity.links != 1
+            || crate::managed_directory::info(file).is_ok_and(|info| info.is_reparse_point())
+    }
+}
+#[cfg(unix)]
+fn group(metadata: &std::fs::Metadata) -> Option<u32> {
+    Some(metadata.gid())
+}
+#[cfg(windows)]
+fn group(_: &std::fs::Metadata) -> Option<u32> {
+    None
+}
 pub(super) fn read(
     directory: &Directory,
     name: &str,
     private_file: bool,
     maximum: usize,
 ) -> Result<ReadFile> {
-    let mut file = match directory.open_file(name, libc::O_RDONLY) {
+    let mut file = match directory.open_file(name, open::READ) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(ReadFile {
@@ -120,23 +208,21 @@ pub(super) fn read(
         Err(error) => return Err(error.into()),
     };
     let before = file.metadata()?;
+    let identity_before = file_identity(&file)?;
     if !before.is_file()
-        || before.uid() != unsafe { libc::geteuid() }
-        || before.nlink() != 1
-        || before.mode() & 0o7022 != 0
+        || unsafe_file(&file, &identity_before, private_file)
         || before.len() > maximum as u64
-        || (private_file && before.mode() & 0o777 != 0o600)
     {
         return Err(rejected("HooksUnsafeFile"));
     }
-    ordinary_acl(&file)?;
+    ordinary_acl(&file, private_file)?;
     let mut bytes = Vec::new();
     (&mut file)
         .take(maximum as u64 + 1)
         .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
-    if identity(&before) != identity(&after)
-        || before.gid() != after.gid()
+    if identity_before != file_identity(&file)?
+        || group(&before) != group(&after)
         || bytes.len() != before.len() as usize
     {
         return Err(rejected("HooksChangedFile"));
@@ -145,11 +231,11 @@ pub(super) fn read(
     let contents = String::from_utf8(bytes).map_err(|_| rejected("HooksInvalidConfiguration"))?;
     Ok(ReadFile {
         state: FileState::Present {
-            identity: identity(&before),
+            identity: identity_before,
             sha256,
         },
         contents: Some(contents),
-        group: Some(before.gid()),
+        group: group(&before),
     })
 }
 pub(super) fn binary(path: &Path) -> Result<Binary> {
@@ -164,14 +250,11 @@ pub(super) fn binary(path: &Path) -> Result<Binary> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| rejected("HooksInvalidBinary"))?;
-    let mut file = parent.open_file(basename, libc::O_RDONLY)?;
+    let mut file = parent.open_file(basename, open::READ)?;
     let before = file.metadata()?;
-    let owner = unsafe { libc::geteuid() };
+    let identity_before = file_identity(&file)?;
     if !before.is_file()
-        || (before.uid() != 0 && before.uid() != owner)
-        || before.nlink() != 1
-        || before.mode() & 0o022 != 0
-        || before.mode() & 0o111 == 0
+        || unsafe_binary(&file, &identity_before, basename)
         || before.len() == 0
         || before.len() > 64 * 1024 * 1024
     {
@@ -180,9 +263,9 @@ pub(super) fn binary(path: &Path) -> Result<Binary> {
     let mut digest = Sha256::new();
     let bytes = io::copy(&mut (&mut file).take(64 * 1024 * 1024 + 1), &mut digest)?;
     parent.check()?;
-    let at_path = parent.open_file(basename, libc::O_RDONLY)?.metadata()?;
-    if identity(&before) != identity(&file.metadata()?)
-        || identity(&before) != identity(&at_path)
+    let at_path = file_identity(&parent.open_file(basename, open::READ)?)?;
+    if identity_before != file_identity(&file)?
+        || identity_before != at_path
         || bytes != before.len()
     {
         return Err(rejected("HooksChangedBinary"));
@@ -191,8 +274,29 @@ pub(super) fn binary(path: &Path) -> Result<Binary> {
     Ok(Binary {
         path: path.to_owned(),
         sha256: format!("{:x}", digest.finalize()),
-        identity: identity(&before),
+        identity: identity_before,
     })
+}
+/// The bound executable must be a plain file that only its owner, root or the administrators can change,
+/// and one the host can run.
+fn unsafe_binary(file: &std::fs::File, identity: &Identity, basename: &str) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = (file, basename);
+        (identity.owner != 0 && identity.owner != unsafe { libc::geteuid() })
+            || identity.links != 1
+            || identity.mode & 0o022 != 0
+            || identity.mode & 0o111 == 0
+    }
+    #[cfg(windows)]
+    {
+        identity.links != 1
+            || !Path::new(basename)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+            || crate::managed_directory::info(file).is_ok_and(|info| info.is_reparse_point())
+            || ordinary_acl(file, false).is_err()
+    }
 }
 pub(super) struct Inspection {
     pub target: Target,
@@ -205,6 +309,20 @@ pub(super) struct Inspection {
     pub binary: Binary,
     pub amp_shadows: Option<[Option<Identity>; 2]>,
 }
+/// Metadata of the entry itself: never follow a link or read a foreign same-name plugin.
+#[cfg(any(target_os = "linux", windows))]
+fn entry_identity(directory: &Directory, name: &str) -> Result<Option<Identity>> {
+    match directory.open_file(name, open::ENTRY) {
+        Ok(file) => Ok(Some(file_identity(&file)?)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+#[cfg(not(any(target_os = "linux", windows)))]
+fn entry_identity(directory: &Directory, name: &str) -> Result<Option<Identity>> {
+    let _ = (directory, name);
+    Err(rejected("HooksAclUnsupported"))
+}
 /// Metadata only: do not traverse or read a foreign same-name plugin.
 pub(super) fn amp_shadows(
     agent: Agent,
@@ -216,23 +334,11 @@ pub(super) fn amp_shadows(
     let Some(directory) = directory else {
         return Ok(Some([None, None]));
     };
-    #[cfg(target_os = "linux")]
-    {
-        let mut snapshot = [None, None];
-        for (slot, name) in snapshot.iter_mut().zip(["lazysh.ts", "lazysh"]) {
-            *slot = match directory.open_file(name, libc::O_PATH) {
-                Ok(file) => Some(identity(&file.metadata()?)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-        }
-        Ok(Some(snapshot))
+    let mut snapshot = [None, None];
+    for (slot, name) in snapshot.iter_mut().zip(["lazysh.ts", "lazysh"]) {
+        *slot = entry_identity(directory, name)?;
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = directory;
-        Err(rejected("HooksAclUnsupported"))
-    }
+    Ok(Some(snapshot))
 }
 impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
