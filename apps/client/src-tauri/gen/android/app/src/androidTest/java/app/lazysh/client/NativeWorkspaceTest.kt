@@ -1188,6 +1188,7 @@ class NativeWorkspaceTest {
     @Test fun webViewCompositesTheGlassMaterialOfItsDialogsOrKeepsTheOpaqueFallback() {
         val scenario = NativeActivityFixture.scenario
         awaitUnlockedWorkspace(scenario, "glass material workspace")
+        closeHostsDrawer(scenario, "hosts closed before glass material")
         // The tools dialog is glass at every width. Preferences is only glass beside a sidebar: on a phone it is an opaque page.
         openWorkspaceTools(scenario, System.nanoTime() + TimeUnit.SECONDS.toNanos(120))
         try { assertCompositedMaterial(scenario, "Workspace tools", workspaceToolsDialog, "true") }
@@ -1848,13 +1849,28 @@ class NativeWorkspaceTest {
         else workspaceMenuAction(scenario, "Preferences")
     }
 
+    /** An open hosts drawer makes the workspace inert, and an earlier case on the shared activity can leave it open. */
+    private fun closeHostsDrawer(scenario: ActivityScenario<MainActivity>, stage: String) {
+        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
+        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
+            awaitDocument(scenario, stage, "!" + workspaceElementVisible(closeHosts))
+        }
+    }
+
     private fun openWorkspaceTools(scenario: ActivityScenario<MainActivity>, deadline: Long) {
         keepTopBar(scenario)
         if (evaluate(scenario, workspaceElementVisible(workspaceToolsDialog)) != "true") {
             awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"), deadline = deadline)
             val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
             trigger.perform(webScrollIntoView())
-            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline)
+            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline, observe = { remaining ->
+                evaluate(scenario, """
+                    (()=>{const bounds=document.querySelector('button.mobile-tools').getBoundingClientRect(),hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+                      return JSON.stringify({bounds:[bounds.left,bounds.top,bounds.right,bounds.bottom],viewport:[innerWidth,innerHeight],
+                        hit:hit&&(hit.tagName+'.'+hit.className+'['+(hit.getAttribute('aria-label')||'')+']'),inert:document.querySelector('main.workspace')?.inert});})()
+                """, remaining)
+            })
             trigger.perform(webClick())
         }
         awaitDocument(scenario, "workspace More opened", workspaceElementVisible(workspaceToolsDialog), deadline = deadline)
@@ -1937,11 +1953,7 @@ class NativeWorkspaceTest {
     }
 
     private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
-        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
-        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
-            awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
-        }
+        closeHostsDrawer(scenario, "hosts closed before owned disconnect")
         val disconnect = "button[aria-label='Disconnect $name']"
         if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
             selectOwnedConnection(scenario, name, requireMosh)
