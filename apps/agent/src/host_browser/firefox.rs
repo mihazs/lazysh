@@ -546,6 +546,8 @@ impl<'l, 'a> Stream<'l, 'a> {
     }
 
     /// One input message: refused while Control is off, outside the bounds or in a flood, else its call.
+    // shortcut: turning Control off while a button is held leaves it held until the next click, as in Chrome;
+    // upgrade when the viewer can start a drag and switch Control off in the same gesture.
     fn input(&mut self, message: &Client) -> Result<()> {
         if !self.control {
             self.refuse(input::CONTROL_OFF);
