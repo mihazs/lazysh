@@ -887,7 +887,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion_settings::get_host_browser_settings, crate::companion_settings::update_host_browser_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::install_managed_herdr, crate::companion::remove_managed_herdr, crate::companion::check_companion_update, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion_settings::get_host_browser_settings, crate::companion_settings::update_host_browser_settings, crate::companion_settings::host_browser_clear_data, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::install_managed_herdr, crate::companion::remove_managed_herdr, crate::companion::check_companion_update, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -931,6 +931,10 @@ mod tests {
             browser_update.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"hostBrowserEnabled":false}}),
             );
+            let mut browser_clear = request(nonce);
+            browser_clear.cmd = "host_browser_clear_data".into();
+            browser_clear.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
             let mut installer = request(nonce);
             installer.cmd = "install_companion".into();
             installer.body = tauri::ipc::InvokeBody::Json(
@@ -963,6 +967,7 @@ mod tests {
                 update,
                 browser,
                 browser_update,
+                browser_clear,
                 installer,
                 fallback,
                 check,

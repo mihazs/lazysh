@@ -4,6 +4,7 @@ import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/
 import {useProtectedInvoke} from './access';
 import {useHostSwitchStatus} from './hostSwitchStatus';
 import {confirmHostBrowser,isHostBrowserConfirmed} from './hostBrowserConfirmation';
+import HostBrowserProfile from './HostBrowserProfile';
 
 type HostBrowser={schemaVersion:1;revision:number;hostBrowserEnabled:boolean};
 export function parseHostBrowserSettings(value:unknown):HostBrowser {
@@ -85,7 +86,7 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
     if(draft && !isHostBrowserConfirmed(hostKey))setConfirming(true);
     else void save();
   }
-  return <form className="form-stack host-browser-switch" onSubmit={event=>{event.preventDefault();submit();}}><fieldset disabled={busy || !visible || !settings}>
+  return <><form className="form-stack host-browser-switch" onSubmit={event=>{event.preventDefault();submit();}}><fieldset disabled={busy || !visible || !settings}>
     <legend>{t('hostBrowserLegend')}</legend>
     <label><input ref={checkbox} type="checkbox" checked={draft} onChange={event=>{setSaved(false);setConfirming(false);setDraft(event.target.checked);}}/>{t('hostBrowserSwitch')}</label>
     <p>{t('hostBrowserHint')}</p>
@@ -101,5 +102,6 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
       </div>
       : settings&&<button type="submit" disabled={draft===settings.hostBrowserEnabled}>{t('hostBrowserSave')}</button>}
     {saved&&<p role="status">{t('hostBrowserSaved')}</p>}
-  </fieldset></form>;
+  </fieldset></form>
+  <HostBrowserProfile sessionId={sessionId} hostKey={hostKey} visible={visible} keepAvailable={Boolean(settings)}/></>;
 }
