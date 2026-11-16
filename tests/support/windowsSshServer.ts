@@ -36,16 +36,17 @@ async function generate(keygen: string, path: string) {
   await execute(keygen, ['-q', '-t', 'ed25519', '-N', '', '-C', 'lazysh-owned', '-f', path], { timeout: 30_000, windowsHide: true });
 }
 
-/** Whether something accepts a TCP connection on loopback and starts speaking SSH; reads no more than the banner. */
-export async function speaksSsh(port: number) {
-  return new Promise<boolean>(resolve => {
+/** The identification line (`SSH-2.0-OpenSSH_for_Windows_...`) of whatever accepts a TCP connection on loopback and speaks SSH, or undefined; reads no more than the banner. */
+export async function sshBanner(port: number) {
+  return new Promise<string | undefined>(resolve => {
     const socket = connect({ host: '127.0.0.1', port });
-    const done = (ok: boolean) => { socket.destroy(); resolve(ok); };
-    socket.setTimeout(2000, () => done(false));
-    socket.once('error', () => done(false));
-    socket.once('data', chunk => done(String(chunk).startsWith('SSH-2.0-OpenSSH')));
+    const done = (banner?: string) => { socket.destroy(); resolve(banner); };
+    socket.setTimeout(2000, () => done());
+    socket.once('error', () => done());
+    socket.once('data', chunk => done(String(chunk).startsWith('SSH-2.0-OpenSSH') ? String(chunk).split(/\r?\n/)[0] : undefined));
   });
 }
+export const speaksSsh = async (port: number) => (await sshBanner(port)) !== undefined;
 
 export interface OwnedSshServer {
   port: number;
@@ -55,6 +56,8 @@ export interface OwnedSshServer {
   privateKeyPath: string;
   /** `SHA256:` fingerprint of the server's host key. */
   fingerprint: string;
+  /** The server's identification line, which names its OpenSSH build. */
+  banner: string;
   directory: string;
   /** A fresh throwaway key (OpenSSH-format text and its file) that this server does not authorize. */
   unauthorizedKey(): Promise<{ path: string; privateKey: string }>;
@@ -107,14 +110,14 @@ export async function startOwnedSshServer(options: { port?: number } = {}): Prom
     server = launch(tools.sshd, ['-D', '-e', '-f', config]);
     const started = server;
     owner = await until('sshd process identity', async () => (await processTable()).find(row => row.pid === started.child.pid));
-    await until('sshd readiness', async () => (await speaksSsh(port)) ? true : undefined);
+    const banner = await until('sshd readiness', () => sshBanner(port));
     let unauthorized = 0;
     const unauthorizedKey = async () => {
       const path = join(directory, `unauthorized_key_${++unauthorized}`);
       await generate(tools.keygen, path);
       return { path, privateKey: await readPrivateKey(path) };
     };
-    return { port, username, privateKey: await readPrivateKey(clientKey), privateKeyPath: clientKey, fingerprint, directory, unauthorizedKey, stop, output: () => started.output() };
+    return { port, username, privateKey: await readPrivateKey(clientKey), privateKeyPath: clientKey, fingerprint, banner, directory, unauthorizedKey, stop, output: () => started.output() };
   } catch (error) {
     console.error(`Owned Windows sshd failed to start; output:\n${server?.output().slice(-4000) ?? ''}`);
     try { await stop(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Owned Windows sshd startup and cleanup failed'); }
