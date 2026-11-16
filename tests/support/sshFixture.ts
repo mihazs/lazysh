@@ -1,7 +1,7 @@
 import {reportOwnedTeardownFailure,OwnedProcess, OUTPUT_LIMIT, identity, descendants, type OwnedPid} from './ownedProcess';
-import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
+import {chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
-import {isAbsolute, join, normalize} from 'node:path';
+import {basename, dirname, isAbsolute, join, normalize} from 'node:path';
 import {createServer, connect} from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -117,6 +117,13 @@ async function installOwnedBinary(directory:string,name:string,binary:string) {
   await copyFile(binary,join(bin,name));await chmod(join(bin,name),0o700);
   return bin;
 }
+/** The release installer keeps bin/, libexec/ and the daemon together, so the whole install tree is copied; a bare copied binary cannot reach its full CLI. Returns its bin directory. */
+async function installOwnedTree(directory:string,name:string,binary:string) {
+  if(!isAbsolute(binary) || basename(binary)!==name || basename(dirname(binary))!=='bin' || !(await stat(binary)).isFile())throw new Error('Explicit current owned fixture install tree required');
+  const root=join(directory,`${name}-install`);
+  await cp(dirname(dirname(binary)),root,{recursive:true,verbatimSymlinks:true});
+  return join(root,'bin');
+}
 const nssWrapperCandidates=['/usr/lib/x86_64-linux-gnu','/usr/lib/aarch64-linux-gnu','/usr/lib64','/usr/lib'].flatMap(dir=>['libnss_wrapper.so','libnss_wrapper.so.0'].map(name=>join(dir,name)));
 async function nssWrapper() {
   const explicit=process.env.LAZYSH_TEST_NSS_WRAPPER;
@@ -147,20 +154,26 @@ export class SshFixture {
   private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv,private readonly privateTtyGroup=false,private readonly toolNamespace?:string[]) {this.nonce=nonce;}
   herdrServer(args:string[]) {return this.namespacedServer('herdr',args);}
   tmuxServer(args:string[]) {return this.namespacedServer('tmux',args);}
-  private namespacedServer(name:'herdr'|'tmux',args:string[]) {
-    if(!this.toolNamespace || !this.environment)throw new Error(`Owned ${name==='herdr'?'Herdr':'tmux'} namespace required`);
-    return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin',name),...args],this.directory,this.environment);
+  rmuxServer(args:string[]) {return this.namespacedServer('rmux',args);}
+  /** The fixture's private copy of a pinned tool: a bare binary in bin/, or rmux's whole install tree. */
+  ownedBinary(name:'herdr'|'tmux'|'rmux') {return name==='rmux'?join(this.directory,'rmux-install/bin/rmux'):join(this.directory,'bin',name);}
+  /** Whether a process image is the fixture's private copy of the tool; rmux's launcher runs the libexec binary of its install tree. */
+  ownsExecutable(name:'tmux'|'rmux',path:string) {return name==='rmux'?path.startsWith(join(this.directory,'rmux-install')+'/'):path===this.ownedBinary(name);}
+  private namespacedServer(name:'herdr'|'tmux'|'rmux',args:string[]) {
+    if(!this.toolNamespace || !this.environment)throw new Error(`Owned ${name==='herdr'?'Herdr':name} namespace required`);
+    return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',this.ownedBinary(name),...args],this.directory,this.environment);
   }
   /** Observe the system tmux of a `tmux:true` fixture through only its private socket directory. */
   tmux(args:string[]) {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
     return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean}={}) {
-    if((options.password!==undefined || options.log || options.sftp) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;rmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean}={}) {
+    if((options.password!==undefined || options.log || options.sftp) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.rmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
-    if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
+    if(options.rmuxBinary && (options.tmux || options.tmuxBinary))throw new Error('Owned rmux fixture runs without a tmux of its own');
+    if((options.tmux || options.tmuxBinary || options.rmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
     // A namespaced companion validates its private state ancestors, which an unmapped host root fails.
     const ownedRoot=!!tools || options.ownedReceiverRoot===true || (options.companion===true && options.privateTtyGroup===true);
@@ -170,7 +183,7 @@ export class SshFixture {
     if(options.moshBinary && (options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
     // tmux socket paths must stay below the Unix socket path limit.
-    const directory=await mkdtemp(join(tools||options.companion||options.tmuxBinary||options.tmux?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
+    const directory=await mkdtemp(join(tools||options.companion||options.tmuxBinary||options.rmuxBinary||options.tmux?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
     try {
       await chmod(directory,0o700);
@@ -205,12 +218,13 @@ export class SshFixture {
         environment=await privateEnvironment(directory,bin+':/usr/bin:/bin',toolDirectories);
       }
       if(options.tmuxBinary)environment=await privateEnvironment(directory,await installOwnedBinary(directory,'tmux',options.tmuxBinary)+':/usr/bin:/bin',toolDirectories);
+      if(options.rmuxBinary)environment=await privateEnvironment(directory,await installOwnedTree(directory,'rmux',options.rmuxBinary)+':/usr/bin:/bin',[...toolDirectories,['RMUX_TMPDIR','rmux']]);
       // A private socket directory keeps every system tmux command away from the account's own servers.
       if(options.tmux)environment=await privateEnvironment(directory,'/usr/bin:/bin',[['TMUX_TMPDIR','tmux']]);
       if(options.moshBinary)environment!.PATH=await installOwnedBinary(directory,'mosh-server',options.moshBinary)+':/usr/bin:/bin';
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       // Long-lived UI owners share the existing bounded 600s host fixture budget.
-      const commandSeconds=options.shellSeconds ?? (options.companion || options.sharedNavigation || options.ownedReceiverRoot || options.tmuxBinary?companionFixtureBudget/1000:90);
+      const commandSeconds=options.shellSeconds ?? (options.companion || options.sharedNavigation || options.ownedReceiverRoot || options.tmuxBinary || options.rmuxBinary?companionFixtureBudget/1000:90);
       // nss_wrapper gives the unprivileged sshd a private account with a password hash,
       // so password login never reads or needs the runner's real account database.
       const accounts=options.password===undefined?undefined:await passwordAccount(directory,username,options.password);
@@ -264,7 +278,7 @@ export class SshFixture {
         // namespace, so receiver PID/start records remain directly verifiable.
         if(tools)toolNamespace=[...namespace,'--proc','/proc'];
         // tmux keeps the host root view, including the host /proc, so pane PIDs stay directly verifiable.
-        else if(options.tmuxBinary)toolNamespace=namespace;
+        else if(options.tmuxBinary || options.rmuxBinary)toolNamespace=namespace;
         // System tmux daemonizes out of the SSH tree; unlike the pinned tmuxBinary server, it lives
         // in sshd's private PID namespace, so retiring sshd also retires that server.
         daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary||options.tmux?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);

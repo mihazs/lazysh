@@ -92,26 +92,56 @@ export function tmuxTeardownObservation(evidence:TmuxTeardownEvidence,failure:un
   return {scope:'tmux-teardown',...evidence,failure:message(failure),supervisorExit:status.exit,supervisorSignal:status.signal};
 }
 
-// The pinned tmux server runs in the foreground of the fixture's private user
+/** The multiplexer an owned fixture serves: tmux, or rmux driven through the same tmux-family commands. */
+export type MuxBinary='tmux'|'rmux';
+/** The variable that names each pinned executable; CI installs both (rmux: the `bin/rmux` of its install tree). */
+export const muxVariable={tmux:'LAZYSH_TEST_TMUX',rmux:'LAZYSH_TEST_RMUX'} as const;
+// Everything that differs between the two. The fixed `Owned tmux ...` messages stay as they are for both.
+const flavours={
+  tmux:{session:'owned-tmux',marker:'TMUX',client:['-L','default'],server:['-D','-f','/dev/null','-L','default'],
+    temporary:'TMUX_TMPDIR',socketDirectory:(uid:number)=>`tmux-${uid}`,
+    // `list-panes -s` takes a session target as the bare exact name.
+    sessionTarget:(name:string)=>`=${name}`},
+  // rmux refuses `list-panes -s -t =name`, so the trailing colon names the session's current window.
+  rmux:{session:'owned-rmux',marker:'RMUX',client:['-u','-L','default'],server:['-u','-L','default','-f','/dev/null','-D'],
+    temporary:'RMUX_TMPDIR',socketDirectory:(uid:number)=>`rmux-${uid}`,sessionTarget:(name:string)=>`=${name}:`},
+} as const;
+/** `rmux -V` prints tmux branding, so the version comes from the capability record. */
+async function muxVersion(binary:MuxBinary,run:(args:string[],server:boolean)=>Promise<string>) {
+  if(binary==='tmux') {
+    const version=(await run(['-V'],false)).trim();
+    if(!/^tmux [0-9]+[.][0-9]+[a-z]?$/.test(version))throw new Error('Owned tmux version unavailable');
+    return version;
+  }
+  const version=(JSON.parse(await run(['capabilities','--json'],false)) as {version?:unknown}).version;
+  if(typeof version!=='string' || !/^[0-9]+[.][0-9]+[.][0-9]+$/.test(version))throw new Error('Owned tmux version unavailable');
+  return `rmux ${version}`;
+}
+
+// The pinned server runs in the foreground of the fixture's private user
 // namespace with a private socket directory, so it cannot outlive its owner.
 export class TmuxFixture {
-  readonly name='owned-tmux';
+  /** The session the fixture serves: `owned-tmux` or `owned-rmux`. */
+  readonly name:string;
+  /** The version the host read, such as `tmux 3.4` or `rmux 0.10.0`. */
+  version='';
   private server:OwnedProcess|undefined;
   private serverPid:OwnedPid|undefined;
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
-  private constructor(readonly ssh:SshFixture) {}
-  static async start(binary=process.env.LAZYSH_TEST_TMUX) {
-    if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
-    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary});
-    const owned=new TmuxFixture(ssh);
+  private constructor(readonly ssh:SshFixture,readonly binary:MuxBinary) {this.name=flavours[binary].session;}
+  /** `binary` is the explicit pinned executable of that multiplexer (rmux: the `bin/rmux` of its install tree), by default from `LAZYSH_TEST_TMUX` or `LAZYSH_TEST_RMUX`. */
+  static async start(kind:MuxBinary='tmux',binary=process.env[muxVariable[kind]]) {
+    const flavour=flavours[kind];
+    if(!binary || !binary.startsWith('/'))throw new Error(`Explicit pinned ${kind} binary required`);
+    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,...(kind==='rmux'?{rmuxBinary:binary}:{tmuxBinary:binary})});
+    const owned=new TmuxFixture(ssh,kind);
     try {
-      const version=(await owned.run(['-V'],false)).trim();
-      if(!/^tmux [0-9]+[.][0-9]+[a-z]?$/.test(version))throw new Error('Owned tmux version unavailable');
-      console.log(`Owned Android tmux fixture ${version}`);
-      owned.server=ssh.tmuxServer(['-D','-f','/dev/null','-L','default']);
-      const socket=join(ssh.environment!.TMUX_TMPDIR!,`tmux-${process.getuid!()}`,'default');
+      owned.version=await muxVersion(kind,(args,server)=>owned.run(args,server));
+      console.log(`Owned Android ${kind} fixture ${owned.version}`);
+      owned.server=kind==='rmux'?ssh.rmuxServer([...flavour.server]):ssh.tmuxServer([...flavour.server]);
+      const socket=join(ssh.environment![flavour.temporary]!,flavour.socketDirectory(process.getuid!()),'default');
       const until=performance.now()+3000;
       // list-sessions never starts a server, so readiness cannot admit an unowned daemon.
       while(!(await lstat(socket).then(info=>info.isSocket(),()=>false) && await owned.run(['list-sessions']).then(()=>true,()=>false))) {
@@ -119,7 +149,7 @@ export class TmuxFixture {
         await delay(10);
       }
       for(const [index,name] of [[0,'alpha'],[1,'beta']] as const) {
-        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec sleep 3600`;
+        const marker=`${flavour.marker}_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec sleep 3600`;
         await owned.run(index===0?['new-session','-d','-s',owned.name,'-n',name,'-x','80','-y','24','-c',ssh.directory,command]
           :['new-window','-d','-t',`=${owned.name}:${index}`,'-n',name,'-c',ssh.directory,command]);
         owned.windows.push({windowId:'',index,name,marker,paneId:'',pane:{pid:0,parent:0,start:'',state:''}});
@@ -149,7 +179,7 @@ export class TmuxFixture {
     }
   }
   private async run(args:string[],server=true) {
-    const command=new OwnedProcess(join(this.ssh.directory,'bin/tmux'),server?['-L','default',...args]:args,this.ssh.directory,this.ssh.environment);
+    const command=new OwnedProcess(this.ssh.ownedBinary(this.binary),server?[...flavours[this.binary].client,...args]:args,this.ssh.directory,this.ssh.environment);
     try {return await command.finish('owned tmux command',3000);}
     catch(error){throw new Error(`Owned tmux command failed: ${tmuxCommandFailure(command.stderr,error)}`);}
   }
@@ -161,10 +191,10 @@ export class TmuxFixture {
    * server's exit, so ownership comes from the private executable path, never the client list.
    */
   private async clientProcesses() {
-    const binary=join(this.ssh.directory,'bin/tmux'),found:OwnedPid[]=[];
+    const found:OwnedPid[]=[];
     for(const entry of await readdir('/proc')) {
       if(!/^[1-9][0-9]{0,9}$/.test(entry) || Number(entry)===this.serverPid?.pid)continue;
-      if(await readlink(`/proc/${entry}/exe`).catch(()=>'')!==binary)continue;
+      if(!this.ssh.ownsExecutable(this.binary,await readlink(`/proc/${entry}/exe`).catch(()=>'')))continue;
       const current=await identity(Number(entry));
       if(!current || ['Z','X'].includes(current.state))continue;
       if(found.length>=16)throw new Error('Owned tmux client count exceeded');
@@ -172,7 +202,7 @@ export class TmuxFixture {
     }
     return found;
   }
-  private panes() {return this.run(['list-panes','-s','-t',`=${this.name}`,'-F','#{window_id}|#{window_index}|#{window_name}|#{window_active}|#{pane_id}|#{pane_pid}|#{pane_dead}']);}
+  private panes() {return this.run(['list-panes','-s','-t',flavours[this.binary].sessionTarget(this.name),'-F','#{window_id}|#{window_index}|#{window_name}|#{window_active}|#{pane_id}|#{pane_pid}|#{pane_dead}']);}
   private async alive(saved:OwnedPid|undefined) {
     const current=saved && await identity(saved.pid);
     return !!current && current.start===saved?.start && current.parent===saved?.parent && !['Z','X'].includes(current.state);
@@ -216,7 +246,7 @@ export class TmuxFixture {
   }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames]};
+    return {binary:this.binary,version:this.version,name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames]};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */
