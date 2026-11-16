@@ -1,5 +1,20 @@
 # @lazysh/agent
 
+## 1.66.0
+
+### Minor Changes
+
+- 30d1569: Report a Kimi Code 2.4 root-agent approval request through `lazysh-agent ingest --agent kimi-code` and an opt-in `kimi-config --dialect kimi-code-2.4` fragment; the default Kimi printer is unchanged.
+
+### Patch Changes
+
+- 2814b5c: Read the `adb` feature list whether it is comma-separated or one feature per line, and start an Android screenshot at its PNG signature when the guest printed a warning line before it, and convert the decoded video to full range before the JPEG encoder, so `lazysh-agent devices` works on a device that `adb` 1.0.41 and the Waydroid guest describe that way and whose encoder tags limited-range video. A list without `shell_v2` and bytes with no PNG signature in the first KiB are still refused.
+- 3ade46f: Teach the host browser relay (`lazysh-agent host-browser serve`) the Control switch and the input messages: `control {on}` turns Control on or off for the session (off at every start), and while it is on `pointer`, `wheel`, `pinch`, `key` and `text` become the browser's mouse, wheel, page-scale, key and insert-text calls, in the order sent, through the allow-list. While Control is off each input message is refused and counted, never forwarded. A value outside its bounds, a clipboard shortcut, an unknown field and a flood of more than 240 messages a second are refused with a counted reason. The command is still hidden and nothing in the app sends these messages yet.
+- @lazysh/account-usage@1.66.0
+  - @lazysh/common@1.66.0
+  - @lazysh/companion-release@1.66.0
+  - @lazysh/notification-client@1.66.0
+
 ## 1.65.0
 
 ### Minor Changes

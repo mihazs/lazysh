@@ -1,5 +1,28 @@
 # @lazysh/client
 
+## 1.66.0
+
+### Minor Changes
+
+- 1d41c8a: Answer the questions Codex asks from the Agent view. When Codex opens a `request_user_input` question on tmux, the dialog card above the message box shows the question, its place among the questions (`Question 1/2`) and the options with Codex's highlight, and a tap moves the highlight with the arrow keys, reads it back and presses Enter, as a person would. Codex then shows its next question as its own card. It works at a phone's width, where Codex wraps the question, both columns of an option and the footer. The card offers no **Cancel the dialog** for a question, because Esc interrupts Codex's turn there; the notes box (Tab) stays in the terminal and shows the banner that the agent waits there.
+
+### Patch Changes
+
+- ec3b23d: Make the installed Windows GUI check able to pass on a hosted runner, and drive saved hosts and singleton delivery through it. Its composite action carried a `timeout-minutes` key the runner refuses, so the action failed to load on `main` and the `continue-on-error` step reported success without executing a case; the bound now sits on the workflow step and a test rejects any composite step key the runner does not accept. Once it ran, every session failed with `DevToolsActivePort file doesn't exist`: the runner is elevated, and an elevated WebView2 host ignores the `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` variable EdgeDriver uses to open the debugging port, so the case now adds, and afterwards removes, the one machine policy entry that reaches `lazysh.exe`. The case runs as a scaffold with two more scenarios: a secondary `--host` launch is handed to the original window with its manual dialog intact and opens the selected saved host with zero connections, and a secondary `--dir` launch opens a local terminal whose shell reports that directory after real key presses. Test-only; the application is unchanged.
+- 58c0db1: Record whether a native terminal surface can sit next to the app's web view on Linux (#1331, part of #1302): a prototype and its measurements on Wayland and X11, kept outside the app. Nothing changes for users: xterm.js stays the only engine and no setting or default changes.
+- 2852a3b: Verify on the Android companion case that a report older than the seven-day retention is absent from the Agent board, and preflight the host script that ages it. Test and documentation only. No user-visible behaviour changes.
+- 243fdd7: Compose CJK text through the real Android input method into the Chat composer in the owned emulator case: preedit updates, one commit, Stage in terminal and the terminal's Send, with the original receiver checked for the word once. Test and documentation only. No user-visible behaviour changes.
+- bbd9ebe: Verify through the real Android app that a cut SSH route shows the lost-connection banner, that automatic retries are refused while it is down, that the banner closes and the same tmux pane returns when the route comes back with saved credentials, and that Close ends the session without reconnecting. The owned tmux job runs it against a relay the host can cut.
+- 3dc7786: Open the Codex conversations the companion used to refuse in the Agent view: a record of any length up to the file bound is read and its text cut with a note, and a conversation over the size bound is reported as too large and no longer retried.
+- 92d35cf: Measure the native terminal core against xterm.js on the exact bytes of the recorded terminal baseline (#1303, part of #1302): the benchmark workloads W2, W3 and W4 can now be written to files and parsed by both engines, and on one desktop host the core parses them 1.6 to 7.7 times faster than xterm.js's `write()` at the parse stage, with the final screens equal to the baseline's. Measurement and documentation only: the terminal engine is unchanged, xterm.js stays the only engine and the default, and no setting or default changes.
+- 768d258: Record what a running Chrome does when it is asked to be controlled, and specify the separate screen that would attach to a user's normal browser (#1697, part of #1258). Measured on Chromium 157 with a headed browser on a virtual display and throwaway profiles: ticking "Allow remote debugging" at `chrome://inspect` opens a loopback WebSocket that answers no HTTP discovery request and holds every connection, even one with a wrong browser id, until a dialog on the host's screen is answered, with no timeout; every new connection needs its own click; and the phone cannot answer it, because the dialog is browser UI that the protocol neither lists, shows nor receives input for. The setting survives restarts, and an approved connection reaches cookies and every tab, so the relay's closed list is what protects them. Google Chrome 144, the debug flag on Google Chrome's default profile and a real display were not tried. Documentation only: nothing changes in the app, no screen is built, and the host browser stays off by default.
+- c5167a9: Fix the Windows companion test run: the Codex session history test built its rollout path with a multi-segment join, so its expected path mixed `/` and `\` and never equalled the listing's path, and `native-desktop (windows-latest)` kept failing on `main` at the companion storage step. The fixture now joins one component at a time. Test-only; the history listing itself is unchanged.
+- @lazysh/account-usage@1.66.0
+  - @lazysh/common@1.66.0
+  - @lazysh/display-idle@1.66.0
+  - @lazysh/et-transport@1.66.0
+  - @lazysh/mosh-transport@1.66.0
+
 ## 1.65.0
 
 ### Patch Changes
