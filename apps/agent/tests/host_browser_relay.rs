@@ -25,6 +25,9 @@ use support::{
     refusing_states, state_text, wait_gone,
 };
 
+#[path = "host_browser_relay/navigation.rs"]
+mod navigation;
+
 const FAKE: &str = include_str!("support/fake_chrome_pipe.py");
 const WAIT: Duration = Duration::from_secs(20);
 const QUIET: Duration = Duration::from_millis(500);
@@ -1285,6 +1288,27 @@ fn http_response(headers: &str, body: &str) -> String {
 /// A page on loopback, served to a real browser.
 fn fixture_page(body: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     fixture_server(move |_| http_response("Content-Type: text/html\r\n", body))
+}
+
+/// What a loopback server sends for one path: its media type, extra header lines (each ended by a line break)
+/// and its body.
+struct Reply {
+    content_type: &'static str,
+    headers: &'static str,
+    body: String,
+}
+
+/// A loopback server that serves a real browser: `answer` gets the path of each request and says what to send.
+fn serve_pages(
+    answer: impl Fn(&str) -> Reply + Send + 'static,
+) -> (u16, std::thread::JoinHandle<()>) {
+    fixture_server(move |line| {
+        let reply = answer(line.split_whitespace().nth(1).unwrap_or("/"));
+        http_response(
+            &format!("Content-Type: {}\r\n{}", reply.content_type, reply.headers),
+            &reply.body,
+        )
+    })
 }
 
 /// A relay over the host's real Chrome or Chromium, opened on a loopback page: the fixture, the relay and the
