@@ -16,7 +16,7 @@ pub(super) enum Entry {
 pub(super) struct Session {
     /// `kCGSSessionOnConsoleKey`: the session owns the physical display and keyboard.
     pub on_console: Entry,
-    /// `kCGSSessionLoginDoneKey`: the user is past the login window.
+    /// `kCGSessionLoginDoneKey`: the user is past the login window.
     pub login_done: Entry,
     /// `CGSSessionScreenIsLocked`: set to true while the lock screen is up and absent otherwise.
     pub screen_locked: Entry,
@@ -82,7 +82,7 @@ mod coregraphics {
             }
             let session = Session {
                 on_console: entry(dictionary, c"kCGSSessionOnConsoleKey"),
-                login_done: entry(dictionary, c"kCGSSessionLoginDoneKey"),
+                login_done: entry(dictionary, c"kCGSessionLoginDoneKey"),
                 screen_locked: entry(dictionary, c"CGSSessionScreenIsLocked"),
             };
             CFRelease(dictionary);
@@ -161,7 +161,7 @@ mod tests {
     }
 
     /// The real reader on a macOS runner answers without crashing, and a dictionary it reads holds booleans
-    /// under the two documented keys: anything else would make every answer unknown.
+    /// under the two documented keys.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_real_window_server_dictionary_is_read_without_error() {
@@ -170,8 +170,16 @@ mod tests {
         match session {
             None => assert_eq!(desktop(|| session), Desktop::Unknown),
             Some(session) => {
-                assert_ne!(session.on_console, Entry::Other, "{session:?}");
-                assert_ne!(session.login_done, Entry::Other, "{session:?}");
+                // The two documented keys are in every console session's dictionary; a misspelled key
+                // reads as missing and would make every answer unknown.
+                assert!(
+                    matches!(session.on_console, Entry::Boolean(_)),
+                    "{session:?}"
+                );
+                assert!(
+                    matches!(session.login_done, Entry::Boolean(_)),
+                    "{session:?}"
+                );
                 assert_ne!(session.screen_locked, Entry::Other, "{session:?}");
             }
         }
