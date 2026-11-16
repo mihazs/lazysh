@@ -48,6 +48,8 @@ pub struct Serve<'a> {
     pub binary: Option<&'a Path>,
     /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
     pub no_sandbox: bool,
+    /// Use the single kept profile instead of a private one, and leave it for `host-browser --clear-data`.
+    pub keep_profile: bool,
 }
 
 pub(super) enum Event {
@@ -141,8 +143,8 @@ fn session(
     }
     let binary = find_binary(options.binary)?;
 
-    // Declared before the browser, so it is removed after the browser has ended.
-    let profile = profile::create(options.state, false)?;
+    // Declared before the browser, so it is released after the browser has ended: removed, unless it is the kept one.
+    let profile = profile::create(options.state, options.keep_profile)?;
     let mut command = browser_command(&binary, profile.path(), headed, options.no_sandbox);
     command
         .arg("--remote-debugging-pipe")

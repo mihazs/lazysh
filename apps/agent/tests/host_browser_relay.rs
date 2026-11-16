@@ -20,7 +20,8 @@ mod binary;
 #[path = "support/host_browser.rs"]
 mod support;
 use support::{
-    agent, assert_nothing_started, chrome, enable, refusing_states, state_text, wait_gone,
+    agent, assert_kept, assert_nothing_started, chrome, clear_data, cleared, enable,
+    refusing_states, state_text, wait_gone,
 };
 
 const FAKE: &str = include_str!("support/fake_chrome_pipe.py");
@@ -263,17 +264,17 @@ impl Fixture {
     }
     /// A relay over the fake browser, which reads its mode and reported product from its environment.
     fn serve(&self, mode: &str, product: &str) -> Relay {
+        self.serve_with(mode, product, &[])
+    }
+    fn serve_with(&self, mode: &str, product: &str, options: &[&str]) -> Relay {
         let (mode, product) = (Path::new(mode), Path::new(product));
         let envs = [
             ("FAKE_BROWSER_DIR", self.directory.path()),
             ("FAKE_MODE", mode),
             ("FAKE_PRODUCT", product),
         ];
-        Relay::start(
-            &self.state,
-            &envs,
-            &["--binary", self.fake.to_str().unwrap()],
-        )
+        let binary = ["--binary", self.fake.to_str().unwrap()];
+        Relay::start(&self.state, &envs, &[&binary[..], options].concat())
     }
     fn recorded(&self, name: &str) -> Option<String> {
         fs::read_to_string(self.directory.path().join(name)).ok()
@@ -817,6 +818,52 @@ fn closing_the_view_ends_the_browser_its_helpers_and_the_profile() {
     assert!(relay.exit().success());
     fixture.nothing_is_left();
     assert!(!profile.exists());
+}
+
+/// **Keep profile** through the relay: the one kept profile is held by one session, survives its stop with what the
+/// browser wrote, and goes only with **Clear browser data**, which refuses while a session uses it.
+#[test]
+fn a_kept_profile_survives_a_stop_and_is_gone_after_clear_browser_data() {
+    let fixture = Fixture::enabled();
+    let mut relay = fixture.serve_with("", "Chrome/120.0.0.0", &["--keep-profile"]);
+    relay.open("about:blank");
+    relay.next("frame");
+    let profile = fixture.profiles().remove(0);
+    assert_eq!(profile.file_name().unwrap(), "kept");
+
+    // One kept profile is never shared by two browsers, and clearing never pulls it from under one.
+    let mut second = fixture.serve_with("", "Chrome/120.0.0.0", &["--keep-profile"]);
+    second.open("about:blank");
+    assert_eq!(closed(&second)["reason"], "BrowserProfileInUse");
+    assert!(!second.exit().success());
+    let refused = clear_data(&fixture.state);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("BrowserProfileInUse"));
+    assert!(profile.join("Cookies").exists());
+
+    relay.close_input();
+    assert_eq!(closed(&relay)["reason"], "ClientClosed");
+    assert!(relay.exit().success());
+    wait_gone(fixture.pid("browser"));
+    wait_gone(fixture.pid("helper"));
+    assert_kept(&profile);
+    assert_eq!(
+        fs::read_dir(profile.parent().unwrap()).unwrap().count(),
+        1,
+        "only the kept profile may outlive the session, with no marker"
+    );
+
+    // Without the option the session is ephemeral again and leaves the kept profile as it was.
+    let mut ephemeral = fixture.serve("", "Chrome/120.0.0.0");
+    ephemeral.open("about:blank");
+    ephemeral.next("frame");
+    assert_eq!(fixture.profiles().len(), 2);
+    ephemeral.stop();
+    assert_eq!(fixture.profiles(), std::slice::from_ref(&profile));
+
+    assert!(cleared(&clear_data(&fixture.state)));
+    assert!(!profile.exists(), "Clear browser data left the profile");
+    assert!(!cleared(&clear_data(&fixture.state)));
 }
 
 /// An SSH drop ends the channel: the host delivers SIGHUP or SIGTERM as well as closing standard input.
