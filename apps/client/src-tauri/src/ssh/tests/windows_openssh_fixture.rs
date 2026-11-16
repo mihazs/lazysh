@@ -3,6 +3,7 @@
 //! `HKLM\SOFTWARE\OpenSSH`, and the user's `Path` and `LAZYSH_STATE_DIR` under `HKCU\Environment`, then puts them back.
 use super::*;
 use std::{path::Path, process::Command};
+use tauri::Manager;
 
 const SSH: &str = r"HKLM\SOFTWARE\OpenSSH";
 const USER: &str = r"HKCU\Environment";
@@ -242,6 +243,26 @@ impl Owned {
         state.config().unwrap().hosts.push(self.host.clone());
         state
     }
+    /// An app that holds this host and one session on it, opened the way the app opens one, with the host's own key.
+    async fn app_session(&self) -> (tauri::App<tauri::test::MockRuntime>, String) {
+        let app = tauri::test::mock_app();
+        app.manage(self.state());
+        app.manage(crate::local::LocalState::default());
+        let id = start_session(
+            &app.state(),
+            self.host.id.clone(),
+            None,
+            self.key(),
+            None,
+            80,
+            24,
+            Channel::new(|_| Ok(())),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{}: {error:?}\n{}", self.name, self.sshd.log()))
+        .session_id;
+        (app, id)
+    }
     fn key(&self) -> Option<String> {
         Some(
             self.user_key
@@ -347,6 +368,91 @@ async fn verify(shell: Shell) {
     owned.finish().await;
 }
 
+/// The Files, previews and repository review checks of `openssh_sftp_and_command_interoperability`, against the server's
+/// own SFTP subsystem and under `shell`: SFTP and the preview forward work as on any host, and what needs a POSIX shell
+/// gives the documented answer.
+async fn verify_files(shell: Shell) {
+    let owned = Owned::start(shell, "Subsystem sftp sftp-server.exe\n").await;
+    let name = owned.name;
+    let (app, id) = owned.app_session().await;
+
+    // SFTP names a drive path `/C:/...`; the account's home is its profile, not the directory sshd starts in.
+    let home = host_home(access_lease(), app.state(), app.state(), id.clone())
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let profile = PathBuf::from(std::env::var_os("USERPROFILE").unwrap());
+    assert!(
+        home.eq_ignore_ascii_case(&format!("/{}", owned_sshd::slashes(&profile))),
+        "{name}: host_home is {home}, the profile is {}",
+        profile.display()
+    );
+    let directory = owned.directory.path();
+    let remote = format!("/{}", owned_sshd::slashes(directory));
+    portable_files::sftp(&app, &id, directory, &remote).await;
+
+    // Discovery and repository review send POSIX command lines, which neither shell runs: both say so by name.
+    let repo = portable_files::git_repo(directory, "repo");
+    let path = owned_sshd::slashes(&repo);
+    let discovery = crate::previews::discover_preview_ports(
+        access_lease(),
+        app.state(),
+        id.clone(),
+        None,
+        Some(false),
+    )
+    .await
+    .err()
+    .unwrap_or_else(|| panic!("{name}: discovery found listeners through a POSIX command"));
+    let status = Box::pin(crate::repository::repository_status(
+        app.state(),
+        app.state(),
+        id.clone(),
+        path.clone(),
+        access_lease(),
+    ))
+    .await
+    .err()
+    .unwrap_or_else(|| panic!("{name}: repository status ran through a POSIX command"));
+    for error in [
+        discovery.into_inner().unwrap(),
+        status.into_inner().unwrap(),
+    ] {
+        assert_eq!(error.kind(), "unsupported_host_shell", "{name}: {error:?}");
+    }
+    // `git diff` carries no environment prefix: Windows PowerShell quotes its path as written, `cmd.exe` does not.
+    for staged in [false, true] {
+        let diff = get_diff(
+            access_lease(),
+            app.state(),
+            app.state(),
+            id.clone(),
+            path.clone(),
+            staged,
+        )
+        .await;
+        match shell {
+            Shell::PowerShell => {
+                let diff = diff.unwrap().into_inner().unwrap();
+                assert!(
+                    diff.contains(if staged { "+before" } else { "+after" }),
+                    "{name}: {diff}"
+                );
+            }
+            Shell::Cmd => {
+                let error = diff.err().unwrap().into_inner().unwrap();
+                assert_eq!(error.kind(), "remote_command_failed", "{name}: {error:?}");
+            }
+        }
+    }
+
+    let port = portable_files::preview_forward(&app, &id).await;
+    portable_files::forward_ends_with_session(&app, id, port).await;
+    drop(app);
+    owned.finish().await;
+}
+
 #[tokio::test]
 #[ignore = "requires Windows with the OpenSSH Server capability, administrator rights and the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn windows_openssh_under_cmd_exe_identifies_the_host_and_runs_the_companion() {
@@ -357,6 +463,18 @@ async fn windows_openssh_under_cmd_exe_identifies_the_host_and_runs_the_companio
 #[ignore = "requires Windows with the OpenSSH Server capability, administrator rights and the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn windows_openssh_under_windows_powershell_identifies_the_host_and_runs_the_companion() {
     Box::pin(verify(Shell::PowerShell)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires Windows with the OpenSSH Server capability, administrator rights and the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
+async fn windows_openssh_files_previews_and_repository_under_cmd_exe() {
+    Box::pin(verify_files(Shell::Cmd)).await;
+}
+
+#[tokio::test]
+#[ignore = "requires Windows with the OpenSSH Server capability, administrator rights and the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
+async fn windows_openssh_files_previews_and_repository_under_windows_powershell() {
+    Box::pin(verify_files(Shell::PowerShell)).await;
 }
 
 #[test]

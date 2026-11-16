@@ -20,27 +20,7 @@ async fn explore(shell: Shell, subsystem: &str) {
     let tag = format!("{} | {subsystem}", shell.name());
     let tag = tag.as_str();
     let owned = Owned::start(shell, &format!("{subsystem}\n")).await;
-    let app = tauri::test::mock_app();
-    app.manage(owned.state());
-    app.manage(crate::local::LocalState::default());
-    let started = start_session(
-        &app.state(),
-        owned.host.id.clone(),
-        None,
-        owned.key(),
-        None,
-        80,
-        24,
-        Channel::new(|_| Ok(())),
-    )
-    .await
-    .map(|connected| connected.session_id);
-    say(tag, "start_session", &started);
-    let Ok(id) = started else {
-        eprintln!("PROBE [{tag}] sshd log {}", owned.sshd.log());
-        owned.finish().await;
-        return;
-    };
+    let (app, id) = owned.app_session().await;
     let dir = owned.directory.path().to_path_buf();
     let home = flat(host_home(access_lease(), app.state(), app.state(), id.clone()).await);
     say(tag, "host_home", &home);

@@ -148,7 +148,8 @@ pub(super) async fn preview_forward(app: &App, id: &str) -> u16 {
 /// Ends the session and waits for the forwarded local port to refuse connections.
 pub(super) async fn forward_ends_with_session(app: &App, id: String, local_port: u16) {
     disconnect(app.state(), id).await.unwrap();
-    timeout(Duration::from_secs(2), async {
+    // Windows takes about two seconds to refuse a connection to a port nobody listens on.
+    timeout(Duration::from_secs(10), async {
         while tokio::net::TcpStream::connect(("127.0.0.1", local_port))
             .await
             .is_ok()
