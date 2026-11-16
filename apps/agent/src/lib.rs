@@ -444,17 +444,24 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
     Ok(Some(event))
 }
 
-/// The terminal pane a hook runs in: tmux's `TMUX_PANE`, else Zellij's session and terminal pane as `zellij:<session>:<pane>`.
-/// tmux wins when both are exported, as before Zellij was recognised.
+/// The terminal pane a hook runs in: tmux's `TMUX_PANE`, else Zellij's session and terminal pane as `zellij:<session>:<pane>`,
+/// else the random identifier lazysh exported when it launched the terminal (`LAZYSH_TERMINAL`) as `lazysh:<id>`.
+/// tmux wins when both are exported, as before Zellij was recognised; a multiplexer started inside a launched terminal names its own panes.
 pub fn pane_identity() -> Option<String> {
     let var = |name| std::env::var(name).ok();
     identity(
         var("TMUX_PANE"),
         var("ZELLIJ_SESSION_NAME").as_deref(),
         var("ZELLIJ_PANE_ID").as_deref(),
+        var("LAZYSH_TERMINAL").as_deref(),
     )
 }
-fn identity(tmux: Option<String>, session: Option<&str>, pane: Option<&str>) -> Option<String> {
+fn identity(
+    tmux: Option<String>,
+    session: Option<&str>,
+    pane: Option<&str>,
+    terminal: Option<&str>,
+) -> Option<String> {
     tmux.or_else(|| {
         let (session, pane) = (session?, pane?);
         let valid = !session.is_empty()
@@ -463,6 +470,11 @@ fn identity(tmux: Option<String>, session: Option<&str>, pane: Option<&str>) -> 
             && (1..=10).contains(&pane.len())
             && pane.bytes().all(|c| c.is_ascii_digit());
         valid.then(|| format!("zellij:{session}:{pane}"))
+    })
+    .or_else(|| {
+        let id = terminal?;
+        let valid = id.len() == 32 && id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
+        valid.then(|| format!("lazysh:{id}"))
     })
 }
 
@@ -998,11 +1010,12 @@ mod test_permissions;
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TERMINAL: &str = "0123456789abcdef0123456789abcdef";
     #[test]
-    fn names_the_pane_of_tmux_else_zellij_and_nothing_malformed() {
-        let zellij = |session, pane| identity(None, Some(session), Some(pane));
+    fn names_the_pane_of_tmux_else_zellij_else_a_launched_terminal_and_nothing_malformed() {
+        let zellij = |session, pane| identity(None, Some(session), Some(pane), None);
         assert_eq!(
-            identity(Some("%4".into()), Some("work"), Some("2")),
+            identity(Some("%4".into()), Some("work"), Some("2"), Some(TERMINAL)),
             Some("%4".into())
         );
         assert_eq!(zellij("work", "2"), Some("zellij:work:2".into()));
@@ -1020,8 +1033,31 @@ mod tests {
         ] {
             assert_eq!(zellij(session, pane), None, "{session:?} {pane:?}");
         }
-        assert_eq!(identity(None, Some("work"), None), None);
-        assert_eq!(identity(None, None, None), None);
+        assert_eq!(identity(None, Some("work"), None, None), None);
+        assert_eq!(identity(None, None, None, None), None);
+        // A multiplexer started inside a launched terminal inherits its variable and still names its own pane.
+        assert_eq!(
+            identity(None, Some("work"), Some("2"), Some(TERMINAL)),
+            Some("zellij:work:2".into())
+        );
+        assert_eq!(
+            identity(None, None, None, Some(TERMINAL)),
+            Some(format!("lazysh:{TERMINAL}"))
+        );
+        for terminal in [
+            "",
+            "0123456789ABCDEF0123456789abcdef",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789abcdef0123456789abcde\n",
+            "0123456789abcdef0123456789abcdeg",
+        ] {
+            assert_eq!(
+                identity(None, None, None, Some(terminal)),
+                None,
+                "{terminal:?}"
+            );
+        }
     }
     #[cfg(unix)]
     #[test]

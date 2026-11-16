@@ -110,7 +110,8 @@ drop unknown kinds on restore.
 
 Companion events carry a typed pane identity: tmux server label plus `TMUX_PANE`;
 rmux label plus `RMUX_PANE`; `ZELLIJ_SESSION_NAME` plus `ZELLIJ_PANE_ID`; the Herdr
-pane. A notification opens that exact pane.
+pane. A notification opens that exact pane. A terminal without a multiplexer that lazysh
+started reports `lazysh:<id>` from `LAZYSH_TERMINAL` instead ([Agent view](agent-view.md#terminals-lazysh-starts)).
 
 ## Capability table: remote hosts
 
