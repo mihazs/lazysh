@@ -228,6 +228,7 @@ fn main() {
         "tmux_chat",
         "herdr_backend_select",
         "herdr_chat",
+        "herdr_pane_input",
         "herdr_agent_input",
         "herdr_agent_screen",
         "zellij_agent_input",

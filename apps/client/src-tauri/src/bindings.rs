@@ -7,6 +7,8 @@ pub(crate) struct Bindings {
     /// The control client that owns navigation and guarded Chat input for the displayed tmux.
     pub(crate) tmux: Mutex<Option<crate::tmux_jump::Binding>>,
     pub(crate) herdr: Mutex<Option<crate::herdr_guard::Binding>>,
+    /// The destination a stock Herdr's Chat input was confirmed for, with its pinned companion actor.
+    pub(crate) herdr_pane_input: crate::herdr_pane_input::Slot,
     /// The tmux server the displayed terminal is attached to.
     pub(crate) tmux_server: Mutex<Option<crate::tmux_server::TmuxServer>>,
     pub(crate) clipboard: crate::host_clipboard::UploadSlot,
@@ -17,6 +19,7 @@ impl Default for Bindings {
         Self {
             tmux: Mutex::new(None),
             herdr: Mutex::new(None),
+            herdr_pane_input: crate::herdr_pane_input::Slot::default(),
             tmux_server: Mutex::new(None),
             clipboard: crate::host_clipboard::UploadSlot::default(),
             companion_install: Arc::new(Semaphore::new(1)),
