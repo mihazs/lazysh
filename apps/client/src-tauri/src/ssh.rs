@@ -2293,21 +2293,33 @@ where
     });
     let mut parent_cancel = parent.cancel.subscribe();
     let mut child_cancel = session.cancel.subscribe();
-    let connected = if *parent_cancel.borrow() || *child_cancel.borrow() {
+    let mut response = response;
+    // A failing worker reports its classified error through `ready` and then ends, which also
+    // cancels the session. That error must win over the cancel, or Auto cannot fall back to SSH.
+    let cancelled =
+        |response: &mut tokio::sync::oneshot::Receiver<Result<()>>, text: &str| match response
+            .try_recv()
+        {
+            Ok(Err(error)) => error,
+            _ => SshError::new("cancelled", format!("{name} connection {text}")),
+        };
+    let connected = if *parent_cancel.borrow() {
         Err(SshError::new(
             "cancelled",
             format!("{name} connection was cancelled"),
         ))
+    } else if *child_cancel.borrow() {
+        Err(cancelled(&mut response, "was cancelled"))
     } else {
         tokio::select! {
             biased;
             _ = parent_cancel.changed() => Err(SshError::new("cancelled", format!("{name} connection was cancelled"))),
-            _ = child_cancel.changed() => Err(SshError::new("cancelled", format!("{name} connection ended before startup completed"))),
             result = async {
-                response.await.map_err(|_| SshError::new("terminal_worker", format!("{name} worker did not complete the connection")))??;
+                (&mut response).await.map_err(|_| SshError::new("terminal_worker", format!("{name} worker did not complete the connection")))??;
                 if let Some(startup) = startup { startup.bind(&parent, &session, &session.creation).await?; }
                 Ok(())
             } => result,
+            _ = child_cancel.changed() => Err(cancelled(&mut response, "ended before startup completed")),
         }
     };
     // A ready receipt can complete without yielding. Recheck current cancellation
@@ -5339,6 +5351,58 @@ mod tests {
             core.closed.load(std::sync::atomic::Ordering::SeqCst),
             "the renderer never learns this session's id, so only the failure path can free the core"
         );
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn a_native_worker_that_fails_startup_reports_its_error_not_the_cancel_that_follows() {
+        let (parent, _dir, server_task) = output_session().await;
+        let (_state_dir, state) = fixture_state();
+        // A real worker sends its classified error through `ready` and then ends, which cancels its
+        // session; the connect must report that error whether it sees the cancel before it starts
+        // waiting or only while waiting, or Auto stops on `cancelled` instead of falling back.
+        for fails_while_connect_waits in [false, true] {
+            let registry = state.sessions.clone();
+            let result = spawn_native_terminal(
+                &state,
+                access_lease(),
+                parent.clone(),
+                Channel::new(|_| Ok(())),
+                NativeTerminalKind::Fixture,
+                None,
+                check_size,
+                move |_access, input, _cancel, _initial, output, ready| {
+                    let child = registry
+                        .try_lock()
+                        .unwrap()
+                        .values()
+                        .next()
+                        .unwrap()
+                        .clone();
+                    let mut fail = Some(move || {
+                        let _ = ready.send(Err(SshError::new("mosh_closed", "the server ended")));
+                        child.cancel.send_replace(true);
+                    });
+                    if !fails_while_connect_waits {
+                        (fail.take().unwrap())();
+                    }
+                    // The test runtime runs this only once the connect has yielded to wait.
+                    tauri::async_runtime::JoinHandle::Tokio(tokio::spawn(async move {
+                        let _ = (input, output);
+                        if let Some(fail) = fail {
+                            fail();
+                        }
+                        Ok(())
+                    }))
+                },
+            )
+            .await;
+            assert_eq!(
+                result.err().expect("the failed worker was admitted").kind(),
+                "mosh_closed",
+                "fails_while_connect_waits={fails_while_connect_waits}"
+            );
+            assert!(state.sessions.lock().await.is_empty());
+        }
         server_task.abort();
     }
     /// A Channel that counts what crosses it, with a core offered for it (taken by the next terminal
