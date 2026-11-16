@@ -7,6 +7,9 @@ import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
 import {connect,createServer} from 'node:net';
 
+/** Runs one tmux command against the owned fixture's server over its SSH, as the app's own action does. */
+const hostTmux=(owned:TmuxFixture)=>async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux window action',5000);
+
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
   const row=(index:number,name:string,active:number,dead=0)=>`@${index+1}|${index}|${name}|${active}|%${index}|${100+index}|${dead}`;
   expect(tmuxPaneRows(`${row(0,'alpha',1)}\n${row(1,'beta',0,1)}\n`)).toEqual([
@@ -165,7 +168,7 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the app-style create, rename and close of one added window',async()=>{
   const owned=await TmuxFixture.start();
   try {
-    const tmux=async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux window action',5000);
+    const tmux=hostTmux(owned);
     // Nothing happened yet, then a window that is still open: neither is the app's final state.
     await expect(owned.verifyWindowLifecycle()).rejects.toThrow('Owned tmux window create, rename and close were not observed');
     const [created,renamed]=owned.metadata().lifecycle;
@@ -182,6 +185,24 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await owned.verifyWindowLifecycle();
     // The original windows and panes were never touched.
     expect(owned.diagnostic().windows).toBe(2);
+  } finally {
+    await owned.stop();
+  }
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback refuses a rename that reached an original window and an original pane that was replaced',async()=>{
+  const owned=await TmuxFixture.start();
+  try {
+    const tmux=hostTmux(owned);
+    const [windowId,name,paneId]=(await tmux("list-windows -F '#{window_id}|#{window_name}|#{pane_id}'")).trim().split('\n')[0].split('|');
+    // The app's Rename window on a window other than the one it added is not the lifecycle step; the name restored is accepted again.
+    await tmux(`rename-window -t '${windowId}' 'renamed'`);
+    await expect(owned.observe()).rejects.toThrow('Owned tmux original window changed');
+    await tmux(`rename-window -t '${windowId}' '${name}'`);
+    await owned.observe();
+    // Same window id and name, but a new pane process: the original pane was lost.
+    await tmux(`respawn-pane -k -t '${paneId}' 'exec sleep 3600'`);
+    await expect(owned.observe()).rejects.toThrow('Owned tmux pane identity changed');
   } finally {
     await owned.stop();
   }
