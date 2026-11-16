@@ -383,6 +383,9 @@ enum HostBrowserCommand {
         /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
         #[arg(long)]
         no_sandbox: bool,
+        /// End the session, and the browser with it, when the view has been hidden this many seconds.
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=86_400))]
+        idle_release: u64,
     },
 }
 #[derive(Subcommand)]
@@ -551,13 +554,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
         }
         Command::HostBrowser {
-            command: Some(HostBrowserCommand::Serve { binary, no_sandbox }),
+            command:
+                Some(HostBrowserCommand::Serve {
+                    binary,
+                    no_sandbox,
+                    idle_release,
+                }),
             ..
         } => {
             lazysh_agent::host_browser::relay::serve(&lazysh_agent::host_browser::relay::Serve {
                 state: &lazysh_agent::state_directory()?,
                 binary: binary.as_deref(),
                 no_sandbox,
+                idle_release: std::time::Duration::from_secs(idle_release),
             })?;
             None
         }
