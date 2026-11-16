@@ -2094,6 +2094,8 @@ export const english = {
   devicesShutdown: "shutdown",
   devicesConfirmReboot: "reboot {{name}}?",
   devicesConfirmShutdown: "shutdown {{name}}?",
+  devicesRequested: "Requested. The host SDK carries it out in its own time, so Find devices again to see the new state.",
+  devicesShuttingDown: "The simulator is still shutting down, so it was not booted again. Find devices, then boot it once it is shut down.",
   devicesScreen: "Screen of {{name}}",
   devicesAvds: "Available virtual devices",
   devicesBootAvd: "Boot {{name}}",

@@ -2097,6 +2097,8 @@ const translations = {
   devicesShutdown: ["Desligar", "Apagar"],
   devicesConfirmReboot: ["Reiniciar {{name}}?", "¿Reiniciar {{name}}?"],
   devicesConfirmShutdown: ["Desligar {{name}}?", "¿Apagar {{name}}?"],
+  devicesRequested: ["Solicitado. O SDK do servidor o executa no próprio ritmo; use Buscar dispositivos de novo para ver o novo estado.", "Solicitado. El SDK del servidor lo ejecuta a su ritmo; usa Buscar dispositivos de nuevo para ver el nuevo estado."],
+  devicesShuttingDown: ["O simulador ainda está desligando, então não foi iniciado de novo. Busque os dispositivos e inicie-o depois que estiver desligado.", "El simulador aún se está apagando, así que no se volvió a iniciar. Busca los dispositivos e inícialo cuando esté apagado."],
   devicesScreen: ["Tela de {{name}}", "Pantalla de {{name}}"],
   devicesAvds: ["Dispositivos virtuais disponíveis", "Dispositivos virtuales disponibles"],
   devicesBootAvd: ["Iniciar {{name}}", "Iniciar {{name}}"],
