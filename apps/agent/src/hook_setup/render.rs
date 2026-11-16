@@ -55,7 +55,7 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             5,
         ),
         Agent::KimiCode => (crate::kimi_code::EVENTS.contains(&event), 5),
-        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => (false, 0),
+        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp | Agent::Grok => (false, 0),
     };
     if !valid {
         return Err("HooksInvalidTemplate");
@@ -86,7 +86,9 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         Agent::Droid => crate::hooks::droid_config(),
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
-        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => return Ok(Vec::new()),
+        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp | Agent::Grok => {
+            return Ok(Vec::new())
+        }
         Agent::KimiCode => {
             return crate::kimi_code::EVENTS
                 .iter()
@@ -167,6 +169,9 @@ pub(super) fn owned_file(agent: Agent, binary: &Path) -> Result<String, &'static
             .map(|text| text + "\n")
             .map_err(|_| "HooksInvalidTemplate");
     }
+    if agent == Agent::Grok {
+        return grok_file(path);
+    }
     let path = serde_json::to_string(path).map_err(|_| "HooksInvalidBinary")?;
     let (asset, command, replacement) = match agent {
         Agent::Opencode => (
@@ -191,6 +196,39 @@ pub(super) fn owned_file(agent: Agent, binary: &Path) -> Result<String, &'static
         return Err("HooksInvalidTemplate");
     }
     Ok(body.replace(command, &replacement))
+}
+
+/// Grok Build runs each command with `sh -c`, so the binary is single-quoted like the other shell dialects.
+/// The opted-in report is the point of managed Grok setup: without it nothing binds the session log to the pane.
+fn grok_file(binary: &str) -> Result<String, &'static str> {
+    // Grok expands `$NAME`, `${NAME}` and `$$` in a command when it loads the file, quoted or not (`env_expand.rs`
+    // of the pinned source); a bare `$` before anything else stays literal.
+    if binary.as_bytes().windows(2).any(|pair| {
+        pair[0] == b'$' && (pair[1].is_ascii_alphanumeric() || b"_{$".contains(&pair[1]))
+    }) {
+        return Err("HooksInvalidBinary");
+    }
+    let command = format!(
+        "'{}' ingest --agent grok --reported-history",
+        binary.replace('\'', "'\\''")
+    );
+    let mut config = crate::reported_history::grok_config();
+    let events = config["hooks"]
+        .as_object_mut()
+        .ok_or("HooksInvalidTemplate")?;
+    for groups in events.values_mut() {
+        let handler = groups
+            .pointer_mut("/0/hooks/0")
+            .filter(|handler| {
+                handler["command"] == "lazysh-agent ingest --agent grok --reported-history"
+                    && handler["timeout"] == 5
+            })
+            .ok_or("HooksInvalidTemplate")?;
+        handler["command"] = command.clone().into();
+    }
+    serde_json::to_string_pretty(&config)
+        .map(|text| text + "\n")
+        .map_err(|_| "HooksInvalidTemplate")
 }
 
 /// Provider envelope handling stays separate from ownership of individual groups.

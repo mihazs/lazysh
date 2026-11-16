@@ -15,6 +15,7 @@ pub enum Agent {
     Amp,
     #[serde(rename = "kimi-code")]
     KimiCode,
+    Grok,
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -91,6 +92,7 @@ impl Request {
             Agent::Copilot => "copilot",
             Agent::Amp => "amp",
             Agent::KimiCode => "kimi-code",
+            Agent::Grok => "grok",
         };
         let suffix = match (&self.action, &self.expected_plan) {
             (Action::Status, None) => String::new(),
@@ -182,6 +184,7 @@ fn discovery_command(schema_version: Option<u8>) -> Result<&'static str> {
         Some(2) => Ok("lazysh-agent hooks discover --schema-version 2"),
         Some(3) => Ok("lazysh-agent hooks discover --schema-version 3"),
         Some(4) => Ok("lazysh-agent hooks discover --schema-version 4"),
+        Some(5) => Ok("lazysh-agent hooks discover --schema-version 5"),
         _ => Err(error(
             "invalid_request",
             "Unsupported hook discovery schema",
@@ -335,7 +338,11 @@ mod tests {
             discovery_command(Some(4)).unwrap(),
             "lazysh-agent hooks discover --schema-version 4"
         );
-        for version in [0, 5, u8::MAX] {
+        assert_eq!(
+            discovery_command(Some(5)).unwrap(),
+            "lazysh-agent hooks discover --schema-version 5"
+        );
+        for version in [0, 6, u8::MAX] {
             assert!(discovery_command(Some(version)).is_err());
         }
     }
@@ -368,6 +375,7 @@ mod tests {
             (Agent::Copilot, "copilot"),
             (Agent::Amp, "amp"),
             (Agent::KimiCode, "kimi-code"),
+            (Agent::Grok, "grok"),
         ] {
             request.agent = agent;
             assert!(request.command(false).unwrap().starts_with(&format!(

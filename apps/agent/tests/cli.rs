@@ -1550,6 +1550,7 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
         ("opencode", "bun-javascript"),
         ("copilot", "shell-free-exec"),
         ("amp", "amp-javascript"),
+        ("grok", "posix-shell"),
     ] {
         let output = run(
             directory.path(),
@@ -1577,6 +1578,15 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
         if bound {
             assert_eq!(preview["binaryBinding"], "currentExecutable");
             assert!(Path::new(preview["binary"].as_str().unwrap()).is_absolute());
+            if agent == "grok" {
+                // The managed file is the opted-in fragment, bound to this executable.
+                let command = preview["asset"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+                    .as_str()
+                    .unwrap();
+                assert!(command.ends_with("' ingest --agent grok --reported-history"));
+                assert!(command.contains(preview["binary"].as_str().unwrap()));
+                assert!(preview["asset"]["hooks"]["PreToolUse"].is_null());
+            }
         } else {
             assert_eq!(preview["binaryBinding"], "unboundTemplate");
             assert_eq!(preview["managedSetupSupported"], false);

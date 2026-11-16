@@ -152,7 +152,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
       }
       if(command==='companion_hook_discovery'){
         const schemaVersion=args.schemaVersion===undefined?1:args.schemaVersion;
-        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||![1,2,3,4].includes(schemaVersion))throw new Error('Wrong discovery source');
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||![1,2,3,4,5].includes(schemaVersion))throw new Error('Wrong discovery source');
         state.hookDiscoveryVersions.push(schemaVersion);
         return {schemaVersion,supported:true,managedSetupSupported:true,truncated:false,agents:[
           {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},

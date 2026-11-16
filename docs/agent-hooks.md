@@ -22,8 +22,9 @@ are refused.
 Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
 on the qualified Linux and macOS filesystems described below. Explicit version-2 discovery
 also enables managed GitHub Copilot CLI setup; explicit version-3 discovery adds
-managed Amp setup, and explicit version-4 discovery adds managed Kimi Code 2.4
-setup, each preserving every older mapping. Gemini uses the selected
+managed Amp setup, explicit version-4 discovery adds managed Kimi Code 2.4
+setup and explicit version-5 discovery adds managed Grok Build setup, each
+preserving every older mapping. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
 layer; detection does not establish or enable the provider's active layer.
@@ -503,7 +504,7 @@ unknown event, so edit it with care.
 
 Use `lazysh-agent hooks discover --schema-version 4` to discover the current Kimi Code
 profile (`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and its managed capability. The app
-asks for version 4 first and falls back one version at a time only when an older companion
+asks for the newest version first (5) and falls back one version at a time only when an older companion
 rejects the schema; a malformed or failed answer never negotiates again, and a fallback
 version labels Kimi manual. Select the existing profile, then inspect and separately
 install, update or remove its exact plan with `--agent kimi-code`;
@@ -659,6 +660,72 @@ retains the source/binary bindings and separate case receipts. Other child
 configurations, real-provider/account behavior, public companion artifacts and
 Android delivery remain unqualified.
 
+## Grok Build
+
+### Explicit managed setup
+
+Use `lazysh-agent hooks discover --schema-version 5` to discover the Grok Build
+profile and its managed capability. The app asks for version 5 first when hook
+setup is opened and falls back one version at a time (4, 3, then 2) when the
+companion rejects it, so an older companion keeps its Copilot, Amp and Kimi Code
+setup and never offers Grok Build. Versions 1 to 4 do not name Grok Build at all: a client that
+predates Grok setup rejects a row it does not know. `GROK_HOME` is a literal
+override, as it is for Grok Build and for transcript discovery: a nonempty value
+is used as written (trailing spaces included), an empty or unset one falls back to
+`~/.grok`, and a relative or unsafe value is reported invalid, never replaced with
+a guess.
+
+Select an existing absolute profile, then inspect and separately install/update
+or remove its exact plan using `--agent grok`. The companion owns only
+`hooks/lazysh.json` and `.lazysh-hooks-grok.json` in that profile, as it does for
+Copilot: Grok Build merges every `*.json` file of `$GROK_HOME/hooks/`, so
+`config.toml`, `disabled-hooks`, `trusted_folders.toml` and every other hook file
+stay untouched, and removal leaves the `hooks` directory. The file is the opted-in
+fragment of `lazysh-agent grok-config --reported-history`, with each command bound
+to the inspected absolute executable and single-quoted for `sh -c`: nine events
+(`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`,
+`Notification`, `Stop`, `StopFailure`, `StopCancelled`, `SessionEnd`) running
+`'<companion>' ingest --agent grok --reported-history` with a five-second timeout,
+and no `PreToolUse`, the one event that can deny a tool call. The opt-in is the
+point: a Grok Build hook that reports its pane and the path of its session log is
+what lets the Agent view follow that session. Preview it with
+`lazysh-agent hooks preview --agent grok`.
+
+A `hooks/lazysh.json` that lazysh does not own is a conflict, even when its content
+equals the printed fragment (for example the file saved by hand after
+`grok-config --reported-history`): it is never adopted or overwritten, so move it
+away before installing. An edit of the owned file is a conflict too. A binary path
+that Grok Build would rewrite is refused (`HooksInvalidBinary`): it expands `$NAME`,
+`${NAME}` and `$$` in a command when it loads the file, quoted or not, so a path
+with such a sequence cannot be bound; a lone `$` is fine.
+
+What setup does not establish, per the pinned Grok Build source and user guide
+(`xai-org/grok-build` commit `2bdd1d6a`):
+
+- **Trust.** Hooks in `~/.grok/hooks/` are global and always trusted; folder trust
+  gates only the project hooks of a workspace. Installing needs no trust grant, and
+  lazysh never writes `trusted_folders.toml`.
+- **`allow_managed_hooks_only`.** An organization policy (`requirements.toml` or
+  `managed_config.toml` in `/etc/grok` or `$GROK_HOME`, or MDM) can restrict a
+  machine to the hooks it enforces. Every other hook, this file included, is then
+  skipped at dispatch and shown `[disabled]` in `/hooks`. Setup cannot read or
+  change that policy, so it still reports `configured`.
+- **Disabled hooks.** A name listed in `$GROK_HOME/disabled-hooks`, or a hook turned
+  off in `/hooks`, stays off.
+- **Loading.** Grok Build reads hook files when a session starts; press `r` in the
+  `/hooks` tab to reload, or start a new session.
+
+Configured entries therefore never prove that Grok Build loads or runs the hooks:
+the status keeps `reporting:notChecked` and `trust:notChecked`. The qualification
+is the companion's own behavior: the generated command, run through `sh -c` with
+an empty `PATH` against a binary whose path holds a quote and a dollar sign,
+reports the pane and the session log, and the Agent view reads them (see
+[Grok Build in the Agent view](companion.md#grok-build-in-the-agent-view)). No
+Grok Build binary or account was available, so a run against a real agent is still
+open on [#1842](https://github.com/mihazs/lazysh/issues/1842). Remove owned hooks
+with the current companion before downgrading to one that does not understand the
+Grok ownership record.
+
 ## Cursor CLI, Amp and Aider
 
 `lazysh-agent cursor-config` prints a version-1 Cursor hook fragment. Merge only
@@ -759,6 +826,7 @@ Remaining work is tracked in [#1527](https://github.com/mihazs/lazysh/issues/152
 | Cursor CLI | Nothing: fixture and documented-contract coverage only | Authenticated execution and neutral-output acceptance | A Cursor account |
 | Droid | 1.1.0, accountless `exec` with a custom loopback model: `Stop` then `SessionEnd`, one `done` row | Prompt-start and `working` delivery; the interactive UI stops at the Factory login | A Factory account |
 | Amp | Nothing: the plugin runs against the generated API types and documented shapes only | Native plugin loading, ordering, and root and child attribution | An Amp account |
+| Grok Build | Nothing: the pinned source and synthetic hook input only; the generated managed command run through `sh -c` binds a pane and a session log | A real Grok Build loading the managed file; `allow_managed_hooks_only` on a real machine | A Grok Build binary and an xAI account ([#1842](https://github.com/mihazs/lazysh/issues/1842)) |
 | GitHub Copilot CLI | 1.0.105 on Linux, manual and managed hooks: root `working` then `done`, an unanswered elicitation as `needs_attention`, a no-tools child | Other child configurations; a real provider | A GitHub Copilot account for a real provider |
 | Cline CLI | 3.0.74 on Linux: two root turns, a managed binding, a disabled plugin | Child directory binding; a real provider | A Cline provider account |
 | Aider | 0.86.0: the notification callback was counted once, with no session row | Anything beyond callback health, by design | Not applicable |
