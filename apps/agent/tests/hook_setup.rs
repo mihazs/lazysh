@@ -1184,14 +1184,20 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
 
 #[cfg(target_os = "linux")]
 impl ProfileFixture {
+    /// The companion store this fixture's hooks and status run against, absent until a hook reports.
+    fn state(&self) -> std::path::PathBuf {
+        self._root.path().join("state")
+    }
     fn cli(&self, action: &str, plan: Option<&str>) -> Value {
+        self.cli_in(&self.state(), action, plan)
+    }
+    fn cli_in(&self, state: &std::path::Path, action: &str, plan: Option<&str>) -> Value {
         let mut command = std::process::Command::new(&self.companion);
-        command.env_clear().env("PATH", "").args([
-            "hooks",
-            action,
-            "--agent",
-            self.target.agent.name(),
-        ]);
+        command
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", state)
+            .args(["hooks", action, "--agent", self.target.agent.name()]);
         if action != "preview" {
             command.arg("--profile-root").arg(&self.target.profile);
         }
@@ -1238,6 +1244,136 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         assert_eq!(removed["outcome"]["status"], "removed");
         assert_eq!(fixture.cli("status", None)["state"], "removed");
     }
+}
+
+/// The store's file names and the bytes of its database and write-ahead log; the shared-memory
+/// index is left out because merely reading a write-ahead-log database touches it.
+#[cfg(target_os = "linux")]
+fn store_fingerprint(state: &std::path::Path) -> (Vec<String>, Vec<Vec<u8>>) {
+    let mut names: Vec<String> = std::fs::read_dir(state)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    let bytes = ["events.sqlite3", "events.sqlite3-wal"]
+        .map(|name| std::fs::read(state.join(name)).unwrap_or_default());
+    (names, bytes.into())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn hook_status_tells_configured_but_silent_from_a_received_local_event_and_never_writes_the_store()
+{
+    let prompt = json!({"hook_event_name":"UserPromptSubmit","session_id":"ready","cwd":"/work"});
+    let cases = [
+        (record::Agent::Claude, prompt.clone()),
+        (record::Agent::Codex, prompt.clone()),
+        (record::Agent::Droid, prompt.clone()),
+        (record::Agent::Copilot, prompt),
+        (
+            record::Agent::Gemini,
+            json!({"hook_event_name":"BeforeAgent","session_id":"ready","cwd":"/work"}),
+        ),
+        (
+            record::Agent::Cursor,
+            json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"ready","cwd":"/work"}),
+        ),
+        (
+            record::Agent::Opencode,
+            json!({"type":"session.status","properties":{"sessionID":"ready","status":{"type":"busy"}},"directory":"/work"}),
+        ),
+        (
+            record::Agent::Cline,
+            json!({"schemaVersion":1,"agentId":"a","conversationId":"ready","runId":"r","status":"start","directory":"/work"}),
+        ),
+        (
+            record::Agent::Amp,
+            json!({"schemaVersion":1,"threadId":"ready","state":"running","directory":"/work"}),
+        ),
+    ];
+    let bystanders = [
+        ProfileFixture::new(record::Agent::Claude),
+        ProfileFixture::new(record::Agent::Codex),
+    ];
+    for (agent, payload) in cases {
+        let fixture = ProfileFixture::new(agent);
+        let state = fixture.state();
+        let status = fixture.cli("status", None);
+        assert_eq!(status["readiness"]["localEvent"], json!({"state":"none"}));
+        assert!(!state.exists(), "status created the store for {agent:?}");
+        // Configured but silent: the hook files exist and no event has arrived.
+        fixture.cli("install", status["installPlan"].as_str());
+        let silent = fixture.cli("status", None);
+        assert_eq!(silent["state"], "configured");
+        assert_eq!(silent["readiness"]["localEvent"], json!({"state":"none"}));
+        assert!(!state.exists());
+        // The companion binary the hook runs records one lifecycle event.
+        let mut ingest = std::process::Command::new(&fixture.companion);
+        ingest
+            .args(["ingest", "--agent", agent.name()])
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", &state);
+        assert!(
+            process::run(&mut ingest, &serde_json::to_vec(&payload).unwrap())
+                .status
+                .success()
+        );
+        let reported = snapshot(&fixture.companion, &state)["sessions"][0]["updatedAt"].clone();
+        let before = store_fingerprint(&state);
+        let received = fixture.cli("status", None);
+        assert_eq!(received["state"], "configured");
+        assert_eq!(
+            received["readiness"]["localEvent"],
+            json!({"state":"received","lastEventAt":reported})
+        );
+        assert_eq!(store_fingerprint(&state), before, "status wrote the store");
+        // What this host cannot observe is never guessed, and the old fields stay as they were.
+        for key in [
+            "providerReloaded",
+            "projectTrusted",
+            "paneBound",
+            "remoteDelivery",
+        ] {
+            assert_eq!(received["readiness"][key], "notChecked");
+        }
+        assert_eq!(received["readiness"]["schemaVersion"], 1);
+        assert_eq!(received["reporting"], "notChecked");
+        assert_eq!(received["trust"], "notChecked");
+        // The event is the agent's own: another agent on the same store has reported nothing.
+        let other = &bystanders[usize::from(agent == record::Agent::Claude)];
+        assert_eq!(
+            other.cli_in(&state, "status", None)["readiness"]["localEvent"],
+            json!({"state":"none"})
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn hook_status_leaves_the_local_event_unchecked_when_the_store_cannot_be_read_safely() {
+    use std::{fs, os::unix::fs::symlink};
+    let unchecked = json!({"state":"notChecked"});
+    let fixture = ProfileFixture::new(record::Agent::Claude);
+    let state = fixture.state();
+    fs::create_dir(&state).unwrap();
+    let database = state.join("events.sqlite3");
+    fs::write(&database, "not a database").unwrap();
+    assert_eq!(
+        fixture.cli("status", None)["readiness"]["localEvent"],
+        unchecked
+    );
+    assert_eq!(fs::read(&database).unwrap(), b"not a database");
+    // A linked database is never followed, so whatever it points at is never read or changed.
+    fs::remove_file(&database).unwrap();
+    let elsewhere = state.join("elsewhere");
+    fs::write(&elsewhere, "").unwrap();
+    symlink(&elsewhere, &database).unwrap();
+    assert_eq!(
+        fixture.cli("status", None)["readiness"]["localEvent"],
+        unchecked
+    );
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"");
 }
 
 #[cfg(target_os = "linux")]

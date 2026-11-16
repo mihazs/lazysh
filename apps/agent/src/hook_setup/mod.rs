@@ -7,6 +7,8 @@ mod files;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod json;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod readiness;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod record;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod render;
@@ -32,6 +34,20 @@ pub enum AgentProfile {
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
+    /// The name the agent's lifecycle events carry in the companion store.
+    fn store_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Droid => "Droid",
+            Self::Gemini => "Gemini CLI",
+            Self::Cursor => "Cursor CLI",
+            Self::Opencode => "OpenCode",
+            Self::Cline => "Cline CLI",
+            Self::Copilot => "GitHub Copilot CLI",
+            Self::Amp => "Amp",
+        }
+    }
     fn agent(self) -> record::Agent {
         match self {
             Self::Claude => record::Agent::Claude,
@@ -200,20 +216,20 @@ fn manage(command: Command) -> Result<Value> {
     };
     if inspected.observation == Some(state::Observation::Conflict) {
         return Ok(
-            json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":"conflict","installPlan":null,"removePlan":null,"reporting":"notChecked","trust":"notChecked"}),
+            json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":"conflict","installPlan":null,"removePlan":null,"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
         );
     }
     let remove = inspected.plan(files::Action::Remove)?;
     let install = match inspected.plan(files::Action::Install) {
         Err(Error::Installation("HooksAmpShadow")) => {
             return Ok(
-                json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":null,"removePlan":remove.digest()?,"binary":remove.binary,"reason":"HooksAmpShadow","reporting":"notChecked","trust":"notChecked"}),
+                json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":null,"removePlan":remove.digest()?,"binary":remove.binary,"reason":"HooksAmpShadow","reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
             );
         }
         other => other?,
     };
     Ok(
-        json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked"}),
+        json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
     )
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

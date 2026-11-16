@@ -1,6 +1,6 @@
 import {useMountedAccess,useProtectedApi} from './access';
 import {api as nativeApi} from './bridge';
-import {t,useUi} from './i18n/core';
+import {formatDateTime,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
 type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';
@@ -32,7 +32,16 @@ export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3=1):Discov
   if(new TextEncoder().encode(JSON.stringify(result)).length>65536)throw new LocalUiError('hooksInvalid');
   return result;
 }
-type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string};
+type LocalEvent={state:'received';lastEventAt:number}|{state:'none'|'notChecked'};
+type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;localEvent?:LocalEvent};
+/** Additive and advisory: an absent, newer or malformed report from the companion reads as not checked and never fails the status. */
+function parseLocalEvent(value:unknown):LocalEvent|undefined{
+  const report=value as {schemaVersion?:unknown;localEvent?:{state?:unknown;lastEventAt?:unknown}}|null|undefined;
+  const event=report?.schemaVersion===1?report.localEvent:undefined;
+  if(event?.state==='none'||event?.state==='notChecked')return {state:event.state};
+  const at=event?.state==='received'&&typeof event.lastEventAt==='string'?Date.parse(event.lastEventAt):NaN;
+  return Number.isFinite(at)?{state:'received',lastEventAt:at}:undefined;
+}
 export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
   if(!value || typeof value!=='object')throw new LocalUiError('hooksInvalid');
   const v=value as Record<string,unknown>;
@@ -41,11 +50,11 @@ export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
   if(![null,'prepared','configured','removed','conflict'].includes(v.state as null))throw new LocalUiError('hooksInvalid');
   if(v.reason==='HooksAmpShadow'){
     if(expectedAgent!=='amp'||v.agent!=='amp'||v.state==='conflict'||v.installPlan!==null||typeof v.removePlan!=='string'||!/^[a-f0-9]{64}$/.test(v.removePlan))throw new LocalUiError('hooksInvalid');
-    return {supported:true,state:v.state as Status['state'],reason:'HooksAmpShadow',removePlan:v.removePlan};
+    return {supported:true,state:v.state as Status['state'],reason:'HooksAmpShadow',removePlan:v.removePlan,localEvent:parseLocalEvent(v.readiness)};
   }
-  if(v.state==='conflict')return {supported:true,state:'conflict'};
+  if(v.state==='conflict')return {supported:true,state:'conflict',localEvent:parseLocalEvent(v.readiness)};
   if(![v.installPlan,v.removePlan].every(plan=>typeof plan==='string' && /^[a-f0-9]{64}$/.test(plan)))throw new LocalUiError('hooksInvalid');
-  return {supported:true,state:v.state as Status['state'],installPlan:v.installPlan as string,removePlan:v.removePlan as string};
+  return {supported:true,state:v.state as Status['state'],installPlan:v.installPlan as string,removePlan:v.removePlan as string,localEvent:parseLocalEvent(v.readiness)};
 }
 export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionId:string;visible:boolean;reveal?:Readonly<{sessionId:string}>}) {
   useUi();const api=useProtectedApi(nativeApi),{access,mounted}=useMountedAccess();
@@ -142,6 +151,10 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     {agent==='amp'&&!ampSupported&&<p className="agent-note" role="status">{t('hooksAmpCapability')}</p>}
     {status?.reason==='HooksAmpShadow'&&<p className="agent-note" role="status">{t('hooksAmpShadow')}</p>}
     {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status?.supported && <ul className="agent-note" aria-label={t('hooksReadinessTitle')} style={{margin:0,paddingLeft:'1.2em'}}>
+      {([['hooksReadinessCompanion',t('hooksReadinessYes')],['hooksReadinessHooks',t(status.state==='configured'?'hooksReadinessYes':status.state==='conflict'?'hooksReadinessConflict':'hooksReadinessNo')],['hooksReadinessReloaded',t('hooksReadinessNotChecked')],['hooksReadinessTrusted',t('hooksReadinessNotChecked')],['hooksReadinessEvent',status.localEvent?.state==='received'?t('hooksReadinessLastEvent',{time:formatDateTime(status.localEvent.lastEventAt)}):t(status.localEvent?.state==='none'?'hooksReadinessNone':'hooksReadinessNotChecked')],['hooksReadinessPane',t('hooksReadinessNotChecked')],['hooksReadinessRemote',t('hooksReadinessNotChecked')]] as const).map(([label,value])=><li key={label}>{t(label)}: {value}</li>)}
+    </ul>}
+    {status?.supported && status.state==='configured' && status.localEvent?.state==='none' && <p className="agent-note">{t('hooksReadinessSilent')}</p>}
     {status?.supported && providerAllowed && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy||!status.installPlan} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy||!status.removePlan} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
