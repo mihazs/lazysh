@@ -8,12 +8,20 @@ const tabNames=['alpha','beta'] as const;
 /** The active tab of one bounded `list-tabs --json` readback; null while no client is attached. Anything but the owned two tabs is a changed topology. */
 export function zellijActiveTab(text:string):ActiveTab {
   let tabs:unknown;
-  try{tabs=JSON.parse(text);}catch{throw new Error('Owned Zellij topology changed');}
+  try{tabs=JSON.parse(text);}catch{throw new Error(`Owned Zellij topology changed (unreadable, ${text.length} bytes)`);}
   if(text.length>16384 || !Array.isArray(tabs) || tabs.length!==2 || tabs.some((tab,index)=>tab?.position!==index || tab.name!==tabNames[index] || typeof tab.active!=='boolean'))
     throw new Error('Owned Zellij topology changed');
   const active=tabs.filter(tab=>tab.active);
   if(active.length>1)throw new Error('Owned Zellij topology changed');
   return active.length?active[0].position:null;
+}
+/** A busy session can answer one readback with nothing readable; only an answer that stays wrong across several samples is a changed topology. */
+export async function zellijActiveTabSettled(read:()=>Promise<string>,attempts=10):Promise<ActiveTab> {
+  for(let attempt=1;;attempt++) {
+    const text=await read();
+    try{return zellijActiveTab(text);}
+    catch(error){if(attempt>=attempts)throw error;await Bun.sleep(25);}
+  }
 }
 /** Attach, numbered Tab 2, tab-close detach, reattach on the remembered tab, numbered Tab 1 and the final detach. */
 export function zellijTabHistoryVerified(history:readonly ActiveTab[]) {
@@ -60,7 +68,7 @@ export class ZellijFixture {
       await Bun.sleep(25);
     }
   }
-  private read() {return this.ssh.zellij(['--session',this.name,'action','list-tabs','--json']).then(zellijActiveTab);}
+  private read() {return zellijActiveTabSettled(()=>this.ssh.zellij(['--session',this.name,'action','list-tabs','--json']));}
   /** One host sample of the session's own active tab; only changes are kept. */
   async observe() {
     const active=await this.read();

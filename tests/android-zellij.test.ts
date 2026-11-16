@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {readdir,readlink,stat} from 'node:fs/promises';
-import {ZellijFixture,zellijActiveTab,zellijTabHistoryVerified} from './support/androidZellij';
+import {ZellijFixture,zellijActiveTab,zellijActiveTabSettled,zellijTabHistoryVerified} from './support/androidZellij';
 import {listening} from './support/androidSsh';
 
 test('Zellij host readback admits only the two owned tabs and reports the single active one',()=>{
@@ -14,6 +14,17 @@ test('Zellij host readback admits only the two owned tabs and reports the single
     expect(()=>read(invalid)).toThrow('Owned Zellij topology changed');
   for(const text of ['','not json','{"position":0}',JSON.stringify([tab(0,'alpha',true),tab(1,'beta',false)]).padEnd(16385,' ')])
     expect(()=>zellijActiveTab(text)).toThrow('Owned Zellij topology changed');
+});
+
+test('Zellij readback survives one unreadable answer but not a topology that stays wrong',async()=>{
+  const owned=JSON.stringify([{position:0,name:'alpha',active:true},{position:1,name:'beta',active:false}]);
+  const answers=(...texts:string[])=>{let reads=0;return {read:async()=>texts[Math.min(reads++,texts.length-1)],reads:()=>reads};};
+  const transient=answers('',owned);
+  expect(await zellijActiveTabSettled(transient.read)).toBe(0);
+  expect(transient.reads()).toBe(2);
+  const changed=answers('[]');
+  await expect(zellijActiveTabSettled(changed.read,3)).rejects.toThrow('Owned Zellij topology changed');
+  expect(changed.reads()).toBe(3);
 });
 
 test('Zellij attach history requires attach, Tab 2, detach, reattach on that tab, Tab 1 and the final detach in order',()=>{
