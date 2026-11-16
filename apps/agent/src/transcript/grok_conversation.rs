@@ -11,7 +11,8 @@ use std::{
 };
 
 const MAX_RECONSTRUCTION: usize = 16 * 1024 * 1024;
-const MAX_RECORDS: usize = 10_000;
+// Records that start a message, a tool update or a control: the chunks of one streamed message count once.
+const MAX_RECORDS: usize = 100_000;
 
 enum Action {
     Chunk(Value, Option<String>),
@@ -50,10 +51,6 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        count += 1;
-        if count > MAX_RECORDS {
-            return Err(Error::InvalidArgument);
-        }
         let record: Value = serde_json::from_slice(&line).map_err(|_| Error::InvalidEvent)?;
         let method = record["method"].as_str().ok_or(Error::InvalidEvent)?;
         if !matches!(method, "session/update" | "_x.ai/session/update") {
@@ -73,6 +70,8 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
         let tag = update["sessionUpdate"]
             .as_str()
             .ok_or(Error::InvalidEvent)?;
+        // A chunk that opens a prompt stays its own action: a rewind cuts the timeline right before it.
+        let mut opens_prompt = false;
         let action = if method == "session/update" {
             match tag {
                 "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk" => {
@@ -84,6 +83,7 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                                     return Err(Error::InvalidEvent);
                                 }
                                 boundaries.push((index, actions.len()));
+                                opens_prompt = true;
                             }
                             key = Some(format!("prompt:{index}"));
                         } else if update["_meta"]["hostTurn"] != true
@@ -103,7 +103,6 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                     {
                         Action::Barrier
                     } else {
-                        charged += normalized_size(&message)?;
                         Action::Chunk(message, key)
                     }
                 }
@@ -121,13 +120,8 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                 }
                 // The plan card when the entries are the recorded shape; anything else stays the labeled text.
                 "plan" => match super::interaction::grok_plan(update) {
-                    Some(card) => plan_action(card, position, &timestamp, &mut charged)?,
-                    None => display_action(
-                        &record,
-                        position,
-                        Some(format!("record:{position}")),
-                        &mut charged,
-                    )?,
+                    Some(card) => plan_action(card, position, &timestamp),
+                    None => display_action(&record, position, Some(format!("record:{position}")))?,
                 },
                 // Explicit non-conversation ACP snapshots do not change the timeline.
                 "available_commands_update"
@@ -156,12 +150,9 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                     branch_id = Some(format!("grok-rewind-{position}"));
                     Action::Barrier
                 }
-                "plan_kept" => display_action(
-                    &record,
-                    position,
-                    Some(format!("record:{position}")),
-                    &mut charged,
-                )?,
+                "plan_kept" => {
+                    display_action(&record, position, Some(format!("record:{position}")))?
+                }
                 // Recorded display keeps the original transcript across model compaction.
                 // Checkpoint files/paths are deliberately never opened.
                 "compaction_checkpoint"
@@ -180,10 +171,10 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                 _ => return Err(Error::InvalidEvent),
             }
         };
+        push(&mut actions, action, opens_prompt, &mut charged, &mut count)?;
         if charged > MAX_RECONSTRUCTION {
             return Err(Error::InvalidArgument);
         }
-        actions.push(action);
     }
     // Parsed actions own their data; reject a changed source before publishing a view.
     super::unchanged_snapshot(path, &before)?;
@@ -254,28 +245,7 @@ fn reduce(actions: Vec<Action>) -> Result<Vec<Value>> {
                 let explicit_key = key.is_some();
                 let key = key.unwrap_or_else(|| format!("unkeyed:{role}"));
                 if previous.as_ref() == Some(&(role.clone(), key.clone())) {
-                    let last = messages.last_mut().ok_or(Error::InvalidEvent)?;
-                    for block in message["blocks"].as_array().ok_or(Error::InvalidEvent)? {
-                        let blocks = last["blocks"].as_array_mut().ok_or(Error::InvalidEvent)?;
-                        if matches!(block["type"].as_str(), Some("text" | "thinking"))
-                            && blocks
-                                .last()
-                                .is_some_and(|last| last["type"] == block["type"])
-                        {
-                            let tail = blocks.last_mut().ok_or(Error::InvalidEvent)?;
-                            let Value::String(text) = &mut tail["text"] else {
-                                return Err(Error::InvalidEvent);
-                            };
-                            let addition = block["text"].as_str().ok_or(Error::InvalidEvent)?;
-                            if text.len() + addition.len() > 262144 {
-                                return Err(Error::InvalidEvent);
-                            }
-                            text.push_str(addition);
-                        } else {
-                            blocks.push(block.clone());
-                        }
-                    }
-                    super::validate_message(last)?;
+                    join(messages.last_mut().ok_or(Error::InvalidEvent)?, &message)?;
                 } else {
                     if explicit_key && !closed_keys.insert(key.clone()) {
                         return Err(Error::InvalidEvent);
@@ -329,8 +299,62 @@ fn reduce(actions: Vec<Action>) -> Result<Vec<Value>> {
     Ok(messages)
 }
 
+/// Adds one action. The next chunk of a streamed message joins the last action instead of becoming a record of its own,
+/// so a long session costs one record and one retained message per message, not one per chunk.
+fn push(
+    actions: &mut Vec<Action>,
+    action: Action,
+    opens_prompt: bool,
+    charged: &mut usize,
+    count: &mut usize,
+) -> Result<()> {
+    if let Action::Chunk(message, key) = &action {
+        if let (false, Some(Action::Chunk(last, last_key))) = (opens_prompt, actions.last_mut()) {
+            if last["role"] == message["role"] && last_key == key {
+                validate_normalized(message)?;
+                *charged += serde_json::to_vec(&message["blocks"])
+                    .map_err(|_| Error::InvalidEvent)?
+                    .len();
+                return join(last, message);
+            }
+        }
+        *charged += normalized_size(message)?;
+    }
+    *count += 1;
+    if *count > MAX_RECORDS {
+        return Err(Error::InvalidArgument);
+    }
+    actions.push(action);
+    Ok(())
+}
+
+/// The blocks of the next chunk of one message: text and thinking extend the tail block of their kind.
+fn join(last: &mut Value, message: &Value) -> Result<()> {
+    for block in message["blocks"].as_array().ok_or(Error::InvalidEvent)? {
+        let blocks = last["blocks"].as_array_mut().ok_or(Error::InvalidEvent)?;
+        if matches!(block["type"].as_str(), Some("text" | "thinking"))
+            && blocks
+                .last()
+                .is_some_and(|last| last["type"] == block["type"])
+        {
+            let tail = blocks.last_mut().ok_or(Error::InvalidEvent)?;
+            let Value::String(text) = &mut tail["text"] else {
+                return Err(Error::InvalidEvent);
+            };
+            let addition = block["text"].as_str().ok_or(Error::InvalidEvent)?;
+            if text.len() + addition.len() > 262144 {
+                return Err(Error::InvalidEvent);
+            }
+            text.push_str(addition);
+        } else {
+            blocks.push(block.clone());
+        }
+    }
+    super::validate_message(last)
+}
+
 /// A plan update as one `plan` call carrying the shared plan card, so the plan chip and the card of the turn read it.
-fn plan_action(card: Value, position: u64, timestamp: &str, charged: &mut usize) -> Result<Action> {
+fn plan_action(card: Value, position: u64, timestamp: &str) -> Action {
     let mut call = super::block(
         "tool_use",
         String::new(),
@@ -339,18 +363,11 @@ fn plan_action(card: Value, position: u64, timestamp: &str, charged: &mut usize)
     );
     call["card"] = card;
     let message = json!({"id":format!("grok-record-{position}"),"role":"assistant","blocks":[call],"timestamp":timestamp});
-    *charged += normalized_size(&message)?;
-    Ok(Action::Chunk(message, Some(format!("record:{position}"))))
+    Action::Chunk(message, Some(format!("record:{position}")))
 }
 
-fn display_action(
-    record: &Value,
-    position: u64,
-    key: Option<String>,
-    charged: &mut usize,
-) -> Result<Action> {
+fn display_action(record: &Value, position: u64, key: Option<String>) -> Result<Action> {
     let message = grok_acp::normalize(record, position).ok_or(Error::InvalidEvent)?;
-    *charged += normalized_size(&message)?;
     Ok(Action::Chunk(message, key))
 }
 
