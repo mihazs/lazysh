@@ -1,6 +1,6 @@
 import {useMountedAccess,useProtectedApi} from './access';
 import {api as nativeApi} from './bridge';
-import {t,useUi} from './i18n/core';
+import {formatDateTime,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
 type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';
@@ -32,8 +32,22 @@ export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3=1):Discov
   if(new TextEncoder().encode(JSON.stringify(result)).length>65536)throw new LocalUiError('hooksInvalid');
   return result;
 }
-type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string};
+type Readiness={localEvent:'received'|'none'|'notChecked';lastEventAt?:string;paneBinding:'bound'|'unbound'|'notChecked'};
+type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;readiness?:Readiness};
+/** Additive and tolerant: an absent, newer or malformed report is hidden or shown as not checked, never an error. */
+function parseReadiness(value:unknown):Readiness|undefined {
+  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
+  const v=value as Record<string,unknown>;
+  if(v.schemaVersion!==1)return undefined;
+  const at=typeof v.lastEventAt==='string'&&v.lastEventAt.length<=64&&!Number.isNaN(Date.parse(v.lastEventAt))?v.lastEventAt:undefined;
+  if(v.localEvent==='received'&&at)return {localEvent:'received',lastEventAt:at,paneBinding:v.paneBinding==='bound'||v.paneBinding==='unbound'?v.paneBinding:'notChecked'};
+  return {localEvent:v.localEvent==='none'?'none':'notChecked',paneBinding:'notChecked'};
+}
 export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
+  const status=parseConfiguration(value,expectedAgent),readiness=parseReadiness((value as Record<string,unknown>).readiness);
+  return readiness?{...status,readiness}:status;
+}
+function parseConfiguration(value:unknown,expectedAgent?:Agent):Status {
   if(!value || typeof value!=='object')throw new LocalUiError('hooksInvalid');
   const v=value as Record<string,unknown>;
   if(v.schemaVersion!==1 || typeof v.supported!=='boolean' || v.reporting!=='notChecked' || v.trust!=='notChecked')throw new LocalUiError('hooksInvalid');
@@ -142,6 +156,13 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     {agent==='amp'&&!ampSupported&&<p className="agent-note" role="status">{t('hooksAmpCapability')}</p>}
     {status?.reason==='HooksAmpShadow'&&<p className="agent-note" role="status">{t('hooksAmpShadow')}</p>}
     {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status?.readiness&&<ul className="agent-note" aria-label={t('hooksReadinessTitle')} style={{paddingInlineStart:'1.25em'}}>
+      <li>{t('hooksReadinessReload')}</li>
+      <li>{t('hooksReadinessTrust')}</li>
+      <li>{status.readiness.localEvent==='received'&&status.readiness.lastEventAt?t('hooksReadinessEventReceived',{time:formatDateTime(new Date(status.readiness.lastEventAt))}):t(status.readiness.localEvent==='none'?'hooksReadinessEventNone':'hooksReadinessEventUnchecked')}</li>
+      <li>{t(status.readiness.paneBinding==='bound'?'hooksReadinessPaneBound':status.readiness.paneBinding==='unbound'?'hooksReadinessPaneUnbound':'hooksReadinessPaneUnchecked')}</li>
+      <li>{t('hooksReadinessRemote')}</li>
+    </ul>}
     {status?.supported && providerAllowed && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy||!status.installPlan} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy||!status.removePlan} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}

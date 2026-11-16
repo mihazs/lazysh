@@ -2,7 +2,7 @@
 import {it,expect,vi,beforeEach,afterEach} from 'vitest';
 import {render,screen,fireEvent,act,cleanup} from '@testing-library/react';
 import {applyAccessStatus} from './access';
-import {uiI18n} from './i18n/core';
+import {formatDateTime,uiI18n} from './i18n/core';
 const {hooks,discover}=vi.hoisted(()=>({hooks:vi.fn(),discover:vi.fn()}));
 vi.mock('./bridge',()=>({api:{companionHooks:hooks,companionHookDiscovery:discover}}));
 import CompanionHooksPanel,{parseHookStatus,parseHookDiscovery} from './CompanionHooksPanel';
@@ -340,4 +340,50 @@ it('keeps manual Amp exact-owned removal enabled through a same-name shadow with
   fireEvent.click(screen.getByRole('button',{name:'Remove lazysh hooks'}));await act(async()=>{});
   expect(hooks.mock.calls[1]).toEqual(['owned-amp-shadow',{agent:'amp',action:'remove',profileRoot:'/owned/profile',expectedPlan:inspected.removePlan}]);
   expect(hooks.mock.calls.map(call=>call[1].action)).toEqual(['status','remove','status']);
+});
+
+const silentReadiness={schemaVersion:1,providerReload:'notChecked',projectTrust:'notChecked',localEvent:'none',paneBinding:'notChecked',remoteDelivery:'notChecked'};
+const heardReadiness={...silentReadiness,localEvent:'received',lastEventAt:'2026-11-14T09:30:15.250000Z',paneBinding:'bound'};
+async function inspectWith(readiness:unknown,language='en'){
+  await uiI18n.changeLanguage(language);
+  hooks.mockResolvedValueOnce({...inspected,state:'configured',...(readiness===undefined?{}:{readiness})});
+  render(<CompanionHooksPanel sessionId="owned-readiness" visible/>);
+  fireEvent.change(screen.getByLabelText(uiI18n.t('hooksProvider')),{target:{value:'codex'}});fireEvent.change(screen.getByLabelText(uiI18n.t('hooksProfile')),{target:{value:'/owned/profile'}});
+  fireEvent.click(screen.getByRole('button',{name:uiI18n.t('hooksInspect')}));
+  return screen.findByLabelText(uiI18n.t('hooksReadinessTitle'),{},{timeout:500}).catch(()=>null);
+}
+it('shows a configured but silent agent apart from one whose local event arrived',async()=>{
+  const silent=await inspectWith(silentReadiness);
+  expect(silent?.textContent).toContain("Local event: this host's companion has received no report from this agent yet.");
+  expect(silent?.textContent).toContain('Pane: not checked until a report from this agent has arrived.');
+  expect(silent?.textContent).toContain('Provider reload: not checked.');
+  expect(silent?.textContent).toContain('Project trust: not checked.');
+  expect(silent?.textContent).toContain('Remote delivery and approvals: not checked.');
+  expect(screen.getByText('Hooks configured. Live reporting has not been verified.')).toBeTruthy();
+  cleanup();hooks.mockReset();
+  const heard=await inspectWith(heardReadiness);
+  expect(heard?.textContent).toContain(`last received a report from this agent on ${formatDateTime(new Date(heardReadiness.lastEventAt))}. That is history and does not show the agent is running now.`);
+  expect(heard?.textContent).toContain('Pane: the latest report carried a pane identity. That does not show the pane still exists.');
+  expect(heard?.textContent).not.toContain('has received no report');
+});
+it('renders the readiness in Portuguese and Spanish',async()=>{
+  const portuguese=await inspectWith(heardReadiness,'pt-BR');
+  expect(portuguese?.textContent).toContain('Evento local: o companion deste servidor recebeu o último relatório deste agente em');
+  expect(portuguese?.textContent).toContain('Confiança no projeto: não verificada.');
+  cleanup();hooks.mockReset();
+  const spanish=await inspectWith(silentReadiness,'es');
+  expect(spanish?.textContent).toContain('Evento local: el companion de este servidor aún no ha recibido ningún informe de este agente.');
+  expect(spanish?.textContent).toContain('Recarga del proveedor: sin verificar.');
+});
+it('keeps working against an older companion and tolerates a newer companion report',async()=>{
+  expect(parseHookStatus(inspected).readiness).toBeUndefined();
+  expect(parseHookStatus({...inspected,readiness:heardReadiness}).readiness).toEqual({localEvent:'received',lastEventAt:heardReadiness.lastEventAt,paneBinding:'bound'});
+  // A state or version this client does not know is never read as a positive fact, and never an error.
+  expect(parseHookStatus({...inspected,readiness:{...heardReadiness,localEvent:'alive'}}).readiness).toEqual({localEvent:'notChecked',paneBinding:'notChecked'});
+  expect(parseHookStatus({...inspected,readiness:{...heardReadiness,lastEventAt:'yesterday'}}).readiness).toEqual({localEvent:'notChecked',paneBinding:'notChecked'});
+  expect(parseHookStatus({...inspected,readiness:{...heardReadiness,paneBinding:'attached'}}).readiness?.paneBinding).toBe('notChecked');
+  expect(parseHookStatus({...inspected,readiness:{...heardReadiness,providerReload:'reloaded',futureField:true}}).readiness?.localEvent).toBe('received');
+  for(const readiness of [null,'received',[],{...heardReadiness,schemaVersion:2}])expect(parseHookStatus({...inspected,readiness}).readiness).toBeUndefined();
+  expect(await inspectWith(undefined)).toBeNull();
+  expect(screen.getByText('Hooks configured. Live reporting has not been verified.')).toBeTruthy();
 });
