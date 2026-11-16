@@ -100,7 +100,7 @@ mod metadata {
             }
         }
         fn literal_profile(&mut self, variable: &str, fallback: &str) -> Value {
-            // Pinned Kimi and Copilot resolvers preserve nonempty overrides verbatim.
+            // Pinned Kimi, Copilot and Grok resolvers preserve nonempty overrides verbatim.
             match (self.environment)(variable) {
                 Some(value) if !value.is_empty() => self.profile(Some(value), variable, ""),
                 _ => self.home(fallback),
@@ -146,10 +146,11 @@ mod metadata {
                 "claude" => self.selected("CLAUDE_CONFIG_DIR", ".claude", ""),
                 "codex" => self.selected("CODEX_HOME", ".codex", ""),
                 "cline" => self.cline_profile(),
-                "copilot" if matches!(self.schema_version, 2 | 3) => {
+                "copilot" if self.schema_version >= 2 => {
                     self.literal_profile("COPILOT_HOME", ".copilot")
                 }
-                "amp" if self.schema_version == 3 => self.amp_profile(),
+                "amp" if self.schema_version >= 3 => self.amp_profile(),
+                "grok" if self.schema_version >= 4 => self.literal_profile("GROK_HOME", ".grok"),
                 "kimi" => {
                     let mut profiles = vec![
                         self.literal_profile("KIMI_CODE_HOME", ".kimi-code"),
@@ -293,11 +294,17 @@ mod metadata {
             ("kimi", "kimi", "manual"),
             ("copilot", "copilot", "manual"),
             ("amp", "amp", "manual"),
+            ("grok", "grok", "manual"),
             ("aider", "aider", "healthOnly"),
         ] {
+            // Clients that predate Grok setup reject a row they do not know, so only version 4 names it.
+            if agent == "grok" && schema_version < 4 {
+                continue;
+            }
             let profiles = scan.profiles(agent);
-            let setup = if (agent == "copilot" && matches!(schema_version, 2 | 3))
-                || (agent == "amp" && schema_version == 3)
+            let setup = if (agent == "copilot" && schema_version >= 2)
+                || (agent == "amp" && schema_version >= 3)
+                || agent == "grok"
             {
                 "managed"
             } else {

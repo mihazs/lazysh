@@ -29,6 +29,7 @@ pub enum AgentProfile {
     Cline,
     Copilot,
     Amp,
+    Grok,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
@@ -43,6 +44,7 @@ impl AgentProfile {
             Self::Cline => record::Agent::Cline,
             Self::Copilot => record::Agent::Copilot,
             Self::Amp => record::Agent::Amp,
+            Self::Grok => record::Agent::Grok,
         }
     }
 }
@@ -59,7 +61,7 @@ pub enum Command {
     /// Discover known installed executables and profile directories without reading configuration.
     Discover {
         /// Explicitly opt into newer managed-provider metadata; default v1 stays compatible.
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=3))]
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=4))]
         schema_version: u8,
     },
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
@@ -98,11 +100,15 @@ pub fn run(command: Command) -> Result<Value> {
 fn preview(agent: AgentProfile) -> Result<Value> {
     let source = std::env::current_exe()?;
     let agent = agent.agent();
-    let (asset, dialect) = if agent == record::Agent::Copilot {
+    let (asset, dialect) = if matches!(agent, record::Agent::Copilot | record::Agent::Grok) {
         let text = render::owned_file(agent, &source).map_err(Error::Installation)?;
         (
             serde_json::from_str(&text).map_err(|_| Error::Installation("HooksInvalidTemplate"))?,
-            "shell-free-exec",
+            if agent == record::Agent::Grok {
+                "posix-shell"
+            } else {
+                "shell-free-exec"
+            },
         )
     } else if agent.is_whole_file() {
         (
@@ -146,6 +152,7 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
         AgentProfile::Copilot => (crate::hooks::copilot_config(), "shell-free-exec"),
+        AgentProfile::Grok => (crate::reported_history::grok_config(), "posix-shell"),
         AgentProfile::Cline => (
             crate::hooks::cline_plugin()["content"].clone(),
             "cline-javascript",

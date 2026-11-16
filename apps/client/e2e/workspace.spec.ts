@@ -150,7 +150,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
       }
       if(command==='companion_hook_discovery'){
         const schemaVersion=args.schemaVersion===undefined?1:args.schemaVersion;
-        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||(schemaVersion!==1&&schemaVersion!==2&&schemaVersion!==3))throw new Error('Wrong discovery source');
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||(schemaVersion!==1&&schemaVersion!==2&&schemaVersion!==3&&schemaVersion!==4))throw new Error('Wrong discovery source');
         state.hookDiscoveryVersions.push(schemaVersion);
         return {schemaVersion,supported:true,managedSetupSupported:true,truncated:false,agents:[
           {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
@@ -781,7 +781,7 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
-  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([3]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([4]);
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
   await expect(detected.getByRole('button',{name:/Kimi.*Manual setup/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();

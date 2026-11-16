@@ -94,6 +94,8 @@ export const english = {
   hooksCopilotCapability: "Detect GitHub Copilot with an updated companion before configuring its hooks.",
   hooksAmpCapability: "Update the companion to discover managed Amp setup.",
   hooksAmpShadow: "A separate same-name plugin blocks installation. Removing lazysh hooks preserves it.",
+  hooksGrokCapability: "Update the companion to discover managed Grok Build setup.",
+  hooksGrokGuide: "Start a new Grok Build session, or press r in /hooks to reload, then review the lazysh hooks in /hooks. A hook file in the profile needs no folder trust, but an organization's allow_managed_hooks_only policy skips it, and a hook disabled in /hooks stays disabled. Setup does not verify live reporting.",
   hooksAmpGuide: "Start a new Amp session using this configuration. Workspace plugins can mask the system plugin; setup does not verify loading.",
   hooksClineGuide: "Start a new Cline session with this profile to load the root-only plugin, then start a turn. Existing plugin restrictions still apply.",
   hooksTrust: "Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.",

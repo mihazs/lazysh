@@ -479,10 +479,13 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     fs::copy(&executable, directory.join("bin/copilot")).unwrap();
     fs::copy(&executable, directory.join("bin/amp")).unwrap();
+    fs::copy(&executable, directory.join("bin/grok")).unwrap();
     let copilot_profile = directory.join(".copilot");
     fs::create_dir(&copilot_profile).unwrap();
     let amp_profile = directory.join(".config/amp");
     fs::create_dir_all(&amp_profile).unwrap();
+    let grok_profile = directory.join(".grok");
+    fs::create_dir(&grok_profile).unwrap();
     let detected_profile = directory.join(".codex");
     fs::create_dir(&detected_profile).unwrap();
     let discovery = crate::companion::hooks::discover(&host, lease)
@@ -549,9 +552,32 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
         assert_eq!(row["setup"], "manual");
         assert_eq!(row["profiles"], serde_json::json!([]));
     }
+    let newest = crate::companion::hooks::discover_version(&host, lease, 4)
+        .await
+        .unwrap();
+    let grok = newest["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == "grok")
+        .unwrap();
+    assert_eq!(grok["setup"], "managed");
+    assert_eq!(grok["profiles"][0]["path"], grok_profile.to_str().unwrap());
+    // Clients that predate Grok setup reject a row they do not know, so older schemas never name it.
+    let v3 = crate::companion::hooks::discover_version(&host, lease, 3)
+        .await
+        .unwrap();
+    for old in [&discovery, &v2, &v3] {
+        assert!(old["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["agent"] != "grok"));
+    }
     assert!(!marker.exists());
     for agent in [
         "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline", "copilot", "amp",
+        "grok",
     ] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
@@ -607,6 +633,17 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
             );
             assert_eq!(config["hooks"]["Stop"][0]["timeoutSec"], 5);
         }
+        if agent == "grok" {
+            let config: serde_json::Value =
+                serde_json::from_slice(&fs::read(profile.join("hooks/lazysh.json")).unwrap())
+                    .unwrap();
+            let binary = current["binary"]["path"].as_str().unwrap();
+            assert_eq!(
+                config["hooks"]["Stop"][0]["hooks"][0]["command"],
+                format!("'{binary}' ingest --agent grok --reported-history")
+            );
+            assert!(config["hooks"].get("PreToolUse").is_none());
+        }
         if agent == "amp" {
             let text = fs::read_to_string(profile.join("plugins/lazysh.js")).unwrap();
             let binding = serde_json::to_string(&current["binary"]["path"]).unwrap();
@@ -625,12 +662,14 @@ async fn hooks_roundtrip(session: &Arc<Session>, lease: &AccessLease, directory:
             assert!(fs::read_to_string(profile.join(name))
                 .unwrap()
                 .contains("{ \"keep\" : true }"));
-        } else if agent == "copilot" {
+        } else if agent == "copilot" || agent == "grok" {
             assert!(!profile.join("hooks/lazysh.json").exists());
-            assert_eq!(
-                fs::read_to_string(&opaque).unwrap(),
-                "// preserve opaque Copilot config\n{}"
-            );
+            if agent == "copilot" {
+                assert_eq!(
+                    fs::read_to_string(&opaque).unwrap(),
+                    "// preserve opaque Copilot config\n{}"
+                );
+            }
         } else {
             assert!(!profile.join("plugins/lazysh.js").exists());
             if agent == "amp" {

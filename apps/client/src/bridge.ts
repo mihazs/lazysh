@@ -92,8 +92,8 @@ function installCompanionVia(command:'install_companion'|'install_companion_from
 }
 export const api = {
   accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
-  companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
-  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
+  companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3|4) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
+  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp'|'grok';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
   /** The host downloads and installs the companion; this device sends only a pin. */
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion',sessionId,onProgress),
   /** The labelled offline fallback: this device downloads the companion and uploads it to a host that cannot reach GitHub. */
