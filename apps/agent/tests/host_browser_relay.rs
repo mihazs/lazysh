@@ -39,6 +39,13 @@ enum Message {
     },
 }
 impl Message {
+    /// The message, when it is a JSON one of `kind`.
+    fn json(self, kind: &str) -> Option<Value> {
+        match self {
+            Self::Json(value) if value["type"] == kind => Some(value),
+            _ => None,
+        }
+    }
     fn kind(&self) -> &str {
         match self {
             Self::Json(value) => value["type"].as_str().unwrap_or("?"),
@@ -106,6 +113,41 @@ impl Relay {
     }
     fn open(&mut self, url: &str) {
         self.send(json!({"type": "open", "viewport": {"width": 412, "height": 915}, "url": url}));
+    }
+    fn control(&mut self, on: bool) {
+        self.send(json!({"type": "control", "on": on}));
+    }
+    /// A touch at a point: the move, press and release that the client sends for it.
+    fn tap(&mut self, x: u32, y: u32) {
+        for (kind, button, clicks) in [
+            ("move", "none", 0),
+            ("press", "left", 1),
+            ("release", "left", 1),
+        ] {
+            self.send(pointer(kind, button, clicks, x, y));
+        }
+    }
+    /// Wait for the page's title to be `expected`; the fixture page reports its state in its title.
+    fn title(&self, expected: &str) {
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + WAIT * 2;
+        while let Some(message) = self.within(deadline.saturating_duration_since(Instant::now())) {
+            if let Some(page) = message.json("page") {
+                if page["title"] == expected {
+                    return;
+                }
+                seen.push(page["title"].clone());
+            }
+        }
+        panic!("the page's title was never {expected:?}; it was {seen:?}");
+    }
+    /// The next refusal the relay reports: its reason and its count.
+    fn refused(&self) -> (String, u64) {
+        let refusal = self.next_json("refused");
+        (
+            refusal["reason"].as_str().unwrap().to_string(),
+            refusal["count"].as_u64().unwrap(),
+        )
     }
 
     fn within(&self, wait: Duration) -> Option<Message> {
@@ -229,6 +271,37 @@ impl Fixture {
             .map(|c| c["method"].as_str().unwrap().to_string())
             .collect()
     }
+    /// The fixture's relay with a page open and its first frame in, and Control on when asked: the one a test
+    /// drives. A relay that its test does not stop ends when the test drops it, because its input closes.
+    fn started(control: bool) -> (Self, Relay) {
+        let fixture = Self::enabled();
+        let mut relay = fixture.serve("", "Chrome/120.0.0.0");
+        relay.open("about:blank");
+        relay.next("frame");
+        if control {
+            relay.control(true);
+        }
+        (fixture, relay)
+    }
+    /// The input calls the browser received, once at least `count` have arrived (the fake records them as it
+    /// reads them). The relay writes in order, so a valid message sent last marks the end of what came before it.
+    fn input_calls(&self, count: usize) -> Vec<Value> {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let calls: Vec<_> = self
+                .commands()
+                .into_iter()
+                .filter(|c| {
+                    let method = c["method"].as_str().unwrap();
+                    method.starts_with("Input.") || method == "Emulation.setPageScaleFactor"
+                })
+                .collect();
+            if calls.len() >= count || Instant::now() > deadline {
+                return calls;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     fn nothing_was_started(&self) {
         assert!(self.recorded("args").is_none(), "a browser was started");
         assert!(self.profiles().is_empty(), "a profile was created");
@@ -274,7 +347,7 @@ fn frames_flow_two_at_a_time_until_the_device_acknowledges() {
         state["viewport"],
         json!({"width": 412, "height": 915, "scale": 1.0})
     );
-    assert_eq!(state["capabilities"]["control"], false);
+    assert_eq!(state["capabilities"]["control"], true);
 
     let page = relay.next_json("page");
     assert_eq!(page["title"], "Fixture page");
@@ -396,6 +469,264 @@ fn the_browser_only_ever_receives_allow_listed_commands() {
         .find(|c| c["method"] == "Browser.setDownloadBehavior")
         .unwrap();
     assert_eq!(denied["params"]["behavior"], "deny");
+}
+
+fn pointer(kind: &str, button: &str, clicks: u8, x: u32, y: u32) -> Value {
+    json!({"type": "pointer", "kind": kind, "x": x, "y": y, "button": button, "clickCount": clicks})
+}
+
+/// One of each input message, all inside the viewport and valid.
+fn one_of_each_input() -> [Value; 5] {
+    [
+        pointer("move", "none", 0, 10, 20),
+        json!({"type": "wheel", "x": 10, "y": 20, "deltaX": 0, "deltaY": 120}),
+        json!({"type": "pinch", "scale": 2}),
+        json!({"type": "key", "key": "Enter", "modifiers": 0}),
+        json!({"type": "text", "text": "ação"}),
+    ]
+}
+
+#[test]
+fn with_control_off_which_is_how_a_session_starts_every_input_is_refused_and_counted() {
+    let (fixture, mut relay) = Fixture::started(false);
+    let inputs = one_of_each_input();
+    for message in inputs.iter().chain(inputs.iter()).take(8) {
+        relay.send(message.clone());
+    }
+    // A reply at 1, 2, 4 and 8: the last one means the relay has seen every message.
+    for count in [1, 2, 4, 8] {
+        assert_eq!(relay.refused(), ("ControlOff".to_string(), count));
+    }
+    assert!(
+        fixture.input_calls(0).is_empty(),
+        "input reached the browser"
+    );
+    relay.stop();
+}
+
+#[test]
+fn with_control_on_each_message_becomes_exactly_its_calls_in_order() {
+    let (fixture, mut relay) = Fixture::started(true);
+    let at = |kind, button, clicks| pointer(kind, button, clicks, 200, 300);
+    for message in [
+        at("move", "none", 0),
+        at("press", "left", 1),
+        at("release", "left", 1),
+        json!({"type": "wheel", "x": 200, "y": 300, "deltaX": 0, "deltaY": 120.5}),
+        json!({"type": "pinch", "scale": 2.5}),
+        json!({"type": "text", "text": "ação 日本 😀"}),
+        json!({"type": "key", "key": "Enter", "modifiers": 0}),
+        json!({"type": "key", "key": "a", "modifiers": 2}),
+        at("press", "right", 1),
+    ] {
+        relay.send(message);
+    }
+    let key = |kind: &str, name: &str, code: &str, virtual_key: u32, modifiers: u32| json!({"type": kind, "key": name, "code": code, "windowsVirtualKeyCode": virtual_key, "modifiers": modifiers});
+    let mut enter = key("keyDown", "Enter", "Enter", 13, 0);
+    enter["text"] = "\r".into();
+    let mouse = |kind: &str, button: &str, buttons: u32, clicks: u32| json!({"type": kind, "x": 200.0, "y": 300.0, "button": button, "buttons": buttons, "clickCount": clicks});
+    let expected = [
+        (
+            "Input.dispatchMouseEvent",
+            mouse("mouseMoved", "none", 0, 0),
+        ),
+        (
+            "Input.dispatchMouseEvent",
+            mouse("mousePressed", "left", 1, 1),
+        ),
+        (
+            "Input.dispatchMouseEvent",
+            mouse("mouseReleased", "left", 0, 1),
+        ),
+        (
+            "Input.dispatchMouseEvent",
+            json!({"type": "mouseWheel", "x": 200.0, "y": 300.0, "deltaX": 0.0, "deltaY": 120.5}),
+        ),
+        (
+            "Emulation.setPageScaleFactor",
+            json!({"pageScaleFactor": 2.5}),
+        ),
+        ("Input.insertText", json!({"text": "ação 日本 😀"})),
+        ("Input.dispatchKeyEvent", enter),
+        (
+            "Input.dispatchKeyEvent",
+            key("keyUp", "Enter", "Enter", 13, 0),
+        ),
+        (
+            "Input.dispatchKeyEvent",
+            key("rawKeyDown", "a", "KeyA", 65, 2),
+        ),
+        ("Input.dispatchKeyEvent", key("keyUp", "a", "KeyA", 65, 2)),
+        (
+            "Input.dispatchMouseEvent",
+            mouse("mousePressed", "right", 2, 1),
+        ),
+    ];
+    let calls = fixture.input_calls(expected.len());
+    let received: Vec<_> = calls
+        .iter()
+        .map(|c| (c["method"].as_str().unwrap(), c["params"].clone()))
+        .collect();
+    assert_eq!(received, expected);
+    assert!(
+        calls.iter().all(|c| c["sessionId"] == "S1"),
+        "an input call left the page's session"
+    );
+    relay.stop();
+}
+
+#[test]
+fn turning_control_off_stops_forwarding_at_once_and_on_again_resumes_it() {
+    let (fixture, mut relay) = Fixture::started(true);
+    let [pointer, wheel, ..] = one_of_each_input();
+    relay.send(pointer.clone());
+    assert_eq!(fixture.input_calls(1).len(), 1);
+    relay.control(false);
+    relay.send(wheel.clone());
+    assert_eq!(relay.refused(), ("ControlOff".to_string(), 1));
+    assert_eq!(
+        fixture.input_calls(0).len(),
+        1,
+        "input was forwarded after Control went off"
+    );
+    relay.control(true);
+    relay.send(wheel);
+    let calls = fixture.input_calls(2);
+    assert_eq!(calls[1]["params"]["type"], "mouseWheel");
+    assert_eq!(calls.len(), 2);
+    relay.stop();
+}
+
+#[test]
+fn input_outside_its_bounds_a_clipboard_chord_or_an_unknown_field_is_refused() {
+    let (fixture, mut relay) = Fixture::started(true);
+    let out_of_range = [
+        json!({"type": "pointer", "kind": "move", "x": 413, "y": 10, "button": "none", "clickCount": 0}),
+        json!({"type": "wheel", "x": 10, "y": 10, "deltaX": 0, "deltaY": 10001}),
+        json!({"type": "pinch", "scale": 5.5}),
+        json!({"type": "text", "text": "a".repeat(5000)}),
+        json!({"type": "key", "key": "Insert", "modifiers": 0}),
+    ];
+    let clipboard = [
+        json!({"type": "key", "key": "v", "modifiers": 2}),
+        json!({"type": "key", "key": "C", "modifiers": 4}),
+        json!({"type": "key", "key": "Delete", "modifiers": 8}),
+    ];
+    let unknown = [
+        json!({"type": "pointer", "kind": "move", "x": 1, "y": 1, "button": "none", "clickCount": 0, "method": "Input.dispatchDragEvent"}),
+        json!({"type": "key", "key": "v", "modifiers": 2, "commands": ["paste"]}),
+        json!({"type": "dragEvent", "x": 1, "y": 1}),
+    ];
+    for message in out_of_range.iter().chain(&clipboard).chain(&unknown) {
+        relay.send(message.clone());
+    }
+    // The last message that is valid ends what came before it.
+    relay.send(json!({"type": "key", "key": "a", "modifiers": 2}));
+    let mut counts = std::collections::BTreeMap::new();
+    // A reply at 1, 2 and 4 of the first kind, 1 and 2 of the other two.
+    for _ in 0..7 {
+        let (reason, count) = relay.refused();
+        counts.insert(reason, count);
+    }
+    // The third of a kind has no reply of its own, so the last one seen is the second.
+    assert_eq!(
+        counts,
+        [
+            ("InputOutOfRange".to_string(), 4),
+            ("OperationRefused".to_string(), 2),
+            ("PermissionRefused".to_string(), 2),
+        ]
+        .into()
+    );
+    let calls = fixture.input_calls(2);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0]["params"]["code"], "KeyA");
+    relay.stop();
+}
+
+#[test]
+fn a_flood_of_input_is_rate_limited_and_the_browser_gets_a_bounded_share() {
+    let (fixture, mut relay) = Fixture::started(true);
+    let flood = json!({"type": "pointer", "kind": "move", "x": 10, "y": 10, "button": "none", "clickCount": 0}).to_string();
+    let bytes: Vec<u8> = (0..2000)
+        .flat_map(|_| {
+            let mut message = (flood.len() as u32 + 1).to_be_bytes().to_vec();
+            message.push(wire::JSON);
+            message.extend_from_slice(flood.as_bytes());
+            message
+        })
+        .collect();
+    relay.send_bytes(&bytes);
+    // Refusals are reported at powers of two: 1024 means more than half of the 2000 were refused.
+    let mut last = (String::new(), 0);
+    while last.1 < 1024 {
+        last = relay.refused();
+        assert_eq!(last.0, "InputRateLimited");
+    }
+    // Whatever the rate, the browser cannot have received more than were not refused.
+    let received = fixture.input_calls(200).len();
+    assert!((200..=976).contains(&received), "{received} calls");
+    relay.stop();
+}
+
+#[test]
+fn whatever_a_client_sends_the_browser_only_gets_allow_listed_input_methods() {
+    let (fixture, mut relay) = Fixture::started(true);
+    let mut hostile = Vec::new();
+    for method in [
+        "Input.dispatchDragEvent",
+        "Input.dispatchTouchEvent",
+        "Runtime.evaluate",
+        "Browser.close",
+    ] {
+        for kind in ["move", "press", "release", "drag"] {
+            hostile.push(json!({"type": "pointer", "kind": kind, "x": 5, "y": 5, "button": "left", "clickCount": 1, "method": method, "params": {}}));
+        }
+        hostile.push(json!({"type": "key", "key": "v", "modifiers": 2, "method": method, "commands": ["paste", "copy"]}));
+        hostile.push(json!({"type": "cdp", "method": method}));
+    }
+    for key in ["v", "c", "x", "Insert", "F12", "Delete"] {
+        for modifiers in [0, 2, 4, 6, 8, 10, 15, 16] {
+            hostile.push(json!({"type": "key", "key": key, "modifiers": modifiers}));
+        }
+    }
+    for message in &hostile {
+        relay.send(message.clone());
+    }
+    relay.send(json!({"type": "text", "text": "last"}));
+    let calls = fixture.input_calls(1);
+    assert!(!calls.is_empty());
+    let allowed = [
+        "Input.dispatchMouseEvent",
+        "Input.dispatchKeyEvent",
+        "Input.insertText",
+        "Emulation.setPageScaleFactor",
+    ];
+    for call in fixture.commands() {
+        let method = call["method"].as_str().unwrap();
+        assert_eq!(allow::command(method, &call["params"]), Ok(()), "{method}");
+        if method.starts_with("Input.") {
+            assert!(allowed.contains(&method), "{method}");
+            assert!(call["params"].get("commands").is_none(), "{call}");
+        }
+    }
+    // The only key events are the valid ones: Delete and the plain keys, never a clipboard chord.
+    for call in calls
+        .iter()
+        .filter(|c| c["method"] == "Input.dispatchKeyEvent")
+    {
+        let (key, modifiers) = (
+            call["params"]["key"].as_str().unwrap(),
+            call["params"]["modifiers"].as_u64().unwrap(),
+        );
+        assert!(
+            !(matches!(key.to_lowercase().as_str(), "c" | "x" | "v") && modifiers & 6 != 0),
+            "{call}"
+        );
+        assert!(!(key == "Delete" && modifiers & 8 != 0), "{call}");
+    }
+    assert_eq!(calls.last().unwrap()["params"], json!({"text": "last"}));
+    relay.stop();
 }
 
 #[test]
@@ -540,13 +871,29 @@ fn broken_framing_closes_the_session_and_the_browser() {
     }
 }
 
-/// A page on loopback that is one solid color, served to a real browser.
-fn fixture_page() -> (u16, std::thread::JoinHandle<()>) {
+const GREEN_PAGE: &str =
+    "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
+
+/// A page that keeps its state in its title, which the relay reports as text: clicks on the button, whether it
+/// scrolled, and the text in the input, in brackets (a title loses trailing spaces). The button, the input and a tall spacer fill the width, one below the other.
+const INPUT_PAGE: &str = "<!doctype html><title>clicks=0;scroll=0;text=[]</title>
+<style>body{margin:0}button{display:block;width:412px;height:200px;border:0;background:#00c800}
+input{display:block;box-sizing:border-box;width:412px;height:100px;margin-top:20px;font-size:32px}div{height:4000px}</style>
+<button></button><input autocomplete=off><div></div>
+<script>
+let clicks = 0;
+const input = document.querySelector('input');
+const report = () => { document.title = `clicks=${clicks};scroll=${scrollY > 0 ? 1 : 0};text=[${input.value}]`; };
+document.querySelector('button').onclick = () => { clicks++; report(); };
+input.oninput = report;
+onscroll = report;
+</script>";
+
+/// A page on loopback, served to a real browser.
+fn fixture_page(body: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
-        let body =
-            "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
         // The browser asks for the page and a favicon; stop when the test drops its relay and connections stop.
         listener.set_nonblocking(true).unwrap();
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -567,14 +914,14 @@ fn fixture_page() -> (u16, std::thread::JoinHandle<()>) {
     (port, server)
 }
 
-/// The real browser: its pixels, not a fake's, reach the client, and nothing is left behind.
-#[test]
-fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
+/// A relay over the host's real Chrome or Chromium, opened on a loopback page: the fixture, the relay and the
+/// page's port. `None` on a host that has no browser.
+fn real_relay(page: &'static str) -> Option<(Fixture, Relay, u16)> {
     let Some(binary) = chrome() else {
         eprintln!("skipped: no Chrome or Chromium on PATH");
-        return;
+        return None;
     };
-    let (port, _server) = fixture_page();
+    let (port, _server) = fixture_page(page);
     let fixture = Fixture::enabled();
     let mut relay = Relay::start(
         &fixture.state,
@@ -582,6 +929,15 @@ fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
         &["--binary", binary.to_str().unwrap(), "--no-sandbox"],
     );
     relay.open(&format!("http://127.0.0.1:{port}/"));
+    Some((fixture, relay, port))
+}
+
+/// The real browser: its pixels, not a fake's, reach the client, and nothing is left behind.
+#[test]
+fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
+    let Some((fixture, mut relay, port)) = real_relay(GREEN_PAGE) else {
+        return;
+    };
     let state = relay.next_json("state");
     assert_eq!(state["state"], "running");
     let version = state["browser"].as_str().unwrap();
@@ -639,4 +995,32 @@ fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
         "the browser survived the relay"
     );
     assert!(!profile.exists(), "the profile outlived the relay");
+}
+
+/// The real browser takes the client's input through the relay: the page changes only because a tap, a scroll and
+/// typed text arrived, and a tap that came while Control was off did not.
+#[test]
+fn a_real_browser_takes_a_tap_typed_text_and_a_scroll_only_while_control_is_on() {
+    let Some((_fixture, mut relay, _)) = real_relay(INPUT_PAGE) else {
+        return;
+    };
+    relay.title("clicks=0;scroll=0;text=[]");
+
+    // On the button, with Control off: refused. A click that got through would show as a second one below.
+    relay.tap(200, 100);
+    assert_eq!(relay.refused(), ("ControlOff".to_string(), 1));
+
+    relay.control(true);
+    relay.tap(200, 100);
+    relay.title("clicks=1;scroll=0;text=[]");
+    // Into the input, where the phone's keyboard puts accents, CJK and emoji as text, and a key deletes the emoji.
+    relay.tap(200, 270);
+    relay.send(json!({"type": "text", "text": "ação 日本 😀"}));
+    relay.title("clicks=1;scroll=0;text=[ação 日本 😀]");
+    relay.send(json!({"type": "key", "key": "Backspace", "modifiers": 0}));
+    relay.title("clicks=1;scroll=0;text=[ação 日本 ]");
+    // A drag of the page: the wheel, at a point of the spacer.
+    relay.send(json!({"type": "wheel", "x": 200, "y": 600, "deltaX": 0, "deltaY": 400}));
+    relay.title("clicks=1;scroll=1;text=[ação 日本 ]");
+    relay.stop();
 }

@@ -3,7 +3,7 @@
 //! Both directions carry messages of `length:u32be tag:u8 body`, where `length` counts the tag and the body. Tag
 //! 1 is a UTF-8 JSON object. Tag 2, relay to client only, is a frame: a 20 byte header and the JPEG bytes
 //! as they are, never base64.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, ErrorKind, Read};
 
@@ -107,6 +107,50 @@ pub enum Client {
     // Struct variants, not unit ones: `deny_unknown_fields` does not reach a unit variant.
     Pause {},
     Resume {},
+    /// Turns Control on or off. It is off when a session starts.
+    Control {
+        on: bool,
+    },
+    // Input, accepted only while Control is on, in the page's CSS pixels (docs/host-browser.md, "Input mapping").
+    #[serde(rename_all = "camelCase")]
+    Pointer {
+        kind: PointerKind,
+        x: f64,
+        y: f64,
+        button: Button,
+        click_count: u8,
+    },
+    #[serde(rename_all = "camelCase")]
+    Wheel {
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+    },
+    Pinch {
+        scale: f64,
+    },
+    Key {
+        key: String,
+        modifiers: u8,
+    },
+    Text {
+        text: String,
+    },
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PointerKind {
+    Move,
+    Press,
+    Release,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Button {
+    None,
+    Left,
+    Right,
 }
 fn chrome() -> String {
     "chrome".into()
@@ -187,6 +231,68 @@ mod tests {
             json!({"type": "ack"}),
             json!({"type": "pause", "extra": true}),
             json!({"type": "open"}),
+        ] {
+            assert!(
+                serde_json::from_value::<Client>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_and_input_are_closed_sets_in_the_clients_own_field_names() {
+        let pointer = json!({"type": "pointer", "kind": "press", "x": 1, "y": 2, "button": "left", "clickCount": 2});
+        let wheel = json!({"type": "wheel", "x": 1, "y": 2, "deltaX": 0.5, "deltaY": -3});
+        let key = json!({"type": "key", "key": "Enter", "modifiers": 0});
+        assert_eq!(
+            serde_json::from_value::<Client>(pointer.clone()).unwrap(),
+            Client::Pointer {
+                kind: PointerKind::Press,
+                x: 1.0,
+                y: 2.0,
+                button: Button::Left,
+                click_count: 2
+            }
+        );
+        for good in [
+            json!({"type": "control", "on": false}),
+            wheel.clone(),
+            json!({"type": "pinch", "scale": 2.5}),
+            key.clone(),
+            json!({"type": "text", "text": "ação 😀"}),
+        ] {
+            assert!(
+                serde_json::from_value::<Client>(good.clone()).is_ok(),
+                "{good}"
+            );
+        }
+        // Each of these is one wrong field away from a message above.
+        let with = |mut message: Value, field: &str, value: Value| {
+            message[field] = value;
+            message
+        };
+        for bad in [
+            json!({"type": "control"}),
+            json!({"type": "control", "on": "yes"}),
+            with(json!({"type": "control", "on": true}), "extra", json!(1)),
+            with(pointer.clone(), "extra", json!(1)),
+            with(pointer.clone(), "kind", json!("tap")),
+            with(pointer.clone(), "button", json!("middle")),
+            with(pointer.clone(), "clickCount", json!(256)),
+            with(pointer.clone(), "clickCount", json!(-1)),
+            with(pointer.clone(), "clickCount", json!(1.5)),
+            with(pointer.clone(), "x", json!("1")),
+            with(pointer.clone(), "x", Value::Null),
+            with(pointer.clone(), "click_count", json!(1)),
+            with(wheel.clone(), "method", json!("Input.dispatchDragEvent")),
+            with(key.clone(), "modifiers", json!(256)),
+            with(key.clone(), "commands", json!(["paste"])),
+            with(key, "key", json!(13)),
+            json!({"type": "pointer", "kind": "move", "x": 1, "y": 2}),
+            json!({"type": "wheel", "x": 1, "y": 2, "deltaX": 1}),
+            json!({"type": "pinch"}),
+            json!({"type": "text", "text": "a", "x": 1}),
+            json!({"type": "text", "text": 1}),
         ] {
             assert!(
                 serde_json::from_value::<Client>(bad.clone()).is_err(),

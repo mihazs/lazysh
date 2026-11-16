@@ -26,6 +26,7 @@ KNOWN = {
     "Target.setDiscoverTargets", "Page.enable", "Browser.setDownloadBehavior",
     "Page.setInterceptFileChooserDialog", "Emulation.setDeviceMetricsOverride",
     "Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck",
+    "Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText", "Emulation.setPageScaleFactor",
 }
 streaming, frames = False, 0
 
