@@ -33,12 +33,42 @@ fn codex_payload() -> Value {
     request["tool_input"]["description"] = json!("Create the marker file?");
     request
 }
-const AGENTS: [&str; 2] = ["claude", "codex"];
+/// What Copilot CLI 1.0.105 sends a `permissionRequest` hook for a shell command: its own camelCase fields.
+fn copilot_payload() -> Value {
+    json!({"hookName":"permissionRequest","sessionId":"session-one","timestamp":1_794_795_539_667_u64,"cwd":"/work/project","toolName":"bash","toolInput":{"command":"echo PRIVATE_APPROVAL_TOOL_INPUT_MARKER"},"permissionSuggestions":[]})
+}
+const AGENTS: [&str; 3] = ["claude", "codex", "copilot"];
 fn payload_for(agent: &str) -> Value {
-    if agent == "codex" {
-        codex_payload()
+    match agent {
+        "codex" => codex_payload(),
+        "copilot" => copilot_payload(),
+        _ => payload(),
+    }
+}
+fn tool_input_of(agent: &str) -> Value {
+    payload_for(agent)[if agent == "copilot" {
+        "toolInput"
     } else {
-        payload()
+        "tool_input"
+    }]
+    .clone()
+}
+/// Claude Code and Codex nest the decision under `hookSpecificOutput`; Copilot reads it at the top level.
+fn decision_output(agent: &str, decision: Value) -> Value {
+    if agent == "copilot" {
+        decision
+    } else {
+        json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}})
+    }
+}
+fn behavior_of(agent: &str, output: &Output) -> Value {
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    if agent == "copilot" {
+        assert!(value.get("hookSpecificOutput").is_none());
+        value["behavior"].clone()
+    } else {
+        value["hookSpecificOutput"]["decision"]["behavior"].clone()
     }
 }
 struct Hook(Option<Child>);
@@ -62,14 +92,19 @@ fn start_with(directory: &Path, timeout: &str, payload: &Value) -> Hook {
     start_agent(directory, "claude", timeout, payload)
 }
 fn start_agent(directory: &Path, agent: &str, timeout: &str, payload: &Value) -> Hook {
-    let mut child = command(directory)
-        .args([
-            "approval-request",
-            "--agent",
-            agent,
-            "--timeout-seconds",
-            timeout,
-        ])
+    let mut hook = command(directory);
+    hook.args([
+        "approval-request",
+        "--agent",
+        agent,
+        "--timeout-seconds",
+        timeout,
+    ]);
+    spawn_hook(hook, payload)
+}
+/// Starts a hook process with `payload` on its stdin, the way an agent does.
+fn spawn_hook(mut hook: Command, payload: &Value) -> Hook {
+    let mut child = hook
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -165,7 +200,7 @@ fn an_exact_request_resolves_once(agent: &str) {
     let hook = start_agent(dir.path(), agent, "10", &payload_for(agent));
     let request = pending(dir.path());
     assert_eq!(request["agent"], agent);
-    assert_eq!(request["toolInput"], payload_for(agent)["tool_input"]);
+    assert_eq!(request["toolInput"], tool_input_of(agent));
     assert_eq!(request["paneId"], "%7");
     assert_eq!(request["expectedHash"].as_str().unwrap().len(), 64);
     for (field, wrong) in [
@@ -192,7 +227,7 @@ fn an_exact_request_resolves_once(agent: &str) {
     assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
-        json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}})
+        decision_output(agent, json!({"behavior":"allow"}))
     );
     assert!(!resolve(dir.path(), &request, "allow").status.success());
     assert_eq!(list(dir.path())["requests"], json!([]));
@@ -232,13 +267,7 @@ fn decisions_have_one_winner(agent: &str) {
         .filter(|(_, output)| output.status.success())
         .collect();
     assert_eq!(winners.len(), 1);
-    let output = hook.finish();
-    assert!(output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        value["hookSpecificOutput"]["decision"]["behavior"],
-        winners[0].0
-    );
+    assert_eq!(behavior_of(agent, &hook.finish()), winners[0].0);
 }
 
 #[test]
@@ -261,13 +290,7 @@ fn a_cancelled_hook_cannot_be_answered(agent: &str) {
     assert_ne!(old["expectedHash"], fresh["expectedHash"]);
     assert!(!resolve(dir.path(), &old, "allow").status.success());
     assert!(resolve(dir.path(), &fresh, "deny").status.success());
-    let output = hook.finish();
-    assert!(output.status.success());
-    assert_eq!(
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()["hookSpecificOutput"]["decision"]
-            ["behavior"],
-        "deny"
-    );
+    assert_eq!(behavior_of(agent, &hook.finish()), "deny");
 }
 
 #[test]
@@ -370,48 +393,62 @@ fn config_is_an_opt_in_fragment_with_no_settings_mutation() {
         assert!(output.status.success());
         assert!(!path.exists());
         let fragment: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(fragment["hooks"]["PreToolUse"].is_null());
-        // Run the pasted command the way the agent does (a shell with the payload on stdin): it must wait for the
-        // request of that agent and outlive its own deadline.
-        let hook = &fragment["hooks"]["PermissionRequest"][0]["hooks"][0];
-        let command = hook["command"].as_str().unwrap();
-        let seconds: u64 = command
-            .split_once("--timeout-seconds ")
-            .unwrap()
-            .1
-            .trim()
-            .parse()
-            .unwrap();
-        assert!(hook["timeout"].as_u64().unwrap() > seconds);
+        // Only the permission event: a pre-tool hook would run before every tool.
+        assert_eq!(fragment["hooks"].as_object().unwrap().len(), 1);
+        // Run the pasted entry the way the agent does, with the payload on stdin: it must wait for the request of
+        // that agent and outlive its own deadline.
+        let (program, args, seconds, agent_timeout) = hook_launch(&fragment, agent);
+        assert!(agent_timeout > seconds);
         let binary = Path::new(env!("CARGO_BIN_EXE_lazysh-agent"))
             .parent()
             .unwrap();
         let path_var = format!("{}:{}", binary.display(), std::env::var("PATH").unwrap());
-        let mut child = command_in_shell(dir.path(), command, &path_var);
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(&serde_json::to_vec(&payload_for(agent)).unwrap())
-            .unwrap();
-        let hook = Hook(Some(child));
+        let mut launched = Command::new(program);
+        launched
+            .args(args)
+            .env("LAZYSH_STATE_DIR", dir.path())
+            .env("TMUX_PANE", "%7")
+            .env("PATH", path_var);
+        let hook = spawn_hook(launched, &payload_for(agent));
         let request = pending(dir.path());
         assert_eq!(request["agent"], agent);
         assert!(resolve(dir.path(), &request, "deny").status.success());
-        assert_eq!(decision(hook)["behavior"], "deny");
+        assert_eq!(behavior_of(agent, &hook.finish()), "deny");
     }
 }
-fn command_in_shell(directory: &Path, command: &str, path: &str) -> Child {
-    Command::new("sh")
-        .args(["-c", command])
-        .env("LAZYSH_STATE_DIR", directory)
-        .env("TMUX_PANE", "%7")
-        .env("PATH", path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap()
+/// A printed fragment as its agent launches it: the program and arguments, the seconds the hook waits for a decision
+/// and the agent's own timeout for the hook. Claude Code and Codex give a command string to a shell; Copilot runs
+/// `exec` with `args` and no shell.
+fn hook_launch(fragment: &Value, agent: &str) -> (String, Vec<String>, u64, u64) {
+    let wait = |words: &[String]| -> u64 {
+        let at = words
+            .iter()
+            .position(|word| word.starts_with("--timeout-seconds"));
+        words[at.unwrap() + 1].trim().parse().unwrap()
+    };
+    if agent == "copilot" {
+        assert_eq!(fragment["version"], 1);
+        let hook = &fragment["hooks"]["permissionRequest"][0];
+        assert_eq!(hook["type"], "command");
+        let args: Vec<String> = serde_json::from_value(hook["args"].clone()).unwrap();
+        let seconds = wait(&args);
+        return (
+            hook["exec"].as_str().unwrap().into(),
+            args,
+            seconds,
+            hook["timeoutSec"].as_u64().unwrap(),
+        );
+    }
+    let hook = &fragment["hooks"]["PermissionRequest"][0]["hooks"][0];
+    let command = hook["command"].as_str().unwrap();
+    let words: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
+    let seconds = wait(&words);
+    (
+        "sh".into(),
+        vec!["-c".into(), command.into()],
+        seconds,
+        hook["timeout"].as_u64().unwrap(),
+    )
 }
 
 #[test]
@@ -552,57 +589,76 @@ fn requests_stored_by_an_older_companion_still_resolve() {
 }
 
 #[test]
-fn a_codex_decision_carries_only_what_codex_accepts() {
-    let dir = tempfile::tempdir().unwrap();
-    // Claude's suggestions in a Codex payload are not offered, and Codex fails closed on `updatedPermissions`.
-    let mut codex = codex_payload();
-    codex["permission_suggestions"] = suggested()["permission_suggestions"].clone();
-    let hook = start_agent(dir.path(), "codex", "10", &codex);
-    let request = pending(dir.path());
-    assert_eq!(request["options"], json!([]));
-    assert!(
-        !resolve_with(dir.path(), &request, "allow", &["--option", "0"])
-            .status
-            .success()
-    );
-    assert!(resolve(dir.path(), &request, "allow").status.success());
-    assert_eq!(decision(hook), json!({"behavior":"allow"}));
-    let hook = start_agent(dir.path(), "codex", "10", &codex_payload());
-    let request = pending(dir.path());
-    assert!(resolve_with(
-        dir.path(),
-        &request,
-        "deny",
-        &["--message", "Use the staging database"]
-    )
-    .status
-    .success());
-    assert_eq!(
-        decision(hook),
-        json!({"behavior":"deny","message":"Use the staging database"})
-    );
+fn a_codex_or_copilot_decision_carries_only_what_the_agent_accepts() {
+    for agent in ["codex", "copilot"] {
+        let dir = tempfile::tempdir().unwrap();
+        // Claude's suggestions (and Copilot's own, in its spelling) are not offered: Codex fails closed on
+        // `updatedPermissions` and Copilot's decision takes a behavior and a message only.
+        let mut offered = payload_for(agent);
+        offered["permission_suggestions"] = suggested()["permission_suggestions"].clone();
+        offered["permissionSuggestions"] = json!([{"type":"addRules","rules":[{"toolName":"bash"}],"behavior":"allow","destination":"session"}]);
+        let hook = start_agent(dir.path(), agent, "10", &offered);
+        let request = pending(dir.path());
+        assert_eq!(request["options"], json!([]));
+        assert!(
+            !resolve_with(dir.path(), &request, "allow", &["--option", "0"])
+                .status
+                .success()
+        );
+        assert!(resolve(dir.path(), &request, "allow").status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&hook.finish().stdout).unwrap(),
+            decision_output(agent, json!({"behavior":"allow"}))
+        );
+        let hook = start_agent(dir.path(), agent, "10", &payload_for(agent));
+        let request = pending(dir.path());
+        assert!(resolve_with(
+            dir.path(),
+            &request,
+            "deny",
+            &["--message", "Use the staging database"]
+        )
+        .status
+        .success());
+        // No `interrupt` for Copilot: a denial never stops the whole agent.
+        assert_eq!(
+            serde_json::from_slice::<Value>(&hook.finish().stdout).unwrap(),
+            decision_output(
+                agent,
+                json!({"behavior":"deny","message":"Use the staging database"})
+            )
+        );
+    }
 }
 
 #[test]
-fn prompts_of_both_agents_pending_together_are_each_answered_by_their_own_identity() {
+fn prompts_of_every_agent_pending_together_are_each_answered_by_their_own_identity() {
     let dir = tempfile::tempdir().unwrap();
     let claude = start(dir.path(), "10");
+    let copilot = start_agent(dir.path(), "copilot", "10", &copilot_payload());
     let first = start_agent(dir.path(), "codex", "10", &codex_payload());
     let second = start_agent(dir.path(), "codex", "10", &codex_payload());
     let claude_request = pending_of(dir.path(), "claude", 1).remove(0);
+    let copilot_request = pending_of(dir.path(), "copilot", 1).remove(0);
     let codex_requests = pending_of(dir.path(), "codex", 2);
-    // The same session, pane and tool input still make three different requests.
+    // The same session, pane and tool input still make four different requests.
     let ids: std::collections::HashSet<_> = codex_requests
         .iter()
-        .chain([&claude_request])
+        .chain([&claude_request, &copilot_request])
         .map(|request| request["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.len(), 4);
     // One agent's hash never answers another agent's request, even with the other's id.
     let mut crossed = codex_requests[0].clone();
     crossed["expectedHash"] = claude_request["expectedHash"].clone();
     assert!(!resolve(dir.path(), &crossed, "allow").status.success());
+    let mut crossed = copilot_request.clone();
+    crossed["expectedHash"] = claude_request["expectedHash"].clone();
+    assert!(!resolve(dir.path(), &crossed, "allow").status.success());
     assert!(resolve(dir.path(), &codex_requests[1], "deny")
+        .status
+        .success());
+    assert!(resolve(dir.path(), &copilot_request, "deny")
         .status
         .success());
     assert_eq!(list(dir.path())["requests"].as_array().unwrap().len(), 2);
@@ -613,6 +669,7 @@ fn prompts_of_both_agents_pending_together_are_each_answered_by_their_own_identi
         .status
         .success());
     assert_eq!(decision(claude)["behavior"], "allow");
+    assert_eq!(behavior_of("copilot", &copilot.finish()), "deny");
     // The two Codex hooks cannot be told apart, but each gets exactly one answer.
     let mut answers = [
         decision(first)["behavior"].clone(),
@@ -623,12 +680,73 @@ fn prompts_of_both_agents_pending_together_are_each_answered_by_their_own_identi
 }
 
 #[test]
-fn an_expired_codex_request_gives_no_decision_so_codex_asks_in_its_own_prompt() {
+fn an_expired_codex_or_copilot_request_gives_no_decision_so_the_agent_asks_in_its_own_prompt() {
+    for agent in ["codex", "copilot"] {
+        let dir = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let output = start_agent(dir.path(), agent, "1", &payload_for(agent)).finish();
+        assert!(started.elapsed() >= Duration::from_millis(900), "{agent}");
+        assert!(output.status.success(), "{agent}");
+        assert!(output.stdout.is_empty(), "{agent}");
+        assert_eq!(list(dir.path())["requests"], json!([]));
+    }
+}
+
+#[test]
+fn a_copilot_hook_refuses_input_that_is_not_its_own_permission_request_and_keeps_no_state() {
+    let mut other_event = copilot_payload();
+    other_event["hookName"] = json!("preToolUse");
+    let mut no_tool = copilot_payload();
+    no_tool.as_object_mut().unwrap().remove("toolName");
+    let mut array_input = copilot_payload();
+    array_input["toolInput"] = json!(["echo"]);
+    let mut oversized = copilot_payload();
+    oversized["toolInput"] = json!({"command":"x".repeat(16385)});
+    let mut relative_project = copilot_payload();
+    relative_project["cwd"] = json!(7);
+    for invalid in [
+        // Claude's and Codex's spelling is not Copilot's.
+        payload(),
+        codex_payload(),
+        other_event,
+        no_tool,
+        array_input,
+        oversized,
+        relative_project,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("invalid-state");
+        let output = run(
+            &path,
+            &["approval-request", "--agent", "copilot"],
+            &serde_json::to_vec(&invalid).unwrap(),
+        );
+        // Copilot treats a failing hook as no decision and keeps its own permission flow.
+        assert!(!output.status.success());
+        assert_ne!(
+            output.status.code(),
+            Some(2),
+            "Copilot reads exit 2 as a denial"
+        );
+        assert!(output.stdout.is_empty());
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn a_waiting_copilot_hook_reports_its_session_as_needing_attention_without_the_tool_input() {
     let dir = tempfile::tempdir().unwrap();
-    let started = Instant::now();
-    let output = start_agent(dir.path(), "codex", "1", &codex_payload()).finish();
-    assert!(started.elapsed() >= Duration::from_millis(900));
+    let hook = start_agent(dir.path(), "copilot", "10", &copilot_payload());
+    let request = pending(dir.path());
+    let output = run(dir.path(), &["snapshot", "--limit", "5"], b"");
     assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    assert_eq!(list(dir.path())["requests"], json!([]));
+    let snapshot: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let row = &snapshot["sessions"][0];
+    assert_eq!(row["agent"], "GitHub Copilot CLI");
+    assert_eq!(row["sessionId"], "session-one");
+    assert_eq!(row["state"], "needs_attention");
+    assert_eq!(row["paneId"], "%7");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("PRIVATE_APPROVAL_TOOL_INPUT_MARKER"));
+    assert!(resolve(dir.path(), &request, "deny").status.success());
+    hook.finish();
 }
