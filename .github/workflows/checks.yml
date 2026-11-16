@@ -915,7 +915,8 @@ jobs:
       - *official-mosh-fixture
       - name: Install the distribution tmux and pinned tmux build dependencies
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
-        run: sudo sh .github/scripts/apt-install.sh --no-update tmux libevent-dev bison
+        # sqlite3: the OpenCode stand-in agent of the Agent view case writes its database with it.
+        run: sudo sh .github/scripts/apt-install.sh --no-update tmux libevent-dev bison sqlite3
       - name: Build the pinned official tmux fixture outside the checkout
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
         timeout-minutes: 10

@@ -2962,8 +2962,10 @@ class NativeWorkspaceTest {
         sessionView(scenario, "Terminal")
     }
 
-    // The host runs a hook-reporting stand-in agent in the displayed tmux pane, which reports to the real companion as Claude Code's
-    // hooks do. This case drives only the packaged UI: a prompt typed through the Android terminal input starts a held turn, the
+    // The host runs a reporting stand-in agent in the displayed tmux pane, which reports to the real companion as Claude Code's hooks do
+    // (flavour "report") or as OpenCode's plugin does, with its conversation in an OpenCode database ("opencode"). The two flavours run
+    // the same steps; the host's key log readback tells them apart (OpenCode takes the sent prompt as one bracketed paste).
+    // This case drives only the packaged UI: a prompt typed through the Android terminal input starts a held turn, the
     // Agent view follows it, Terminal, Agent and Terminal keep the same xterm node, a prompt sent from the Agent view composer and
     // another typed one each become a turn, and Android Back from the Agent view returns to that terminal. The host then reads the
     // agent's own logs for one delivery of each prompt and no other key.
@@ -3077,7 +3079,7 @@ class NativeWorkspaceTest {
             deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5), observe = ::observeAgentView)
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
         awaitDocument(scenario, "Android Back after the typed turn shows the same terminal and node", terminalOriginal(height))
-        println("lazysh tmux Agent view: a mid-turn switch, a sent prompt, a typed prompt and Android Back followed the reporting pane")
+        println("lazysh tmux Agent view: a mid-turn switch, a sent prompt, a typed prompt and Android Back followed the ${agent.getString("flavour")} reporting pane")
         endOwnedConnection(scenario, child)
     }
 
@@ -3343,7 +3345,9 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
-    @Test fun ownedTmuxAgentViewThroughRealUi() = ownedSshUi(false, requireTmux = true, requireTmuxAgent = true)
+    @Test fun ownedTmuxAgentViewThroughRealUi() = ownedSshUi(false, requireTmux = true, requireTmuxAgent = "report")
+    // The same case for the OpenCode stand-in, whose prompt the Agent view sends as one bracketed paste and Enter.
+    @Test fun ownedTmuxOpenCodeAgentViewThroughRealUi() = ownedSshUi(false, requireTmux = true, requireTmuxAgent = "opencode")
 
     /**
      * Lost connection on a saved-credential tmux host (#1640). tests/support/androidLostConnection.ts runs the pinned
@@ -4135,8 +4139,8 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireTmuxAgent: Boolean = false) {
-        require(!requireTmuxAgent || requireTmux) { "Owned tmux agent mode requires the tmux fixture" }
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireTmuxAgent: String? = null) {
+        require(requireTmuxAgent == null || requireTmux) { "Owned tmux agent mode requires the tmux fixture" }
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
         require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
@@ -4570,8 +4574,8 @@ class NativeWorkspaceTest {
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
             } else if (requireTmux) {
                 val tmux = fixture.getJSONObject("tmux")
-                require(requireTmuxAgent == tmux.has("agent")) { "Owned tmux agent fixture mode mismatch" }
-                if (requireTmuxAgent) verifyOwnedTmuxAgentView(scenario, tmux, name, label) else verifyOwnedTmux(scenario, tmux, name, label)
+                require(requireTmuxAgent == tmux.optJSONObject("agent")?.getString("flavour")) { "Owned tmux agent fixture mode mismatch" }
+                if (requireTmuxAgent != null) verifyOwnedTmuxAgentView(scenario, tmux, name, label) else verifyOwnedTmux(scenario, tmux, name, label)
             } else if (requireDpad) {
                 verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {

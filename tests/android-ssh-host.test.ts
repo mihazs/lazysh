@@ -419,7 +419,12 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux disco
 
 // The stand-in agent reports from its own tmux pane to the real companion; the packaged UI follows it as the Agent view does on desktop.
 test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android Agent view follows a reporting agent pane across a mid-turn switch, a sent prompt, a typed prompt and Back',async()=>{
-  await tmuxAcceptance(await TmuxFixture.start(undefined,tmuxCompanion(),true));
+  await tmuxAcceptance(await TmuxFixture.start(undefined,tmuxCompanion(),'report'));
+},610_000);
+
+// The same for an OpenCode stand-in: its database and status report, and the Agent view's prompt sent as one bracketed paste.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android Agent view follows an OpenCode agent pane across a mid-turn switch, a sent prompt, a typed prompt and Back',async()=>{
+  await tmuxAcceptance(await TmuxFixture.start(undefined,tmuxCompanion(),'opencode'));
 },610_000);
 
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{

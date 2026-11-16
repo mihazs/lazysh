@@ -466,9 +466,8 @@ Tests assert behaviour, not source text.
   agent (`reportingAgent.ts`). The agents are stand-ins, not Claude Code or OpenCode (no real
   OpenCode runs in CI, which does not have the binary; its own screen, dialogs and database writes
   are not reproduced), and Herdr's state for the Herdr one comes from the drawn hint, not from
-  Claude's own hooks: provider behaviour, macOS, Windows and Android are not covered by these
-  specs. Still to add: the Android instrumentation case, for the Claude-style agent and for
-  OpenCode.
+  Claude's own hooks: provider behaviour, macOS and Windows are not covered by these specs
+  (Android has its own cases, below).
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved. `ownedTmuxAgentViewThroughRealUi`
   (`native-android-tmux`, host test `actual Android Agent view follows a reporting agent pane ...`)
@@ -484,6 +483,21 @@ Tests assert behaviour, not source text.
   view switch), the pane showing each prompt once, one display client attached and detached, and
   the original server and pane processes alive throughout. The pane identity, scrollback length and
   cursor are not sampled at the moment of the switch on Android, as the native Linux case does.
+  `ownedTmuxOpenCodeAgentViewThroughRealUi` (host test `actual Android Agent view follows an OpenCode
+  agent pane ...`, same job) runs the same steps with the stand-in's `opencode` value: the pane's
+  conversation is OpenCode 2.2's SQLite database under the fixture's `HOME` (`.local/share/opencode`,
+  which the real companion finds without an `XDG_DATA_HOME`), written with the host's `sqlite3`
+  (`native-android-tmux` installs it), and the stand-in reports only `session.status`. The host
+  readback differs in one thing: the prompt sent from the Agent view composer must be in the key
+  log as Escape, the prompt's bytes, Escape and Enter (one bracketed paste and Enter, OpenCode's
+  input form, where the Claude-style case accepts either form), and the prompts typed through the
+  Android terminal input as plain keys. The stand-in's database must also hold the three prompts
+  as user messages, in order. OpenCode is followed by polling only, so its turns reach the view
+  within one 2 s follow interval (the 5 s deadline of the typed prompt is unchanged). Both Android
+  cases have run only on the local Waydroid guest (Android 13, x86_64, a 1080 x 2400 window at
+  420 dpi, three-button navigation, tmux 3.8) with stand-in agents: they have not run on the API 36
+  CI emulator (the first `native-android-tmux` run on `main` is their CI evidence) or on a physical
+  device, and no real OpenCode runs on Android.
 - **Co-existence cases, required in every slice**:
   1. Switch Terminal → Agent → Terminal while a turn is running; the connection id,
      PTY and scrollback length are unchanged and no bytes were written by the switch.

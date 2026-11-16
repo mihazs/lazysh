@@ -3,10 +3,10 @@ import {chmod,lstat,readdir,readFile,readlink,writeFile} from 'node:fs/promises'
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,descendants,identity,type OwnedPid} from './ownedProcess';
 import {SshFixture,stopOwnedTree} from './sshFixture';
-import {reportingAgentDeliveredOnce,reportingAgentPrompts,reportingAgentScript} from './androidTmuxAgent';
+import {reportingAgentDeliveredOnce,reportingAgentForms,reportingAgentPrompts,reportingAgentScript,reportingAgentTranscript,type ReportingAgentFlavour} from './androidTmuxAgent';
 
 type OwnedChat={transcript:string;record:string;draft:string;window:'alpha'};
-type OwnedAgent=ReturnType<typeof reportingAgentPrompts>;
+type OwnedAgent=ReturnType<typeof reportingAgentPrompts>&{flavour:ReportingAgentFlavour};
 type OwnedWindow={windowId:string;index:number;name:'alpha'|'beta';marker:string;paneId:string;pane:OwnedPid};
 const paneRow=/^(@[0-9]{1,9})\|([0-9]{1,3})\|(alpha|beta)\|([01])\|(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])$/;
 
@@ -119,9 +119,10 @@ export class TmuxFixture {
   private constructor(readonly ssh:SshFixture) {}
   /**
    * With an `agent` companion the fixture also owns a synthetic Claude transcript, so the app can open it and send Chat input.
-   * With `reporting` too, window alpha runs the hook-reporting stand-in agent instead of `sleep`, so the Agent view binds to a real pane.
+   * With `reporting` too, window alpha runs the reporting stand-in agent instead of `sleep`, so the Agent view binds to a real pane:
+   * `report` is Claude Code's hook report and transcript file, `opencode` OpenCode's status report and SQLite database (needs `sqlite3`).
    */
-  static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string,reporting=false) {
+  static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string,reporting:ReportingAgentFlavour|false=false) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
     if(agent!==undefined && !isAbsolute(agent))throw new Error('Explicit current-source companion required');
     if(reporting && agent===undefined)throw new Error('The reporting agent needs the current-source companion');
@@ -139,9 +140,9 @@ export class TmuxFixture {
         if(performance.now()>=until || !await owned.server.liveIdentity())throw new Error('Owned tmux startup deadline');
         await delay(10);
       }
-      if(reporting)owned.agent=await owned.prepareAgent();
+      if(reporting)owned.agent=await owned.prepareAgent(reporting);
       for(const [index,name] of [[0,'alpha'],[1,'beta']] as const) {
-        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=reporting && index===0?owned.agentCommand():`printf '%s\\n' '${marker}'; exec sleep 3600`;
+        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=reporting && index===0?owned.agentCommand(reporting):`printf '%s\\n' '${marker}'; exec sleep 3600`;
         await owned.run(index===0?['new-session','-d','-s',owned.name,'-n',name,'-x','80','-y','24','-c',ssh.directory,command]
           :['new-window','-d','-t',`=${owned.name}:${index}`,'-n',name,'-c',ssh.directory,command]);
         owned.windows.push({windowId:'',index,name,marker,paneId:'',pane:{pid:0,parent:0,start:'',state:''}});
@@ -253,16 +254,18 @@ export class TmuxFixture {
     this.chat={transcript,record,draft:`tmux chat ${nonce}: it's "quoted" $HOME #{pane_id} a;b`,window:'alpha'};
   }
   /** The stand-in agent, its fixed prompts and the companion's own state directory, which the app's companion reads over SSH too. */
-  private async prepareAgent() {
+  private async prepareAgent(flavour:ReportingAgentFlavour) {
     const directory=this.ssh.directory;
+    // The pane's PATH is the fixture's bin, /usr/bin and /bin: the OpenCode stand-in writes its database with the system sqlite3.
+    if(flavour==='opencode' && !Bun.which('sqlite3',{PATH:'/usr/bin:/bin'}))throw new Error('The OpenCode stand-in agent needs sqlite3 in /usr/bin or /bin');
     await writeFile(join(directory,'agent.sh'),await readFile(reportingAgentScript),{mode:0o700,flag:'wx'});
     await chmod(join(directory,'agent.sh'),0o700);
-    return reportingAgentPrompts(this.ssh.nonce);
+    return {...reportingAgentPrompts(this.ssh.nonce),flavour};
   }
-  private agentCommand() {
-    const directory=this.ssh.directory,[agent,log,companion]=['session.jsonl','agent.log','bin/lazysh-agent'].map(name=>`'${join(directory,name)}'`);
+  private agentCommand(flavour:ReportingAgentFlavour) {
+    const directory=this.ssh.directory,[agent,log,companion]=[reportingAgentTranscript(flavour),'agent.log','bin/lazysh-agent'].map(name=>`'${join(directory,name)}'`);
     // The companion's default state directory under the fixture's XDG_STATE_HOME; the app's companion reads the same one.
-    return `exec bash '${join(directory,'agent.sh')}' ${agent} ${log} ${companion} '${join(directory,'state/lazysh')}' report`;
+    return `exec bash '${join(directory,'agent.sh')}' ${agent} ${log} ${companion} '${join(directory,'state/lazysh')}' ${flavour}`;
   }
   private readonly agentFile=(name:string)=>readFile(join(this.ssh.directory,name),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
   private agentLog() {return this.agentFile('agent.log');}
@@ -276,7 +279,7 @@ export class TmuxFixture {
     await this.untilDetached();
     if(!tmuxAttachHistoryVerified(this.history,1))throw new Error('Owned tmux agent display was not attached exactly once and then detached');
     const pane=await this.run(['capture-pane','-p','-J','-t',alpha.paneId]);
-    reportingAgentDeliveredOnce(await this.agentLog(),await this.agentFile('agent.log.keys'),pane,[agent.hold,agent.sent,agent.typed]);
+    reportingAgentDeliveredOnce(await this.agentLog(),await this.agentFile('agent.log.keys'),pane,[agent.hold,agent.sent,agent.typed],reportingAgentForms(agent.flavour));
   }
   /** After the run: the confirmed draft is in the original pane only (by pane id), once, and that pane is the same process. */
   async verifyChatInput() {

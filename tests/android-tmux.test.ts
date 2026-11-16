@@ -5,7 +5,9 @@ import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCo
 import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
-import {connect,createServer} from 'node:net';import {reportingAgentDeliveredOnce,reportingAgentKeysAre,reportingAgentPrompts} from './support/androidTmuxAgent';
+import {connect,createServer} from 'node:net';
+import {Database} from 'bun:sqlite';
+import {reportingAgentDeliveredOnce,reportingAgentForms,reportingAgentKeysAre,reportingAgentPrompts,reportingAgentTranscript,type ReportingAgentFlavour} from './support/androidTmuxAgent';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
   const row=(index:number,name:string,active:number,dead=0)=>`@${index+1}|${index}|${name}|${active}|%${index}|${100+index}|${dead}`;
@@ -291,14 +293,27 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_ANDROID_UI_TMUX!=='
 },610_000);
 
 const codes=(text:string)=>Array.from(text,character=>String(character.codePointAt(0)));
+const typed=(prompt:string,enter='13')=>[...codes(prompt),enter],pasted=(prompt:string)=>['27',...codes(prompt),'27','13'];
 test('the reporting agent key log admits each prompt once, typed or pasted, and no other key',()=>{
   const prompts=['hold ab12','send ab12','type ab12'];
-  const typed=(prompt:string,enter='13')=>[...codes(prompt),enter],pasted=(prompt:string)=>['27',...codes(prompt),'27','13'];
   expect(reportingAgentKeysAre([...pasted(prompts[0]),...typed(prompts[1],'10'),...typed(prompts[2])],prompts)).toBe(true);
   const stray=[...pasted(prompts[0]),...typed(prompts[1]),...typed(prompts[2])];
   for(const keys of [stray.slice(0,-1),[...stray,'13'],[...stray,'27'],['27',...stray],[...typed(prompts[1]),...typed(prompts[0]),...typed(prompts[2])],[...typed(prompts[0]),...typed(prompts[0]),...typed(prompts[1]),...typed(prompts[2])]])
     expect(reportingAgentKeysAre(keys,prompts)).toBe(false);
   expect(reportingAgentKeysAre([],prompts)).toBe(false);
+});
+
+test('the OpenCode key log pins the sent prompt to one bracketed paste and the others to keys',()=>{
+  const prompts=['hold ab12','send ab12','type ab12'],forms=reportingAgentForms('opencode');
+  expect(forms).toEqual([false,true,false]);
+  expect(reportingAgentForms('report')).toBeUndefined();
+  expect(reportingAgentKeysAre([...typed(prompts[0]),...pasted(prompts[1]),...typed(prompts[2],'10')],prompts,forms)).toBe(true);
+  // A sent prompt that arrived as keys, or a prompt other than the sent one that arrived as a paste, is not OpenCode's input.
+  for(const keys of [[...typed(prompts[0]),...typed(prompts[1]),...typed(prompts[2])],[...pasted(prompts[0]),...pasted(prompts[1]),...typed(prompts[2])],[...typed(prompts[0]),...pasted(prompts[1]),...pasted(prompts[2])]])
+    expect(reportingAgentKeysAre(keys,prompts,forms)).toBe(false);
+  const log=['READY','SUBMIT '+prompts[0],'HOLD','HOLD_ENDED','SUBMIT '+prompts[1],'SUBMIT '+prompts[2]].join('\n'),pane=prompts.map(prompt=>`> ${prompt}`).join('\n');
+  reportingAgentDeliveredOnce(log,[...typed(prompts[0]),...pasted(prompts[1]),...typed(prompts[2])].join('\n'),pane,prompts,forms);
+  expect(()=>reportingAgentDeliveredOnce(log,prompts.flatMap(prompt=>typed(prompt)).join('\n'),pane,prompts,forms)).toThrow('received a key other than its prompts');
 });
 
 test('the reporting agent readback requires one logged, held, ended and shown delivery of each prompt',()=>{
@@ -315,12 +330,12 @@ test('the reporting agent readback requires one logged, held, ended and shown de
 });
 
 // The real stand-in agent reports to the real companion from a real tmux pane, as it will for the packaged app.
-test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !process.env.LAZYSH_TEST_AGENT_BIN)('owned tmux reporting agent readback accepts the three deliveries once and refuses a stray key',async()=>{
-  const owned=await TmuxFixture.start(undefined,process.env.LAZYSH_TEST_AGENT_BIN,true);
+const agentReadback=async(flavour:ReportingAgentFlavour)=>{
+  const owned=await TmuxFixture.start(undefined,process.env.LAZYSH_TEST_AGENT_BIN,flavour);
   let client:OwnedProcess|undefined;
   try {
     const {agent,windows}=owned.metadata();
-    expect(agent).toBeDefined();
+    expect(agent?.flavour).toBe(flavour);
     expect(windows.map(({name})=>name)).toEqual(['alpha','beta']);
     const wait=async(predicate:()=>boolean|Promise<boolean>)=>{
       const deadline=performance.now()+10_000;
@@ -344,6 +359,20 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !proc
     // The companion's own state holds the report of this pane, readable by the app's companion over SSH.
     const reported=await keys('lazysh-agent --help >/dev/null && ls "$XDG_STATE_HOME/lazysh"');
     expect(reported).toContain('events.sqlite3');
+    // OpenCode keeps its conversation in the database the app's companion reads: every prompt is a user message in it, written just after its log row.
+    if(flavour==='opencode') {
+      const database=new Database(join(owned.ssh.directory,reportingAgentTranscript(flavour)),{readonly:true});
+      try {
+        let users:string[]=[];
+        // The stand-in is still writing (WAL), so a read can meet SQLITE_BUSY: read again.
+        await wait(()=>{
+          try {users=database.query<{data:string},[]>("select data from session_message where type='user' order by seq").all().map(row=>JSON.parse(row.data).text);}
+          catch(error) {if(!/locked|busy/i.test(String(error)))throw error;}
+          return users.length===3;
+        });
+        expect(users).toEqual([agent!.hold,agent!.sent,agent!.typed]);
+      } finally {database.close();}
+    }
     shell.child.stdin!.write('\x02d');
     await shell.finish('owned tmux prefix detach',5000);client=undefined;
     await owned.verifyReportingAgent();
@@ -356,4 +385,7 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !proc
     await client?.stop().catch(()=>{});
     await owned.stop();
   }
-},90_000);
+};
+const agentReadbackSkipped=process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !process.env.LAZYSH_TEST_AGENT_BIN;
+test.skipIf(agentReadbackSkipped)('owned tmux reporting agent readback accepts the three deliveries once and refuses a stray key',()=>agentReadback('report'),90_000);
+test.skipIf(agentReadbackSkipped)('owned tmux OpenCode agent readback accepts the three deliveries once, the sent one as a paste, and refuses a stray key',()=>agentReadback('opencode'),90_000);
