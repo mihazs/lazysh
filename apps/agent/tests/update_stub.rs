@@ -18,12 +18,22 @@ const NEW: &str = "99.0.0";
 
 /// Runs `hold` from `path`: a live process whose image is that file.
 fn running(path: &std::path::Path) -> Child {
-    Command::new(path)
+    let mut command = Command::new(path);
+    command
         .arg("hold")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    // A script another test thread just wrote can be briefly busy to exec while a sibling's fork still
+    // holds its write descriptor; the updater's own process runner retries the same way.
+    (0..5)
+        .find_map(|attempt| match command.spawn() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 4 => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                None
+            }
+            result => Some(result.unwrap()),
+        })
         .unwrap()
 }
 fn alive(child: &mut Child) -> bool {
