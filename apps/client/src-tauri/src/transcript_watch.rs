@@ -23,7 +23,12 @@ const MAX_LINE: usize = 1024 * 1024 + 4096;
 const QUIET: Duration = Duration::from_secs(20);
 /// How often the selected Herdr agent is checked to still be the same pane's agent.
 const RECHECK: Duration = Duration::from_secs(10);
+/// Conversation streams (the Agent view's) that may run at once.
 const MAX_WATCHES: usize = 4;
+/// Herdr event streams that may run at once: the inbox monitor follows up to 32 hosts. They are counted apart, so
+/// they neither use up the conversation streams nor are refused by them.
+const MAX_EVENT_STREAMS: usize = 32;
+const EVENTS_SLOT: &str = "herdrEvents";
 /// The transcript stream's frames and the Herdr event stream's (`status`, `changed`, `unsupported`).
 const FRAME_TYPES: [&str; 8] = [
     "hello",
@@ -69,14 +74,28 @@ pub enum WatchTarget {
     HerdrEvents { herdr_session: String },
 }
 impl WatchTarget {
-    /// A view's watches replace each other only within the same slot, so the Herdr event stream and a
-    /// conversation stream of one session run side by side.
-    fn slot(&self) -> &'static str {
+    /// A view's watches replace each other only within the same slot, so the event streams of two Herdr
+    /// servers and a conversation stream of one session run side by side.
+    fn slot(&self) -> String {
         match self {
-            Self::HerdrEvents { .. } => "herdrEvents",
-            _ => "transcript",
+            Self::HerdrEvents { herdr_session } => format!("{EVENTS_SLOT}:{herdr_session}"),
+            _ => "transcript".into(),
         }
     }
+}
+/// Whether another watch of this slot's kind would pass the bound of that kind.
+fn crowded(entries: &HashMap<String, Watch>, slot: &str) -> bool {
+    let events = slot.starts_with(EVENTS_SLOT);
+    let same_kind = entries
+        .values()
+        .filter(|watch| watch.slot.starts_with(EVENTS_SLOT) == events)
+        .count();
+    let bound = if events {
+        MAX_EVENT_STREAMS
+    } else {
+        MAX_WATCHES
+    };
+    same_kind >= bound
 }
 
 #[derive(Clone, Serialize)]
@@ -94,7 +113,7 @@ pub enum WatchEvent {
 pub struct TranscriptWatches(Mutex<HashMap<String, Watch>>);
 struct Watch {
     session_id: String,
-    slot: &'static str,
+    slot: String,
     cancel: watch::Sender<bool>,
     done: watch::Receiver<bool>,
 }
@@ -410,8 +429,8 @@ pub async fn agent_watch_start(
             };
             let slot = target.slot();
             let mut entries = watches.0.lock().await;
-            retire(&mut entries, &session_id, slot);
-            if entries.len() >= MAX_WATCHES {
+            retire(&mut entries, &session_id, &slot);
+            if crowded(&entries, &slot) {
                 return Err(SshError::new(
                     "busy",
                     "Too many live conversations are open",
@@ -630,34 +649,93 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn a_rebinding_view_replaces_only_its_own_slot_of_its_own_session() {
+    /// A running watch of `slot` for `session`, and the receiver that sees it cancelled.
+    fn watching(session: &str, slot: &str) -> (Watch, watch::Receiver<bool>) {
+        let (cancel, cancelled) = watch::channel(false);
+        let (_done, done) = watch::channel(false);
+        let watch = Watch {
+            session_id: session.into(),
+            slot: slot.into(),
+            cancel,
+            done,
+        };
+        (watch, cancelled)
+    }
+    /// Retires `slot` of `session` among the watches `[(token, session, slot)]` and returns what is left
+    /// and which tokens were cancelled.
+    fn retired(
+        watches: &[(&'static str, &str, &str)],
+        session: &str,
+        slot: &str,
+    ) -> (Vec<String>, Vec<&'static str>) {
         let mut entries = HashMap::new();
         let mut cancels = HashMap::new();
-        for (token, session, slot) in [
-            ("a", "one", "transcript"),
-            ("b", "one", "herdrEvents"),
-            ("c", "two", "herdrEvents"),
-        ] {
-            let (cancel, cancelled) = watch::channel(false);
-            let (_done, done) = watch::channel(false);
-            cancels.insert(token, cancelled);
-            entries.insert(
-                token.to_owned(),
-                Watch {
-                    session_id: session.into(),
-                    slot,
-                    cancel,
-                    done,
-                },
-            );
+        for (token, owner, kind) in watches {
+            let (watch, cancelled) = watching(owner, kind);
+            entries.insert(token.to_string(), watch);
+            cancels.insert(*token, cancelled);
         }
-        retire(&mut entries, "one", "herdrEvents");
+        retire(&mut entries, session, slot);
         let mut left: Vec<_> = entries.keys().cloned().collect();
         left.sort();
+        let mut cancelled: Vec<_> = cancels
+            .into_iter()
+            .filter(|(_, cancelled)| *cancelled.borrow())
+            .map(|(token, _)| token)
+            .collect();
+        cancelled.sort();
+        (left, cancelled)
+    }
+
+    #[tokio::test]
+    async fn a_rebinding_view_replaces_only_its_own_slot_of_its_own_session() {
+        let (left, cancelled) = retired(
+            &[
+                ("a", "one", "transcript"),
+                ("b", "one", "herdrEvents:main"),
+                ("c", "two", "herdrEvents:main"),
+            ],
+            "one",
+            "herdrEvents:main",
+        );
         assert_eq!(left, ["a", "c"]);
-        assert!(*cancels["b"].borrow());
-        assert!(!*cancels["a"].borrow() && !*cancels["c"].borrow());
+        assert_eq!(cancelled, ["b"]);
+    }
+
+    #[tokio::test]
+    async fn the_event_streams_of_two_servers_of_one_connection_do_not_replace_each_other() {
+        // The inbox follows the attached server while a Herdr view may follow another one.
+        let (left, cancelled) = retired(
+            &[
+                ("a", "one", "herdrEvents:main"),
+                ("b", "one", "herdrEvents:other"),
+            ],
+            "one",
+            "herdrEvents:main",
+        );
+        assert_eq!(left, ["b"]);
+        assert_eq!(cancelled, ["a"]);
+    }
+
+    #[test]
+    fn event_streams_and_conversation_streams_are_bounded_apart() {
+        let mut entries = HashMap::new();
+        let events = |index: usize| format!("herdrEvents:server-{index}");
+        for index in 0..MAX_WATCHES {
+            entries.insert(format!("c{index}"), watching("one", "transcript").0);
+        }
+        // Four conversations refuse a fifth, and leave the event streams alone.
+        assert!(crowded(&entries, "transcript"));
+        assert!(!crowded(&entries, &events(0)));
+        for index in 0..MAX_EVENT_STREAMS {
+            entries.insert(format!("e{index}"), watching("two", &events(index)).0);
+        }
+        assert!(crowded(&entries, &events(99)));
+        // Thirty-two event streams do not take a conversation slot.
+        entries.remove("c0");
+        assert!(!crowded(&entries, "transcript"));
+        entries.remove("e0");
+        assert!(!crowded(&entries, &events(99)));
     }
 
     #[test]
@@ -736,17 +814,8 @@ mod tests {
     #[tokio::test]
     async fn lock_cancels_every_watch() {
         let watches = TranscriptWatches::default();
-        let (cancel, cancelled) = watch::channel(false);
-        let (_done, done) = watch::channel(false);
-        watches.0.lock().await.insert(
-            "token".into(),
-            Watch {
-                session_id: "session".into(),
-                slot: "transcript",
-                cancel,
-                done,
-            },
-        );
+        let (watch, cancelled) = watching("session", "transcript");
+        watches.0.lock().await.insert("token".into(), watch);
         watches.cancel_for_lock().await;
         assert!(*cancelled.borrow());
     }
