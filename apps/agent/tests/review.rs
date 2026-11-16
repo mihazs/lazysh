@@ -28,6 +28,12 @@ fn git_command(directory: &Path) -> Command {
             "user.email=test@example.invalid",
             "-c",
             "commit.gpgsign=false",
+            // `git commit` otherwise detaches a background maintenance run whose lock file
+            // (`.git/objects/maintenance.lock`) comes and goes while the cases snapshot the repository.
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
         ]);
     command
 }
