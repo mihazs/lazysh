@@ -1,6 +1,7 @@
 //! The local companion: how a command line becomes argv, which executable is chosen, and a real
 //! `lazysh-agent` serving a local session. The real-runtime cases need the companion this build
-//! produced in `LAZYSH_TEST_AGENT_BIN` (a release build: hook setup refuses binaries over 64 MiB).
+//! produced in `LAZYSH_TEST_AGENT_BIN` (a release build: hook setup refuses binaries over 64 MiB),
+//! or the companion in the desktop bundle `LAZYSH_TEST_BUNDLE_DIR` names.
 use super::*;
 use crate::{
     app_lock::{AccessLease, AccessState, Guarded, GuardedError},
@@ -229,11 +230,32 @@ fn an_installed_companion_stands_in_for_the_bundle_only_when_it_is_not_older() {
 
 // ---- A real companion serving a local session.
 
-/// The companion this build produced, placed beside the test executable the way the desktop
-/// bundle places it beside the app, so resolution is the one a shipped app performs. The copy is
-/// a distinct file: hook setup refuses a binary with more than one hard link.
+/// The companion the cases run, which the local arm must resolve to. With `LAZYSH_TEST_BUNDLE_DIR`
+/// (an installed Windows app, a built macOS app) it is the one that directory holds, and the case
+/// fails when the bundle has none. Otherwise it is the companion this build produced, placed
+/// beside the test executable the way the desktop bundle places it beside the app, so resolution
+/// is the one a shipped app performs. The copy is a distinct file: hook setup refuses a binary
+/// with more than one hard link.
+async fn resolved_bundle() -> PathBuf {
+    let companion = bundle();
+    assert_eq!(
+        program().await.as_deref(),
+        companion.to_str(),
+        "the local arm must run the bundled companion"
+    );
+    companion
+}
 fn bundle() -> PathBuf {
     static PLACED: std::sync::Once = std::sync::Once::new();
+    if let Some(installed) = std::env::var_os("LAZYSH_TEST_BUNDLE_DIR") {
+        let companion = PathBuf::from(installed).join(NAME);
+        assert!(
+            companion.is_file(),
+            "the bundle in LAZYSH_TEST_BUNDLE_DIR has no {NAME}: {}",
+            companion.display()
+        );
+        return companion;
+    }
     let target = std::env::current_exe().unwrap().with_file_name(NAME);
     PLACED.call_once(|| {
         let source = std::env::var_os("LAZYSH_TEST_AGENT_BIN")
@@ -303,7 +325,7 @@ async fn transcript(app: &App<MockRuntime>, id: &str, path: &Path) -> Result<Val
 #[tokio::test]
 #[ignore = "requires the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell() {
-    bundle();
+    resolved_bundle().await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let recorded = home.join(".claude/projects/project/recorded.jsonl");
@@ -421,7 +443,7 @@ async fn hook(
 #[tokio::test]
 #[ignore = "requires the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn real_local_hooks_report_to_the_board_and_a_permission_request_is_answered() {
-    let companion = bundle();
+    let companion = resolved_bundle().await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let (app, id) = session(home).await;
@@ -536,7 +558,7 @@ async fn real_local_hooks_report_to_the_board_and_a_permission_request_is_answer
 #[tokio::test]
 #[ignore = "requires the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn real_local_hook_setup_on_windows_is_template_only() {
-    bundle();
+    resolved_bundle().await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let (app, id) = session(home).await;

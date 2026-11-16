@@ -40,16 +40,38 @@ export async function publishedCompanion(identity: Identity, desktop: DesktopTar
   requireBundle(actual.bytes === staged.bytes && actual.sha256 === staged.sha256, 'companion differs from its receipt');
   return { target: companion, file, ...actual };
 }
+async function placeSidecar(source: { file: string; bytes: number; sha256: string }, desktop: DesktopTarget, root: string) {
+  const destination = join(root, 'apps/client/src-tauri', sidecarPath(desktop));
+  await mkdir(dirname(destination), { recursive: true });
+  await copyFile(source.file, destination);
+  await chmod(destination, 0o755);
+  const copied = await digestFile(destination, companionMaximumBytes);
+  requireBundle(copied.bytes === source.bytes && copied.sha256 === source.sha256, 'staged sidecar differs from the published companion');
+  return destination;
+}
 /** Copies the published companion to the sidecar path, byte for byte; the Tauri build then packages that file. */
 export async function stageSidecar(identity: Identity, desktop: DesktopTarget, directory: string, root: string) {
   const published = await publishedCompanion(identity, desktop, directory);
-  const destination = join(root, 'apps/client/src-tauri', sidecarPath(desktop));
-  await mkdir(dirname(destination), { recursive: true });
-  await copyFile(published.file, destination);
-  await chmod(destination, 0o755);
-  const copied = await digestFile(destination, companionMaximumBytes);
-  requireBundle(copied.bytes === published.bytes && copied.sha256 === published.sha256, 'staged sidecar differs from the published companion');
-  return { ...published, destination };
+  return { ...published, destination: await placeSidecar(published, desktop, root) };
+}
+/** The desktop target of the machine running this, which is the one Tauri names the sidecar for. */
+export function hostDesktop(platform = process.platform, arch = process.arch): DesktopTarget {
+  const target = `${platform}-${arch}`;
+  const desktop = { 'linux-x64': 'linux-x64', 'win32-x64': 'windows-x64', 'darwin-arm64': 'macos-arm64', 'darwin-x64': 'macos-x64' }[target];
+  requireBundle(desktop, `unsupported desktop host ${target}`);
+  return desktop as DesktopTarget;
+}
+/**
+ * For the checks that package the app on every main push: stages the companion this checkout just
+ * built (a release build, `target/release`), which has no release receipt to verify.
+ */
+export async function stageBuiltSidecar(root: string, desktop = hostDesktop()) {
+  const file = join(root, 'target/release', desktop === 'windows-x64' ? 'lazysh-agent.exe' : 'lazysh-agent');
+  let actual;
+  try { actual = await digestFile(file, companionMaximumBytes); }
+  catch { requireBundle(false, 'no built companion to stage in target/release'); }
+  const built = { file, ...actual };
+  return { ...built, destination: await placeSidecar(built, desktop, root) };
 }
 /** Requires the file inside a package to be exactly the published companion. */
 export async function requireBundled(path: string, published: PublishedCompanion, where: string) {
@@ -101,8 +123,14 @@ export async function requireBundledImage(path: string, published: PublishedComp
 
 if (import.meta.main) {
   const [command, target, directory] = process.argv.slice(2);
-  requireBundle(command === 'stage' && Object.hasOwn(desktopCompanions, target) && directory, 'usage: stage <desktop target> <companion artifact directory>');
   const root = resolve('.');
-  const staged = await stageSidecar(await buildIdentity(root), target as DesktopTarget, resolve(directory), root);
-  console.info(`Bundled companion staged: ${target} bytes=${staged.bytes} sha256=${staged.sha256}`);
+  if (command === 'stage-built') {
+    const staged = await stageBuiltSidecar(root);
+    console.info(`Built companion staged: bytes=${staged.bytes} sha256=${staged.sha256}`);
+  } else {
+    requireBundle(command === 'stage' && Object.hasOwn(desktopCompanions, target) && directory,
+      'usage: stage <desktop target> <companion artifact directory> | stage-built');
+    const staged = await stageSidecar(await buildIdentity(root), target as DesktopTarget, resolve(directory), root);
+    console.info(`Bundled companion staged: ${target} bytes=${staged.bytes} sha256=${staged.sha256}`);
+  }
 }
