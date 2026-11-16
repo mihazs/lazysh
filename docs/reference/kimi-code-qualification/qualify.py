@@ -19,8 +19,15 @@ IDENTITYLESS = ("TurnStarted", "PreToolUse", "PostToolUse", "PostToolUseFailure"
 T = ["tmux", "-S", "/tmp/qualify.sock"]
 
 
-def hook(name, event, extra="timeout = 10\n", delay=0):
-    return f'\n[[hooks]]\nevent = "{event}"\ncommand = "sleep {delay}; cat > /tmp/h-{name}/rcpt/$(date +%s%N)-$$.{event}.json"\n{extra}'
+def hook(name, event, extra="timeout = 10\n", delay=0, then=""):
+    return f'\n[[hooks]]\nevent = "{event}"\ncommand = "sleep {delay}; cat > /tmp/h-{name}/rcpt/$(date +%s%N)-$$.{event}.json{then}"\n{extra}'
+
+
+# One answer in every spelling the agents lazysh already supports use (Claude Code and Codex nest `decision`, Copilot
+# puts `behavior` at the top, Kimi's own `permissionDecision`), printed by recording hooks on the two events that run
+# before and during an approval.
+ALLOW = ('{"decision":"approve","behavior":"allow","hookSpecificOutput":{"hookEventName":"PermissionRequest",'
+         '"permissionDecision":"allow","decision":{"behavior":"allow"}}}')
 
 # ---------------------------------------------------------------- mock endpoint
 REQS = []
@@ -173,9 +180,14 @@ STOP_ONCE = ('\n[[hooks]]\nevent = "Stop"\ncommand = "[ -e /tmp/h-stop_blocked_o
              'echo keep going >&2; exit 2; }"\n')
 
 
+OUT = {}  # what a driver observed outside the receipts, by scenario
+
+
 def run(name, drive, **kw):
     p = Profile(name, **kw)
     drive(p)
+    if isinstance(getattr(p, "out", None), dict):
+        OUT[name] = p.out
     return p.receipts(), [r["plan"] for r in REQS]
 
 
@@ -200,6 +212,27 @@ def drive_reordered(p):  # one slow observer: delivery order is not event order
     p.keys("1")
     p.wait("PermissionRequest")
     p.wait("Stop")
+    p.quit()
+
+
+def drive_decision(p):  # a hook that prints an allow does not approve: the prompt still waits for the person
+    open("/tmp/allow.json", "w").write(ALLOW)
+    p.tui()
+    p.say("RUN-TOOL go")
+    p.until("Approve once")
+    time.sleep(4)  # an honoured allow would have run the tool by now
+    seen = [r["event"] for r in p.receipts()]
+    p.out = {"prompt_waiting": "Approve once" in p.pane(), "seen_before_answer": seen}
+    p.approve("3")
+    p.wait("Stop")
+    p.quit()
+
+
+def drive_block(p):  # the only decision a hook can give: PreToolUse exits 2 and the tool never asks nor runs
+    p.tui()
+    p.say("RUN-TOOL go")
+    p.wait("Stop")
+    p.out = {"prompt_shown": "Approve once" in p.pane()}
     p.quit()
 
 
@@ -267,11 +300,16 @@ def main(out):
         ("unknown_event", hook("strict", "NotAnEvent")), ("timeout_601", hook("strict", "SessionStart", "timeout = 601\n")))}
     scen = {"prompt_auto": drive_prompt, "approve": drive_approve, "reject": lambda p: drive_approve(p, "3"),
             "interrupt": drive_interrupt, "upstream_failure": drive_fail, "stop_blocked_once": drive_stop_block,
-            "result_before_request": drive_reordered,
+            "result_before_request": drive_reordered, "allow_printed": drive_decision, "pretooluse_exit_2": drive_block,
             "subagent_foreground": drive_agent, "subagent_background": lambda p: drive_agent(p, "RUN-AGENT-BG go", 3)}
     R = {}
     for n, d in scen.items():
-        R[n] = run(n, d, mode="manual", foreign=STOP_ONCE if n == "stop_blocked_once" else "",
+        hooks = None
+        if n == "allow_printed":
+            hooks = "".join(hook(n, e, then=("; cat /tmp/allow.json" if e in ("PermissionRequest", "PreToolUse") else "")) for e in EVENTS)
+        if n == "pretooluse_exit_2":
+            hooks = "".join(hook(n, e, then=("; echo blocked by lazysh qualification >&2; exit 2" if e == "PreToolUse" else "")) for e in EVENTS)
+        R[n] = run(n, d, mode="manual", hooks=hooks, foreign=STOP_ONCE if n == "stop_blocked_once" else "",
                    slow={"PermissionRequest": 2} if n == "result_before_request" else {})
         print(f"ran {n}: {[r['event'] for r in R[n][0]]}", flush=True)
     ev = lambda n: [r["event"] for r in R[n][0]]  # noqa: E731
@@ -295,6 +333,12 @@ def main(out):
             ev("stop_blocked_once").count("Stop") == 1 and R["stop_blocked_once"][1] == ["text", "text"],
         "a slow observer delivers PermissionResult before its PermissionRequest":
             [e for e in ev("result_before_request") if e.startswith("Permission")] == ["PermissionResult", "PermissionRequest"],
+        "a hook that prints an allow on PermissionRequest and PreToolUse does not approve: the prompt keeps waiting until the person answers":
+            OUT["allow_printed"]["prompt_waiting"] and {"PermissionRequest", "PreToolUse"} <= set(OUT["allow_printed"]["seen_before_answer"])
+            and not {"PermissionResult", "PostToolUse", "PostToolUseFailure"} & set(OUT["allow_printed"]["seen_before_answer"]),
+        "a PreToolUse hook that exits 2 blocks the tool before any approval is requested":
+            "PreToolUse" in ev("pretooluse_exit_2") and "PermissionRequest" not in ev("pretooluse_exit_2")
+            and "PostToolUse" not in ev("pretooluse_exit_2") and not OUT["pretooluse_exit_2"]["prompt_shown"],
         "interrupt fires Interrupt in place of Stop": "Interrupt" in ev("interrupt") and "Stop" not in ev("interrupt"),
         "upstream failure fires StopFailure in place of Stop": "StopFailure" in ev("upstream_failure") and "Stop" not in ev("upstream_failure"),
         "SessionEnd reports reason exit in every interactive scenario": all(by(R[n][0], "SessionEnd")[0]["reason"] == "exit" for n in R if n != "prompt_auto"),
