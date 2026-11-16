@@ -83,11 +83,17 @@ its ACLs are refused before anything is written. Existing ordinary file
 permissions and group ID are retained. On macOS the same ownership, preimage,
 cooperative-lock and commit-boundary checks run through `openat`, `renameatx_np`
 and `fstatat` instead of Linux's `renameat2` and `O_PATH`. They are exercised by
-the managed-setup tests on a hosted macOS runner (APFS, extended ACL entries,
+the managed-setup tests on a hosted macOS runner (extended ACL entries,
 inherited ACL entries, links and replacement races), and the `native-desktop`
-job runs them on every push to `main`. That qualifies the hosted runner's local
-APFS volume for the tested macOS release; HFS+, network or other volumes are
-admitted only by the existing local-filesystem check and were not exercised.
+job runs them on every push to `main`. The run recorded for this support passed
+41 cases with one ignored (it needs an explicit supplementary group) on macOS
+26.7 for Apple silicon, on the runner's local APFS volume; no other macOS
+version, no Intel Mac, no Apple hardware, and no HFS+, network or other volume
+was exercised, and those are admitted only by the existing local-filesystem
+check. A companion reached through a symbolic link is refused, and on macOS
+`/tmp`, `/var` and `/etc` are symbolic links (the first hosted run failed on
+exactly this with a temporary directory); install the companion under a
+physical path such as your home directory or `/usr/local/bin`.
 Windows writes remain unsupported; preview is available without accessing a
 profile. Preview labels POSIX shell, Bun JavaScript or Cline JavaScript dialect.
 On Windows it returns the existing unbound print-only templates, explicitly
