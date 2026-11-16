@@ -66,7 +66,8 @@ Security and data (each is tested, not only stated):
   starts a process. The field is not in `settings.json` (a strict file that a released companion or client would
   refuse): it has its own file, `host-browser.json`, and `settings host-browser show|update`, as the planned
   update policy does. See [the reference](reference/companion-settings.md). Shipped in the companion by slice A
-  of [#1258](https://github.com/mihazs/lazysh/issues/1258); the app's switch and confirmation come with the viewer.
+  of [#1258](https://github.com/mihazs/lazysh/issues/1258); the app's switch and first-use confirmation are in host
+  settings ([#1696](https://github.com/mihazs/lazysh/issues/1696)), and the viewer that uses them comes later.
 - The first use on a host shows what the browser can reach: the host's network and loopback services, any
   file the browser can open, and every site the user signs in to inside it. The user confirms per host. The
   confirmation is remembered on the device for that host only, never synced.
