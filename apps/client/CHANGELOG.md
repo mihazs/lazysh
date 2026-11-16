@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.67.0
+
+### Patch Changes
+
+- 93d2e86: Add an Android instrumentation case that observes the operating system after a remote OSC 52 request is allowed (the system clipboard) and after Open in browser is tapped on a terminal link (an `ACTION_VIEW` intent for that URL). Test coverage only; no app behaviour changes.
+- f25f379: Mark the Windows installed-application cases that passed in a `main` run (run 43790076928: identity, saved-host dialog, singleton `--host` and `--dir` delivery) in the parity matrix, and list what remains for the Windows GUI (the authenticated SSH terminal and saved-host add, edit, delete and persist). Documentation only. No user-visible behaviour changes.
+- @lazysh/account-usage@1.67.0
+  - @lazysh/common@1.67.0
+  - @lazysh/display-idle@1.67.0
+  - @lazysh/et-transport@1.67.0
+  - @lazysh/mosh-transport@1.67.0
+
 ## 1.66.1
 
 ### Patch Changes

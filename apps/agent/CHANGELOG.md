@@ -1,5 +1,22 @@
 # @lazysh/agent
 
+## 1.67.0
+
+### Minor Changes
+
+- be619f7: Report the identity of a terminal lazysh starts: a hook that runs with `LAZYSH_TERMINAL` set to 32 lowercase hexadecimal characters records `lazysh:<id>` as its pane identity when neither `TMUX_PANE` nor Zellij's variables are set, so a later release can tie the Agent view of a terminal with no multiplexer to the agent that terminal started. A value of another shape is ignored and the hook still succeeds. Nothing exports the variable yet, so reports do not change.
+- 0b93d52: Answer Copilot CLI's permission prompts remotely through Copilot's own `permissionRequest` hook decision. `lazysh-agent approval-request` and `approval-config` take `--agent copilot`; the request is the same immutable, hash-bound record as Claude Code's and Codex's, listed with `"agent":"copilot"`, and an allow or a deny with a message goes back at the top level of the hook's stdout, never as keys. Copilot runs this hook before its own rules, so every shell command and file edit that needs a permission check waits for you (including ones Copilot would run without asking), and an allow skips Copilot's deny rules. A request nobody answers gives no decision, so Copilot shows its own prompt in the terminal.
+
+### Patch Changes
+
+- ca8d976: Read long Grok Build sessions in the conversation view: the chunks of a streamed message are joined as they are read and count as one record, so a session of 50,000 chunk records opens instead of being refused at 10,000.
+- 9bd5593: Record that Kimi Code 2.4.1 has no hook that can carry an Allow (hooks that print an allow on `PermissionRequest` and `PreToolUse` leave the prompt waiting; `PreToolUse` can only block), so a Kimi prompt stays in the terminal, with two new scenarios in the repeatable qualification run. No behavior change.
+- fb610c5: Read long Gemini CLI sessions quickly and prove that a Gemini conversation pages with `--before`, `--after` and `--from-start` from its first message to its last.
+- @lazysh/account-usage@1.67.0
+  - @lazysh/common@1.67.0
+  - @lazysh/companion-release@1.67.0
+  - @lazysh/notification-client@1.67.0
+
 ## 1.66.1
 
 ### Patch Changes
