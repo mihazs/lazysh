@@ -38,7 +38,7 @@ it('connects only on the explicit action, after the system permission, and drops
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
   expect(await screen.findByText('Receiving from https://gotify.example.com.')).toBeTruthy();
   expect(requestPermission).toHaveBeenCalledOnce();
-  expect(invoke).toHaveBeenLastCalledWith('remote_notifications_configure', { origin: 'https://gotify.example.com', token: 'client-token' }, access);
+  expect(invoke).toHaveBeenLastCalledWith('remote_notifications_configure', { kind: 'gotify', origin: 'https://gotify.example.com', topic: '', token: 'client-token' }, access);
   expect(document.body.innerHTML).not.toContain('client-token');
   expect(screen.queryByLabelText('Gotify client token')).toBeNull();
 });
@@ -92,4 +92,35 @@ it('shows the native rejection code for a wrong token', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
   expect((await screen.findByRole('alert')).textContent).toBe(t('remoteNotifErrorUnauthorized'));
   expect(screen.getByLabelText('Gotify client token')).toBeTruthy();
+});
+
+it('connects an ntfy topic with an optional token, asks for the topic and clears it from the form', async () => {
+  vi.mocked(isPermissionGranted).mockResolvedValue(true);
+  vi.mocked(invoke).mockResolvedValueOnce(off).mockResolvedValueOnce({ ...on, origin: 'https://ntfy.example.com' });
+  render(<RemoteNotificationsPanel />);
+  fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'ntfy' } });
+  expect(screen.queryByLabelText('Gotify client token')).toBeNull();
+  fireEvent.change(screen.getByLabelText('ntfy server address (HTTPS)'), { target: { value: 'https://ntfy.example.com' } });
+  const connect = screen.getByRole('button', { name: 'Connect' }) as HTMLButtonElement;
+  expect(connect.disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('ntfy topic'), { target: { value: 'alerts' } });
+  expect(connect.disabled).toBe(false);
+  fireEvent.click(connect);
+  expect(await screen.findByText('Receiving from https://ntfy.example.com.')).toBeTruthy();
+  expect(invoke).toHaveBeenLastCalledWith('remote_notifications_configure', { kind: 'ntfy', origin: 'https://ntfy.example.com', topic: 'alerts', token: '' }, access);
+  expect(document.body.innerHTML).not.toContain('alerts');
+  expect(screen.queryByLabelText('ntfy topic')).toBeNull();
+});
+
+it('shows the native code for a bad topic in the interface language', async () => {
+  vi.mocked(isPermissionGranted).mockResolvedValue(true);
+  vi.mocked(invoke).mockResolvedValueOnce(off).mockRejectedValueOnce('topic');
+  render(<RemoteNotificationsPanel />);
+  fireEvent.change(await screen.findByLabelText('Server'), { target: { value: 'ntfy' } });
+  fireEvent.change(screen.getByLabelText('ntfy server address (HTTPS)'), { target: { value: 'https://ntfy.example.com' } });
+  fireEvent.change(screen.getByLabelText('ntfy topic'), { target: { value: 'a/b' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  expect((await screen.findByRole('alert')).textContent).toBe(t('remoteNotifErrorTopic'));
+  await act(async () => { await uiI18n.changeLanguage('es'); });
+  expect(screen.getByRole('alert').textContent).toBe('Introduce el nombre del tema: hasta 64 letras, dígitos, _ o -.');
 });

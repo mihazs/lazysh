@@ -6,6 +6,10 @@ mod bound_push;
 mod gotify_server;
 #[cfg(unix)]
 mod ntfy_android;
+#[cfg(target_os = "linux")]
+mod ntfy_server;
+#[cfg(target_os = "linux")]
+mod owned_server;
 mod push_delivery;
 #[path = "../tests/support/mod.rs"]
 mod support;
