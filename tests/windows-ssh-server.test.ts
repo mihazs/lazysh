@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { lstat } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { powershell, requireOwnedWindowsRunner } from './support/windowsGui';
-import { hostKeyFingerprint, offeredHostKey, openSshTools, speaksSsh, startOwnedSshServer, type OwnedSshServer } from './support/windowsSshServer';
+import { hostKeyFingerprint, offeredHostKey, openSshTools, speaksSsh, sshBanner, startOwnedSshServer, type OwnedSshServer } from './support/windowsSshServer';
 
 const fingerprint = `SHA256:${'Ab1+/'.repeat(8)}Ab1`;
 
@@ -16,6 +17,22 @@ test('the offered host key is read from the verbose client log and nothing else 
   expect(offeredHostKey(`debug1: Remote protocol version 2.0\r\ndebug1: Server host key: ssh-ed25519 ${fingerprint}\r\ndebug1: rekey\r\n`)).toBe(fingerprint);
   for (const bad of ['', `debug1: Server host key: ssh-rsa ${fingerprint}`, `debug1: Server host key: ssh-ed25519 SHA256:short`])
     expect(() => offeredHostKey(bad)).toThrow('The server offered no Ed25519 host key');
+});
+
+test('the banner is the identification line of an OpenSSH greeting and nothing else is taken for a server', async () => {
+  const greet = async (greeting: string) => {
+    const listener = createServer(socket => socket.end(greeting));
+    await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+    const { port } = listener.address() as { port: number };
+    try { return [await sshBanner(port), await speaksSsh(port)] as const; } finally { listener.close(); }
+  };
+  expect(await greet('SSH-2.0-OpenSSH_for_Windows_9.5\r\nkex')).toEqual(['SSH-2.0-OpenSSH_for_Windows_9.5', true]);
+  expect(await greet('HTTP/1.1 400 Bad Request\r\n')).toEqual([undefined, false]);
+  const closed = createServer();
+  await new Promise<void>(resolve => closed.listen(0, '127.0.0.1', resolve));
+  const { port } = closed.address() as { port: number };
+  await new Promise(resolve => closed.close(resolve));
+  expect(await sshBanner(port)).toBeUndefined();
 });
 
 test('only the OpenSSH build below the system directory is ever run', () => {

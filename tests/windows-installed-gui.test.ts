@@ -387,11 +387,13 @@ async function connectWithKey(browser: WebDriver, privateKey: string) {
   return connect;
 }
 
-/** Trust is explicit: the verification dialog must show the server's own fingerprint before the user accepts it. */
+/** Trust is explicit: the verification dialog must show exactly the server's own fingerprint before the user accepts it. */
 async function trustHostKey(browser: WebDriver, fingerprint: string) {
   const trust = await until('host verification', () => browser.find('[role="dialog"][aria-label="Verify this host"]'), 60_000);
-  expect(await browser.text(trust)).toContain(fingerprint);
+  const shown = await browser.text(await need(browser, '[data-testid="host-key-fingerprint"]', trust));
+  expect(shown).toBe(fingerprint);
   await browser.click(await need(browser, button('Trust key and connect'), trust, 'xpath'));
+  return shown;
 }
 
 /** The text a refused connection leaves in its dialog, which stays open and has no terminal behind it. */
@@ -407,7 +409,7 @@ actual('actual Windows installed GUI saves a host, trusts the exact host key of 
     await withInstalledGui('ssh', async ({ browser, app, owned }) => {
       await addOwnedSshHost(browser, server);
       await connectWithKey(browser, server.privateKey);
-      await trustHostKey(browser, server.fingerprint);
+      const shownFingerprint = await trustHostKey(browser, server.fingerprint);
 
       const screen = await until('SSH terminal', async () => {
         const alert = await browser.find(connectionAlert);
@@ -422,6 +424,7 @@ actual('actual Windows installed GUI saves a host, trusts the exact host key of 
       await browser.keys('set /a 1234*5678\uE007');
       await until('challenge answer', async () => (await shown()).includes('7006652') ? true : undefined, 30_000);
       expect(server.output()).toContain(`Accepted publickey for ${server.username}`);
+      console.info(`Windows installed GUI SSH evidence: server=${server.banner}; fingerprint shown=${shownFingerprint}; typed 'set /a 1234*5678', the shell answered 7006652 on the terminal screen; log: Accepted publickey for ${server.username}`);
       expect(await owned()).toEqual([app]);
     });
   } finally { await server.stop(); }
@@ -437,7 +440,8 @@ actual('actual Windows installed GUI refuses a key the owned server rejects and,
       // A key the server does not authorize: trusted host key, rejected credential, no terminal.
       const connect = await connectWithKey(browser, (await server!.unauthorizedKey()).privateKey);
       await trustHostKey(browser, fingerprint);
-      expect(await refusal(browser)).toContain('Authentication rejected by the server');
+      const rejected = await refusal(browser);
+      expect(rejected).toContain('Authentication rejected by the server');
       expect(server!.output()).not.toContain('Accepted');
       await browser.click(await need(browser, button('Cancel'), connect, 'xpath'));
       await until('connection dialog closed', async () => (await browser.find(`[role="dialog"][aria-label="Connect to ${hostName}"]`)) ? undefined : true);
@@ -453,6 +457,7 @@ actual('actual Windows installed GUI refuses a key the owned server rejects and,
       expect(refused).not.toContain(server.fingerprint);
       expect(await browser.find('[role="dialog"][aria-label="Verify this host"]')).toBeUndefined();
       expect(server.output()).not.toContain('Accepted');
+      console.info(`Windows installed GUI SSH refusal evidence: server=${server.banner}; rejected key: ${JSON.stringify(rejected)}; changed host key (${fingerprint} pinned, ${server.fingerprint} offered): ${JSON.stringify(refused)}`);
       expect(await owned()).toEqual([app]);
     });
   } finally { await server?.stop(); }
