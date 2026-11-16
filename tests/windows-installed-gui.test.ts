@@ -442,7 +442,8 @@ actual('actual Windows installed GUI refuses a key the owned server rejects and,
       await trustHostKey(browser, fingerprint);
       const rejected = await refusal(browser);
       expect(rejected).toContain('Authentication rejected by the server');
-      expect(server!.output()).not.toContain('Accepted');
+      const rejectedLog = server!.output();
+      expect(rejectedLog).not.toContain('Accepted');
       await browser.click(await need(browser, button('Cancel'), connect, 'xpath'));
       await until('connection dialog closed', async () => (await browser.find(`[role="dialog"][aria-label="Connect to ${hostName}"]`)) ? undefined : true);
 
@@ -457,7 +458,7 @@ actual('actual Windows installed GUI refuses a key the owned server rejects and,
       expect(refused).not.toContain(server.fingerprint);
       expect(await browser.find('[role="dialog"][aria-label="Verify this host"]')).toBeUndefined();
       expect(server.output()).not.toContain('Accepted');
-      console.info(`Windows installed GUI SSH refusal evidence: server=${server.banner}; rejected key: ${JSON.stringify(rejected)}; changed host key (${fingerprint} pinned, ${server.fingerprint} offered): ${JSON.stringify(refused)}`);
+      console.info(`Windows installed GUI SSH refusal evidence: server=${server.banner}; rejected key: ${JSON.stringify(rejected)} (server log tail ${JSON.stringify(rejectedLog.slice(-1200))}); changed host key (${fingerprint} pinned, ${server.fingerprint} offered): ${JSON.stringify(refused)}`);
       expect(await owned()).toEqual([app]);
     });
   } finally { await server?.stop(); }
