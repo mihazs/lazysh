@@ -41,6 +41,8 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
     let mut charged = 0;
     let mut count = 0;
     let mut branch_id = None;
+    // Work records with the number of actions before them, so a rewind drops the ones it abandons.
+    let mut work = Vec::new();
     while offset < size {
         let line = read_record_line(&mut reader)?;
         if line.last() != Some(&b'\n') {
@@ -146,10 +148,23 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
                         .map(|(_, cut)| *cut)
                         .ok_or(Error::InvalidEvent)?;
                     actions.truncate(cut);
+                    work.retain(|(at, _)| *at < cut);
                     boundaries.retain(|(index, _)| *index < target);
                     branch_id = Some(format!("grok-rewind-{position}"));
                     Action::Barrier
                 }
+                // Sub-agents and background jobs fill the work panel and leave the timeline as it is. A record of these kinds
+                // that is not the recorded shape is skipped, and their snapshots and monitor lines repeat what the launch and
+                // end records already carry.
+                "subagent_spawned" | "subagent_finished" | "task_backgrounded"
+                | "task_completed" => {
+                    work.extend(
+                        super::grok_work::record(tag, update, &timestamp)
+                            .map(|record| (actions.len(), record)),
+                    );
+                    Action::Barrier
+                }
+                "background_tasks" | "monitor_event" => Action::Barrier,
                 "plan_kept" => {
                     display_action(&record, position, Some(format!("record:{position}")))?
                 }
@@ -193,7 +208,7 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
         has_newer: selected.has_newer,
         activity: None,
         queued: Vec::new(),
-        work: None,
+        work: super::grok_work::tasks(work.into_iter().map(|(_, record)| record)),
         session: None,
     })
 }
@@ -212,6 +227,13 @@ fn tool_patch(update: &Value) -> Result<Value> {
             };
         }
     }
+    // The shared diff card reads an edit call's own input: keep the recorded kind and what the recorded diff changed.
+    if let Some(kind) = update["kind"].as_str() {
+        patch["kind"] = json!(kind);
+    }
+    if update["content"].is_array() {
+        patch["edit"] = edit_input(update);
+    }
     for field in ["content", "rawOutput"] {
         if let Some(value) = update.get(field).filter(|value| !value.is_null()) {
             if field == "content" && !value.is_array() {
@@ -227,6 +249,29 @@ fn tool_patch(update: &Value) -> Result<Value> {
         }
     }
     Ok(patch)
+}
+
+/// The input of an `edit` call (`file_path`, `old_string`, `new_string`) for content that is exactly one ACP `diff` part,
+/// else null. A diff with no old text is a new file.
+fn edit_input(update: &Value) -> Value {
+    let [part] = update["content"].as_array().map_or(&[][..], Vec::as_slice) else {
+        return Value::Null;
+    };
+    let old = match part.get("oldText") {
+        None | Some(Value::Null) => Some(""),
+        Some(old) => old.as_str(),
+    };
+    match (
+        part["type"].as_str(),
+        part["path"].as_str(),
+        old,
+        part["newText"].as_str(),
+    ) {
+        (Some("diff"), Some(path), Some(old), Some(new)) => {
+            json!(json!({"file_path":path,"old_string":old,"new_string":new}).to_string())
+        }
+        _ => Value::Null,
+    }
 }
 
 fn reduce(actions: Vec<Action>) -> Result<Vec<Value>> {
@@ -273,16 +318,29 @@ fn reduce(actions: Vec<Action>) -> Result<Vec<Value>> {
         }
     }
     for (id, (index, state)) in tools {
-        let mut call = super::block(
-            "tool_use",
-            state["rawInput"].as_str().unwrap_or_default().into(),
-            Some(id.clone()),
-            Some(state["title"].as_str().ok_or(Error::InvalidEvent)?.into()),
-        );
+        // A completed edit whose only output is its diff is the shared diff card, named and shaped as the other agents' edits.
+        let edit = state["edit"]
+            .as_str()
+            .filter(|_| state["kind"] == "edit" && state["status"] == "completed");
+        let mut call = match edit {
+            Some(input) => super::block(
+                "tool_use",
+                input.into(),
+                Some(id.clone()),
+                Some("edit".into()),
+            ),
+            None => super::block(
+                "tool_use",
+                state["rawInput"].as_str().unwrap_or_default().into(),
+                Some(id.clone()),
+                Some(state["title"].as_str().ok_or(Error::InvalidEvent)?.into()),
+            ),
+        };
         let mut output = state["content"]
             .as_array()
             .filter(|parts| !parts.is_empty())
             .or_else(|| state["rawOutput"].as_array())
+            .filter(|_| edit.is_none())
             .cloned()
             .unwrap_or_default();
         if let Some(status) = state["status"].as_str() {

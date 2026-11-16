@@ -26,6 +26,7 @@ mod gemini_conversation;
 mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
+mod grok_work;
 mod herdr_session;
 mod history;
 mod inline_image;

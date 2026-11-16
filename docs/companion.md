@@ -561,7 +561,8 @@ session file and replays it the way the CLI does: the file is an append-only log
 that message in place, `$patch` lines set tool results and edit, remove or reorder messages, `$rewindTo` drops a message and
 everything after it, and the metadata lines (`sessionId`, `$set`) show nothing. A legacy single-object `.json` session reads
 the same way. There is no Records view: `--view records` is refused. Only complete lines count, so a line still being written
-is ignored. Messages of type `info`, `warning` and `error` are not mapped.
+is ignored. Messages of type `info`, `warning` and `error` are not mapped: Gemini CLI writes an `info` message only for binary
+tool output (an image a tool returned), never for a compression, so there is no compression notice to show.
 
 `discover --agent gemini` lists `chats/session-*.jsonl` under `$GEMINI_CLI_HOME/.gemini/tmp/<project>/` (the user's home when
 the variable is unset). A sub-agent's own file, one folder deeper under the parent session id, is not listed and not read.
@@ -581,6 +582,10 @@ ordinary tool block:
 | `write_todos` (`todos[].description`, `status` of `pending`, `in_progress`, `completed`, `cancelled` or `blocked`) | plan card |
 | `invoke_agent` (`agent_name`, `prompt`) | `agent` work item; running until its call is `success`, `error` or `cancelled` |
 | `run_shell_command` with `is_background: true` | `shell` work item; it ends at no recorded event, so it stays `running` |
+
+The end of a background shell is not recorded under Gemini's default `backgroundCompletionBehavior` of `silent`; `inject` and
+`notify` put a `[Background command completed ...]` text into the next turn, in a shape that was never captured, so nothing
+reads an end from it (checked against the released 0.68.0 package and the current source, 2026-11-16).
 
 `activity` is `waiting` while a call awaits approval, `working` while a call runs or after the user's prompt or a finished
 call that the model has not answered, `stopped` after a cancelled call and `idle` after an answer. `session` carries the last
@@ -637,7 +642,30 @@ The modern disk envelope is `{timestamp, method, params: {sessionId, update}}`. 
 
 The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Unix-owner guards and modification-time ordering apply. Discovery does not read transcript contents, `.cwd`, session metadata or sidecars; it reports file path/size/time and the parent folder as an opaque display label. It never interprets a folder ID as a live agent session ID. Results are candidates, not parsed transcripts or proven live-terminal bindings. Select a result and explicitly open it to use the existing guarded record reader; malformed or replaced files are still validated on open. No new whole-file size ceiling is implied by metadata listing.
 
-`--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged. In the conversation view a `plan` update (`entries[{content,status,priority}]`, each update replacing the whole plan) is one `plan` call carrying the shared plan card, so the card and, once the Agent view follows a Grok session, the plan chip above the composer read it like a Claude Code `TodoWrite`; a plan with an entry whose `status` is not `pending`, `in_progress` or `completed` is refused, as it was before, so the conversation view fails and the Records view stays available. No sub-agent or background-job record shape of Grok Build is verified, so none is shown for it.
+`--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged. In the conversation view a `plan` update (`entries[{content,status,priority}]`, each update replacing the whole plan) is one `plan` call carrying the shared plan card, so the card and, once the Agent view follows a Grok session, the plan chip above the composer read it like a Claude Code `TodoWrite`; a plan with an entry whose `status` is not `pending`, `in_progress` or `completed` is refused, as it was before, so the conversation view fails and the Records view stays available. The sub-agents, background commands and monitors of the session fill `work` (see below) and an edit is the shared diff card; no
+other Grok record is mapped to a card.
+
+#### Grok Build work records
+
+In the conversation view the xAI records of four kinds make the `work` items the Agent view's background-work panel shows, and
+none of them adds a message: `subagent_spawned` (`subagent_id`, `description`, `subagent_type`, `child_session_id`) launches an
+`agent` item and the `subagent_finished` naming it (`status` `completed`, `failed` or `cancelled`, plus `error`, `output`,
+`tokens_used` and `duration_ms`) ends it as `done`, `failed` or `stopped`; `task_backgrounded` (`task_id`, `command`,
+`description` or, for a monitor, `monitor_description`) launches a `shell` or `monitor` item and the `task_completed` whose
+`task_snapshot.task_id` names it ends it (`explicitly_killed` is `stopped`, a non-zero `exit_code` or a `signal` is `failed`,
+the `session_restart` signal Grok writes for a task it lost is `unknown`, a snapshot with `completed` false ends nothing). The
+last line of the snapshot's `output`, or a sub-agent's `error` or first output line, is the item's `last`. A launch with no
+recorded end stays `running`; a record of one of these kinds with other field types, an end naming no launch and a rewound
+turn's records change nothing and never fail the conversation. `background_tasks` snapshots and `monitor_event` lines are
+accepted and show nothing, since the launch and end records carry what the panel shows.
+
+An edit is the shared diff card when its call is `kind: edit`, its last status is `completed` and its output is exactly one ACP
+`diff` part (`path`, `newText` and `oldText`, absent for a new file): the call is then an `edit` call whose input is
+`{file_path, old_string, new_string}`, which the client already draws as a diff card, and the diff is not repeated as output.
+Any other shape (a failed or unfinished edit, several diffs, another kind) stays an ordinary tool block with its recorded
+title, input and output. The records are the shapes the official writer serializes at the commit the Grok fixtures pin; no
+Grok CLI ran, so the shapes are not checked against a real session: `apps/agent/tests/grok_work.rs` and
+`tests/fixtures/grok-acp/work.jsonl`.
 
 #### Optional inline recorded images
 
