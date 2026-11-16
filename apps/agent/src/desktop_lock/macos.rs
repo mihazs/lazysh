@@ -166,6 +166,7 @@ mod tests {
     #[test]
     fn the_real_window_server_dictionary_is_read_without_error() {
         let session = coregraphics::session();
+        eprintln!("window-server session: {session:?}");
         match session {
             None => assert_eq!(desktop(|| session), Desktop::Unknown),
             Some(session) => {

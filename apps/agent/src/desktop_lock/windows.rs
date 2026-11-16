@@ -147,6 +147,7 @@ mod tests {
             0
         );
         let session = wts::session().expect("every process has a session to query");
+        eprintln!("console session query: {session:?} (this process: {mine})");
         assert_eq!(session.id, mine, "{session:?}");
         if session.id != session.console || session.state != ACTIVE {
             assert_eq!(desktop(|| Some(session)), Desktop::Unknown, "{session:?}");
