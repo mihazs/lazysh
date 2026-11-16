@@ -3835,6 +3835,8 @@ mod tests {
     mod host_clipboard_fixture;
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
+    #[path = "portable_files.rs"]
+    mod portable_files;
     #[cfg(unix)]
     #[path = "repository_review_fixture.rs"]
     mod repository_review_fixture;
@@ -7972,135 +7974,7 @@ mod tests {
             .unwrap(),
             fs::canonicalize(dir.path()).unwrap()
         );
-        let upload = dir
-            .path()
-            .join("new file' safe.txt")
-            .to_string_lossy()
-            .into_owned();
-        upload_file(
-            access_lease(),
-            app.state(),
-            id.clone(),
-            upload.clone(),
-            "hello 世界".as_bytes().to_vec(),
-        )
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
-        assert_eq!(
-            read_file(
-                access_lease(),
-                app.state(),
-                app.state(),
-                id.clone(),
-                upload.clone()
-            )
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap(),
-            "hello 世界"
-        );
-        assert!(upload_file(
-            access_lease(),
-            app.state(),
-            id.clone(),
-            upload.clone(),
-            b"replacement".to_vec()
-        )
-        .await
-        .is_err());
-        assert_eq!(fs::read(&upload).unwrap(), "hello 世界".as_bytes());
-        let entries = list_directory(
-            access_lease(),
-            app.state(),
-            app.state(),
-            id.clone(),
-            dir.path().to_string_lossy().into_owned(),
-        )
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
-        assert!(entries
-            .iter()
-            .any(|e| e.name == "new file' safe.txt" && !e.is_dir && e.size == 12));
-        let large = dir.path().join("large");
-        fs::write(&large, vec![0u8; FILE_LIMIT as usize + 1]).unwrap();
-        assert_eq!(
-            read_file(
-                access_lease(),
-                app.state(),
-                app.state(),
-                id.clone(),
-                large.to_string_lossy().into_owned()
-            )
-            .await
-            .err()
-            .unwrap()
-            .into_inner()
-            .unwrap()
-            .kind,
-            "file_too_large"
-        );
-        let binary = dir.path().join("binary");
-        fs::write(&binary, [0xffu8, 0xfe]).unwrap();
-        assert_eq!(
-            read_file(
-                access_lease(),
-                app.state(),
-                app.state(),
-                id.clone(),
-                binary.to_string_lossy().into_owned()
-            )
-            .await
-            .err()
-            .unwrap()
-            .into_inner()
-            .unwrap()
-            .kind,
-            "binary_file"
-        );
-        let crowded = dir.path().join("crowded");
-        fs::create_dir(&crowded).unwrap();
-        for i in 0..10001 {
-            fs::write(crowded.join(i.to_string()), b"").unwrap();
-        }
-        assert_eq!(
-            list_directory(
-                access_lease(),
-                app.state(),
-                app.state(),
-                id.clone(),
-                crowded.to_string_lossy().into_owned()
-            )
-            .await
-            .err()
-            .unwrap()
-            .into_inner()
-            .unwrap()
-            .kind,
-            "directory_too_large"
-        );
-        let rejected = dir.path().join("rejected-upload");
-        assert_eq!(
-            upload_file(
-                access_lease(),
-                app.state(),
-                id.clone(),
-                rejected.to_string_lossy().into_owned(),
-                vec![0; UPLOAD_LIMIT + 1]
-            )
-            .await
-            .err()
-            .unwrap()
-            .into_inner()
-            .unwrap()
-            .kind,
-            "file_too_large"
-        );
-        assert!(!rejected.exists());
+        portable_files::sftp(&app, &id, dir.path(), &dir.path().to_string_lossy()).await;
         let repo = dir.path().join("repo '$(echo no)");
         fs::create_dir(&repo).unwrap();
         assert!(std::process::Command::new("git")
@@ -8147,60 +8021,7 @@ mod tests {
         repository_review_fixture::verify(&app, &id, &repo).await;
         file_download_fixture::verify(&app, &id, dir.path()).await;
         repository_review_fixture::verify_discovery(&app, &id).await;
-        app.manage(crate::previews::PreviewState::default());
-        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let http_port = http.local_addr().unwrap().port();
-        let request = b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-        let response = b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
-        let websocket = [0x81, 0x82, 0, 1, 2, 3, b'H', b'i' ^ 1];
-        let web_server = tokio::spawn(async move {
-            let (mut socket, _) = http.accept().await.unwrap();
-            let mut received = vec![0; request.len()];
-            socket.read_exact(&mut received).await.unwrap();
-            assert_eq!(received, request);
-            socket.write_all(response).await.unwrap();
-            let mut frame = [0; 8];
-            socket.read_exact(&mut frame).await.unwrap();
-            assert_eq!(frame, websocket);
-            socket.write_all(&[0x81, 2, b'H', b'i']).await.unwrap();
-        });
-        let preview = crate::previews::start_preview(
-            access_lease(),
-            app.state(),
-            app.state(),
-            id.clone(),
-            http_port,
-            None,
-            None,
-        )
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
-        let preview = serde_json::to_value(preview).unwrap();
-        let local_port = preview["localPort"].as_u64().unwrap() as u16;
-        assert_ne!(
-            local_port, http_port,
-            "occupied port must fall back to an unused port"
-        );
-        let mut browser = tokio::net::TcpStream::connect(("127.0.0.1", local_port))
-            .await
-            .unwrap();
-        browser.write_all(request).await.unwrap();
-        let mut received = vec![0; response.len()];
-        timeout(Duration::from_secs(3), browser.read_exact(&mut received))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(received, response);
-        browser.write_all(&websocket).await.unwrap();
-        let mut frame = [0; 4];
-        timeout(Duration::from_secs(3), browser.read_exact(&mut frame))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(frame, [0x81, 2, b'H', b'i']);
-        web_server.await.unwrap();
+        let local_port = portable_files::preview_forward(&app, &id).await;
         resize(access_lease(), app.state(), id.clone(), 110, 35)
             .await
             .unwrap()
@@ -8217,17 +8038,7 @@ mod tests {
         .unwrap()
         .into_inner()
         .unwrap();
-        disconnect(app.state(), id).await.unwrap();
-        timeout(Duration::from_secs(2), async {
-            while tokio::net::TcpStream::connect(("127.0.0.1", local_port))
-                .await
-                .is_ok()
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        portable_files::forward_ends_with_session(&app, id, local_port).await;
     }
     #[tokio::test(start_paused = true)]
     async fn background_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
