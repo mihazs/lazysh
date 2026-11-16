@@ -444,8 +444,10 @@ mod tests {
         impl Output {
             pub(super) fn lines(&self) -> Vec<Value> {
                 let bytes = self.0.lock().unwrap().clone();
-                String::from_utf8(bytes)
-                    .unwrap()
+                let text = String::from_utf8(bytes).unwrap();
+                // A frame is a whole line: a line still being written is not parsed (it made this flaky).
+                let whole = text.rfind('\n').map_or("", |end| &text[..end]);
+                whole
                     .lines()
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect()
