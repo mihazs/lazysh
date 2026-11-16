@@ -1267,9 +1267,11 @@ fn real_tmux_agent_window() {
                     "#{pane_id}\t#{pane_current_path}",
                 ],
             );
+            // tmux 3.4 lists a `$` before a letter, `_` or `{` as `\$`; no path here holds a
+            // backslash, and the stub's own `pwd -P` already proved the real directory.
             rows.lines()
                 .filter_map(|row| row.split_once('\t'))
-                .map(|(pane, path)| (pane.to_owned(), path.to_owned()))
+                .map(|(pane, path)| (pane.to_owned(), path.replace("\\$", "$")))
                 .collect()
         },
     );
