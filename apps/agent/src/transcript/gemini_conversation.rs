@@ -15,7 +15,10 @@ use super::{
     block, conversation::capture, interaction, Error, Result, TranscriptAgent, TranscriptPage,
 };
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 const MAX_RECORDS: usize = 100_000;
 const MAX_TEXT: usize = 32 * 1024;
@@ -66,8 +69,9 @@ fn records(bytes: &[u8]) -> Result<Vec<Value>> {
     Ok(records)
 }
 
+/// Searches from the newest message: a replacement or a `$patch` nearly always targets a recent one.
 fn position(messages: &[Value], id: &str) -> Option<usize> {
-    messages.iter().position(|message| message["id"] == id)
+    messages.iter().rposition(|message| message["id"] == id)
 }
 
 /// `content` and tool results of one message, as a `$patch` sets them.
@@ -116,16 +120,35 @@ fn patch(messages: &mut Vec<Value>, patch: &Value) {
 
 fn replay(records: Vec<Value>) -> Vec<Value> {
     let mut messages: Vec<Value> = Vec::new();
+    // The ids of `messages`: a new message is appended without scanning for it, which would make a long session quadratic.
+    let ids = |messages: &[Value]| -> HashSet<String> {
+        messages
+            .iter()
+            .filter_map(|message| message["id"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let mut known = HashSet::new();
     for record in records {
         if let Some(id) = record["$rewindTo"].as_str() {
             // An unknown id empties the conversation, as in the CLI.
             messages.truncate(position(&messages, id).unwrap_or(0));
+            known = ids(&messages);
         } else if record.get("$patch").is_some_and(Value::is_object) {
             patch(&mut messages, &record["$patch"]);
+            if known.len() != messages.len() {
+                known = ids(&messages);
+            }
         } else if let Some(id) = record["id"].as_str() {
-            match position(&messages, id) {
+            match known
+                .contains(id)
+                .then(|| position(&messages, id))
+                .flatten()
+            {
                 Some(index) => messages[index] = record,
-                None => messages.push(record),
+                None => {
+                    known.insert(id.to_owned());
+                    messages.push(record);
+                }
             }
         }
     }
