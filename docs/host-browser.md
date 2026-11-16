@@ -216,10 +216,10 @@ header (sequence, width, height, scroll offset, timestamp), so the client never 
 | client to relay | `navigate {url}`, `back`, `forward`, `reload`, `stop` | `url` limited to `http`, `https`, `about:blank`. |
 | client to relay | `tabs`, `activateTab {id}`, `newTab`, `closeTab {id}` | Pages only. |
 | client to relay | `ack {sequence, decodeMs}` | After the device decoded a frame. |
-| client to relay | `quality {rung}`, `pause`, `resume` | Pause when hidden. |
+| client to relay | `quality {rung}`, `pause`, `resume` | `rung` is `auto`, `high`, `balanced`, `low` or `minimal`: a named rung holds it (Data saver sends `minimal`), `auto` lets the relay choose. Pause when hidden. |
 | client to relay | `control {on}` | Turns Control on or off for the session. Off when a session starts. |
 | client to relay | `pointer {kind, x, y, button, clickCount}`, `wheel {x, y, deltaX, deltaY}`, `pinch {scale}`, `key {key, modifiers}`, `text {text}` | Accepted only while Control is on; see "Relay wire format". |
-| relay to client | `frame`, `state`, `tabs`, `dialog {kind, text}`, `closed {reason}` | Page strings are untrusted text. |
+| relay to client | `frame`, `state`, `quality {rung, pinned}`, `tabs`, `dialog {kind, text}`, `closed {reason}` | Page strings are untrusted text. |
 
 Everything else is dropped with a counter, and the browser's protocol is not otherwise reachable.
 
@@ -237,15 +237,17 @@ the body.
 
 Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome" | "firefox", headed?, viewport: {width,
 height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
-scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause`, `resume`, `control {on}` and the
-input messages below. Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
+scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `quality {rung}`, `pause`, `resume`,
+`control {on}` and the input messages below. Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
 than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
-browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
+browser, viewport, capabilities}`, `quality {rung, pinned}` (the rung the stream is at, sent when the stream starts and
+whenever the rung or the pin changes) (the version comes from `Browser.getVersion` and must be Chrome or Chromium
 111 or newer, or, for Firefox, from `session.new` and must be Firefox 159 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
 `page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (one count
 per reason, sent at count 1, 2, 4, 8 and so on; the reasons are `OperationRefused`, `ControlOff`,
 `InputOutOfRange`, `PermissionRefused` and `InputRateLimited`), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
-`BrowserExited`, `PageCrashed`, `ProtocolViolation`, or the class of a failure before the stream started
+`BrowserExited`, `PageCrashed`, `ProtocolViolation`, `IdleReleased` (the view was hidden for the idle time, below),
+or the class of a failure before the stream started
 (`HostBrowserDisabled`, `BrowserNotFound`, `AddressRefused`, `ViewportInvalid`, and so on).
 
 `control {on}` turns Control on or off, and `capabilities.control` in `state` says the relay accepts it. Control is
@@ -271,7 +273,9 @@ does not reach (a drag is one `wheel` per frame). The relay does not log or keep
 Pacing is the relay's job. It acknowledges the browser's screencast frame at once and keeps only the newest
 frame for the device; at most two frames are unacknowledged, and the client sends `ack` after it decoded a frame,
 so a slow device sees fewer frames, not a queue. `pause` stops the screencast at the browser and holds nothing;
-`resume` starts it again. The browser's title and address are read when they change and once a second while the
+`resume` starts it again. A view hidden for the idle time, `--idle-release SECONDS` (1 to 86400, default 600), ends
+the session with `IdleReleased`, which stops the browser and removes its profile; a shown view is never released.
+How much the relay asks of the browser is the [quality ladder](#performance). The browser's title and address are read when they change and once a second while the
 view is shown, because Chrome announces an address change but not a title that the page sets later.
 
 The browser is started with `--remote-debugging-pipe`, a private profile and `--headless=new` (so no port exists
@@ -541,19 +545,40 @@ Measured on this project's development host; see the
 
 Design from those facts:
 
-- **Quality ladder.** High, balanced, low and minimal, each a JPEG quality, a frame size and a frame divisor
-  (for example q60 full size every frame, q40 every 3rd frame, q35 at 75 percent size every 6th frame). The
-  relay measures goodput and the acknowledgement time, steps down within a second and steps up after ten stable
-  seconds. A **Data saver** option pins the lowest rung.
+- **Quality ladder** (`apps/agent/src/host_browser/ladder.rs`). Four rungs, each a JPEG quality, a frame size
+  and a frame divisor:
+
+  | Rung | JPEG quality | Size | Every nth frame (60 fps page) |
+  | --- | --- | --- | --- |
+  | High | 60 | 100 percent | 1 (60) |
+  | Balanced | 50 | 100 percent | 2 (30) |
+  | Low | 40 | 100 percent | 3 (20) |
+  | Minimal | 35 | 75 percent | 6 (10) |
+
+  A stream starts at High. The relay counts the frames the browser produces and the frames the device acknowledges
+  after decoding them. At most two frames are unacknowledged, so the acknowledgement rate is two frames over the
+  acknowledgement time: it holds the link's goodput and round trip and the phone's decode time, and the relay
+  does not estimate them separately. A rung **fits** while, over a window of 0.8 seconds, the device acknowledges
+  at least 80 percent of the lesser of the produced rate and 15 frames a second; a window with fewer than four
+  produced frames (an unchanged page) is not judged. A window that does not fit steps down one rung, so the first
+  step comes within a second and the lowest rung from High within about three. A rung that fit for ten seconds
+  steps up one rung, and if that one does not fit it is left again within a window. The relay tells the client the
+  rung and whether it is pinned with `quality {rung, pinned}`. A **Data saver** option sends `quality {rung:
+  "minimal"}`, which pins the lowest rung: the ladder neither judges nor boosts, until `quality {rung: "auto"}`
+  starts again from High.
+  A screencast sends a frame when the page changes (measured with Chromium 156), so after a step on a page that
+  does not change the picture keeps the previous rung's size until the page next changes.
 - **Acknowledge after decode.** The device's decode time is part of back-pressure, so a slow phone gets fewer
   frames instead of a growing queue.
 - **Pacing on the host.** The relay acknowledges the browser at once and holds only the newest frame for the
   device, so the link's round trip never throttles the browser. On Firefox it pipelines polls and drops repeats.
-- **Interaction boost.** Full rate for two seconds after input, then back to the ladder.
+- **Interaction boost.** Every frame (divisor 1) for two seconds after input the relay forwarded, at the rung's
+  own quality and size, then back to the rung. The boosted rate is not judged, because the link cannot be
+  expected to carry it, and a pinned rung is never boosted.
 - **Sharpen when idle.** A single high-quality still when the page stops changing, because a screencast is
   produced at CSS size.
 - **Pause when hidden.** No frames when the view is not visible, the app is in the background or the screen is
-  off; the browser is released after the idle time.
+  off (the viewer sends `pause`); the browser is released after the idle time (`--idle-release`).
 - **Host budget.** A streaming browser stays under one core at the highest rung, with at most one browser per
   session and two per app.
 

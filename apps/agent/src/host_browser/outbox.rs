@@ -73,9 +73,14 @@ impl Outbox {
             }
         });
     }
-    /// The device decoded one frame.
-    pub fn ack(&self) {
-        self.change(|slots| slots.in_flight = slots.in_flight.saturating_sub(1));
+    /// The device decoded one frame; `false` when none was waiting for it, which is not a delivery.
+    pub fn ack(&self) -> bool {
+        let mut acknowledged = false;
+        self.change(|slots| {
+            acknowledged = slots.in_flight > 0;
+            slots.in_flight = slots.in_flight.saturating_sub(1);
+        });
+        acknowledged
     }
     /// Paused: no frame is held or sent. Resuming forgets frames the hidden device never acknowledged.
     pub fn pause(&self, paused: bool) {
