@@ -141,10 +141,28 @@ async fn probe(session: &Session, lease: &AccessLease) -> Result<Probed> {
                 )
                 .await?
                 {
-                    Asked::Text(text) => Probed::Known(Windows::parse(&text).map(Host::Windows)),
+                    Asked::Text(text) => Probed::Known(match Windows::parse(&text) {
+                        Some(windows) => {
+                            Some(Host::Windows(managed(session, lease, windows).await?))
+                        }
+                        None => None,
+                    }),
                     _ => Probed::Unknown,
                 }
             }
+        },
+    )
+}
+/// The identified Windows host once its managed namespace has been read (one exec) and decided, for the whole
+/// connection. A read that fails or does not answer keeps the `PATH` lookup, as does a namespace that is absent or refused.
+async fn managed(session: &Session, lease: &AccessLease, windows: Windows) -> Result<Windows> {
+    let Ok(command) = windows.namespace_command() else {
+        return Ok(windows);
+    };
+    Ok(
+        match ask(session, lease, command, Duration::from_secs(10)).await? {
+            Asked::Text(text) => windows.admit(&text),
+            _ => windows,
         },
     )
 }

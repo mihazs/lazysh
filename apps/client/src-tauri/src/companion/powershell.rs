@@ -4,6 +4,7 @@
 //! which none of those shells (nor a POSIX one) changes. Windows PowerShell 5.1 is assumed, as in ADR 0003.
 use super::{error, words, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use lazysh_common::windows_acl::{admit_facts, descriptor_from_binary, Fact, Unsafe};
 
 /// What the probe prints first: the answer of a host that ran it, never of one that merely echoes a command.
 const MARKER: &str = "lazysh-windows-v1";
@@ -15,21 +16,43 @@ if(-not $a){$a=$env:PROCESSOR_ARCHITECTURE}
 $a
 [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([Environment]::GetFolderPath('LocalApplicationData')))";
-/// Output as UTF-8 (the console's code page would garble a transcript), and the first `lazysh-agent` program on the
-/// `PATH`: PowerShell never runs one from the current directory, which `cmd.exe` would.
-const FIND: &str = "try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)}catch{}
-$e=Get-Command lazysh-agent -CommandType Application -ErrorAction SilentlyContinue|Select-Object -First 1";
+/// Output as UTF-8: the console's code page would garble a transcript.
+const UTF8: &str = "try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)}catch{}";
+/// The first `lazysh-agent` program on the `PATH`: PowerShell never runs one from the current directory, which
+/// `cmd.exe` would.
+const SEARCH: &str =
+    "Get-Command lazysh-agent -CommandType Application -ErrorAction SilentlyContinue|Select-Object -First 1";
+/// What the namespace reader prints first.
+const NAMESPACE_MARKER: &str = "lazysh-windows-managed-v1";
+/// The managed namespace below `%LOCALAPPDATA%` and the executable in it, as `lazysh-agent` places them.
+const MANAGED: [&str; 2] = ["lazysh", "companion"];
+const EXECUTABLE: &str = "lazysh-agent.exe";
+/// One line for each component from `%LOCALAPPDATA%` down to the executable, up to the first one that is absent, a
+/// link or not a directory (nothing under it is read, and a junction is never followed): `-` absent, `l` a reparse
+/// point, `?` that it cannot be read, or `d` or `f` (a directory, or a file) and the base64 of its self-relative
+/// security descriptor, which Rust reads and decides. `GetAttributes` looks at a link itself, not at what it points to.
+const NAMESPACE: &str = "$p={root}
+{marker}
+foreach($n in $null,{names}){
+if($n){$p+='\\'+$n}
+try{$a=[int][IO.File]::GetAttributes($p)}catch [IO.FileNotFoundException],[IO.DirectoryNotFoundException]{'-';break}catch{'?';break}
+if($a -band 0x400){'l';break}
+try{$o=if($a -band 0x10){[IO.DirectoryInfo]::new($p)}else{[IO.FileInfo]::new($p)};$d=[Convert]::ToBase64String($o.GetAccessControl().GetSecurityDescriptorBinaryForm())}catch{'?';break}
+if($a -band 0x10){'d '+$d}else{'f '+$d;break}}";
 /// `cmd.exe` takes 8,191 characters per line, the shell's own prefix included (`"C:\Windows\System32\cmd.exe" /c ` is 33).
 const LIMIT: usize = 8191 - 100;
 
-/// A Windows host the probe identified. Installation stays unsupported; the managed executable is not resolved yet.
+/// A Windows host the probe identified. Installation stays unsupported.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct Windows {
+    /// Read by the tests only: nothing picks a download for a Windows host yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub arch: &'static str,
     pub sid: String,
     /// `%LOCALAPPDATA%`, where the managed companion belongs.
     pub data: String,
+    /// The managed `lazysh-agent.exe`, when its namespace was read and admitted: it runs before the `PATH`'s.
+    pub managed: Option<String>,
 }
 
 fn sid(value: &str) -> bool {
@@ -120,6 +143,48 @@ fn arguments(original: &str) -> Result<String> {
         .collect()
 }
 
+/// The facts a namespace exec printed: its marker, then a row for each component down to the first one that is not a
+/// directory. `None` when it is anything else, a row after the last one the walk reaches included. A descriptor that
+/// cannot be read faithfully is `Unreadable`, which refuses.
+fn namespace(answer: &str) -> Option<Vec<Fact>> {
+    let mut rows = answer.lines();
+    (rows.next()? == NAMESPACE_MARKER).then_some(())?;
+    let mut facts = Vec::new();
+    for row in rows {
+        if facts.len() == MANAGED.len() + 2
+            || !matches!(facts.last(), None | Some(Fact::Directory(_)))
+        {
+            return None;
+        }
+        facts.push(match row.split_once(' ') {
+            None => match row {
+                "-" => Fact::Absent,
+                "l" => Fact::Link,
+                "?" => Fact::Unreadable,
+                _ => return None,
+            },
+            Some((kind, bytes)) => {
+                let read = STANDARD
+                    .decode(bytes)
+                    .ok()
+                    .and_then(|bytes| descriptor_from_binary(&bytes));
+                match (kind, read) {
+                    ("d", Some(descriptor)) => Fact::Directory(descriptor),
+                    ("f", Some(descriptor)) => Fact::File(descriptor),
+                    ("d" | "f", None) => Fact::Unreadable,
+                    _ => return None,
+                }
+            }
+        });
+    }
+    // The walk stops at the first component that is not a directory; a directory last means rows are missing.
+    let complete = facts.len() == MANAGED.len() + 2 || !matches!(facts.last()?, Fact::Directory(_));
+    complete.then(|| {
+        facts.resize(MANAGED.len() + 2, Fact::Absent);
+        facts
+    })
+}
+
 impl Windows {
     pub(super) fn probe_command() -> String {
         encode(PROBE)
@@ -141,12 +206,68 @@ impl Windows {
             arch,
             sid: sid_row.into(),
             data,
+            managed: None,
         })
     }
+    /// Reads the facts of the managed namespace in one exec: see `NAMESPACE`.
+    pub(super) fn namespace_command(&self) -> Result<String> {
+        let names = MANAGED.iter().chain([&EXECUTABLE]);
+        checked(
+            &NAMESPACE
+                .replace("{root}", &literal(&self.data))
+                .replace("{marker}", &literal(NAMESPACE_MARKER))
+                .replace(
+                    "{names}",
+                    &names
+                        .map(|name| literal(name))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+        )
+    }
+    /// The host once `answer`, what `namespace_command` printed, has been decided by the `lazysh_common::windows_acl`
+    /// rules for the user the probe named. An absent namespace, an answer that cannot be understood and a refused
+    /// namespace (reported, never used) all keep the `PATH` lookup.
+    pub(super) fn admit(self, answer: &str) -> Windows {
+        let admitted = namespace(answer).map(|facts| admit_facts(&self.sid, &facts));
+        match admitted {
+            Some(Ok(true)) => Windows {
+                managed: Some(format!(
+                    "{}\\{}\\{EXECUTABLE}",
+                    self.data,
+                    MANAGED.join("\\")
+                )),
+                ..self
+            },
+            Some(Err(refused)) => {
+                eprintln!(
+                    "The managed companion on the Windows host was not used: {}. Falling back to the PATH.",
+                    match refused {
+                        Unsafe::Directory => "a directory of its namespace is a link or can be changed by another account",
+                        Unsafe::Executable => "its executable is a link, no regular file, or open to another account",
+                    }
+                );
+                self
+            }
+            _ => self,
+        }
+    }
+    /// The script that sets `$e` to the program to run: the admitted managed executable while it is still a file, else
+    /// the first one on the `PATH`. Between the decision and the run another account cannot change the namespace, but
+    /// the user and the administrators can, and PowerShell cannot evaluate the rules again here.
+    fn find(&self) -> String {
+        match &self.managed {
+            None => format!("{UTF8}\n$e={SEARCH}"),
+            Some(path) => format!(
+                "{UTF8}\n$e=@{{Source={}}}\nif(-not(Test-Path -LiteralPath $e.Source -PathType Leaf)){{$e={SEARCH}}}",
+                literal(path)
+            ),
+        }
+    }
     pub(super) fn command(&self, original: &str) -> Result<String> {
-        let arguments = arguments(original)?;
+        let (arguments, find) = (arguments(original)?, self.find());
         checked(&format!(
-            "{FIND}
+            "{find}
 if(-not $e){{[Console]::Error.WriteLine('lazysh-agent: command not found');exit 127}}
 $LASTEXITCODE=1
 & $e.Source{arguments}
@@ -161,10 +282,10 @@ exit $LASTEXITCODE"
         marker: &str,
         diagnostics: bool,
     ) -> Result<String> {
-        let (arguments, marker) = (arguments(original)?, literal(marker));
+        let (arguments, marker, find) = (arguments(original)?, literal(marker), self.find());
         let redirect = if diagnostics { "" } else { " 2>$null" };
         checked(&format!(
-            "{FIND}
+            "{find}
 if(-not $e){{{marker};exit 0}}
 $LASTEXITCODE=1
 & $e.Source{arguments}{redirect}
@@ -212,7 +333,8 @@ mod tests {
             Windows {
                 arch: "arm64",
                 sid: SID.into(),
-                data: profile.into()
+                data: profile.into(),
+                managed: None
             }
         );
         assert_eq!(host().arch, "x64");
@@ -221,7 +343,8 @@ mod tests {
             Some(Windows {
                 arch: "x64",
                 sid: SID.into(),
-                data: profile.into()
+                data: profile.into(),
+                managed: None
             })
         );
         let good = answer("AMD64", SID, "C:\\Users\\o\\AppData\\Local");
@@ -340,6 +463,203 @@ mod tests {
         assert!(host()
             .command("lazysh-agent x --path 'C:\\dir with space\\file'")
             .is_ok());
+    }
+
+    use lazysh_common::windows_acl::{
+        binary_fixture::encode, Ace, Descriptor, ADMINISTRATORS, SYSTEM,
+    };
+
+    const MANAGED_PATH: &str = "C:\\Users\\o\\AppData\\Local\\lazysh\\companion\\lazysh-agent.exe";
+    const OTHER: &str = "S-1-5-21-1004336348-1177238915-682003330-1002";
+    fn grant(sid: &str, mask: u32) -> Ace {
+        Ace {
+            sid: sid.into(),
+            mask,
+            allow: true,
+            inherit_only: false,
+        }
+    }
+    /// What a user profile gives: the system, the administrators and the user hold everything.
+    fn profile() -> Vec<Ace> {
+        [SYSTEM, ADMINISTRATORS, SID]
+            .map(|sid| grant(sid, 0x1f_01ff))
+            .to_vec()
+    }
+    /// A row of the namespace reader for an object of `kind` (`d` or `f`) owned by the user.
+    fn row(kind: &str, aces: Vec<Ace>) -> String {
+        let descriptor = Descriptor {
+            owner: SID.into(),
+            dacl: Some(aces),
+        };
+        format!("{kind} {}", STANDARD.encode(encode(&descriptor)))
+    }
+    fn rows(rows: &[String]) -> String {
+        format!("{NAMESPACE_MARKER}\r\n{}\r\n", rows.join("\r\n"))
+    }
+    /// The four rows of a namespace in place, with `executable` as the last.
+    fn namespace_in_place(executable: String) -> Vec<String> {
+        let mut rows = vec![row("d", profile()); 3];
+        rows.push(executable);
+        rows
+    }
+    fn admitted() -> Windows {
+        host().admit(&rows(&namespace_in_place(row("f", profile()))))
+    }
+
+    #[test]
+    fn the_namespace_reader_is_one_line_of_fixed_words_and_base64_with_the_profile_path_as_a_literal(
+    ) {
+        let profile = "D:\\Usuários\\O'Neil\\AppData\\Local";
+        let host = Windows::parse(&answer("AMD64", SID, profile)).unwrap();
+        let command = host.namespace_command().unwrap();
+        assert!(
+            command
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || " -.+/=".contains(c)),
+            "{command}"
+        );
+        let text = script(&command);
+        assert!(text.starts_with(
+            "$p='D:\\Usuários\\O''Neil\\AppData\\Local'\n'lazysh-windows-managed-v1'\n"
+        ));
+        assert!(text.contains("foreach($n in $null,'lazysh','companion','lazysh-agent.exe'){"));
+        assert!(command.len() < 4_000);
+    }
+
+    #[test]
+    fn the_managed_namespace_is_read_from_the_top_down_and_decided_by_the_windows_acl_rules() {
+        let admitted = admitted();
+        assert_eq!(admitted.managed.as_deref(), Some(MANAGED_PATH));
+        // Others may read and run the executable's directory but not change it; an administrator may own the files.
+        let mut listing = profile();
+        listing.push(grant("S-1-5-32-545", 0x12_00a9));
+        let mut rows = namespace_in_place(row("f", profile()));
+        rows[2] = row("d", listing);
+        assert_eq!(host().admit(&self::rows(&rows)), admitted);
+        // Nothing yet, or only part of the namespace: the PATH lookup stays, nothing is refused.
+        for answer in [
+            rows_of(&["-"]),
+            rows_of(&["d", "-"]),
+            rows_of(&["d", "d", "-"]),
+            rows_of(&["d", "d", "d", "-"]),
+        ] {
+            assert_eq!(host().admit(&answer), host(), "{answer}");
+        }
+    }
+
+    /// An answer of rows with a real descriptor wherever the kind is `d` or `f`.
+    fn rows_of(kinds: &[&str]) -> String {
+        let all = kinds.iter().map(|kind| match *kind {
+            "d" | "f" => row(kind, profile()),
+            other => other.into(),
+        });
+        rows(&all.collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_namespace_another_account_can_change_or_a_link_in_its_place_is_never_used() {
+        let writable = |grant_to: &str, mask| {
+            let mut aces = profile();
+            aces.push(grant(grant_to, mask));
+            aces
+        };
+        let foreign = Descriptor {
+            owner: OTHER.into(),
+            dacl: Some(profile()),
+        };
+        let with_executable = |executable: String| rows(&namespace_in_place(executable));
+        for (name, answer) in [
+            ("a directory another account may change", {
+                let mut rows = namespace_in_place(row("f", profile()));
+                rows[1] = row("d", writable("S-1-1-0", 0x13_01bf));
+                self::rows(&rows)
+            }),
+            ("a directory it owns", {
+                let mut rows = namespace_in_place(row("f", profile()));
+                rows[2] = format!("d {}", STANDARD.encode(encode(&foreign)));
+                self::rows(&rows)
+            }),
+            (
+                "an executable another account may read",
+                with_executable(row("f", writable("S-1-1-0", 1))),
+            ),
+            (
+                "an executable it owns",
+                with_executable(format!("f {}", STANDARD.encode(encode(&foreign)))),
+            ),
+            ("a link in place of a directory", rows_of(&["d", "l"])),
+            (
+                "a link in place of the executable",
+                rows_of(&["d", "d", "d", "l"]),
+            ),
+            ("a file in place of a directory", rows_of(&["d", "d", "f"])),
+            (
+                "a directory in place of the executable",
+                rows_of(&["d", "d", "d", "d"]),
+            ),
+            ("a component it could not read", rows_of(&["d", "d", "?"])),
+            ("a descriptor of an unknown form", rows(&["d AAAA".into()])),
+        ] {
+            assert_eq!(host().admit(&answer), host(), "{name}");
+        }
+    }
+
+    #[test]
+    fn what_the_reader_did_not_print_faithfully_decides_nothing() {
+        let good = rows(&namespace_in_place(row("f", profile())));
+        assert_eq!(host().admit(&good).managed.as_deref(), Some(MANAGED_PATH));
+        let dir = row("d", profile());
+        for (name, answer) in [
+            ("nothing", String::new()),
+            (
+                "another marker",
+                good.replace(NAMESPACE_MARKER, "lazysh-windows-v1"),
+            ),
+            ("a banner", format!("banner\r\n{good}")),
+            ("a row past the executable", good.clone() + "d\r\n"),
+            ("a row after a link", rows_of(&["d", "l", "-"])),
+            (
+                "a directory last and rows missing",
+                rows(&[dir.clone(), dir.clone()]),
+            ),
+            ("only the marker", format!("{NAMESPACE_MARKER}\r\n")),
+            ("an unknown row", rows_of(&["d", "x"])),
+            ("a kind without a descriptor", rows(&["d".into()])),
+            (
+                "a descriptor that is not base64",
+                rows(&["d not base64!".into()]),
+            ),
+            ("an unknown kind", rows(&[dir.replacen('d', "x", 1)])),
+        ] {
+            assert_eq!(host().admit(&answer), host(), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_admitted_executable_runs_before_the_path_and_falls_back_to_it_when_it_is_gone() {
+        let (plain, managed) = (host(), admitted());
+        let search = "Get-Command lazysh-agent -CommandType Application -ErrorAction SilentlyContinue|Select-Object -First 1";
+        let lines = |host: &Windows| {
+            let text = script(&host.command("lazysh-agent snapshot --limit 5").unwrap());
+            text.lines().map(str::to_owned).collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&plain)[1], format!("$e={search}"));
+        let managed = lines(&managed);
+        assert_eq!(managed[1], format!("$e=@{{Source='{MANAGED_PATH}'}}"));
+        assert_eq!(
+            managed[2],
+            format!("if(-not(Test-Path -LiteralPath $e.Source -PathType Leaf)){{$e={search}}}")
+        );
+        // The call, the missing-companion answer and the exit status are the ones of the PATH lookup.
+        assert_eq!(managed[3..], lines(&plain)[2..]);
+        let marker = "lazysh-account-usage-companion-required-v1";
+        let required = script(
+            &admitted()
+                .required("lazysh-agent account-usage", marker, false)
+                .unwrap(),
+        );
+        assert!(required.contains(&format!("$e=@{{Source='{MANAGED_PATH}'}}")));
+        assert!(required.contains(&format!("if(-not $e){{'{marker}';exit 0}}")));
     }
 
     #[test]
@@ -539,5 +859,159 @@ mod native_tests {
                 "{shell:?}"
             );
         }
+    }
+
+    /// The facts the reader would print for `data`, read on this machine the way the native admission reads them.
+    fn native_facts(data: &Path) -> Vec<Fact> {
+        use lazysh_common::windows_acl::describe;
+        let mut path = data.to_owned();
+        let mut facts = Vec::new();
+        for name in [
+            None,
+            Some("lazysh"),
+            Some("companion"),
+            Some("lazysh-agent.exe"),
+        ] {
+            path.extend(name);
+            let fact = match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Fact::Absent,
+                Err(_) => Fact::Unreadable,
+                Ok(metadata) if lazysh_common::storage_namespace::is_link(&metadata) => Fact::Link,
+                Ok(metadata) => match describe(&path) {
+                    Ok(descriptor) if metadata.is_dir() => Fact::Directory(descriptor),
+                    Ok(descriptor) => Fact::File(descriptor),
+                    Err(_) => Fact::Unreadable,
+                },
+            };
+            let more = matches!(fact, Fact::Directory(_));
+            facts.push(fact);
+            if !more {
+                break;
+            }
+        }
+        facts.resize(4, Fact::Absent);
+        facts
+    }
+
+    #[test]
+    #[ignore = "requires Windows PowerShell and the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
+    fn real_windows_shells_read_the_managed_namespace_and_run_what_it_admits_before_the_path() {
+        use lazysh_common::windows_acl::{
+            admit_namespace, admit_path,
+            fixtures::{icacls, restrict},
+            local_kind,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let (bin, state, data) = (
+            root.path().join("bin"),
+            root.path().join("state"),
+            root.path().join("data"),
+        );
+        let companion = data.join("lazysh").join("companion");
+        let managed = companion.join("lazysh-agent.exe");
+        for dir in [&bin, &state, &data] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        // The user and the system hold the stand-in profile; a temporary folder would inherit whatever its volume grants.
+        restrict(&data);
+        let agent = std::env::var_os("LAZYSH_TEST_AGENT_BIN")
+            .expect("build lazysh-agent from this checkout and pass it as LAZYSH_TEST_AGENT_BIN");
+        // A different program under the same name first on the PATH: whichever runs shows in the output.
+        let shadow = Path::new(&std::env::var("SystemRoot").unwrap()).join(r"System32\whoami.exe");
+        fs::copy(shadow, bin.join("lazysh-agent.exe")).unwrap();
+        let version = format!("lazysh-agent {}", env!("CARGO_PKG_VERSION"));
+        let place = || {
+            fs::create_dir_all(&companion).unwrap();
+            fs::copy(&agent, &managed).unwrap();
+        };
+        let everyone = "*S-1-1-0";
+        let hosts = SHELLS.map(|shell| (shell, identified(shell, &state)));
+        // Reads and decides the namespace through each shell, then runs a command on the host it yields, and
+        // checks them against the native admission of the same files.
+        let check = |case: &str, expected: std::result::Result<bool, Unsafe>| {
+            let native = admit_namespace(
+                &data,
+                &["lazysh", "companion"],
+                "lazysh-agent.exe",
+                admit_path,
+                local_kind,
+            );
+            assert_eq!(native, expected, "{case}: the native admission");
+            for (shell, identity) in &hosts {
+                let host = Windows {
+                    data: data.display().to_string(),
+                    ..identity.clone()
+                };
+                let command = host.namespace_command().unwrap();
+                let out = run(*shell, &command, &search(None), &state);
+                let answer = String::from_utf8_lossy(&out.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert!(out.status.success(), "{case} {shell:?}: {answer} {stderr}");
+                assert_eq!(
+                    namespace(&answer),
+                    Some(native_facts(&data)),
+                    "{case} {shell:?}: {answer}"
+                );
+                let host = host.admit(&answer);
+                assert_eq!(
+                    host.managed.is_some(),
+                    expected == Ok(true),
+                    "{case} {shell:?}"
+                );
+                let command = host.command("lazysh-agent --version").unwrap();
+                let out = run(*shell, &command, &search(Some(&bin)), &state);
+                let ran_managed = text(&out.stdout) == version;
+                assert_eq!(ran_managed, expected == Ok(true), "{case} {shell:?}");
+            }
+        };
+        place();
+        check("a namespace the user alone controls", Ok(true));
+        // Others may read and run the directory and cannot read the executable.
+        icacls(&companion, &["/grant", &format!("{everyone}:(RX)")]);
+        check("a directory others may only list", Ok(true));
+        icacls(&companion, &["/grant", &format!("{everyone}:(M)")]);
+        check("a directory others may change", Err(Unsafe::Directory));
+        icacls(&companion, &["/remove", everyone]);
+        icacls(&managed, &["/grant", &format!("{everyone}:(R)")]);
+        check("an executable others may read", Err(Unsafe::Executable));
+        icacls(&managed, &["/remove", everyone]);
+        check("the grants taken back", Ok(true));
+        fs::remove_file(&managed).unwrap();
+        check("no executable yet", Ok(false));
+        place();
+        icacls(&managed, &["/setowner", "*S-1-5-32-545"]);
+        check(
+            "an executable another account owns",
+            Err(Unsafe::Executable),
+        );
+        fs::remove_file(&managed).unwrap();
+        fs::create_dir(&managed).unwrap();
+        check(
+            "a directory where the executable belongs",
+            Err(Unsafe::Executable),
+        );
+        fs::remove_dir(&managed).unwrap();
+        place();
+        let elsewhere = root.path().join("elsewhere");
+        fs::rename(&companion, &elsewhere).unwrap();
+        let junction = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&companion)
+            .arg(&elsewhere)
+            .output()
+            .unwrap();
+        assert!(junction.status.success(), "{junction:?}");
+        check(
+            "a junction in the place of a directory",
+            Err(Unsafe::Directory),
+        );
+        fs::remove_dir(&companion).unwrap();
+        fs::remove_dir_all(&elsewhere).unwrap();
+        fs::write(&companion, b"not a directory").unwrap();
+        check("a file where a directory belongs", Err(Unsafe::Directory));
+        fs::remove_file(&companion).unwrap();
+        check("no companion directory yet", Ok(false));
+        fs::remove_dir_all(data.join("lazysh")).unwrap();
+        check("no lazysh directory yet", Ok(false));
     }
 }
