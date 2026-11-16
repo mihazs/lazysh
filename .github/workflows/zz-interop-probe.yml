@@ -1,0 +1,30 @@
+name: zz-interop-probe
+on:
+  push:
+    branches: [chore/windows-interop-trial]
+jobs:
+  trial:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: A stub frontend, so the client crate's tests compile without building the application
+        shell: bash
+        run: |
+          mkdir -p apps/client/dist
+          echo '<!doctype html>' > apps/client/dist/index.html
+      - name: Build the companion this checkout produces
+        shell: bash
+        run: cargo build --locked -p lazysh-agent --bin lazysh-agent
+      - name: Probe
+        shell: bash
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
+        run: |
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::windows_openssh_fixture::probe::windows_probe -- --ignored --exact --nocapture 2>&1 | tee probe.log
+          echo "=== PROBE SUMMARY ==="
+          grep -a "PROBE" probe.log || true

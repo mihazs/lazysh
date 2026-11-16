@@ -44,7 +44,12 @@ pub(super) async fn sftp(app: &App, id: &str, dir: &Path, remote: &str) {
     for i in 0..10001 {
         fs::write(crowded.join(i.to_string()), b"").unwrap();
     }
-    let error = list(at("crowded")).await.err().unwrap().into_inner().unwrap();
+    let error = list(at("crowded"))
+        .await
+        .err()
+        .unwrap()
+        .into_inner()
+        .unwrap();
     assert_eq!(error.kind, "directory_too_large");
     let error = upload(at("rejected-upload"), vec![0; UPLOAD_LIMIT + 1])
         .await
@@ -54,6 +59,30 @@ pub(super) async fn sftp(app: &App, id: &str, dir: &Path, remote: &str) {
         .unwrap();
     assert_eq!(error.kind, "file_too_large");
     assert!(!dir.join("rejected-upload").exists());
+}
+
+/// A Git repository `name` in `dir` whose `file.txt` is staged as "before" and reads "after" in the work tree.
+pub(super) fn git_repo(dir: &Path, name: &str) -> PathBuf {
+    let repo = dir.join(name);
+    fs::create_dir(&repo).unwrap();
+    let git = |args: &[&std::ffi::OsStr]| {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init".as_ref(), repo.as_os_str()]);
+    fs::write(repo.join("file.txt"), "before\n").unwrap();
+    git(&[
+        "-C".as_ref(),
+        repo.as_os_str(),
+        "add".as_ref(),
+        "file.txt".as_ref(),
+    ]);
+    fs::write(repo.join("file.txt"), "after\n").unwrap();
+    repo
 }
 
 /// Previews a listener on the host: its port is taken, so the forward falls back to an unused local one, and an HTTP

@@ -403,3 +403,6 @@ fn registry_values_return_to_the_machines_own_or_to_their_absence_on_every_exit_
     );
     assert!(reg(&["delete", &key, "/f"]).status.success());
 }
+
+#[path = "windows_probe.rs"]
+mod probe;

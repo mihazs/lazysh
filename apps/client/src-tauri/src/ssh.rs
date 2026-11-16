@@ -7975,22 +7975,7 @@ mod tests {
             fs::canonicalize(dir.path()).unwrap()
         );
         portable_files::sftp(&app, &id, dir.path(), &dir.path().to_string_lossy()).await;
-        let repo = dir.path().join("repo '$(echo no)");
-        fs::create_dir(&repo).unwrap();
-        assert!(std::process::Command::new("git")
-            .arg("init")
-            .arg(&repo)
-            .output()
-            .unwrap()
-            .status
-            .success());
-        fs::write(repo.join("file.txt"), "before\n").unwrap();
-        assert!(std::process::Command::new("git")
-            .args(["-C", repo.to_str().unwrap(), "add", "file.txt"])
-            .status()
-            .unwrap()
-            .success());
-        fs::write(repo.join("file.txt"), "after\n").unwrap();
+        let repo = portable_files::git_repo(dir.path(), "repo '$(echo no)");
         let diff = get_diff(
             access_lease(),
             app.state(),
