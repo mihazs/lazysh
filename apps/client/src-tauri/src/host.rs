@@ -690,7 +690,13 @@ impl LocalHost {
             .argv
             .split_first()
             .ok_or_else(|| SshError::new("invalid_command", "Empty command"))?;
-        let mut command = tokio::process::Command::new(program);
+        // Windows keeps the process PATH (`login_path` is None there), which is what is searched.
+        let mut command = tokio::process::Command::new(crate::native_program::start(
+            cfg!(windows),
+            &std::env::var_os("PATH").unwrap_or_default(),
+            std::env::var_os("PATHEXT").as_deref(),
+            program,
+        ));
         command.args(args).envs(cmd.env.iter().copied());
         for name in INHERITED {
             command.env_remove(name);
@@ -959,8 +965,12 @@ fn executable(program: &str) -> String {
 }
 #[cfg(desktop)]
 fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
-    let name = executable(program);
-    std::env::split_paths(path).any(|directory| directory.join(&name).is_file())
+    crate::native_program::on_path(
+        cfg!(windows),
+        path,
+        std::env::var_os("PATHEXT").as_deref(),
+        program,
+    )
 }
 /// The PATH Herdr runs with: a Herdr on the PATH always wins; otherwise its owner-checked
 /// user install directory is appended, as the remote `with_path` wrapper does.
