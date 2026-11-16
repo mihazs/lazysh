@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readdir,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE} from './support/androidSsh';
@@ -38,6 +38,11 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
   expect(await listening(port)).toBe(false);
 },15_000);
 
+/** A stopped fixture no longer listens and leaves no directory behind. */
+async function expectRetired(fixture:Pick<SshFixture,'port'|'directory'>) {
+  expect(await listening(fixture.port)).toBe(false);
+  await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+}
 async function verifyCompanionFixture(privateTtyGroup:boolean) {
   const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup});
   try {
@@ -55,8 +60,7 @@ async function verifyCompanionFixture(privateTtyGroup:boolean) {
     const output=await client.finish('owned long-lived companion shell',5000);
     expect(output.includes(fixture.prompt) && output.includes(fixture.expected)).toBe(true);
   } finally {await fixture.stop();}
-  expect(await listening(fixture.port)).toBe(false);
-  await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+  await expectRetired(fixture);
 }
 
 test.skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools',()=>verifyCompanionFixture(false),15_000);
@@ -125,6 +129,29 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced 
   expect(await listening(lost.port)).toBe(false);
   await expect(stat(lost.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
+
+test('owned namespaced SSH rmux fixture refuses a relative, misnamed or tmux-combined rmux before starting anything',async()=>{
+  const refused=(options:Parameters<typeof SshFixture.start>[1],message:string)=>expect(SshFixture.start(undefined,options)).rejects.toThrow(message);
+  await refused({privateTtyGroup:true,rmux:'rmux'},'Owned rmux fixture requires the absolute path of an rmux binary');
+  await refused({privateTtyGroup:true,rmux:'/bin/sh'},'Owned rmux fixture requires the absolute path of an rmux binary');
+  await refused({privateTtyGroup:true,rmux:'/bin/rmux',tmux:true},'Owned rmux requires its own isolated private namespace fixture');
+  await refused({rmux:'/bin/rmux'},'Owned rmux requires its own isolated private namespace fixture');
+});
+
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RMUX)('owned namespaced SSH rmux runs the pinned rmux on its private socket directory and retires it with sshd',async()=>{
+  const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,rmux:process.env.LAZYSH_TEST_RMUX});
+  try {
+    // Started through sshd, so its daemon lives in the fixture's namespace; observed from outside through RMUX_TMPDIR only.
+    await (await fixture.client(true,'rmux -u -L default new-session -d -s probe -n one && rmux -u -L default new-window -d -t probe -n two')).finish('owned rmux session',10_000);
+    expect((await fixture.rmux(['list-windows','-t','probe','-F','#{window_name}:#{window_active}'])).trim().split('\n')).toEqual(['one:1','two:0']);
+    expect((await fixture.rmux(['list-clients','-F','#{client_session}'])).trim()).toBe('');
+    expect((await readdir(join(fixture.directory,'rmux'))).length).toBeGreaterThan(0);
+    // The daemon's pane records are readable from outside the namespace.
+    const pane=(await fixture.rmux(['list-panes','-t','probe:one','-F','#{pane_id}:#{pane_pid}'])).trim();
+    expect(pane).toMatch(/^%[0-9]+:[1-9][0-9]*$/);
+  } finally {await fixture.stop();}
+  await expectRetired(fixture);
+},20_000);
 
 test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH Mosh witness attributes both receipts to the same live shell and UDP socket',async()=>{
   const binary=await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Mosh witness binary','sh',['-c','command -v mosh-server'])).trim());
