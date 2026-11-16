@@ -5,7 +5,9 @@
 // `--status` exist, and the rest of this module is not reached.
 #![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 use clap::{Args as ClapArgs, ValueEnum};
-use lazysh_companion_release::{version, Config, Publisher, Selection, Which, MAX_BINARY};
+use lazysh_companion_release::{
+    valid_etag, version, Checked, Config, Publisher, Selection, Which, MAX_BINARY,
+};
 use report::{Failure, Fault, Latest, Output, Report};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -75,6 +77,11 @@ pub struct Args {
     /// The caller's SHA-256 of the release asset; the release must match it exactly.
     #[arg(long, value_parser = parse_sha256, requires_all = ["expect_bytes", "version"])]
     expect_sha256: Option<String>,
+    /// For `auto-update run` only: answer `outcome: notModified` without verifying anything when GitHub
+    /// still serves the release listing under this ETag (`--conditional=ETAG`), and report the ETag the
+    /// listing came with (`--conditional`).
+    #[arg(long, hide = true, requires = "check", conflicts_with = "version", num_args = 0..=1, require_equals = true, value_parser = parse_etag)]
+    conditional: Option<Option<String>>,
     /// The caller's byte count of the release asset; the release must match it exactly.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=MAX_BINARY), requires = "expect_sha256")]
     expect_bytes: Option<u64>,
@@ -89,6 +96,11 @@ fn parse_version(value: &str) -> Result<String, String> {
     version(value)
         .map(|_| value.to_owned())
         .ok_or_else(|| "expected X.Y.Z".to_owned())
+}
+fn parse_etag(value: &str) -> Result<String, String> {
+    valid_etag(value)
+        .then(|| value.to_owned())
+        .ok_or_else(|| "expected an entity tag".to_owned())
 }
 fn parse_sha256(value: &str) -> Result<String, String> {
     lazysh_common::valid_sha256(value)
@@ -156,8 +168,21 @@ struct Resolved {
     publisher: Publisher,
     selection: Selection,
     channel: &'static str,
+    /// The ETag of the listing the release came from.
+    etag: Option<String>,
 }
 async fn resolve(args: &Args, mode: Mode, output: &Output) -> Result<Resolved, Fault> {
+    // Only `--check` takes `--conditional`, and it calls `resolve_if_changed` itself.
+    resolve_if_changed(args, mode, output)
+        .await?
+        .ok_or_else(|| lazysh_companion_release::Error::unavailable().into())
+}
+/// `None` when `--conditional=ETAG` was given and GitHub says the listing is still that one.
+async fn resolve_if_changed(
+    args: &Args,
+    mode: Mode,
+    output: &Output,
+) -> Result<Option<Resolved>, Fault> {
     let target = current::target().ok_or(Failure::UnsafeInstallLocation)?;
     output.stage("resolving");
     // A download is bounded by the whole-request limit too, so it gets room an 11 MB body needs.
@@ -180,7 +205,12 @@ async fn resolve(args: &Args, mode: Mode, output: &Output) -> Result<Resolved, F
         (None, true) => Which::Highest,
         (None, false) => Which::Stable,
     };
-    let selection = publisher.select(target, which).await?;
+    let sent = args.conditional.as_ref().and_then(|etag| etag.as_deref());
+    let Checked::Changed { selection, etag } =
+        publisher.select_if_changed(target, which, sent).await?
+    else {
+        return Ok(None);
+    };
     // The caller's pin is a second opinion: the host's own resolution must agree with it.
     if args
         .expect_sha256
@@ -190,11 +220,12 @@ async fn resolve(args: &Args, mode: Mode, output: &Output) -> Result<Resolved, F
     {
         return Err(Fault::detail(Failure::VerificationFailed, "pinMismatch"));
     }
-    Ok(Resolved {
+    Ok(Some(Resolved {
         publisher,
         selection,
         channel,
-    })
+        etag,
+    }))
 }
 impl Resolved {
     fn latest(&self) -> Latest {
@@ -234,9 +265,14 @@ fn compare(args: &Args, installed: Option<&str>, wanted: &str) -> Result<Standin
 }
 
 async fn check(args: &Args, output: &Output, report: &mut Report) -> Result<bool, Fault> {
-    let resolved = resolve(args, Mode::Check, output).await?;
+    let Some(resolved) = resolve_if_changed(args, Mode::Check, output).await? else {
+        report.current = Some(current::detect()?);
+        report.outcome = "notModified";
+        return Ok(false);
+    };
     let installed = current::detect()?;
     report.latest = Some(resolved.latest());
+    report.etag = resolved.etag.clone().filter(|_| args.conditional.is_some());
     let standing = compare(
         args,
         installed.version.as_deref(),

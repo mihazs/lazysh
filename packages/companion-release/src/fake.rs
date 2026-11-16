@@ -4,7 +4,7 @@ use crate::{extension, sha};
 use axum::{
     body::Body,
     extract::{Path, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -111,6 +111,8 @@ pub struct Logged {
     pub method: String,
     pub path: String,
     pub user_agent: String,
+    /// The `If-None-Match` the client sent, if any.
+    pub if_none_match: Option<String>,
 }
 struct Inner {
     releases: Vec<Release>,
@@ -156,6 +158,23 @@ fn json_response(value: &Value) -> Response {
     )
         .into_response()
 }
+/// A listing with a weak ETag of its bytes, and `304` when the client already holds that one.
+fn listing(value: &Value, request: &HeaderMap) -> Response {
+    let bytes = serde_json::to_vec(value).unwrap();
+    let etag = format!("W/\"{}\"", &sha(&bytes)[..32]);
+    let held = request
+        .get(header::IF_NONE_MATCH)
+        .is_some_and(|sent| sent.as_bytes() == etag.as_bytes());
+    let mut response = if held {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
+    };
+    response
+        .headers_mut()
+        .insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    response
+}
 fn streamed(chunks: Vec<Result<Bytes, std::io::Error>>) -> Response {
     Response::new(Body::from_stream(futures_util::stream::iter(chunks)))
 }
@@ -175,6 +194,11 @@ fn logged(state: &Shared, request: &Request) -> Option<Fault> {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_owned(),
+        if_none_match: request
+            .headers()
+            .get(header::IF_NONE_MATCH)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned),
     });
     inner.fault.clone()
 }
@@ -192,7 +216,7 @@ async fn record(State(state): State<Shared>, request: Request, next: Next) -> Re
     }
     next.run(request).await
 }
-async fn latest(State(state): State<Shared>) -> Response {
+async fn latest(State(state): State<Shared>, headers: HeaderMap) -> Response {
     let state = state.lock().unwrap();
     // The newest stable one, like GitHub's `releases/latest`.
     match state
@@ -201,11 +225,11 @@ async fn latest(State(state): State<Shared>) -> Response {
         .enumerate()
         .rfind(|(_, r)| !r.draft && !r.prerelease)
     {
-        Some((index, release)) => json_response(&release_json(index, release, &state.fault)),
+        Some((index, release)) => listing(&release_json(index, release, &state.fault), &headers),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
-async fn list(State(state): State<Shared>) -> Response {
+async fn list(State(state): State<Shared>, headers: HeaderMap) -> Response {
     let state = state.lock().unwrap();
     let all = state
         .releases
@@ -214,7 +238,7 @@ async fn list(State(state): State<Shared>) -> Response {
         .rev()
         .map(|(index, release)| release_json(index, release, &state.fault))
         .collect::<Vec<_>>();
-    json_response(&Value::Array(all))
+    listing(&Value::Array(all), &headers)
 }
 async fn tagged(State(state): State<Shared>, Path(tag): Path<String>) -> Response {
     let state = state.lock().unwrap();

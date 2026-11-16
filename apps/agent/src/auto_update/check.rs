@@ -7,9 +7,13 @@
 //! The check is rate limited by what it records, so a runner that dies halfway, a state directory
 //! that cannot be written and a host that is offline all end the same way: the next check waits.
 use super::{app, instant, AutoUpdate, Policy};
-use crate::{private_json, update::state, Result};
+use crate::{
+    private_json,
+    update::state::{self, ReleaseEtag},
+    Result,
+};
 use chrono::{DateTime, Duration, Utc};
-use lazysh_companion_release::version;
+use lazysh_companion_release::{valid_etag, version};
 use serde_json::{json, Value};
 use std::time::Duration as Wait;
 
@@ -124,31 +128,56 @@ pub(super) fn run() -> Result<Value> {
     }
     // Written before the network is used: if this process dies, or the answer cannot be written
     // below, the next check still waits. A state directory that cannot be written ends the run here.
-    state::record_check(&directory, failed_check(&last, now, "interrupted"))?;
+    state::record_check(&directory, failed_check(&last, now, "interrupted"), None)?;
+    // What the last good check read from this channel's release listing: GitHub answers `304`, for no
+    // rate limit and with nothing more to verify, while that listing has not changed.
+    let channel = settings.channel.name();
+    let stored = state::State::read(&directory)
+        .release_etag
+        .filter(|stored| stored.channel == channel);
+    let etag = stored.as_ref().map(|stored| stored.etag.as_str());
     let (code, result) =
-        app::check_child(settings.channel, CHECK_DEADLINE).unwrap_or((-1, Value::Null));
-    let latest = result["latest"]["version"]
-        .as_str()
-        .filter(|latest| version(latest).is_some());
+        app::check_child(settings.channel, CHECK_DEADLINE, etag).unwrap_or((-1, Value::Null));
+    let unchanged = stored.is_some() && code == 0 && result["outcome"] == "notModified";
+    let latest = match &stored {
+        Some(stored) if unchanged => Some(stored.latest.as_str()),
+        _ => result["latest"]["version"]
+            .as_str()
+            .filter(|latest| version(latest).is_some()),
+    };
     let (Some(latest), 0 | 10) = (latest, code) else {
         // A host that cannot reach the release server is not an error for a timer: it is recorded,
         // and the next check waits.
         let kind = app::kind(code);
-        state::record_check(&directory, failed_check(&last, now, kind))?;
+        state::record_check(&directory, failed_check(&last, now, kind), None)?;
         let state = if code == 20 { "skipped" } else { "failed" };
         return Ok(answer(state, Some(kind), None));
     };
-    let available = code == 10;
+    // An installed version that cannot be read is a development build: never replaced behind its back.
+    let installed = result["current"]["version"].as_str().and_then(version);
+    // A `304` carries no verdict, so the stored latest is held against what is installed now.
+    let available = if unchanged {
+        installed.is_none_or(|installed| version(latest) > Some(installed))
+    } else {
+        code == 10
+    };
+    let fresh = result["etag"]
+        .as_str()
+        .filter(|etag| !unchanged && valid_etag(etag))
+        .map(|etag| ReleaseEtag {
+            channel: channel.to_owned(),
+            etag: etag.to_owned(),
+            latest: latest.to_owned(),
+        });
     state::record_check(
         &directory,
         json!({"at": app::stamp(now), "latest": latest, "available": available, "error": null}),
+        fresh.as_ref(),
     )?;
     let answer = |state, reason| answer(state, reason, Some(latest));
     if !available || settings.policy != Policy::Install {
         return Ok(answer("checked", None));
     }
-    // An installed version that cannot be read is a development build: never replaced behind its back.
-    let installed = result["current"]["version"].as_str().and_then(version);
     if !installed.is_some_and(|installed| version(latest) > Some(installed)) {
         return Ok(answer("checked", Some("notNewer")));
     }

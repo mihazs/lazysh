@@ -13,7 +13,7 @@ pub mod fake;
 pub use error::{Detail, Error, Kind, Result};
 #[cfg(feature = "test-endpoint")]
 pub use http::Endpoint;
-pub use http::{Body, Config, Download, Publisher, Which};
+pub use http::{valid_etag, Body, Checked, Config, Download, Publisher, Which};
 pub use metadata::{extension, sha, version, Selection, MAX_BINARY, TARGETS};
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use crate::{
     error::{Detail, Error, Kind},
-    http::{allowed, recheck_body, recheck_reference, recheck_transport, Body},
+    http::{allowed, recheck_body, recheck_reference, recheck_transport, valid_etag, Body},
     metadata::{select, Selection, MAX_BINARY},
     version,
 };
@@ -302,4 +302,25 @@ async fn response_stream_rejects_truncation_extra_bytes_compression_and_size_hea
         Body::new(response, 3, None).err().unwrap(),
         Error::verification(Detail::SizeMismatch)
     );
+}
+
+#[test]
+fn only_entity_tags_made_of_safe_characters_are_kept_and_sent() {
+    for good in ["\"abc123\"", "W/\"9f2c.4-b_e:1+x=/\""] {
+        assert!(valid_etag(good), "{good}");
+    }
+    let long = format!("\"{}\"", "a".repeat(127));
+    for bad in [
+        "",
+        "abc",
+        "\"\"",
+        "W/abc",
+        "\"a b\"",
+        "\"a\r\nX-Evil: 1\"",
+        "\"a\"b\"",
+        "w/\"abc\"",
+        long.as_str(),
+    ] {
+        assert!(!valid_etag(bad), "{bad:?}");
+    }
 }

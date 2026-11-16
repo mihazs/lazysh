@@ -303,10 +303,26 @@ fn update_child(args: &[&str], limit: Wait, capture: bool) -> Option<(i32, Vec<u
         thread::sleep(Wait::from_millis(50));
     }
 }
-/// `update --check --json` of `channel`: the status it exits with and the result it printed.
-pub(super) fn check_child(channel: Channel, limit: Wait) -> Option<(i32, Value)> {
+/// `update --check --json` of `channel`: the status it exits with and the result it printed. With
+/// `etag` the check asks GitHub whether the release listing changed since then; either way it
+/// reports the ETag of the listing it read.
+pub(super) fn check_child(
+    channel: Channel,
+    limit: Wait,
+    etag: Option<&str>,
+) -> Option<(i32, Value)> {
+    let conditional = etag.map_or_else(
+        || "--conditional".to_owned(),
+        |e| format!("--conditional={e}"),
+    );
     let (code, output) = update_child(
-        &["--check", "--json", "--channel", channel.name()],
+        &[
+            "--check",
+            "--json",
+            "--channel",
+            channel.name(),
+            &conditional,
+        ],
         limit,
         true,
     )?;

@@ -1,7 +1,7 @@
 //! `update-state.json`: what the last update operations left behind. Readers ignore unknown fields,
 //! because a rollback can run an older companion over a newer file; a damaged file reads as empty.
 use crate::private_json;
-use lazysh_companion_release::version;
+use lazysh_companion_release::{valid_etag, version};
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
@@ -17,6 +17,17 @@ pub struct State {
     pub last_check: Option<Value>,
     #[serde(default)]
     pub last_operation: Option<Value>,
+    #[serde(default)]
+    pub release_etag: Option<ReleaseEtag>,
+}
+/// The ETag of the release listing the last good scheduled check read, with the version that check
+/// found in it: a `304` to this ETag on the same channel means that version is still the latest. It
+/// has its own key so `lastCheck` keeps the shape the app reads.
+#[derive(Clone, Deserialize)]
+pub struct ReleaseEtag {
+    pub channel: String,
+    pub etag: String,
+    pub latest: String,
 }
 #[derive(Clone, Deserialize)]
 pub struct Previous {
@@ -35,6 +46,11 @@ impl State {
             previous: state.previous.filter(|previous| {
                 lazysh_companion_release::version(&previous.version).is_some()
                     && lazysh_common::valid_sha256(&previous.sha256)
+            }),
+            release_etag: state.release_etag.filter(|stored| {
+                valid_etag(&stored.etag)
+                    && version(&stored.latest).is_some()
+                    && matches!(stored.channel.as_str(), "stable" | "prerelease")
             }),
             ..state
         }
@@ -80,10 +96,20 @@ pub fn record(directory: &Path, retained: Retained, operation: Value) {
         value["lastOperation"] = operation;
     });
 }
-/// Write what a scheduled check found. Unlike `record` this one reports failure: a check that
-/// cannot be recorded cannot be rate limited, so the caller must not go on to use the network.
-pub fn record_check(directory: &Path, check: Value) -> crate::Result<()> {
-    modify(directory, |value| value["lastCheck"] = check)
+/// Write what a scheduled check found, and the listing ETag it read when it read a new one. Unlike
+/// `record` this one reports failure: a check that cannot be recorded cannot be rate limited, so the
+/// caller must not go on to use the network.
+pub fn record_check(
+    directory: &Path,
+    check: Value,
+    etag: Option<&ReleaseEtag>,
+) -> crate::Result<()> {
+    modify(directory, |value| {
+        value["lastCheck"] = check;
+        if let Some(stored) = etag {
+            value["releaseEtag"] = serde_json::json!({"channel":stored.channel,"etag":stored.etag,"latest":stored.latest});
+        }
+    })
 }
 fn modify(directory: &Path, change: impl FnOnce(&mut Value)) -> crate::Result<()> {
     let _lock =

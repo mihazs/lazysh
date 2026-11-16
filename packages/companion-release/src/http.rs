@@ -29,6 +29,29 @@ pub struct Endpoint {
     pub api: String,
     pub ca_pem: Vec<u8>,
 }
+/// What `Publisher::select_if_changed` found.
+pub enum Checked {
+    /// GitHub answered `304`: the release listing is the one the ETag was taken from.
+    NotModified,
+    /// The verified release, and the ETag of the listing it came from (for the next call), when
+    /// GitHub sent a well formed one.
+    Changed {
+        selection: Selection,
+        etag: Option<String>,
+    },
+}
+/// An entity tag as GitHub sends it (`"abc"` or `W/"abc"`), short and made of safe characters only, so
+/// that it can be stored and sent back as a header value.
+pub fn valid_etag(value: &str) -> bool {
+    let quoted = value.strip_prefix("W/").unwrap_or(value);
+    value.len() <= 128
+        && quoted.len() >= 3
+        && quoted.starts_with('"')
+        && quoted.ends_with('"')
+        && quoted[1..quoted.len() - 1]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:+=/-".contains(&byte))
+}
 pub enum Which<'a> {
     /// The release GitHub marks latest: not a draft, not a prerelease.
     Stable,
@@ -287,21 +310,73 @@ impl Publisher {
             .map_err(transport)?;
         Body::new(response, maximum, expected)
     }
+    /// A JSON GET that may carry `If-None-Match`. `None` is GitHub's `304 Not Modified` to the
+    /// ETag sent; otherwise the answer and the ETag it came with (kept only when well formed).
+    async fn json_if_changed<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        maximum: u64,
+        etag: Option<&str>,
+    ) -> Result<Option<(T, Option<String>)>> {
+        let etag = etag.filter(|etag| valid_etag(etag));
+        let mut request = self.request(path, false)?;
+        if let Some(etag) = etag {
+            request = request.header("If-None-Match", etag);
+        }
+        let response = request.send().await.map_err(transport)?;
+        if etag.is_some() && response.status().as_u16() == 304 {
+            return Ok(None);
+        }
+        let received = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| valid_etag(value))
+            .map(str::to_owned);
+        let bytes = Body::new(response, maximum, None)?.collect().await?;
+        let value = serde_json::from_slice(&bytes).map_err(|_| Error::unavailable())?;
+        Ok(Some((value, received)))
+    }
     async fn json<T: serde::de::DeserializeOwned>(&self, path: &str, maximum: u64) -> Result<T> {
-        let bytes = self
-            .body(path, maximum, None, false)
-            .await?
-            .collect()
-            .await?;
-        serde_json::from_slice(&bytes).map_err(|_| Error::unavailable())
+        let answer = self.json_if_changed(path, maximum, None).await?;
+        answer
+            .map(|(value, _)| value)
+            .ok_or_else(Error::unavailable)
     }
     /// Resolve and verify the companion asset for `target`.
     pub async fn select(&self, target: &str, which: Which<'_>) -> Result<Selection> {
-        let (release, prerelease) = match which {
-            Which::Stable => (self.json("releases/latest", MAX_RELEASE).await?, false),
+        match self.select_if_changed(target, which, None).await? {
+            Checked::Changed { selection, .. } => Ok(selection),
+            Checked::NotModified => Err(Error::unavailable()),
+        }
+    }
+    /// Like `select`, but a release listing GitHub still serves under `etag` (what the last
+    /// `Checked::Changed` returned for the same `which`) answers `NotModified` after one request
+    /// that does not count against the API rate limit, and nothing else is fetched. `Which::Tag`
+    /// names one exact release and is never conditional.
+    pub async fn select_if_changed(
+        &self,
+        target: &str,
+        which: Which<'_>,
+        etag: Option<&str>,
+    ) -> Result<Checked> {
+        let (release, prerelease, etag) = match which {
+            Which::Stable => {
+                let Some((release, etag)) = self
+                    .json_if_changed("releases/latest", MAX_RELEASE, etag)
+                    .await?
+                else {
+                    return Ok(Checked::NotModified);
+                };
+                (release, false, etag)
+            }
             Which::Highest => {
-                let releases: Vec<Release> =
-                    self.json("releases?per_page=10", MAX_RELEASES).await?;
+                let Some((releases, etag)) = self
+                    .json_if_changed::<Vec<Release>>("releases?per_page=10", MAX_RELEASES, etag)
+                    .await?
+                else {
+                    return Ok(Checked::NotModified);
+                };
                 let highest = releases
                     .into_iter()
                     .filter(|release| !release.draft)
@@ -311,7 +386,7 @@ impl Publisher {
                     })
                     .max_by_key(|(version, _)| *version)
                     .ok_or_else(Error::unavailable)?;
-                (highest.1, true)
+                (highest.1, true, etag)
             }
             Which::Tag {
                 version,
@@ -320,6 +395,7 @@ impl Publisher {
                 self.json(&format!("releases/tags/v{version}"), MAX_RELEASE)
                     .await?,
                 prerelease,
+                None,
             ),
             Which::Tag { .. } => return Err(Error::unavailable()),
         };
@@ -346,7 +422,8 @@ impl Publisher {
         }
         let manifest: Manifest =
             serde_json::from_slice(&bytes).map_err(|_| Error::unavailable())?;
-        select(release, manifest, reference, target, prerelease)
+        let selection = select(release, manifest, reference, target, prerelease)?;
+        Ok(Checked::Changed { selection, etag })
     }
     /// Start downloading the verified asset; nothing is trusted until `chunk` returns `Ok(None)`.
     pub async fn download(&self, selection: &Selection) -> Result<Download> {

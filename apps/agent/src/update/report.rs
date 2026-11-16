@@ -162,6 +162,8 @@ pub struct Report {
     pub current: Option<Current>,
     pub previous: Option<Value>,
     pub latest: Option<Latest>,
+    /// The ETag of the release listing, for the scheduled check that asked (`--check --conditional`).
+    pub etag: Option<String>,
     /// `lastCheck` and `lastOperation` of `--status`.
     pub history: Option<(Value, Value)>,
     /// The auto-update settings of `--status`: the app reads policy and last check in one call.
@@ -203,6 +205,9 @@ impl Report {
             "outcome":self.outcome,"exitCode":exit_code,"error":error,"current":self.current,
             "previous":self.previous,"latest":self.latest,
             "checkedAt":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)});
+        if let Some(etag) = &self.etag {
+            value["etag"] = json!(etag);
+        }
         if let Some((check, operation)) = &self.history {
             value["lastCheck"] = check.clone();
             value["lastOperation"] = operation.clone();

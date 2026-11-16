@@ -59,6 +59,14 @@ impl Host {
         assert_eq!(reply["schemaVersion"], 1);
         reply
     }
+    /// A scheduled check that looked and found `latest`, without installing it.
+    fn looked_and_found(&self, latest: &str) {
+        let reply = self.check();
+        assert_eq!(
+            (reply["state"].as_str(), reply["latest"].as_str()),
+            (Some("checked"), Some(latest))
+        );
+    }
     /// `set` with the revision the host is at, so each call is one change.
     fn set(&self, args: &[&str]) -> (i32, Value) {
         let (_, status) = self.auto_update(&["status"]);
@@ -84,6 +92,26 @@ impl Host {
             "update-state.json",
             &json!({"schemaVersion":1,"lastCheck":{"at":stamp(-Hours::hours(hours_ago)),"latest":NEW,"available":true,"error":null}}),
         );
+    }
+    /// The last check was this long ago; everything else in the state file, the ETag too, stays.
+    fn backdate(&self, ago: Hours) {
+        let mut state = self.state_file();
+        state["lastCheck"]["at"] = json!(stamp(-ago));
+        self.write_state("update-state.json", &state);
+    }
+    fn state_file(&self) -> Value {
+        serde_json::from_slice(&fs::read(self.state().join("update-state.json")).unwrap()).unwrap()
+    }
+    /// The requests for a release listing, with the `If-None-Match` each carried.
+    fn listings(&self) -> Vec<(String, Option<String>)> {
+        let requests = self.fixture.server.requests();
+        let listing =
+            |path: &str| path.ends_with("/releases/latest") || path.contains("/releases?");
+        requests
+            .into_iter()
+            .filter(|logged| listing(&logged.path))
+            .map(|logged| (logged.path, logged.if_none_match))
+            .collect()
     }
     fn paths(&self) -> Vec<String> {
         let requests = self.fixture.server.requests();
@@ -266,11 +294,16 @@ fn a_check_that_cannot_be_recorded_does_not_use_the_network() {
     assert_eq!(host.installed_version(), format!("lazysh-agent {THIS}"));
 }
 
-#[test]
-fn the_channel_decides_which_release_a_check_looks_at() {
+/// A due host whose releases are `NEW` (stable) and `99.1.0` (a prerelease).
+fn with_prerelease() -> Host {
     let mut prerelease = release_of("99.1.0", &companion("99.1.0"));
     prerelease.prerelease = true;
-    let host = Host::due_with(&[release_of(NEW, &companion(NEW)), prerelease]);
+    Host::due_with(&[release_of(NEW, &companion(NEW)), prerelease])
+}
+
+#[test]
+fn the_channel_decides_which_release_a_check_looks_at() {
+    let host = with_prerelease();
     assert_eq!(host.set(&["--policy", "notify"]).0, 0);
     assert_eq!(host.check()["latest"], NEW);
     host.checked(Hours::hours(48));
@@ -545,4 +578,173 @@ mod opportunistic {
         host.assert_offline();
         assert!(!host.state().join("update-state.json").exists());
     }
+}
+
+#[test]
+fn a_later_check_asks_only_whether_the_release_listing_changed() {
+    let host = Host::due();
+    assert_eq!(host.set(&["--policy", "notify"]).0, 0);
+    host.check();
+    let etag = host.state_file()["releaseEtag"]["etag"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(host.listings().len(), 1);
+    assert_eq!(
+        host.listings()[0].1,
+        None,
+        "the first check has nothing to ask about"
+    );
+    let asked = host.paths().len();
+    host.backdate(Hours::hours(25));
+    host.looked_and_found(NEW);
+    // One request, the conditional one: no tag, no `release.json`, nothing to verify again.
+    assert_eq!(host.paths().len(), asked + 1, "{:?}", host.paths());
+    assert_eq!(host.listings()[1].1.as_deref(), Some(etag.as_str()));
+    // What was found still stands, and the answer is recorded as a fresh check.
+    let check = host.last_check();
+    assert_eq!(
+        (check["latest"].as_str(), check["available"].as_bool()),
+        (Some(NEW), Some(true))
+    );
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(check["at"].as_str().unwrap()).unwrap()
+            > Utc::now() - Hours::minutes(5)
+    );
+    assert_eq!(host.state_file()["releaseEtag"]["etag"], etag);
+    assert_eq!(host.fixture.server.companion_downloads(), 0);
+    // The ETag is not part of `lastCheck` and not part of a plain `update --check`.
+    assert!(check.get("etag").is_none());
+    let plain = host.run(None, &["update", "--check", "--json"]);
+    let result: Value = serde_json::from_slice(
+        plain
+            .stdout
+            .split(|b| *b == b'\n')
+            .rfind(|l| !l.is_empty())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(result.get("etag").is_none() && result["latest"]["version"] == NEW);
+}
+
+#[test]
+fn a_new_release_replaces_the_listing_the_next_check_asks_about() {
+    let host = Host::due();
+    assert_eq!(host.set(&["--policy", "notify"]).0, 0);
+    host.check();
+    let first = host.state_file()["releaseEtag"].clone();
+    host.fixture
+        .server
+        .publish(vec![release_of("99.1.0", &companion("99.1.0"))]);
+    host.backdate(Hours::hours(25));
+    host.looked_and_found("99.1.0");
+    // The old ETag no longer matched: the listing came back whole and was verified like a first check.
+    assert_eq!(
+        host.listings()[1].1,
+        first["etag"].as_str().map(str::to_owned)
+    );
+    assert_eq!(host.paths().len(), 4 + 4, "{:?}", host.paths());
+    let second = host.state_file()["releaseEtag"].clone();
+    assert_ne!(second["etag"], first["etag"]);
+    assert_eq!(second["latest"], "99.1.0");
+    assert_eq!(host.last_check()["latest"], "99.1.0");
+}
+
+#[test]
+fn an_unchanged_listing_still_installs_a_release_that_waited_for_its_window() {
+    let host = Host::due();
+    assert_eq!(
+        host.set(&["--policy", "install", "--window", &window(2, 3)])
+            .0,
+        0
+    );
+    assert_eq!(host.check()["reason"], "outsideWindow");
+    assert_eq!(host.installed_version(), format!("lazysh-agent {THIS}"));
+    assert_eq!(
+        host.set(&["--policy", "install", "--window", &window(-1, 1)])
+            .0,
+        0
+    );
+    host.backdate(Hours::hours(1));
+    let reply = host.check();
+    assert_eq!(
+        (reply["state"].as_str(), reply["latest"].as_str()),
+        (Some("updated"), Some(NEW))
+    );
+    assert!(
+        host.listings()[1].1.is_some(),
+        "the second look was conditional"
+    );
+    // A 304 only spared the check; the install resolved, verified and downloaded the release itself.
+    assert_eq!(host.fixture.server.companion_downloads(), 1);
+    assert_eq!(host.installed_version(), format!("lazysh-agent {NEW}"));
+}
+
+#[test]
+fn an_unchanged_listing_of_an_older_release_is_still_no_update() {
+    let host = Host::due_with(&[release_of("0.0.9", &companion("0.0.9"))]);
+    assert_eq!(host.check()["state"], "checked");
+    host.backdate(Hours::hours(25));
+    assert_eq!(host.check()["state"], "checked");
+    assert!(host.listings()[1].1.is_some());
+    let check = host.last_check();
+    assert_eq!(
+        (check["latest"].as_str(), check["available"].as_bool()),
+        (Some("0.0.9"), Some(false))
+    );
+}
+
+#[test]
+fn another_channel_does_not_reuse_the_etag_of_the_listing_of_this_one() {
+    let host = with_prerelease();
+    assert_eq!(host.set(&["--policy", "notify"]).0, 0);
+    host.check();
+    assert_eq!(host.state_file()["releaseEtag"]["channel"], "stable");
+    assert_eq!(
+        host.set(&["--policy", "notify", "--channel", "prerelease"])
+            .0,
+        0
+    );
+    host.backdate(Hours::hours(25));
+    assert_eq!(host.check()["latest"], "99.1.0");
+    let listings = host.listings();
+    assert!(listings[1].0.contains("releases?per_page"), "{listings:?}");
+    assert_eq!(listings[1].1, None, "the stable ETag was not sent");
+    let stored = host.state_file()["releaseEtag"].clone();
+    assert_eq!(
+        (stored["channel"].as_str(), stored["latest"].as_str()),
+        (Some("prerelease"), Some("99.1.0"))
+    );
+}
+
+#[test]
+fn a_stored_etag_that_is_not_an_entity_tag_is_never_sent() {
+    let host = Host::due();
+    assert_eq!(host.set(&["--policy", "notify"]).0, 0);
+    host.write_state(
+        "update-state.json",
+        &json!({"schemaVersion":1,"lastCheck":{"at":stamp(-Hours::hours(48)),"latest":NEW,"available":true,"error":null},
+            "releaseEtag":{"channel":"stable","etag":"W/\"x\"\r\nX-Evil: 1","latest":NEW}}),
+    );
+    let reply = host.check();
+    assert_eq!(reply["state"], "checked");
+    assert_eq!(host.listings()[0].1, None);
+    assert_eq!(host.paths().len(), 4, "verified in full like a first check");
+    assert!(host.state_file()["releaseEtag"]["etag"]
+        .as_str()
+        .unwrap()
+        .starts_with("W/\""));
+}
+
+#[test]
+fn a_failed_check_keeps_the_etag_of_the_last_good_one() {
+    let host = Host::due();
+    assert_eq!(host.set(&["--policy", "notify"]).0, 0);
+    host.check();
+    let kept = host.state_file()["releaseEtag"].clone();
+    host.fixture.server.fault(Some(Fault::Status(503, None)));
+    host.backdate(Hours::hours(25));
+    assert_eq!(host.check()["state"], "skipped");
+    assert_eq!(host.last_check()["error"]["kind"], "networkUnavailable");
+    assert_eq!(host.state_file()["releaseEtag"], kept);
 }
