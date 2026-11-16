@@ -22,6 +22,7 @@ mod herdr_guard;
 mod herdr_path;
 mod herdr_stock_input;
 mod host;
+mod host_browser;
 mod host_clipboard;
 mod identities;
 mod keep_awake;
@@ -108,6 +109,7 @@ pub fn run() {
         .manage(theme_qr::QrState::default())
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
+        .manage(host_browser::HostBrowsers::default())
         .manage(transcript_watch::TranscriptWatches::default())
         .manage(share::ShareState::default())
         .manage(voice::cloud::CloudState::default())
@@ -213,6 +215,12 @@ pub fn run() {
                 devices::stream::device_stream_start,
                 devices::stream::device_stream_next,
                 devices::stream::device_stream_stop,
+                host_browser::host_browser_start,
+                host_browser::host_browser_next,
+                host_browser::host_browser_ack,
+                host_browser::host_browser_pause,
+                host_browser::host_browser_resume,
+                host_browser::host_browser_stop,
                 sync::sync_status,
                 sync::sync_configure,
                 sync::sync_recovery_key,
