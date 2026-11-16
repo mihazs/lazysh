@@ -710,6 +710,7 @@
 - Allow active host-local uploads to be cancelled from Attachments and the remote Files browser. New reservation defaults allow two occupied jobs (pending, sending or retiring), each up to 10 MiB (20 MiB total); unused reservations expire after 30 seconds, separately from the existing 30-second transfer deadline. Cancellation never deletes a remote pathname: a partial or completed new file may remain. Existing files remain protected against replacement.
 
 - Add an optional self-hosted authenticated webhook relay with private source capabilities, a durable bounded outbox and one fixed HTTPS destination. Delivery is disabled by default; native APNs/FCM delivery remains unavailable.
+- Document why a Kimi Code prompt stays in the terminal (#1797, part of #1535): in a network-less run of the official 2.4.1 release, hooks on `PermissionRequest` and `PreToolUse` that printed an allow (in the spelling of Claude Code, Codex, Copilot CLI and Kimi itself) left the prompt waiting for the person, `PermissionRequest` is a fire-and-forget observer, and `PreToolUse` can only block a tool before any approval is asked. Nothing changes in the app and no default changes; the Kimi "Approval requested" notification stays a notification without Allow or Deny. The qualification run gained two scenarios for this.
 
 - Add cold desktop `--host SAVED_ID` / `-host SAVED_ID` launch into the normal
   saved-host connection dialog, with original unlock ownership across explicit

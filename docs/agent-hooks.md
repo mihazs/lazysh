@@ -336,6 +336,8 @@ unknown event, so edit it with care.
   one row and removed it; Esc and Ctrl+C at the prompt both answer the request as
   rejected, so they remove it too; a result delayed past its request left no row; a
   sub-agent's approval was delivered and reported nothing; `SessionEnd` left no row.
+- No decision: a hook cannot answer the prompt (the observers are not read and `PreToolUse` can only
+  block), so a Kimi prompt stays in the terminal; see [Remote decisions](approvals.md#kimi-code).
 - Not covered: Kimi's source (not observed in a run) sends no `PermissionResult`
   when the turn is aborted while an approval waits ([`isUserCancellation`](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/agent/toolApproval/toolApprovalService.ts#L170)),
   and `Interrupt` cannot say whose turn it ended, so such a report would stay until

@@ -71,3 +71,18 @@ The approval card and the Agent view dock show Allow and Deny, then each suggest
 ## In the Agent view
 
 On a native tmux session, the Agent view shows the pending requests of the Claude Code session whose hook report names its pane (and no other) above the conversation. A decision is the same hash-bound `resolve_agent_approval` call as on the Agents board, sent only after the pane and the single reported session are checked again, and the buttons ignore taps for 400 ms after a card appears. Nothing is typed into the terminal, so switching to the terminal shows the prompt already answered through the hook. Before it sends, the view lists the host's pending requests once more: a request answered in the terminal first (or on another device) is no longer listed, so nothing is sent and the view says it was already answered. A conversation chosen from the session list, and any pane without exactly one matching report, shows no requests there; the Agents board still lists them.
+
+## Agents that keep their prompt in the terminal
+
+An agent whose hook cannot express an Allow keeps its prompt in the terminal, and lazysh does not offer a decision for it. Cursor CLI, Droid, Gemini CLI, Amp and Cline have not been checked against an installed CLI yet, so none of them is claimed either way ([#1797](https://github.com/mihazs/lazysh/issues/1797)).
+
+### Kimi Code
+
+Kimi Code 2.4.1 has no hook that can carry an Allow, so a Kimi prompt is answered at the terminal. `lazysh-agent kimi-config --dialect kimi-code-2.4` (see [the agent hooks guide](agent-hooks.md#gemini-cli-droid-and-kimi-cli)) still shows "Approval requested" on the Agents board; that is a notification and has no buttons.
+
+- `PermissionRequest` and `PermissionResult` are fire-and-forget observers: Kimi starts the hook, never reads what it prints and never waits for it ([source of 2.4.1](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts#L178)).
+- `PreToolUse` is the only tool hook whose answer is read, and only to **block**: exit code 2, or `hookSpecificOutput.permissionDecision` of `deny` ([`runHook.ts`](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/features/externalHooks/internal/runHook.ts#L140)). There is no allow. It also runs for every tool call, before any approval is requested, so a hook that blocked would deny each call without ever showing a prompt; that is a policy, not an Allow and Deny pair for the prompt the person is looking at.
+
+Checked with the official 2.4.1 Linux x64 release (SHA-256 `f4a225fb...d738de`), in a network-less sandbox against a synthetic endpoint, in Kimi's manual permission mode ([the qualification harness](reference/kimi-code-qualification/README.md), scenarios `allow_printed` and `pretooluse_exit_2`): hooks on `PermissionRequest` and `PreToolUse` that printed an allow in each spelling the supported agents use (Claude Code's and Codex's nested `hookSpecificOutput.decision.behavior`, Copilot's top-level `behavior`, Kimi's own `permissionDecision`, and `decision: "approve"`) ran, and the prompt still waited: four seconds later no `PermissionResult` and no tool event had arrived, and the tool ran or failed only when the person answered. A `PreToolUse` hook that exited 2 stopped the tool with no prompt and no `PermissionRequest`.
+
+Not covered: release 2.6.2 (the harness does not run on it, see its README), a real provider or account, macOS and Windows. A later Kimi release that reads a decision from these hooks would need this check again before lazysh offered one.
