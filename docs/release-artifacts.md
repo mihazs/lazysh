@@ -200,10 +200,10 @@ companion, and the local arm must resolve to that file:
   a temporary `%USERPROFILE%`, and hook setup reports the template-only state. The same cases fail
   against a directory without the companion, and a case that runs no test fails the step.
 
-This step is non-blocking until its first hosted run on `main` passes
-([#1853](https://github.com/mihazs/lazysh/issues/1853)); neither platform's run happens on pull
-requests (`native-desktop` is main-only) and no Windows or macOS machine was available to run it
-before merge, so read the first `main-verdict` before relying on it.
+The Windows step is non-blocking until its first hosted run on `main` passes
+([#1853](https://github.com/mihazs/lazysh/issues/1853)); the macOS step blocks. Neither runs on
+pull requests (`native-desktop` is main-only) and no Windows or macOS machine was available to
+run them before merge, so read the first `main-verdict` before relying on either.
 
 ## Runner layout
 
