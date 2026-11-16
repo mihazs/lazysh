@@ -127,6 +127,16 @@ describe('a dialog open on the pane of the agent followed in Herdr',()=>{
     expect(within(dialog()).getByRole('button',{name:/^No, and tell Codex/})).toBeTruthy();
     expect(pressed()).toEqual([]);
   });
+  it('answers a question Codex asks through the same card, with the arrows and Enter and no Cancel that would interrupt the turn',async()=>{
+    const host=herdr({agent:'codex',status:'blocked',screen:onTmux(dialogScreen('codex-question'))});
+    host.press=input=>{if(input.enter)host.screen=onTmux([]);};
+    await settle();
+    expect(within(dialog()).getByRole('heading',{name:'Which color?'})).toBeTruthy();
+    expect(within(dialog()).queryByRole('button',{name:'Cancel the dialog'})).toBeNull();
+    await act(async()=>{fireEvent.click(within(dialog()).getByRole('button',{name:/^Red/}));await vi.advanceTimersByTimeAsync(3000);});
+    expect(pressed()).toEqual([{kind:'pick',rows:0,enter:true}]);
+    expect(calls('herdr_agent_input')[0]).toMatchObject({target:{agent:'codex',agentSessionId:SESSION}});
+  });
   it('does not read the screen while the agent is working, and reads it again when it stops',async()=>{
     const host=herdr({status:'working',screen:modelScreen(5)});
     await settle();
