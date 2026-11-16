@@ -980,10 +980,11 @@ describe('OpenCode pane',()=>{
   });
 });
 
-describe('permission requests of the agent in this pane',()=>{
-  const approval=(id:string,paneId:string,sessionId='Claude Code-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+describe.each([['claude','Claude Code'],['codex','Codex']])('permission requests of the %s agent in this pane',(agent,label)=>{
+  // A Codex request lists no suggestions, so it carries an empty `options` and offers a denial message.
+  const approval=(id:string,paneId:string,sessionId=`${label}-session`,as=agent)=>({id,expectedHash:'a'.repeat(64),agent:as,sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},...(as==='codex'?{options:[]}:{}),createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
   function approvals(requests:unknown[],pane=()=>'%3') {
-    host('claude',[row('Claude Code','%3','needs_attention')],'available',[turn('Prompt','Answer')]);
+    host(agent,[row(label,'%3','needs_attention')],'available',[turn('Prompt','Answer')]);
     const fallback=vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
       if(command==='agent_approvals')return {schemaVersion:1,requests};
@@ -998,13 +999,13 @@ describe('permission requests of the agent in this pane',()=>{
     mount();await advance(0);
     const dock=screen.getByRole('region',{name:'Pending approvals'});
     expect(within(dock).getAllByRole('article')).toHaveLength(1);expect(dock.textContent).toContain('run 11111111-1111-4111-8111-111111111111');expect(dock.textContent).not.toContain('run 22222222');
+    expect(!!within(dock).queryByRole('button',{name:'Deny with a message'})).toBe(agent==='codex');
     const deny=within(dock).getByRole('button',{name:'Deny request'});
     expect(deny.hasAttribute('disabled')).toBe(true);fireEvent.click(deny);expect(calls('resolve_agent_approval')).toEqual([]);
     await advance(400);expect(deny.hasAttribute('disabled')).toBe(false);
     await act(async()=>{fireEvent.click(deny);await vi.advanceTimersByTimeAsync(0);});
-    expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:'Claude Code-session',paneId:'%3',decision:'deny'}]);
+    expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:`${label}-session`,paneId:'%3',decision:'deny'}]);
     // Nothing was typed into the terminal: the decision is the hook's, not a key. The composer binds the pane but sends no input.
-    // Nothing was typed into the terminal: the decision is the hook's, not a key.
     expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
     expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
   });
@@ -1015,6 +1016,11 @@ describe('permission requests of the agent in this pane',()=>{
     pane='%4';
     await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
     expect(calls('resolve_agent_approval')).toEqual([]);expect(within(screen.getByRole('region',{name:'Pending approvals'})).getByRole('alert')).toBeTruthy();
+  });
+  it('never offers a request of the other agent, even for the same session id and pane',async()=>{
+    approvals([approval('11111111-1111-4111-8111-111111111111','%3',`${label}-session`,agent==='codex'?'claude':'codex')]);
+    mount();await advance(0);await advance(400);
+    expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
   });
 });
 
