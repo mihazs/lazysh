@@ -1,6 +1,6 @@
 //! Whether another supported agent started the agent that is reporting. Detection only ever claims
 //! a nesting it saw: an agent whose process is not recognized, and any host where the process table
-//! cannot be read (Windows), count as not nested.
+//! cannot be read, count as not nested.
 use crate::Agent;
 use std::collections::HashSet;
 
@@ -24,6 +24,7 @@ const LAUNCHERS: [&str; 8] = [
     "node", "nodejs", "bun", "deno", "python", "python3", "sh", "bash",
 ];
 
+#[derive(Clone)]
 pub(crate) struct Process {
     pub parent: u32,
     /// Normalized names this process answers to: its command name and the program or script it runs.
@@ -112,14 +113,28 @@ pub(crate) fn in_process_tree(owner: Agent, table: &dyn Table, start: u32) -> bo
 pub(crate) fn system(owner: Agent) -> bool {
     let declared = std::env::var(PARENT_SESSION_VARIABLE)
         .is_ok_and(|session| crate::text(&session, 256).is_ok());
+    if declared {
+        return true;
+    }
     #[cfg(unix)]
-    return declared || in_process_tree(owner, &unix::Processes::detect(), std::process::id());
-    #[cfg(not(unix))]
+    {
+        in_process_tree(owner, &unix::Processes::detect(), std::process::id())
+    }
+    #[cfg(windows)]
+    {
+        windows::Processes::snapshot()
+            .is_some_and(|table| in_process_tree(owner, &table, std::process::id()))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = owner;
-        declared
+        false
     }
 }
+
+// The table builder compiles on every host under test, so Linux CI runs it; the snapshot reader only on Windows.
+#[cfg(any(windows, test))]
+mod windows;
 
 #[cfg(unix)]
 mod unix {
