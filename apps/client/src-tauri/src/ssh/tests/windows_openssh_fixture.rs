@@ -148,76 +148,137 @@ async fn observe(
     }
 }
 
+fn touched() -> [Option<(String, String)>; 3] {
+    [
+        (SSH, "DefaultShell"),
+        (USER, "Path"),
+        (USER, "LAZYSH_STATE_DIR"),
+    ]
+    .map(|(key, name)| registered(key, name))
+}
+
+/// One owned Windows sshd under `shell`, reached with its own key. Its registry values go back with `finish`, and also
+/// when an assertion unwinds first.
+struct Owned {
+    name: &'static str,
+    directory: tempfile::TempDir,
+    sshd: owned_sshd::OwnedSshd,
+    host: Host,
+    user_key: russh::keys::PrivateKey,
+    registry: (Registry, (Registry, Registry)),
+    before: [Option<(String, String)>; 3],
+    _machine: tokio::sync::MutexGuard<'static, ()>,
+}
+impl Owned {
+    /// `settings` are extra `sshd_config` lines, such as the SFTP subsystem.
+    async fn start(shell: Shell, settings: &str) -> Self {
+        let name = shell.name();
+        let machine = MACHINE.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let (bin, state_dir) = (directory.path().join("bin"), directory.path().join("state"));
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::copy(
+            std::env::var_os("LAZYSH_TEST_AGENT_BIN").expect(
+                "build lazysh-agent from this checkout and pass it as LAZYSH_TEST_AGENT_BIN",
+            ),
+            bin.join("lazysh-agent.exe"),
+        )
+        .unwrap();
+        let before = touched();
+        let program = shell.program().display().to_string();
+        let default_shell = Registry::set(SSH, "DefaultShell", "REG_SZ", &program);
+        assert_eq!(
+            registered(SSH, "DefaultShell"),
+            Some(("REG_SZ".into(), program)),
+            "{name}: the registry does not hold the default shell this case runs under"
+        );
+        // The host's own environment, which is where sshd takes a session's from: the companion on the user's PATH, and a
+        // state directory that is not the user's.
+        let environment = (
+            Registry::path_with(&bin),
+            Registry::set(
+                USER,
+                "LAZYSH_STATE_DIR",
+                "REG_SZ",
+                &state_dir.display().to_string(),
+            ),
+        );
+        let (host_key, user_key) = (ed25519_key(), ed25519_key());
+        let authorized = directory.path().join("authorized_keys");
+        // sshd splits `AuthorizedKeysFile` on blanks.
+        assert!(!authorized.to_str().unwrap().contains(char::is_whitespace));
+        fs::write(&authorized, user_key.public_key().to_openssh().unwrap()).unwrap();
+        let port = owned_sshd::free_port();
+        let settings = format!(
+            "AuthorizedKeysFile {}\n{settings}",
+            owned_sshd::slashes(&authorized)
+        );
+        let sshd =
+            owned_sshd::OwnedSshd::start(directory.path(), port, &host_key, &settings, &[]).await;
+        let host: Host = serde_json::from_value(serde_json::json!({
+            "id": "windows-openssh",
+            "name": "Windows OpenSSH fixture",
+            "hostname": "127.0.0.1",
+            "port": port,
+            "username": std::env::var("USERNAME").unwrap(),
+            "fingerprint": host_key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+        }))
+        .unwrap();
+        Self {
+            name,
+            directory,
+            sshd,
+            host,
+            user_key,
+            registry: (default_shell, environment),
+            before,
+            _machine: machine,
+        }
+    }
+    /// The app's state, with this host saved in it.
+    fn state(&self) -> AppState {
+        let state = AppState::new(self.directory.path().join("config")).unwrap();
+        state.config().unwrap().hosts.push(self.host.clone());
+        state
+    }
+    fn key(&self) -> Option<String> {
+        Some(
+            self.user_key
+                .to_openssh(Default::default())
+                .unwrap()
+                .to_string(),
+        )
+    }
+    /// Everything the case started or changed is gone.
+    async fn finish(self) {
+        let Self {
+            name,
+            sshd,
+            registry,
+            before,
+            ..
+        } = self;
+        let port = sshd.port;
+        drop(sshd);
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "{name}: the owned sshd still accepts connections"
+        );
+        drop(registry);
+        assert_eq!(touched(), before, "{name}: the registry was not restored");
+    }
+}
+
 async fn verify(shell: Shell) {
-    let name = shell.name();
-    let _machine = MACHINE.lock().await;
-    let directory = tempfile::tempdir().unwrap();
-    let (bin, state_dir) = (directory.path().join("bin"), directory.path().join("state"));
-    fs::create_dir_all(&bin).unwrap();
-    fs::create_dir_all(&state_dir).unwrap();
-    fs::copy(
-        std::env::var_os("LAZYSH_TEST_AGENT_BIN")
-            .expect("build lazysh-agent from this checkout and pass it as LAZYSH_TEST_AGENT_BIN"),
-        bin.join("lazysh-agent.exe"),
-    )
-    .unwrap();
-    let touched = || {
-        [
-            (SSH, "DefaultShell"),
-            (USER, "Path"),
-            (USER, "LAZYSH_STATE_DIR"),
-        ]
-        .map(|(key, name)| registered(key, name))
-    };
-    let before = touched();
-    let program = shell.program().display().to_string();
-    let default_shell = Registry::set(SSH, "DefaultShell", "REG_SZ", &program);
-    assert_eq!(
-        registered(SSH, "DefaultShell"),
-        Some(("REG_SZ".into(), program)),
-        "{name}: the registry does not hold the default shell this case runs under"
-    );
-    // The host's own environment, which is where sshd takes a session's from: the companion on the user's PATH, and a state
-    // directory that is not the user's.
-    let environment = (
-        Registry::path_with(&bin),
-        Registry::set(
-            USER,
-            "LAZYSH_STATE_DIR",
-            "REG_SZ",
-            &state_dir.display().to_string(),
-        ),
-    );
-    let (host_key, user_key) = (ed25519_key(), ed25519_key());
-    let authorized = directory.path().join("authorized_keys");
-    // sshd splits `AuthorizedKeysFile` on blanks.
-    assert!(!authorized.to_str().unwrap().contains(char::is_whitespace));
-    fs::write(&authorized, user_key.public_key().to_openssh().unwrap()).unwrap();
-    let port = owned_sshd::free_port();
-    let settings = format!("AuthorizedKeysFile {}\n", owned_sshd::slashes(&authorized));
-    let sshd =
-        owned_sshd::OwnedSshd::start(directory.path(), port, &host_key, &settings, &[]).await;
-    let app_state = AppState::new(directory.path().join("config")).unwrap();
-    let host: Host = serde_json::from_value(serde_json::json!({
-        "id": "windows-openssh",
-        "name": "Windows OpenSSH fixture",
-        "hostname": "127.0.0.1",
-        "port": port,
-        "username": std::env::var("USERNAME").unwrap(),
-        "fingerprint": host_key.public_key().fingerprint(HashAlg::Sha256).to_string(),
-    }))
-    .unwrap();
-    app_state.config().unwrap().hosts.push(host.clone());
+    let owned = Owned::start(shell, "").await;
+    let (name, sshd) = (owned.name, &owned.sshd);
     let lease = access_lease();
-    let handle = authenticate(
-        &app_state,
-        &host,
-        None,
-        Some(user_key.to_openssh(Default::default()).unwrap().to_string()),
-        None,
-    )
-    .await
-    .unwrap_or_else(|error| panic!("{name}: {error:?}\n{}", sshd.log()));
+    let handle = authenticate(&owned.state(), &owned.host, None, owned.key(), None)
+        .await
+        .unwrap_or_else(|error| panic!("{name}: {error:?}\n{}", sshd.log()));
     let (input, _input) = mpsc::channel(1);
     let (cancel, _cancel) = watch::channel(false);
     let session = Session::new(Arc::new(handle), input, cancel, lease.clone(), check_size);
@@ -282,17 +343,8 @@ async fn verify(shell: Shell) {
         failed.stderr
     );
 
-    // Everything the case started or changed is gone.
     drop(session);
-    drop(sshd);
-    assert!(
-        tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_err(),
-        "{name}: the owned sshd still accepts connections"
-    );
-    drop((default_shell, environment));
-    assert_eq!(touched(), before, "{name}: the registry was not restored");
+    owned.finish().await;
 }
 
 #[tokio::test]

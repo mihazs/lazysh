@@ -55,6 +55,29 @@ impl Cmd {
     }
 }
 
+/// A Windows OpenSSH login shell (PowerShell or cmd) cannot run a POSIX command line or script: its parser or command
+/// lookup refuses it in one of these ways.
+pub(crate) fn host_shell(error: SshError) -> SshError {
+    let message = error.message();
+    if error.kind() == "remote_command_failed"
+        && [
+            "ParserError",
+            "Missing '(' after 'if'",
+            "is not recognized as",
+            "was unexpected at this time",
+        ]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        SshError::new(
+            "unsupported_host_shell",
+            "This host's login shell is not POSIX sh (for example PowerShell or cmd), so lazysh cannot run its POSIX commands there",
+        )
+    } else {
+        error
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Kind {
@@ -157,7 +180,9 @@ impl Host {
     ) -> Result<String> {
         match self {
             Self::Remote(session) => {
-                ssh::exec_bounded(session, cmd.render(), lease, deadline, limit, None).await
+                ssh::exec_bounded(session, cmd.render(), lease, deadline, limit, None)
+                    .await
+                    .map_err(host_shell)
             }
             #[cfg(desktop)]
             Self::Local(host) => ssh::command_text(host.exec(lease, cmd, deadline, limit).await?),
@@ -200,7 +225,8 @@ impl Host {
         match self {
             Self::Remote(session) => {
                 ssh::exec(session, lease, format!("{} | od -An -v -tu1", cmd.render()))
-                    .await?
+                    .await
+                    .map_err(host_shell)?
                     .split_whitespace()
                     .map(|byte| {
                         byte.parse::<u8>().map_err(|_| {
@@ -701,3 +727,27 @@ mod local_fs {
 #[cfg(all(test, desktop))]
 #[path = "host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod shell_tests {
+    use super::*;
+    #[test]
+    fn non_posix_login_shells_are_reported_as_unsupported_host_shells() {
+        let powershell = "At line:1 char:3\r\n+ if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\t%s\\n' ...\r\n+   ~\r\nMissing '(' after 'if' in if statement.\r\n    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException\r\n    + FullyQualifiedErrorId : NoOpenParenthesisAfterIf";
+        let pwsh = "ParserError: \nLine |\n   1 |  if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\t%s\\n' \"$(tmux -V 2>/dev/null | head -n 1)\"; …\n     |    ~\n     | Missing '(' after 'if' in if statement.";
+        let cmd = "-v was unexpected at this time.";
+        for message in [powershell, pwsh, cmd] {
+            assert_eq!(
+                host_shell(SshError::new("remote_command_failed", message)).kind(),
+                "unsupported_host_shell"
+            );
+        }
+        for error in [
+            SshError::new("remote_command_failed", "sh: 1: tmux: Permission denied"),
+            SshError::new("timeout", "ParserError"),
+        ] {
+            let kind = error.kind();
+            assert_eq!(host_shell(error).kind(), kind);
+        }
+    }
+}

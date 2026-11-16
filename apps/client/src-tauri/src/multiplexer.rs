@@ -1,4 +1,5 @@
 use crate::app_lock::AccessLease;
+use crate::host::host_shell;
 use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -405,27 +406,6 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
             Support::Degraded
         },
         missing: if full { &[] } else { missing },
-    }
-}
-// A Windows OpenSSH login shell (PowerShell or cmd) cannot parse the POSIX discovery script.
-fn host_shell(error: SshError) -> SshError {
-    let message = error.message();
-    if error.kind() == "remote_command_failed"
-        && [
-            "ParserError",
-            "Missing '(' after 'if'",
-            "is not recognized as",
-            "was unexpected at this time",
-        ]
-        .iter()
-        .any(|marker| message.contains(marker))
-    {
-        SshError::new(
-            "unsupported_host_shell",
-            "This host's login shell is not POSIX sh (for example PowerShell or cmd), so lazysh cannot read its multiplexers",
-        )
-    } else {
-        error
     }
 }
 #[derive(Debug, Serialize)]
@@ -905,25 +885,6 @@ mod tests {
         );
         // The pre-version format is not accepted as a version-less success.
         assert!(parse_tree("tmux\t1\nherdr\t0\nzellij\t0\n").is_err());
-    }
-    #[test]
-    fn non_posix_login_shells_are_reported_as_unsupported_host_shells() {
-        let powershell = "At line:1 char:3\r\n+ if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\t%s\\n' ...\r\n+   ~\r\nMissing '(' after 'if' in if statement.\r\n    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException\r\n    + FullyQualifiedErrorId : NoOpenParenthesisAfterIf";
-        let pwsh = "ParserError: \nLine |\n   1 |  if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\t%s\\n' \"$(tmux -V 2>/dev/null | head -n 1)\"; …\n     |    ~\n     | Missing '(' after 'if' in if statement.";
-        let cmd = "-v was unexpected at this time.";
-        for message in [powershell, pwsh, cmd] {
-            assert_eq!(
-                host_shell(SshError::new("remote_command_failed", message)).kind(),
-                "unsupported_host_shell"
-            );
-        }
-        for error in [
-            SshError::new("remote_command_failed", "sh: 1: tmux: Permission denied"),
-            SshError::new("timeout", "ParserError"),
-        ] {
-            let kind = error.kind();
-            assert_eq!(host_shell(error).kind(), kind);
-        }
     }
     #[cfg(unix)]
     #[test]

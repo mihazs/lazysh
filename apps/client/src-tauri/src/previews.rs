@@ -426,7 +426,7 @@ pub async fn discover_preview_ports(
         return Ok(Vec::new());
     }
     access.check()?;
-    let text = crate::ssh::exec_for_access(&session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into(), &access).await?;
+    let text = crate::ssh::exec_for_access(&session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into(), &access).await.map_err(crate::host::host_shell)?;
     let listeners: Vec<_> = parse_listeners(&text)
         .into_iter()
         .filter(|listener| {
