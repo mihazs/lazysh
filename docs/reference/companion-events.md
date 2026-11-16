@@ -16,7 +16,7 @@
 | `project` | Required nonblank string, at most 4096 characters. |
 | `state` | Required `working`, `needs_attention` or `done`. |
 | `summary` | Required nonblank string, at most 512 characters. |
-| `paneId` | Optional/null; when present, nonblank string of at most 256 characters. Reported metadata, not input authority. |
+| `paneId` | Optional/null; when present, nonblank string of at most 256 characters. Reported metadata, not input authority. The companion writes `%N` (tmux), `zellij:<session>:<pane>` or `lazysh:<32 lowercase hex>` (a terminal lazysh started). |
 
 String fields reject characters below U+0020. Input JSON is bounded to 256 KiB; malformed or oversized input fails. These character limits are not the byte-based SSH selector limits.
 

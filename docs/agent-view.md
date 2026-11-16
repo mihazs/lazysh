@@ -485,3 +485,18 @@ key stay in the terminal, and the pane test reads only the first two words of th
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
 refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
 agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.
+
+## Terminals lazysh starts
+
+A terminal with no multiplexer has no pane to name, so a hook report from it carries no pane identity. For a
+terminal that lazysh starts itself, the companion reads one more variable: when `LAZYSH_TERMINAL` holds exactly 32
+lowercase hexadecimal characters, `lazysh-agent hook` reports `lazysh:<id>` as the pane identity. A value of any
+other shape is ignored and the report carries no identity; the hook never fails over it. The identity comes last:
+`TMUX_PANE` wins, then Zellij's session and pane, so a multiplexer started inside such a terminal still names its own
+panes. The id is a random launch identifier, not a secret and not input authority.
+
+Status: the companion side ships first (#1867). Nothing exports `LAZYSH_TERMINAL` yet and the Agent view does not bind
+by it, so no behaviour changes on its own; the launcher that exports it and the binding follow with the New agent flow
+for sessions with no multiplexer (#1684). A companion that predates this reports no identity for these terminals, and
+a client that predates it reads `lazysh:<id>` like any other identity it does not know (neither tmux nor Zellij) and
+binds nothing by it, so the manual picker stays.
