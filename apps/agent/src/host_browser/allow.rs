@@ -70,10 +70,12 @@ const ALLOWED: [&str; 27] = [
 
 /// The only WebDriver BiDi commands the Firefox adapter sends (docs/host-browser.md, "Adapters and
 /// capabilities"). The same closed-list rule as [`ALLOWED`]: a command that a later Firefox adds is not reachable.
-const BIDI_ALLOWED: [&str; 6] = [
+const BIDI_ALLOWED: [&str; 8] = [
     "browsingContext.captureScreenshot",
     "browsingContext.getTree",
     "browsingContext.setViewport",
+    "input.performActions",
+    "input.releaseActions",
     "script.evaluate",
     "session.end",
     "session.new",
@@ -177,8 +179,126 @@ pub fn bidi(method: &str, params: &Value) -> Result<(), Refusal> {
         {
             Err(Refusal::Script)
         }
+        "input.performActions" => bidi_actions(params),
+        "input.releaseActions" if !is_context_only(params) => Err(Refusal::Unlisted),
         _ => Ok(()),
     }
+}
+
+/// The WebDriver key values of the keys that are not text (the private-use points of the specification), by the
+/// name the client sends. Any other point of the range is refused: one of them releases every key, others open
+/// menus or press modifiers the client never asks for.
+pub(super) const BIDI_NAMED_KEYS: [(&str, char); 13] = [
+    ("Backspace", '\u{E003}'),
+    ("Tab", '\u{E004}'),
+    ("Enter", '\u{E006}'),
+    ("Escape", '\u{E00C}'),
+    ("PageUp", '\u{E00E}'),
+    ("PageDown", '\u{E00F}'),
+    ("End", '\u{E010}'),
+    ("Home", '\u{E011}'),
+    ("ArrowLeft", '\u{E012}'),
+    ("ArrowUp", '\u{E013}'),
+    ("ArrowRight", '\u{E014}'),
+    ("ArrowDown", '\u{E015}'),
+    ("Delete", BIDI_DELETE),
+];
+/// Alt, Control, Meta and Shift, in the order of the client's modifier bits.
+pub(super) const BIDI_MODIFIER_KEYS: [char; 4] = ['\u{E00A}', BIDI_CONTROL, BIDI_META, BIDI_SHIFT];
+const BIDI_CONTROL: char = '\u{E009}';
+const BIDI_META: char = '\u{E03D}';
+const BIDI_SHIFT: char = '\u{E008}';
+const BIDI_DELETE: char = '\u{E017}';
+/// The range of key values that name keys and not text.
+pub(super) const BIDI_KEY_RANGE: std::ops::RangeInclusive<char> = '\u{E000}'..='\u{E0FF}';
+
+/// The most actions one call carries: a key down and a key up for each character of the longest text, and a chord.
+const MAX_BIDI_ACTIONS: usize = 8200;
+/// A coordinate is in a viewport of at most 2048 CSS pixels; a wheel moves at most 10000 on an axis; a tick lasts at
+/// most a second.
+const MAX_BIDI_COORDINATE: f64 = 2048.0;
+const MAX_BIDI_DELTA: f64 = 10_000.0;
+const MAX_BIDI_TICK: f64 = 1000.0;
+
+fn is_context_only(params: &Value) -> bool {
+    params["context"].is_string() && params.as_object().is_some_and(|fields| fields.len() == 1)
+}
+
+/// `input.performActions`: one source of pointer, wheel or key actions at most each, in the page's own context, with
+/// every number inside the bounds. A key sequence that would reach the host's clipboard is refused, as in Chrome.
+fn bidi_actions(params: &Value) -> Result<(), Refusal> {
+    let (Some(sources), true) = (params["actions"].as_array(), params["context"].is_string())
+    else {
+        return Err(Refusal::Unlisted);
+    };
+    let total: usize = sources
+        .iter()
+        .map(|source| source["actions"].as_array().map_or(0, Vec::len))
+        .sum();
+    if sources.is_empty() || sources.len() > 3 || total > MAX_BIDI_ACTIONS {
+        return Err(Refusal::Unlisted);
+    }
+    for source in sources {
+        let kind = source["type"].as_str().unwrap_or_default();
+        let id_and_actions = source["id"].is_string() && source["actions"].is_array();
+        // Pointer sources are mice: a touch pointer would need its own measured mapping.
+        let pointer_ok = kind != "pointer" || source["parameters"]["pointerType"] == "mouse";
+        if !id_and_actions || !pointer_ok || !["pointer", "wheel", "key"].contains(&kind) {
+            return Err(Refusal::Unlisted);
+        }
+        let mut held = Vec::new();
+        for action in source["actions"].as_array().into_iter().flatten() {
+            bidi_action(kind, action, &mut held)?;
+        }
+    }
+    Ok(())
+}
+
+fn bidi_action(kind: &str, action: &Value, held: &mut Vec<char>) -> Result<(), Refusal> {
+    let value = |key: &str| action[key].as_f64();
+    let within = |key: &str, limit: f64| value(key).is_some_and(|n| n.abs() <= limit);
+    let at = ["x", "y"]
+        .into_iter()
+        .all(|key| value(key).is_some_and(|n| (0.0..=MAX_BIDI_COORDINATE).contains(&n)));
+    let on_viewport = action["origin"] == "viewport";
+    let quick = action.get("duration").is_none() || within("duration", MAX_BIDI_TICK);
+    let button = action["button"].as_u64().is_some_and(|button| button <= 2);
+    let ok = match (kind, action["type"].as_str().unwrap_or_default()) {
+        ("pointer", "pointerMove") => at && on_viewport && quick,
+        ("pointer", "pointerDown" | "pointerUp") => button,
+        ("wheel", "scroll") => {
+            at && on_viewport
+                && quick
+                && within("deltaX", MAX_BIDI_DELTA)
+                && within("deltaY", MAX_BIDI_DELTA)
+        }
+        ("key", name @ ("keyDown" | "keyUp")) => {
+            let mut characters = action["value"].as_str().unwrap_or_default().chars();
+            let (Some(key), None) = (characters.next(), characters.next()) else {
+                return Err(Refusal::Unlisted);
+            };
+            let named = BIDI_NAMED_KEYS.iter().any(|(_, value)| *value == key);
+            if BIDI_KEY_RANGE.contains(&key) && !named && !BIDI_MODIFIER_KEYS.contains(&key) {
+                return Err(Refusal::Unlisted);
+            }
+            if name == "keyUp" {
+                held.retain(|modifier| *modifier != key);
+                return Ok(());
+            }
+            let chord = held.contains(&BIDI_CONTROL) || held.contains(&BIDI_META);
+            let clipboard = (chord && "cxv".contains(key.to_ascii_lowercase()))
+                || (held.contains(&BIDI_SHIFT) && key == BIDI_DELETE);
+            if clipboard {
+                return Err(Refusal::Permission);
+            }
+            if BIDI_MODIFIER_KEYS.contains(&key) {
+                held.push(key);
+            }
+            true
+        }
+        _ => false,
+    };
+    ok.then_some(()).ok_or(Refusal::Unlisted)
 }
 
 #[cfg(test)]
@@ -516,6 +636,158 @@ mod tests {
             ),
         ] {
             assert_eq!(bidi(method, &params), Ok(()), "{method} {params}");
+        }
+    }
+
+    fn mouse(actions: Value) -> Value {
+        json!({"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":actions})
+    }
+    fn keyboard(events: &[(&'static str, char)]) -> Value {
+        super::super::input::key_source(events.to_vec())
+    }
+    fn perform(source: Value) -> Result<(), Refusal> {
+        bidi(
+            "input.performActions",
+            &json!({"context":"c","actions":[source]}),
+        )
+    }
+
+    #[test]
+    fn the_bidi_input_the_relay_sends_is_allowed() {
+        let to = json!({"type":"pointerMove","x":10,"y":20,"origin":"viewport"});
+        let scroll =
+            json!({"type":"scroll","x":10,"y":20,"deltaX":0,"deltaY":-400,"origin":"viewport"});
+        for source in [
+            mouse(json!([to, {"type":"pointerDown","button":2}])),
+            mouse(json!([to, {"type":"pointerUp","button":0}])),
+            json!({"type":"wheel","id":"wheel","actions":[scroll]}),
+            keyboard(&[
+                ("keyDown", 'ç'),
+                ("keyUp", 'ç'),
+                ("keyDown", '😀'),
+                ("keyUp", '😀'),
+            ]),
+            keyboard(&[("keyDown", '\u{E003}'), ("keyUp", '\u{E003}')]),
+            keyboard(&[
+                ("keyDown", '\u{E009}'),
+                ("keyDown", 'a'),
+                ("keyUp", 'a'),
+                ("keyUp", '\u{E009}'),
+            ]),
+        ] {
+            assert_eq!(perform(source.clone()), Ok(()), "{source}");
+        }
+        assert_eq!(
+            bidi("input.releaseActions", &json!({"context":"c"})),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn bidi_input_outside_its_bounds_is_refused() {
+        let to = |x: f64, y: f64| json!({"type":"pointerMove","x":x,"y":y,"origin":"viewport"});
+        let down = |value: char| ("keyDown", value);
+        let long = || vec![json!({"type":"keyDown","value":"a"}); MAX_BIDI_ACTIONS + 1];
+        for (source, refusal) in [
+            // A touch pointer, a source that is not one of the three, a position outside any viewport, a position
+            // relative to the pointer or an element, and a tick that lasts longer than a second.
+            (
+                json!({"type":"pointer","id":"p","parameters":{"pointerType":"touch"},"actions":[to(1.0, 1.0)]}),
+                Refusal::Unlisted,
+            ),
+            (
+                json!({"type":"none","id":"n","actions":[]}),
+                Refusal::Unlisted,
+            ),
+            (mouse(json!([to(2049.0, 1.0)])), Refusal::Unlisted),
+            (mouse(json!([to(1.0, -1.0)])), Refusal::Unlisted),
+            (
+                mouse(json!([{"type":"pointerMove","x":1,"y":1,"origin":"pointer"}])),
+                Refusal::Unlisted,
+            ),
+            (
+                mouse(
+                    json!([{"type":"pointerMove","x":1,"y":1,"origin":{"type":"element","element":{"sharedId":"e"}}}]),
+                ),
+                Refusal::Unlisted,
+            ),
+            (
+                mouse(
+                    json!([{"type":"pointerMove","x":1,"y":1,"origin":"viewport","duration":1001}]),
+                ),
+                Refusal::Unlisted,
+            ),
+            (
+                mouse(json!([{"type":"pointerDown","button":3}])),
+                Refusal::Unlisted,
+            ),
+            (
+                mouse(json!([{"type":"pause","duration":5}])),
+                Refusal::Unlisted,
+            ),
+            (
+                json!({"type":"wheel","id":"w","actions":[{"type":"scroll","x":1,"y":1,"deltaX":0,"deltaY":10001,"origin":"viewport"}]}),
+                Refusal::Unlisted,
+            ),
+            // A value that is not one key, a key of the private-use range that is not on the closed list (U+E000
+            // releases every key, U+E031 is F1), and more actions than the longest text.
+            (
+                json!({"type":"key","id":"k","actions":[{"type":"keyDown","value":"ab"}]}),
+                Refusal::Unlisted,
+            ),
+            (keyboard(&[down('\u{E000}')]), Refusal::Unlisted),
+            (keyboard(&[down('\u{E031}')]), Refusal::Unlisted),
+            (
+                json!({"type":"key","id":"k","actions":long()}),
+                Refusal::Unlisted,
+            ),
+            // The clipboard: Control or Meta with C, X or V, and Shift with Delete.
+            (
+                keyboard(&[down('\u{E009}'), down('v')]),
+                Refusal::Permission,
+            ),
+            (
+                keyboard(&[down('\u{E03D}'), down('C')]),
+                Refusal::Permission,
+            ),
+            (
+                keyboard(&[down('\u{E008}'), down('\u{E017}')]),
+                Refusal::Permission,
+            ),
+        ] {
+            assert_eq!(perform(source.clone()), Err(refusal), "{source}");
+        }
+        for params in [
+            json!({"actions":[mouse(json!([]))]}),
+            json!({"context":"c","actions":[]}),
+            json!({"context":"c","actions":[mouse(json!([])), mouse(json!([])), mouse(json!([])), mouse(json!([]))]}),
+            json!({"context":"c"}),
+        ] {
+            assert_eq!(
+                bidi("input.performActions", &params),
+                Err(Refusal::Unlisted),
+                "{params}"
+            );
+        }
+        // A key that was let go of no longer makes a chord.
+        assert_eq!(
+            perform(keyboard(&[
+                down('\u{E009}'),
+                ("keyUp", '\u{E009}'),
+                down('v')
+            ])),
+            Ok(())
+        );
+        for params in [
+            json!({}),
+            json!({"context":"c","all":true}),
+            json!({"context":1}),
+        ] {
+            assert_eq!(
+                bidi("input.releaseActions", &params),
+                Err(Refusal::Unlisted),
+                "{params}"
+            );
         }
     }
 

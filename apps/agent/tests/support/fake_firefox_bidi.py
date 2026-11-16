@@ -69,6 +69,12 @@ def answer(message):
             time.sleep(0.005)
             same = mode == "same"
             return ok({"data": base64.b64encode(JPEG + (b"" if same else bytes([captures % 256]))).decode()})
+        if method == "input.performActions":
+            if mode == "input-error":
+                return error("invalid argument", "bad sequence")
+            return ok({})
+        if method == "input.releaseActions":
+            return ok({})
         if method == "script.evaluate":
             return ok({"type": "success", "realm": "R1", "result": {"type": "string", "value": "Fixture page"}})
     return error("unknown command", method)
