@@ -6,7 +6,7 @@ Open **Inbox** and enable **Monitor connected hosts** after installing the host 
 
 The [inbox reference](reference/inbox.md) describes polling, retention and deduplication limits. To remove deduplication history and notification preferences too, clear the application data.
 
-While a [Herdr](multiplexers.md#live-updates-and-the-inbox) view is shown, an agent that becomes blocked or done in a Herdr pane is also an inbox event, from Herdr's own live stream; the same turn reported by a hook is one row and one alert.
+While monitoring is on, an agent that becomes blocked or done in a [Herdr](multiplexers.md#live-updates-and-the-inbox) pane is also an inbox event, from Herdr's own live stream, whichever page or terminal is shown; the same turn reported by a hook is one row and one alert.
 
 Select an inbox row or supported notification action to return to its still-connected SSH session, then inspect or answer the agent through its session controls. See the [inbox reference](reference/inbox.md) for action and platform limits.
 

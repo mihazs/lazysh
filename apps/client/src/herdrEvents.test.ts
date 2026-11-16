@@ -3,22 +3,24 @@ import {invoke} from '@tauri-apps/api/core';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {applyAccessStatus,captureAccess} from './access';
 import {herdrTransitionEvent,parseHerdrFrame,rememberHerdrAgents,subscribeHerdrEvents,type HerdrEvent,type HerdrTransition} from './herdrEvents';
+import {followHerdrServer,herdrMonitorStreams,monitoredHerdrServer} from './herdrMonitor';
 import type {WatchState} from './watchChannel';
 
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn(),Channel:class{onmessage:((event:unknown)=>void)|undefined;}}));
 type Channel={onmessage:(event:unknown)=>void};
-let channels:Channel[],stops:string[],revision=0;
+let channels:Channel[],stops:string[],starts:string[],listing:unknown,revision=0;
 const advance=(ms:number)=>vi.advanceTimersByTimeAsync(ms);
 const send=(frame:unknown,channel=channels.at(-1)!)=>channel.onmessage({type:'frame',frame});
 const status=(extra={})=>({type:'status',paneId:'w1:p2',workspaceId:'w1',status:'blocked',agent:'codex',cwd:'/work/app',...extra});
 const hello={type:'hello',protocol:1,session:'main'};
 beforeEach(()=>{
-  vi.useFakeTimers();channels=[];stops=[];
+  vi.useFakeTimers();channels=[];stops=[];starts=[];listing=[{name:'main'}];
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++revision+1000),nonce:'c'.repeat(64)});
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
-    if(command==='agent_watch_start'){channels.push((args as {events:Channel}).events);return `watch-${channels.length}`;}
+    if(command==='agent_watch_start'){channels.push((args as {events:Channel}).events);starts.push((args as {target:{herdrSession:string}}).target.herdrSession);return `watch-${channels.length}`;}
     if(command==='agent_watch_stop'){stops.push((args as {watchId:string}).watchId);return;}
+    if(command==='multiplexer_sessions'){if(listing instanceof Error)throw listing;return listing;}
     throw new Error(`Unexpected ${command}`);
   });
 });
@@ -124,4 +126,74 @@ it('falls back when the channel cannot start and when a follower throws',async()
   expect(good).toHaveLength(1);
   expect(channels).toHaveLength(1);
   stopBad();stopGood();
+});
+
+const monitor=()=>herdrMonitorStreams(captureAccess(),vi.mocked(invoke) as never);
+
+it('follows the attached Herdr server when it runs, else the only running one, and never substitutes another',()=>{
+  expect(monitoredHerdrServer(['main'])).toBe('main');
+  expect(monitoredHerdrServer(['main','other'])).toBe('');
+  expect(monitoredHerdrServer(['main','other'],'other')).toBe('other');
+  expect(monitoredHerdrServer(['main'],'other')).toBe('');
+  expect(monitoredHerdrServer([])).toBe('');
+});
+
+it('keeps one monitor stream per connection, moves it with the server and closes it with the connection or the monitor',async()=>{
+  const streams=monitor();
+  streams.follow('host','main');streams.follow('host','main');streams.follow('host-2','main');
+  await advance(0);
+  expect(starts).toEqual(['main','main']);
+  streams.follow('host','other');await advance(0);
+  expect(starts).toEqual(['main','main','other']);
+  expect(stops).toEqual(['watch-1']);
+  streams.keep(new Set(['host']));await advance(0);
+  expect(stops).toEqual(['watch-1','watch-2']);
+  streams.close();await advance(0);
+  expect(stops).toEqual(['watch-1','watch-2','watch-3']);
+  streams.close();await advance(0);
+  expect(channels).toHaveLength(3);
+});
+
+it('shares the monitor stream with a visible Herdr view, whichever opens it first, and closes it with the last of them',async()=>{
+  const first=monitor(),view=follow();
+  first.follow('host','main');
+  await advance(0);
+  expect(channels).toHaveLength(1);
+  first.close();await advance(0);
+  expect(stops).toEqual([]);
+  send(hello);expect(view.states.at(-1)).toBe('live');
+  const second=monitor();
+  second.follow('host','main');view.stop();await advance(0);
+  expect(channels).toHaveLength(1);expect(stops).toEqual([]);
+  second.close();await advance(0);
+  expect(stops).toEqual(['watch-1']);
+  const late=monitor();
+  late.follow('host','other');const opened=follow('other');await advance(0);
+  expect(starts).toEqual(['main','other']);
+  late.close();await advance(0);
+  expect(stops).toEqual(['watch-1']);
+  opened.stop();await advance(0);
+  expect(stops).toEqual(['watch-1','watch-2']);
+});
+
+it('lists the host\'s servers each time: a failed listing keeps the stream, an empty one closes it',async()=>{
+  const streams=monitor(),session={id:'host',hostId:'h1',name:'builder',connected:true};
+  const refresh=async(valid=true)=>{await followHerdrServer(streams,vi.mocked(invoke) as never,session,()=>valid);await advance(0);};
+  await refresh(false);
+  expect(starts).toEqual([]);
+  await refresh();await refresh();
+  expect(starts).toEqual(['main']);
+  listing=new Error('host unreachable');await refresh();
+  listing=[{name:'a'},{name:'a'}];await refresh();
+  expect(stops).toEqual([]);
+  listing=[];await refresh();
+  expect(stops).toEqual(['watch-1']);
+  // Two servers are no choice, unless the terminal is attached to one of them.
+  listing=[{name:'a'},{name:'b'}];await refresh();
+  expect(starts).toEqual(['main']);
+  Object.assign(session,{attached:{kind:'tmux',name:'b'}});await refresh();
+  expect(starts).toEqual(['main']);
+  Object.assign(session,{attached:{kind:'herdr',name:'b'}});await refresh();
+  expect(starts).toEqual(['main','b']);
+  streams.close();
 });

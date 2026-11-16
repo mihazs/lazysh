@@ -2,7 +2,7 @@
 import {webcrypto} from 'node:crypto';
 import {beforeEach,expect,it,vi} from 'vitest';
 import type {HerdrTransition} from './herdrEvents';
-import {collectHerdrTransition,herdrPaneIdentity,reportedByHerdr,SAME_TRANSITION_MS} from './herdrInbox';
+import {collectHerdrTransition,herdrPaneIdentity,reportedByHerdr,SAME_TRANSITION_MS,withAgentSession} from './herdrInbox';
 import {collectInbox,getInbox,updateInbox} from './notificationStore';
 
 vi.stubGlobal('crypto',webcrypto);
@@ -93,6 +93,30 @@ it('keeps one row per pane for agents with no session, bounded, newest first, wi
   expect(long!.agent).not.toContain('\n');
   expect(long!.project).toHaveLength(200);
   expect(await collectHerdrTransition(session,transition({paneId:'w3:p1',server:'s'.repeat(300),at:T0+1000000}))).toMatchObject({paneId:null});
+});
+
+/** A Herdr tree whose pane `w1:p2` hosts a Codex agent of `value`, or no agent session at all. */
+const treeOf=(value?:string)=>({workspaces:[],tabs:[],panes:[{workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p2',focused:false,agent_status:'blocked'}],
+  agents:[{terminal_id:'t2',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p2',name:null,agent:'codex',agent_status:'blocked',...(value?{agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value}}:{})}]});
+
+it('names a blocked or finished pane from a fresh read of the tree, so a new agent in the pane is not taken for the old one',async()=>{
+  const tree=vi.fn<(command:string,args?:Record<string,unknown>)=>Promise<unknown>>(async()=>treeOf('first-session'));
+  const read=tree as unknown as Parameters<typeof withAgentSession>[0];
+  expect((await withAgentSession(read,transition())).agentSession).toEqual({agent:'codex',value:'first-session'});
+  expect(tree).toHaveBeenCalledWith('herdr_tree',{sessionId:'ssh1',name:'main'});
+  // The pane's agent was replaced: the stream's earlier answer is not kept.
+  tree.mockResolvedValue(treeOf('second-session'));
+  expect((await withAgentSession(read,transition({status:'done'}))).agentSession).toEqual({agent:'codex',value:'second-session'});
+  tree.mockResolvedValue(treeOf());
+  expect((await withAgentSession(read,transition())).agentSession).toBeNull();
+  // A working pane is no event and costs no read; a failed read keeps what the stream named.
+  tree.mockClear();
+  const working=transition({status:'working'});
+  expect(await withAgentSession(read,working)).toBe(working);
+  expect(tree).not.toHaveBeenCalled();
+  tree.mockRejectedValue(new Error('host unreachable'));
+  const named=transition({agentSession:{agent:'codex',value:'kept'}});
+  expect(await withAgentSession(read,named)).toBe(named);
 });
 
 it('does not record the same frame twice',async()=>{

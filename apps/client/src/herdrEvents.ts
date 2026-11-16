@@ -55,6 +55,7 @@ const sourceKey = (sessionId: string, server: string) => JSON.stringify([session
 export function rememberHerdrAgents(sessionId: string, server: string, agents: {pane_id: string; agent_session?: {agent: string; value: string}}[]) {
   sessions.set(sourceKey(sessionId, server), new Map(agents.flatMap(agent => agent.agent_session ? [[agent.pane_id, {agent: agent.agent_session.agent, value: agent.agent_session.value}] as const] : [])));
 }
+export const herdrAgentSession = (sessionId: string, server: string, paneId: string): HerdrAgentSession | null => sessions.get(sourceKey(sessionId, server))?.get(paneId) ?? null;
 
 type Entry = {refs: number; state: WatchState; events: Set<(event: HerdrEvent) => void>; states: Set<(state: WatchState) => void>; close: () => void};
 const entries = new Map<string, Entry>();
@@ -79,7 +80,7 @@ export function subscribeHerdrEvents({sessionId, server, lease, invoke}: {sessio
           if (event.type === 'status') {
             const {type: _type, ...status} = event;
             window.dispatchEvent(new CustomEvent<HerdrTransition>(herdrTransitionEvent, {detail: {...status, sessionId, server, at: Date.now(), sequence: ++sequence,
-              agentSession: sessions.get(sourceKey(sessionId, server))?.get(event.paneId) ?? null}}));
+              agentSession: herdrAgentSession(sessionId, server, event.paneId)}}));
           }
           each(created.events, event);
         }

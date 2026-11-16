@@ -2,7 +2,7 @@ import {t} from './i18n/core';
 import { useSyncExternalStore } from 'react';
 import { parseSnapshot } from './AgentPanel';
 
-export type InboxSession = { id: string; hostId: string; name: string; connected: boolean };
+export type InboxSession = { id: string; hostId: string; name: string; connected: boolean; attached?: { kind: string; name?: string } };
 export type InboxRow = { id: string; eventId: string; sessionId: string; hostId: string; hostName: string; agent: string; project: string; agentSessionId: string; state: 'working' | 'needs_attention' | 'done'; updatedAt: string; paneId: string | null };
 type InboxState = { version: 1; monitoring: boolean; notifications: boolean; rows: InboxRow[]; latest: Record<string, string>; error: string };
 const storageKey = 'lazysh.inbox.v1';
