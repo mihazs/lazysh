@@ -28,6 +28,9 @@ export function openSshTools(env: NodeJS.ProcessEnv = process.env) {
   return { sshd: win32.join(directory, 'sshd.exe'), keygen: win32.join(directory, 'ssh-keygen.exe'), client: win32.join(directory, 'ssh.exe') };
 }
 
+/** The key text as the application's key field holds it: Windows ssh-keygen writes CRLF line ends. */
+const readPrivateKey = async (path: string) => (await readFile(path, 'utf8')).replaceAll('\r\n', '\n');
+
 /** One ssh-keygen run; the passphrase is empty because the key exists only for this server and dies with it. */
 async function generate(keygen: string, path: string) {
   await execute(keygen, ['-q', '-t', 'ed25519', '-N', '', '-C', 'lazysh-owned', '-f', path], { timeout: 30_000, windowsHide: true });
@@ -53,17 +56,22 @@ export interface OwnedSshServer {
   /** `SHA256:` fingerprint of the server's host key. */
   fingerprint: string;
   directory: string;
+  /** A fresh throwaway key (OpenSSH-format text and its file) that this server does not authorize. */
+  unauthorizedKey(): Promise<{ path: string; privateKey: string }>;
   stop(): Promise<void>;
   output(): string;
 }
 
 /**
+ * `options.port` binds that loopback port instead of a fresh one, so a second server (a new host key and a new client key) can replace
+ * a stopped one at the same address.
+ *
  * A second sshd (the Windows OpenSSH build the image already carries) started as an ordinary process by the job's own user.
  * It listens on a fresh loopback port, accepts one throwaway Ed25519 key for that user and nothing else, and never touches the
  * machine's `sshd` service, its configuration or `administrators_authorized_keys`. Everything it creates lives in one fresh
  * directory below `RUNNER_TEMP` that `stop()` removes after killing exactly the processes below this server.
  */
-export async function startOwnedSshServer(): Promise<OwnedSshServer> {
+export async function startOwnedSshServer(options: { port?: number } = {}): Promise<OwnedSshServer> {
   requireOwnedWindowsRunner();
   const tools = openSshTools();
   for (const tool of [tools.sshd, tools.keygen, tools.client])
@@ -89,7 +97,7 @@ export async function startOwnedSshServer(): Promise<OwnedSshServer> {
     // sshd refuses a host key that any other principal can read.
     await execute('icacls.exe', [hostKey, '/inheritance:r', '/grant', 'SYSTEM:F', '/grant', 'Administrators:F'], { timeout: 30_000, windowsHide: true });
     const fingerprint = hostKeyFingerprint((await execute(tools.keygen, ['-l', '-E', 'sha256', '-f', `${hostKey}.pub`], { timeout: 30_000, windowsHide: true })).stdout);
-    const [port] = await freePorts(1);
+    const port = options.port ?? (await freePorts(1))[0];
     const config = join(directory, 'sshd_config');
     const slashes = (path: string) => path.replaceAll('\\', '/');
     // StrictModes is off because the files are private to a directory this process just created, not to a profile.
@@ -100,7 +108,13 @@ export async function startOwnedSshServer(): Promise<OwnedSshServer> {
     const started = server;
     owner = await until('sshd process identity', async () => (await processTable()).find(row => row.pid === started.child.pid));
     await until('sshd readiness', async () => (await speaksSsh(port)) ? true : undefined);
-    return { port, username, privateKey: (await readFile(clientKey, 'utf8')).replaceAll('\r\n', '\n'), privateKeyPath: clientKey, fingerprint, directory, stop, output: () => started.output() };
+    let unauthorized = 0;
+    const unauthorizedKey = async () => {
+      const path = join(directory, `unauthorized_key_${++unauthorized}`);
+      await generate(tools.keygen, path);
+      return { path, privateKey: await readPrivateKey(path) };
+    };
+    return { port, username, privateKey: await readPrivateKey(clientKey), privateKeyPath: clientKey, fingerprint, directory, unauthorizedKey, stop, output: () => started.output() };
   } catch (error) {
     console.error(`Owned Windows sshd failed to start; output:\n${server?.output().slice(-4000) ?? ''}`);
     try { await stop(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Owned Windows sshd startup and cleanup failed'); }

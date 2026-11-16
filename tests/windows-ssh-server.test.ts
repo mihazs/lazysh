@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { lstat } from 'node:fs/promises';
-import { join } from 'node:path';
 import { powershell, requireOwnedWindowsRunner } from './support/windowsGui';
-import { hostKeyFingerprint, offeredHostKey, openSshTools, speaksSsh, startOwnedSshServer } from './support/windowsSshServer';
+import { hostKeyFingerprint, offeredHostKey, openSshTools, speaksSsh, startOwnedSshServer, type OwnedSshServer } from './support/windowsSshServer';
 
 const fingerprint = `SHA256:${'Ab1+/'.repeat(8)}Ab1`;
 
@@ -28,28 +27,27 @@ const run = (program: string, args: string[]) => new Promise<{ code: number; std
   execFile(program, args, { timeout: 60_000, windowsHide: true }, (error, stdout, stderr) =>
     resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout, stderr })));
 
+/** The real Windows `ssh.exe` against the owned server; the last argument is the remote command. */
+const sshTo = (server: OwnedSshServer, args: string[]) => run(openSshTools().client, ['-p', String(server.port), '-o', 'UserKnownHostsFile=NUL', '-o', 'StrictHostKeyChecking=no',
+  '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10', ...args.slice(0, -1), `${server.username}@127.0.0.1`, args.at(-1)!]);
+
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_SSH !== '1')('owned Windows OpenSSH server accepts only its key, offers its host key on loopback and leaves nothing behind', async () => {
   requireOwnedWindowsRunner();
-  const tools = openSshTools();
   const service = () => powershell('(Get-Service sshd -ErrorAction SilentlyContinue).Status');
   const before = await service();
   const server = await startOwnedSshServer();
   let stopped = false;
   try {
-    const ssh = (args: string[]) => run(tools.client, ['-p', String(server.port), '-o', 'UserKnownHostsFile=NUL', '-o', 'StrictHostKeyChecking=no',
-      '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10', ...args.slice(0, -1), `${server.username}@127.0.0.1`, args.at(-1)!]);
     expect(server.port).not.toBe(22);
     // The challenge is computed by the Windows shell, so its answer is not in the text typed.
-    const accepted = await ssh(['-v', '-i', server.privateKeyPath, 'set /a 1234*5678']);
+    const accepted = await sshTo(server, ['-v', '-i', server.privateKeyPath, 'set /a 1234*5678']);
     expect(accepted.code).toBe(0);
     expect(accepted.stdout).toContain('7006652');
     expect(offeredHostKey(accepted.stderr)).toBe(server.fingerprint);
 
-    const other = join(server.directory, 'other_key');
-    await run(tools.keygen, ['-q', '-t', 'ed25519', '-N', '', '-f', other]);
-    const wrongKey = await ssh(['-i', other, 'echo refused']);
+    const wrongKey = await sshTo(server, ['-i', (await server.unauthorizedKey()).path, 'echo refused']);
     expect([wrongKey.code, wrongKey.stdout.includes('refused'), wrongKey.stderr.includes('Permission denied')]).toEqual([255, false, true]);
-    const password = await ssh(['-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no', 'echo refused']);
+    const password = await sshTo(server, ['-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no', 'echo refused']);
     expect([password.code, password.stdout.includes('refused'), password.stderr.includes('Permission denied')]).toEqual([255, false, true]);
 
     const listeners = JSON.parse(await powershell(`ConvertTo-Json -Compress -InputObject @(Get-NetTCPConnection -State Listen -LocalPort ${server.port} | ForEach-Object LocalAddress)`));
@@ -62,5 +60,21 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_SSH !== '1')('owned Windows OpenSSH 
     expect(await service()).toBe(before);
   } finally {
     if (!stopped) await server.stop().catch(error => console.error(`Owned Windows sshd cleanup failed: ${error}`));
+  }
+}, 180_000);
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_SSH !== '1')('a replacement owned Windows OpenSSH server takes the same port with another host key and another client key', async () => {
+  requireOwnedWindowsRunner();
+  const first = await startOwnedSshServer();
+  await first.stop();
+  const second = await startOwnedSshServer({ port: first.port });
+  try {
+    expect(second.port).toBe(first.port);
+    expect([second.fingerprint === first.fingerprint, second.privateKey === first.privateKey]).toEqual([false, false]);
+    const accepted = await sshTo(second, ['-v', '-i', second.privateKeyPath, 'set /a 1234*5678']);
+    expect([accepted.code, accepted.stdout.includes('7006652')]).toEqual([0, true]);
+    expect(offeredHostKey(accepted.stderr)).toBe(second.fingerprint);
+  } finally {
+    await second.stop().catch(error => console.error(`Owned Windows sshd cleanup failed: ${error}`));
   }
 }, 180_000);
