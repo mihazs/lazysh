@@ -22,6 +22,9 @@ use support::{
     agent, assert_nothing_started, chrome, enable, refusing_states, state_text, wait_gone,
 };
 
+#[path = "host_browser_relay/navigation.rs"]
+mod navigation;
+
 const FAKE: &str = include_str!("support/fake_chrome_pipe.py");
 const WAIT: Duration = Duration::from_secs(20);
 const QUIET: Duration = Duration::from_millis(500);
@@ -904,8 +907,18 @@ input.oninput = report;
 onscroll = report;
 </script>";
 
-/// A page on loopback, served to a real browser.
-fn fixture_page(body: &'static str) -> (u16, std::thread::JoinHandle<()>) {
+/// What a loopback server sends for one path: its media type, extra header lines (each ended by a line break)
+/// and its body.
+struct Reply {
+    content_type: &'static str,
+    headers: &'static str,
+    body: String,
+}
+
+/// A loopback server that serves a real browser: `answer` gets the path of each request and says what to send.
+fn serve_pages(
+    answer: impl Fn(&str) -> Reply + Send + 'static,
+) -> (u16, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
@@ -918,15 +931,30 @@ fn fixture_page(body: &'static str) -> (u16, std::thread::JoinHandle<()>) {
                 continue;
             };
             let mut request = [0u8; 2048];
-            let _ = std::io::Read::read(&mut stream, &mut request);
+            let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]);
+            let path = request.split_whitespace().nth(1).unwrap_or("/");
+            let reply = answer(path);
             let _ = write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
+                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                reply.content_type,
+                reply.headers,
+                reply.body.len(),
+                reply.body
             );
         }
     });
     (port, server)
+}
+
+/// A page on loopback, served to a real browser.
+fn fixture_page(body: &'static str) -> (u16, std::thread::JoinHandle<()>) {
+    serve_pages(move |_| Reply {
+        content_type: "text/html",
+        headers: "",
+        body: body.into(),
+    })
 }
 
 /// A relay over the host's real Chrome or Chromium, opened on a loopback page: the fixture, the relay and the

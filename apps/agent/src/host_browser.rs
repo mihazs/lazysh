@@ -18,6 +18,7 @@ pub mod outbox;
 pub mod profile;
 pub mod relay;
 pub mod settings;
+pub mod tabs;
 pub mod wire;
 
 pub const ENABLE_VARIABLE: &str = "LAZYSH_DEV_HOST_BROWSER";
