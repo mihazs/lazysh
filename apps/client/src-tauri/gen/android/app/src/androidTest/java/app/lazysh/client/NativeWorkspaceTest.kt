@@ -2913,24 +2913,29 @@ class NativeWorkspaceTest {
         }
     }
 
-    // The host harness owns this pinned tmux server and its two pane processes. This
+    // The host harness owns this pinned tmux or rmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, tab-close detach and reattach. The host independently proves
-    // the remote window state and that the original server and panes survived.
+    // the remote window state and that the original server and panes survived. The
+    // fixture's `binary` selects the multiplexer; rmux has no Agent view or window
+    // lifecycle step here, and its server is picked with Browse rmux sessions.
     private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String) {
+        val binary = tmux.optString("binary", "tmux")
+        require(binary == "tmux" || binary == "rmux") { "Owned tmux-family binary required" }
         val server = tmux.getString("name")
-        require(server == "owned-tmux") { "Owned tmux fixture required" }
+        require(server == "owned-$binary") { "Owned $binary fixture required" }
         val windows = tmux.getJSONArray("windows")
         require(windows.length() == 2) { "Owned tmux topology required" }
         val alpha = windows.getJSONObject(0)
         val beta = windows.getJSONObject(1)
         require(alpha.getInt("index") == 0 && alpha.getString("name") == "alpha" && beta.getInt("index") == 1 && beta.getString("name") == "beta")
-        for (window in listOf(alpha, beta)) require(Regex("TMUX_(ALPHA|BETA)_[a-f0-9]{32}").matches(window.getString("marker")))
+        for (window in listOf(alpha, beta)) require(Regex("${binary.uppercase()}_(ALPHA|BETA)_[a-f0-9]{32}").matches(window.getString("marker")))
         val child = "$parent / $server"
         val labels = JSONArray(listOf(parent, child))
         val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
         require(observer.length <= 4096)
-        val jumpPanel = "section[aria-label='tmux Jump To']"
+        // Both tmux and rmux sessions open the same Jump To panel; only its tmux-family prefix could differ.
+        val jumpPanel = "section[aria-label\$='Jump To']"
         fun title(window: JSONObject) = "${window.getInt("index")}: ${window.getString("name")}"
         fun click(xpath: String) = onWebView().withElement(findElement(Locator.XPATH, xpath)).perform(webScrollIntoView()).perform(webClick())
         fun visible(target: JSONObject, other: JSONObject, stage: String) {
@@ -2939,22 +2944,32 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,$labels,1,${JSONObject.quote(target.getString("marker"))},$forbidden);})()")
         }
         // The Workspaces panel lists exactly these windows (title and active mark) in the one session, as read back from the host; `also` adds checks on its `panel`.
+        val sessionLabel = if (binary == "rmux") "rmux: $server" else server
         fun panelWindows(expected: List<String>, also: String = "true") = """
             (()=>{const panels=document.querySelectorAll('.tool-panel.multiplexer-panel');if(panels.length!==1)return false;
               const panel=panels[0],sessions=Array.from(panel.querySelectorAll('.mux-list > details'));
               if(panel.querySelector('.loading,[role=alert]') || sessions.length!==1)return false;
               const expected=${JSONArray(expected)},windows=Array.from(sessions[0].querySelectorAll(':scope > details > summary')).map(x=>x.textContent.trim());
-              return sessions[0].querySelector(':scope > summary')?.textContent.trim()===${JSONObject.quote("$server · ${expected.size} windows")} &&
+              return sessions[0].querySelector(':scope > summary')?.textContent.trim()===${JSONObject.quote("$sessionLabel · ${expected.size} windows")} &&
                 windows.length===expected.length && windows.every((x,i)=>x===expected[i]) && ($also);})()
         """
+        // The panel's server selector starts on tmux: Browse rmux sessions switches it to rmux, whose status line must read the host's version as Supported.
+        fun browseButton(label: String) = "Array.from(document.querySelectorAll('.multiplexer-panel button')).some(x=>x.textContent.trim()===${JSONObject.quote(label)})"
+        val discoveredStatus = if (binary == "rmux") "(panel.querySelector('p.muted')?.textContent??'').includes(${JSONObject.quote("${tmux.getString("version")} (Supported)")})"
+            else "/^tmux \\S+ \\((?:Supported|Limited)\\)/.test(panel.querySelector('p.muted')?.textContent??'')"
         fun attach(active: JSONObject, stage: String) {
             sessionView(scenario, "Sessions")
-            awaitDocument(scenario, "live tmux sessions discovered $stage", panelWindows(listOf(alpha, beta).map { title(it) + if (it === active) " · active" else "" }, """
-                /^tmux \S+ \((?:Supported|Limited)\)/.test(panel.querySelector('p.muted')?.textContent??'') &&
+            if (binary == "rmux") {
+                awaitDocument(scenario, "rmux offered beside tmux $stage", "${browseButton("Browse rmux sessions")} || ${browseButton("Browse tmux sessions")}")
+                if (evaluate(scenario, browseButton("Browse rmux sessions")) == "true")
+                    click("//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='Browse rmux sessions']")
+            }
+            awaitDocument(scenario, "live $binary sessions discovered $stage", panelWindows(listOf(alpha, beta).map { title(it) + if (it === active) " · active" else "" }, """
+                $discoveredStatus &&
                   (attach=>attach.length===1 && !attach[0].disabled)(Array.from(panel.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote("Attach $server")}))
             """))
             click("//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='Attach $server']")
-            awaitDocument(scenario, "owned tmux display attached $stage", """
+            awaitDocument(scenario, "owned $binary display attached $stage", """
                 (()=>{const tabs=document.querySelectorAll('.session-tabs [role=tab]');
                   return tabs.length===2 && tabs[1].textContent.trim()===${JSONObject.quote(child)} && tabs[1].getAttribute('aria-selected')==='true';})()
             """)
@@ -2965,15 +2980,15 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Workspaces']")).perform(webClick())
             // The current marker must come from the live tmux binding, including a switch made by the numbered control.
-            awaitDocument(scenario, "live tmux Jump To marks ${title(current)} current", """
+            awaitDocument(scenario, "live $binary Jump To marks ${title(current)} current", """
                 (()=>{const panels=document.querySelectorAll(${JSONObject.quote(jumpPanel)});
                   if(panels.length!==1 || panels[0].querySelector('[role=status],[role=alert]'))return false;
                   const buttons=Array.from(panels[0].querySelectorAll('.mux-row button')),marked=buttons.filter(x=>x.getAttribute('aria-current')==='location');
                   return buttons.length===2 && marked.length===1 && marked[0].textContent.trim()===${JSONObject.quote(title(current) + " · Current")} &&
                     buttons.some(x=>x.textContent.trim()===${JSONObject.quote(title(target))} && !x.disabled);})()
             """)
-            click("//section[@aria-label='tmux Jump To']//button[normalize-space(.)='${title(target)}']")
-            awaitDocument(scenario, "tmux Jump To reached ${title(target)}", """
+            click("//section[contains(@aria-label,'Jump To')]//button[normalize-space(.)='${title(target)}']")
+            awaitDocument(scenario, "$binary Jump To reached ${title(target)}", """
                 (()=>{const panel=document.querySelector(${JSONObject.quote(jumpPanel)});
                   return !panel || (!panel.querySelector('[role=status],[role=alert]') &&
                     panel.querySelector('.mux-row button[aria-current=location]')?.textContent.trim()===${JSONObject.quote(title(target) + " · Current")});})()
@@ -2982,15 +2997,15 @@ class NativeWorkspaceTest {
         fun numbered(target: JSONObject) {
             sessionView(scenario, "Sessions")
             val button = "Window ${target.getInt("index")}"
-            val region = "section[aria-label='tmux prefix shortcuts']"
+            val region = "section[aria-label='$binary prefix shortcuts']"
             val ready = "Array.from(document.querySelectorAll(${JSONObject.quote("$region button")})).filter(x=>x.textContent.trim()===${JSONObject.quote(button)} && !x.disabled).length===1"
-            awaitDocument(scenario, "tmux numbered window control ready", ready)
-            click("//section[@aria-label='tmux prefix shortcuts']//button[normalize-space(.)='$button']")
-            awaitDocument(scenario, "tmux numbered window control sent", "$ready && !document.querySelector(${JSONObject.quote("$region [role=alert]")})")
+            awaitDocument(scenario, "$binary numbered window control ready", ready)
+            click("//section[@aria-label='$binary prefix shortcuts']//button[normalize-space(.)='$button']")
+            awaitDocument(scenario, "$binary numbered window control sent", "$ready && !document.querySelector(${JSONObject.quote("$region [role=alert]")})")
         }
         fun detach(stage: String) {
             endOwnedConnection(scenario, child)
-            awaitDocument(scenario, "tmux display detached $stage", """
+            awaitDocument(scenario, "$binary display detached $stage", """
                 (()=>{const tabs=document.querySelectorAll('.session-tabs [role=tab]');return tabs.length===1 && tabs[0].textContent.trim()===${JSONObject.quote(parent)};})()
             """)
             if (evaluate(scenario, "document.querySelector('.session-tabs [role=tab]')?.getAttribute('aria-selected')==='true'") != "true") {
@@ -3070,22 +3085,26 @@ class NativeWorkspaceTest {
         var primaryFailure: Throwable? = null
         try {
             attach(alpha, "before detach")
-            visible(alpha, beta, "attached tmux shows its current window")
-            agentViewBack()
-            visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            visible(alpha, beta, "attached $binary shows its current window")
+            if (binary == "tmux") {
+                agentViewBack()
+                visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            }
             jump(beta, alpha)
-            visible(beta, alpha, "tmux Jump To shows the selected window")
+            visible(beta, alpha, "$binary Jump To shows the selected window")
             numbered(alpha)
-            visible(alpha, beta, "tmux numbered window control shows its window")
+            visible(alpha, beta, "$binary numbered window control shows its window")
             jump(beta, alpha)
-            visible(beta, alpha, "tmux Jump To returns to the selected window")
+            visible(beta, alpha, "$binary Jump To returns to the selected window")
             detach("by closing its tab")
             attach(beta, "after detach")
-            visible(beta, alpha, "reattached tmux shows the same selected window and pane")
-            windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
-            visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
+            visible(beta, alpha, "reattached $binary shows the same selected window and pane")
+            if (binary == "tmux") {
+                windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
+                visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
+            }
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, a created, renamed and closed window, tab-close detach and reattach completed")
+            println("lazysh $binary: live discovery, Jump To current marker, numbered window, ${if (binary == "tmux") "a created, renamed and closed window, " else ""}tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure

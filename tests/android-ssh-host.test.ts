@@ -405,9 +405,10 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Androi
   await ownedAndroidAcceptance('Herdr',owned,()=>androidSshAcceptance(undefined,owned,false,false,false,true));
 },610_000);
 
-// Separate CI owner: only the pinned tmux fixture and packaged UI decide this verdict.
-test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
-  const owned=await TmuxFixture.start();
+// Separate CI owner: only the pinned tmux-family fixture and packaged UI decide each verdict, tmux and rmux as separate tests.
+for(const kind of ['tmux','rmux'] as const)
+test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')(`actual Android ${kind} discovery, window controls, Jump To and detach keep the original remote panes`,async()=>{
+  const owned=await TmuxFixture.start(kind);
   await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
 },610_000);
 

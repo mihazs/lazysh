@@ -617,7 +617,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      recorded?'-PlazyshRecordedConversationAcceptance=true':tmux?'-PlazyshTmuxAcceptance=true':herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':deniedNotification?'-PlazyshDeniedNotificationAcceptance=true':'-PlazyshSshAcceptance=true',
+      recorded?'-PlazyshRecordedConversationAcceptance=true':tmux?(tmux.binary==='rmux'?'-PlazyshRmuxAcceptance=true':'-PlazyshTmuxAcceptance=true'):herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':deniedNotification?'-PlazyshDeniedNotificationAcceptance=true':'-PlazyshSshAcceptance=true',
       ...((herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
       '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?'ownedTmuxThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
@@ -693,9 +693,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
     }
     if(tmux) {
-      await tmux.verifyWindowLifecycle();
+      // The rmux case does not create windows: its observed windows may only be the two originals.
+      if(tmux.binary==='tmux')await tmux.verifyWindowLifecycle();
       await tmux.verifyDetachedAndReattached();
-      console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, detach and reattach verified against the original server and pane processes');
+      console.log(`Owned packaged ${tmux.binary}: discovery, numbered window, Jump To, ${tmux.binary==='tmux'?'a created, renamed and closed window, ':''}detach and reattach verified against the original server and pane processes`);
     }
     if(sharedHerdr)await herdr!.expectNavigationBytes();
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
@@ -718,7 +719,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     } catch {moshBackgroundObservation={state:'unavailable'};}
     if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':tmux?'tmux-ui':herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':deniedNotification?'denied-notification-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':tmux?`${tmux.binary}-ui`:herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':deniedNotification?'denied-notification-ui':'ssh-ui');
       await reportInstrumentationFailures(directory);
       const crash=await crashes?.stop();
       const imeWire=ime?await observeImeReceiverWire(join(imeDirectory,'received-bytes'),fixture.nonce):undefined;

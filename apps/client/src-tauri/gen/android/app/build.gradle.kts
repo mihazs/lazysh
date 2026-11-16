@@ -71,7 +71,7 @@ val releaseSigning = System.getenv("LAZYSH_ANDROID_SIGNING_PROPERTIES")?.let { p
 // Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
 // debug/release builds never include this resource directory or change trust.
 val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
-    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance","lazyshTmuxAcceptance","lazyshBiometricAcceptance","lazyshDeniedNotificationAcceptance")
+    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance","lazyshTmuxAcceptance","lazyshRmuxAcceptance","lazyshBiometricAcceptance","lazyshDeniedNotificationAcceptance")
         .none {providers.gradleProperty(it).orNull=="true"}) {"UnifiedPush acceptance requires its private report namespace"}
     val allowed = setOf("assembleUniversalDebug", "assembleUniversalDebugAndroidTest",
         "connectedUniversalDebugAndroidTest", "compileUniversalDebugAndroidTestKotlin",
@@ -260,6 +260,12 @@ android {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/tmux-ui"
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/tmux-ui"
+        }
+    }
+    if (providers.gradleProperty("lazyshRmuxAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/rmux-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/rmux-ui"
         }
     }
     if (providers.gradleProperty("lazyshQrCameraAcceptance").orNull == "true") {
