@@ -1152,6 +1152,9 @@ jobs:
         run: "cargo test --locked -p lazysh-common --lib windows_acl::"
       - name: Exercise native companion WAL admission and recovery
         run: bun run test:storage
+      - name: Exercise managed hook setup against native Windows ACLs, links, streams and the commit boundary
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p lazysh-agent --test hook_setup_windows
       - name: Build pinned Parakeet runtime and exercise native ACL storage
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Exercise native desktop launch parsing and original-lease admission
@@ -1170,7 +1173,7 @@ jobs:
         run: "cargo test --locked -p lazysh --lib herdr_path::"
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx moon run client-native:test-local
-      # Hook writes are Linux-verified (a debug companion is over the 64 MiB hook-setup bound); Windows reports template-only setup.
+      # Hook writes are Linux-verified (a debug companion is over the 64 MiB hook-setup bound); Windows manages only the plugin providers and reports the others template-only.
       - name: Exercise the companion on this device through real local sessions
         shell: bash
         env:
