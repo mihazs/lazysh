@@ -73,6 +73,18 @@ export function framePoint(
     ),
   };
 }
+const lifecycleNotices = {
+  requested: "devicesRequested",
+  shutting_down: "devicesShuttingDown",
+} as const;
+type LifecycleNotice = (typeof lifecycleNotices)[keyof typeof lifecycleNotices];
+/** What the host answered to a boot, shutdown or reboot; anything else says nothing. */
+function lifecycleNotice(result: unknown): LifecycleNotice | "" {
+  const status = (result as { status?: unknown } | undefined)?.status;
+  return typeof status === "string" && Object.hasOwn(lifecycleNotices, status)
+    ? lifecycleNotices[status as keyof typeof lifecycleNotices]
+    : "";
+}
 export default function DevicePanel({ sessionId }: { sessionId: string }) {
   useUi();
   const invoke = useProtectedInvoke();
@@ -99,6 +111,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UiErrorCause>("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [notice, setNotice] = useState<LifecycleNotice | "">("");
   const current = useRef(0);
   const running = useRef(false);
   const device = devices.find((item) => item.id === selected);
@@ -116,6 +129,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     setCompanion(undefined);
     setInput(false);
     setWarnings([]);
+    setNotice("");
     return () => {
       current.current++;
     };
@@ -150,7 +164,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     streamError,
     platform,
   );
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<unknown>) {
     if (running.current) return;
     running.current = true;
     setBusy(true);
@@ -168,6 +182,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   }
   async function list() {
     const generation = current.current;
+    setNotice("");
     const result = await invoke<{
       schemaVersion: number;
       devices: Device[];
@@ -233,7 +248,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       setNeedsScreenshot(false);
     }
   }
-  async function action(action: unknown, id = selected) {
+  async function action(action: unknown, id = selected): Promise<unknown> {
     const type = (action as { type?: string }).type;
     if (
       platform === "ios" &&
@@ -271,7 +286,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       }
       return;
     }
-    await invoke("device_action", {
+    return await invoke("device_action", {
       sessionId,
       devicePlatform: platform,
       id,
@@ -282,6 +297,13 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   const androidInputBlocked =
     platform === "android" && (continuous ? !androidDisplay : needsScreenshot);
   const touchSpace = platform === "ios" ? companion : continuous ? androidDisplay : undefined;
+  /** The host answers once the SDK accepted the request, not when the new state is reached. */
+  function lifecycle(type: "boot" | "reboot" | "shutdown", id = selected) {
+    void run(async () => {
+      setNotice("");
+      setNotice(lifecycleNotice(await action({ type }, id)));
+    });
+  }
   useEffect(() => {
     if (!live || !selected) return;
     const timer = setInterval(() => {
@@ -463,6 +485,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           {warning}
         </p>
       ))}
+      {notice && <p role="status">{t(notice)}</p>}
       {error && (
         <p role="alert" className="inline-error">
           {uiErrorText(error)}
@@ -517,7 +540,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
                   disabled={busy}
                   onClick={() => {
                     if (type === "boot" || confirm(t(type==='reboot'?'devicesConfirmReboot':'devicesConfirmShutdown',{name:device.name})))
-                      void run(() => action({ type }));
+                      lifecycle(type);
                   }}
                 >
                   {t(({boot:'devicesBoot',reboot:'devicesReboot',shutdown:'devicesShutdown'} as const)[type])}
@@ -613,7 +636,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
             <button
               key={avd.id}
               disabled={busy}
-              onClick={() => void run(() => action({ type: "boot" }, avd.id))}
+              onClick={() => lifecycle("boot", avd.id)}
             >
               {t('devicesBootAvd',{name:avd.name})}
             </button>

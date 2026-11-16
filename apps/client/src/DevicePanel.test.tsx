@@ -4,11 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import DevicePanel, { framePoint, parseFrame } from "./DevicePanel";
-import { t } from "./i18n/core";
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
 
-import {androidVideoInputProbe,androidVideoProbe,deviceFrame as frame} from './test/deviceData';
+import {androidVideoInputProbe,androidVideoProbe,deviceFrame as frame,deviceInventory,deviceRecord} from './test/deviceData';
+import {t,uiI18n} from './i18n/core';
 it("bounds frame content and maps displayed coordinates to original device pixels", () => {
   expect(parseFrame(frame)).toEqual(frame);
   for (const value of [
@@ -292,3 +292,49 @@ it("says the SDK is on this device for a local session and on the SSH host for a
   expect(screen.getByText(t("devicesHint"))).toBeTruthy();
   expect(screen.queryByText(t("devicesHintLocal"))).toBeNull();
 });
+it.each([
+  { status: "requested", key: "devicesRequested" },
+  { status: "shutting_down", key: "devicesShuttingDown" },
+  { status: "unknown-status", key: undefined },
+] as const)(
+  "tells the user a lifecycle request answered $status until devices are found again",
+  async ({ status, key }) => {
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "list_devices"
+        ? deviceInventory
+        : command === "device_action"
+          ? { schemaVersion: 1, platform: "android", id: frame.id, operation: "reboot", status }
+          : undefined,
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<DevicePanel sessionId="ssh-lifecycle" />);
+    const find = () => fireEvent.click(screen.getByRole("button", { name: t("devicesFind") }));
+    find();
+    await screen.findByRole("option", { name: `${deviceRecord.name} · ${deviceRecord.state}` });
+    fireEvent.change(screen.getByLabelText(t("devicesDevice")), { target: { value: frame.id } });
+    fireEvent.click(screen.getByRole("button", { name: t("devicesReboot") }));
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "device_action",
+        { sessionId: "ssh-lifecycle", devicePlatform: "android", id: frame.id, action: { type: "reboot" } },
+        expect.anything(),
+      ),
+    );
+    if (!key) {
+      expect(screen.queryByText(t("devicesRequested"))).toBeNull();
+      expect(screen.queryByText(t("devicesShuttingDown"))).toBeNull();
+      return;
+    }
+    expect(await screen.findByText(t(key))).toBeTruthy();
+    try {
+      for (const language of ["pt-BR", "es"]) {
+        await uiI18n.changeLanguage(language);
+        expect(screen.getByText(t(key))).toBeTruthy();
+      }
+    } finally {
+      await uiI18n.changeLanguage("en");
+    }
+    find();
+    await vi.waitFor(() => expect(screen.queryByText(t(key))).toBeNull());
+  },
+);
