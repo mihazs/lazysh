@@ -354,6 +354,9 @@ enum HostBrowserCommand {
         /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
         #[arg(long)]
         no_sandbox: bool,
+        /// Keep the browser profile (cookies, sessions) after the session, until `host-browser --clear-data`.
+        #[arg(long)]
+        keep_profile: bool,
     },
 }
 #[derive(Subcommand)]
@@ -490,13 +493,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
         }
         Command::HostBrowser {
-            command: Some(HostBrowserCommand::Serve { binary, no_sandbox }),
+            command:
+                Some(HostBrowserCommand::Serve {
+                    binary,
+                    no_sandbox,
+                    keep_profile,
+                }),
             ..
         } => {
             lazysh_agent::host_browser::relay::serve(&lazysh_agent::host_browser::relay::Serve {
                 state: &lazysh_agent::state_directory()?,
                 binary: binary.as_deref(),
                 no_sandbox,
+                keep_profile,
             })?;
             None
         }

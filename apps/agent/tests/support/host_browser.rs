@@ -4,7 +4,7 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
     time::{Duration, Instant},
 };
 
@@ -31,6 +31,31 @@ pub fn switch(state: &Path, revision: &str, enabled: &str) {
 
 pub fn enable(state: &Path) {
     switch(state, "0", "true");
+}
+
+/// **Clear browser data**: `host-browser --clear-data`, which works with the switch off.
+pub fn clear_data(state: &Path) -> Output {
+    agent(state)
+        .args(["host-browser", "--clear-data"])
+        .output()
+        .unwrap()
+}
+
+/// Whether `clear_data` removed a kept profile (`false`: there was none).
+pub fn cleared(output: &Output) -> bool {
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["cleared"] == true
+}
+
+/// A kept profile holds what the browser wrote and stays private to the user.
+pub fn assert_kept(profile: &Path) {
+    assert_eq!(
+        fs::read_to_string(profile.join("Cookies")).unwrap(),
+        "session-cookie"
+    );
+    assert_eq!(
+        fs::metadata(profile).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
 }
 
 pub fn alive(pid: u32) -> bool {
