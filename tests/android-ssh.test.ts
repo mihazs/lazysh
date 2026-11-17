@@ -22,9 +22,10 @@ test('Chat IME hit diagnostic uses bounded geometry and fixed categories without
   const run=new Function('target','document','innerWidth','innerHeight',`return ${expression!.replace('$area','target')}`);
   const hit=(category:string)=>({contains:()=>category==='ancestor',closest:(selector:string)=>
     category==='dialog'&&selector==='.dialog-backdrop'||category==='sidebar'&&selector==='.sidebar, .sidebar-scrim'||
+    category==='gesture-handle'&&selector==='.gesture-handle'||category==='bottom-menu'&&selector==='.bottom-menu, .bottom-menu-scrim'||
     category==='chat'&&selector==='.chat-panel'||category==='terminal'&&selector==='.terminal-canvas'||
     category==='session'&&selector==='.session-body',get textContent(){throw Error('private text read');}});
-  for(const category of ['ancestor','dialog','sidebar','chat','terminal','session','other']) {
+  for(const category of ['ancestor','dialog','sidebar','chat','gesture-handle','bottom-menu','terminal','session','other']) {
     const result=run(area,{elementFromPoint:()=>hit(category)},412,660);
     expect(result.ok).toBe(false);expect(result.diagnostic).toEqual({hit:category,rect:[-10000,581,363,80],viewport:[412,660]});
   }

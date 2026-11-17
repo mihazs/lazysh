@@ -6985,6 +6985,7 @@ class NativeWorkspaceTest {
                         hit:hit===area?'textarea':hit===null?'none':area.contains(hit)?'descendant':
                           hit.contains(area)?'ancestor':hit.closest('.dialog-backdrop')?'dialog':
                           hit.closest('.sidebar, .sidebar-scrim')?'sidebar':hit.closest('.chat-panel')?'chat':
+                          hit.closest('.gesture-handle')?'gesture-handle':hit.closest('.bottom-menu, .bottom-menu-scrim')?'bottom-menu':
                           hit.closest('.terminal-canvas')?'terminal':hit.closest('.session-body')?'session':'other',
                         rect:[rect.left,rect.top,rect.width,rect.height].map(bounded),viewport:[innerWidth,innerHeight].map(bounded)}};})()
                 """))
