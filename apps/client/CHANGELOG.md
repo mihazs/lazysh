@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.68.1
+
+### Patch Changes
+
+- d998491: Retry a briefly busy local companion executable during version checks (#1923).
+- d998491: For ordinary sessions, continue the Auto transport fallback sequence when a Mosh startup fails, instead of refusing with "Mosh connection ended before startup completed": the startup error the Mosh or Eternal Terminal worker reports now wins over the cancel that follows it. Once a Mosh multiplexer entry has been started, a failed startup retains its explicit non-fallback error.
+- d998491: Keep changed terminal dialogs disabled until their safety delay has elapsed, reject stale option descriptions or pane checks, and keep pending answers from being re-enabled by older responses.
+- @lazysh/account-usage@1.68.1
+  - @lazysh/common@1.68.1
+  - @lazysh/display-idle@1.68.1
+  - @lazysh/et-transport@1.68.1
+  - @lazysh/mosh-transport@1.68.1
+
 ## 1.68.0
 
 ### Minor Changes
