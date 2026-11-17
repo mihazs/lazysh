@@ -79,6 +79,12 @@ test.each(Object.entries(legacy))('legacy task %s resolves to %s with the old ca
   expect(task.options.runInCI).toBe(!task.options.persistent); // dev servers are the only local-only tasks
 });
 
+test('the Android Appium CI task remains eligible and installs its driver', async () => {
+  expect((await moonTask('client:test-mobile-e2e-ci')).options.runInCI).toBe(true);
+  expect((await moonTask('client:setup-mobile-e2e')).options.runInCI).toBe(true);
+  expect((await moonTask('client:test-mobile-e2e-ci')).deps!.map(dependency => dependency.target)).toEqual(['client:setup-mobile-e2e']);
+});
+
 test('release builds, ordering and inline environment survive the port', async () => {
   expect(commandLine(await moonTask('agent:build'))).toBe('cargo build --release --locked');
   // The update tests need the local release-server seam; a command that repeats the inherited arguments would
