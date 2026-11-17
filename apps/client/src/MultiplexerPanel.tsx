@@ -13,7 +13,7 @@ import ZellijPanel from './ZellijPanel';
 import MultiplexerShortcuts from './MultiplexerShortcuts';
 import { parseSnapshot } from './AgentPanel';
 
-type Pane = { id: string; index: number; active: boolean; command: string; path: string };
+type Pane = { id: string; index: number; active: boolean; command: string; path: string; width: number; height: number; title: string };
 type Window = { id: string; index: number; name: string; active: boolean; panes: Pane[] };
 type Session = { id: string; name: string; windows: Window[] };
 type Tree = { tmuxAvailable: boolean; herdrAvailable: boolean; zellijAvailable: boolean; tools?: MultiplexerTool[]; sessions: Session[] };
@@ -22,9 +22,16 @@ type Action =
   | { type: 'createSession'; name: string; directory: string }
   | { type: 'renameSession' | 'renameWindow'; target: string; name: string }
   | { type: 'createWindow'; target: string; name: string; directory: string }
-  | { type: 'selectWindow' | 'selectPane' | 'zoomPane'; target: string }
+  | { type: 'selectWindow' | 'selectPane' | 'zoomPane' | 'closeSession' | 'closePane'; target: string }
+  | { type: 'renamePane'; target: string; title: string }
+  | { type: 'resizePane'; target: string; direction: 'left' | 'right' | 'up' | 'down'; amount: number }
   | { type: 'splitPane'; target: string; horizontal: boolean; directory: string };
-type Edit = { type: 'createSession' } | { type: 'createWindow' | 'renameSession' | 'renameWindow'; target: string };
+type Edit = { type: 'createSession' } | { type: 'createWindow' | 'renameSession' | 'renameWindow' | 'renamePane'; target: string };
+type Closing = { action: { type: 'closeSession' | 'closePane'; target: string }; message: string };
+// One keypress moves a divider this many cells; the host clamps it to what the layout allows.
+const resizeStep = 5;
+const resizeLabels = { left: 'muxResizeLeft', right: 'muxResizeRight', up: 'muxResizeUp', down: 'muxResizeDown' } as const;
+const resizeGlyphs = { left: '←', right: '→', up: '↑', down: '↓' } as const;
 
 export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: { sessionId: string; onAttach: (name: string, kind?: MultiplexerKind, tmuxServer?: string) => Promise<void>; attached?: SessionAttachment; requested?:DesktopMuxRequest; onTools?: (tools: MultiplexerTool[]) => void }) {
   useUi();
@@ -40,6 +47,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [edit, setEdit] = useState<Edit | null>(null);
+  const [closing, setClosing] = useState<Closing | null>(null);
   const [name, setName] = useState('');
   const [directory, setDirectory] = useState('.');
   const [persistent, setPersistent] = useState<Record<string, { name: string }[]>>({});
@@ -59,13 +67,13 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
     return {tree,sessions};
   }
   function acceptWorkspaces(value:Awaited<ReturnType<typeof readWorkspaces>>) {
-    setTree(value.tree);setEdit(null);if(value.tree.tools)onTools?.(value.tree.tools);
+    setTree(value.tree);setEdit(null);setClosing(null);if(value.tree.tools)onTools?.(value.tree.tools);
     if(value.sessions)setPersistent({herdr:value.sessions});
   }
   useEffect(() => {
     const current = ++generation.current;
     if(!currentOwner(current))return;
-    setTree(null); setEdit(null); setPersistent({}); setHerdr(''); setZellij(''); setProjects([]); setProjectsLoaded(false); setError(''); setBusy(true);
+    setTree(null); setEdit(null); setClosing(null); setPersistent({}); setHerdr(''); setZellij(''); setProjects([]); setProjectsLoaded(false); setError(''); setBusy(true);
     observeCurrent(readWorkspaces(), () => currentOwner(current),
       acceptWorkspaces, error => setError(errorMessage(error)), () => setBusy(false));
     return () => { generation.current++; };
@@ -119,12 +127,14 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
     if (!tool) return t(kind === 'tmux' ? 'muxAvailable' : 'muxDetected');
     return `${tool.version ?? ''} (${t(tool.support === 'full' ? 'muxSupported' : 'muxLimited')})`.trim();
   }
-  function begin(value: Edit, initial = '') { setEdit(value); setName(initial); setError(''); }
+  function begin(value: Edit, initial = '') { setEdit(value); setClosing(null); setName(initial); setError(''); }
+  function confirmClose(value: Closing) { setClosing(value); setEdit(null); setError(''); }
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!edit || !name.trim()) return;
     if (edit.type === 'createSession') void run({ ...edit, name, directory });
     else if (edit.type === 'createWindow') void run({ type: 'createWindow', target: edit.target, name, directory });
+    else if (edit.type === 'renamePane') void run({ type: 'renamePane', target: edit.target, title: name });
     else void run({ type: edit.type, target: edit.target, name });
   }
   return <section className="tool-panel multiplexer-panel" aria-label={t('muxTitle')}>
@@ -151,6 +161,8 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
       </div>)}{!requested && <p>{t('muxPersistentHint')}</p>}</div>}
     {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} navigationOnly={tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')} />}
     {zellij && <ZellijPanel key={`${sessionId}:${zellij}`} sessionId={sessionId} name={zellij} projectDirectory={directory} />}
+    {closing && <div role="alertdialog" aria-label={t('muxConfirmClose')} aria-describedby="mux-close-message" className="security-note"><p id="mux-close-message">{closing.message}</p>
+      <button className="subtle-button" disabled={busy} onClick={() => void run(closing.action)}>{t('muxConfirmClose')}</button><button className="subtle-button" disabled={busy} onClick={() => setClosing(null)}>{t('appCancel')}</button></div>}
     {edit && <form onSubmit={submit} aria-label={t('muxDetails')}><label>{t('appName')}<input autoFocus maxLength={200} value={name} onChange={e => setName(e.target.value)} required disabled={busy} /></label>
       {(edit.type === 'createSession' || edit.type === 'createWindow') && <label>{t('muxDirectory')}<input value={directory} onChange={e => setDirectory(e.target.value)} required disabled={busy} placeholder="/home/user/project" /></label>}
       <button className="subtle-button" type="submit" disabled={busy || !name.trim()}>{t('muxSave')}</button><button className="subtle-button" type="button" disabled={busy} onClick={() => setEdit(null)}>{t('appCancel')}</button></form>}
@@ -159,15 +171,19 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
       <summary>{session.name} · {t('muxWindows',{total:formatNumber(session.windows.length),count:session.windows.length})}</summary>
       <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name)}>{t('muxAttach',{name:session.name})}</button>
         {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameSession', target: session.id }, session.name)}>{t('muxRenameSession')}</button>}
-        {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWindow', target: session.id })}>{t('muxNewWindow')}</button>}</div>
+        {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWindow', target: session.id })}>{t('muxNewWindow')}</button>}
+        {!requested && <button className="subtle-button" disabled={busy} onClick={() => confirmClose({ action: { type: 'closeSession', target: session.id }, message: t('muxConfirmCloseSession', { name: session.name }) })}>{t('muxCloseSession')}</button>}</div>
       {!requested && session.windows.map(window => <details key={window.id} open><summary>{formatNumber(window.index)}: {window.name}{window.active ? ` · ${t('muxActive')}` : ''}</summary>
         <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'selectWindow', target: window.id })}>{t('muxSelectWindow',{index:formatNumber(window.index)})}</button>
           <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameWindow', target: window.id }, window.name)}>{t('muxRenameWindow')}</button></div>
-        {window.panes.map(pane => <div className="mux-row" key={pane.id}><div><strong>{pane.command} · {pane.id}{pane.active ? ` · ${t('muxActive')}` : ''}</strong><small>{pane.path}</small></div>
+        {window.panes.map(pane => <div className="mux-row" key={pane.id}><div><strong>{pane.command} · {pane.id}{pane.active ? ` · ${t('muxActive')}` : ''}</strong><small>{pane.path} · {formatNumber(pane.width)}×{formatNumber(pane.height)}{pane.title ? ` · ${pane.title}` : ''}</small></div>
           <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'selectPane', target: pane.id })}>{t('muxSelect',{id:pane.id})}</button>
           <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'zoomPane', target: pane.id })}>{t('muxZoom',{id:pane.id})}</button>
           <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.id, horizontal: true, directory: pane.path })}>{t('muxSplitHorizontal',{id:pane.id})}</button>
           <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.id, horizontal: false, directory: pane.path })}>{t('muxSplitVertical',{id:pane.id})}</button>
+          <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renamePane', target: pane.id }, pane.title)}>{t('muxRenamePane',{id:pane.id})}</button>
+          {(['left', 'right', 'up', 'down'] as const).map(direction => <button key={direction} className="subtle-button" disabled={busy} aria-label={t(resizeLabels[direction],{id:pane.id})} onClick={() => void run({ type: 'resizePane', target: pane.id, direction, amount: resizeStep })}>{resizeGlyphs[direction]}</button>)}
+          <button className="subtle-button" disabled={busy} onClick={() => confirmClose({ action: { type: 'closePane', target: pane.id }, message: t('muxConfirmClosePane', { id: pane.id, command: pane.command, path: pane.path }) })}>{t('muxClosePane',{id:pane.id})}</button>
         </div>)}
       </details>)}
     </details>)}</div>
