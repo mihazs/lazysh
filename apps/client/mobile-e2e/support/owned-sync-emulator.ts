@@ -29,3 +29,11 @@ export async function prepareSyncDevice<T>(env: NodeJS.ProcessEnv, specs: readon
   const emulator = hostedRunner(env) || ambiguous || selected ? await admit(env) : undefined;
   return {emulator, device: await setup()};
 }
+
+/** WDIO swallows ordinary beforeSession hook errors; terminate this worker before it can create a session. */
+export async function failClosedBeforeSession(setup: () => Promise<void>) {
+  try { await setup(); } catch {
+    console.error('Android pre-session safety check failed; refusing to start the session.');
+    process.exit(1);
+  }
+}

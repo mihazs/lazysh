@@ -3,7 +3,7 @@ import {SevereServiceError} from 'webdriverio';
 import {acquireDevice, adbFor, ensurePhoneScreen, ensureThreeButtonNavigation, restoreFromJournal, type DeviceSession} from './support/device';
 import {ENDPOINTS_ENV, hostKinds, startHosts, type OwnedHosts} from './support/hosts';
 import {config as shared, here, reports} from './wdio.conf';
-import {prepareSyncDevice} from './support/owned-sync-emulator';
+import {failClosedBeforeSession, prepareSyncDevice} from './support/owned-sync-emulator';
 
 const serial = process.env.ANDROID_SERIAL;
 if (!serial) throw new Error('Set ANDROID_SERIAL to the one device the suite may use (adb devices); it is never guessed.');
@@ -71,17 +71,19 @@ export const config: WebdriverIO.Config = {
     }
   },
   // Before the session starts the app, so it never sees the tablet-shaped window a Waydroid guest has or a gestural overlay left behind.
-  beforeSession: async (_config, _capabilities, specs) => {
+  beforeSession: async (_config, _capabilities, specs) => failClosedBeforeSession(async () => {
     const admitted = await prepareSyncDevice(process.env, specs ?? [], process.argv, async () => undefined);
     workerEmulator = admitted.emulator;
     await workerEmulator?.check();
     await ensurePhoneScreen(adbFor(serial)); await ensureThreeButtonNavigation(adbFor(serial));
-  },
+  }),
   // Every worker runs one spec file: put the device back to the recorded baseline between files, even after a failure.
   after: async () => { await workerEmulator?.check(); await restoreFromJournal(serial); },
   // Hosts first (their forwards and processes), then the device baseline and lock, even when the first step fails.
   onComplete: async () => {
-    await emulator?.check();
-    try { await hosts?.stop(); } finally { await device?.release(); }
+    let lost = false;
+    try { await emulator?.check(); } catch { lost = true; }
+    try { await hosts?.stop({removeForwards: !lost}); } finally { await device?.release({restore: !lost}); }
+    if (lost) throw new Error('Owned emulator changed before device cleanup');
   },
 };

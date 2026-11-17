@@ -1,6 +1,13 @@
 import {expect, test} from 'bun:test';
 import {localSyncSelection, ownedSyncEmulator, prepareSyncDevice} from './owned-sync-emulator';
 import type {attestQrCamera} from '../../../../tests/support/androidQrOwnership';
+import {spawnSync} from 'node:child_process';
+import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join, resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 const hosted = {CI: 'true', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_TEMP: '/runner',
   LAZYSH_ANDROID_QR_EMULATOR_PID_FILE: '/runner/lazysh-qr-emulator.pid'};
@@ -39,3 +46,49 @@ test('device setup happens only after admission for the sync case or an ambiguou
   await prepareSyncDevice({}, ['/other.e2e.ts'], [], setup, admit);
   expect(events).toEqual(['setup']);
 });
+
+test('WDIO cannot proceed to a session after a pre-session safety failure', () => {
+  const script = `import {executeHooksWithArgs} from '@wdio/utils';
+    import {failClosedBeforeSession} from './apps/client/mobile-e2e/support/owned-sync-emulator.ts';
+    await executeHooksWithArgs('beforeSession', [() => failClosedBeforeSession(async () => { throw new Error('lost'); })], []);
+    console.log('SESSION_STARTED');`;
+  const child = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8'});
+  expect(child.status).toBe(1);
+  expect(child.stdout).not.toContain('SESSION_STARTED');
+  expect(child.stderr).toContain('refusing to start the session');
+});
+
+test('a real WDIO worker sends no session request when pre-session admission fails', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'lazysh-wdio-gate-'));
+  const requests: string[] = [];
+  const server = createServer((req, res) => { requests.push(`${req.method} ${req.url}`); res.writeHead(500).end('{}'); });
+  await new Promise<void>(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
+  const root = resolve(import.meta.dir, '../../../..');
+  const port = (server.address() as {port: number}).port;
+  try {
+    const spec = join(dir, 'gate.e2e.js'), config = join(dir, 'wdio.conf.ts');
+    await writeFile(spec, "describe('gate', () => { it('would create a session', () => {}); });\n");
+    const helper = pathToFileURL(join(import.meta.dir, 'owned-sync-emulator.ts')).href;
+    const run = async (fail: boolean) => {
+      await writeFile(config, `import {failClosedBeforeSession} from ${JSON.stringify(helper)};\nexport const config = {
+        runner: 'local', framework: 'mocha', reporters: [], logLevel: 'error', hostname: '127.0.0.1', port: ${port}, path: '/',
+        connectionRetryCount: 0, connectionRetryTimeout: 1000, specs: [${JSON.stringify(spec)}],
+        capabilities: [{browserName: 'chrome'}], maxInstances: 1,
+        beforeSession: () => failClosedBeforeSession(async () => { ${fail ? "throw new Error('lost');" : ''} }) };\n`);
+      const child = spawn(join(root, 'node_modules/.bin/wdio'), ['run', config], {cwd: root, stdio: 'ignore'});
+      return new Promise<number | null>((done, reject) => {
+        const timer = setTimeout(() => { child.kill(); reject(new Error('WDIO gate timed out')); }, 20_000);
+        child.once('error', error => { clearTimeout(timer); reject(error); });
+        child.once('exit', code => { clearTimeout(timer); done(code); });
+      });
+    };
+    expect(await run(false)).toBe(1);
+    expect(requests).toContain('POST /session');
+    requests.length = 0;
+    expect(await run(true)).toBe(1);
+    expect(requests).toEqual([]);
+  } finally {
+    await new Promise<void>(done => server.close(() => done()));
+    await rm(dir, {recursive: true, force: true});
+  }
+}, 30_000);
