@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.68.2
+
+### Patch Changes
+
+- 8f2308a: Pin the Android tmux acceptance case's host readback for the window rename: a real-tmux test requires it to refuse a rename that reached an original window and an original pane that was replaced, and the parity matrix records that the create, rename and close step ran green on `main`. Test and documentation only; no behaviour changes.
+- 24e0b21: Make the installed Windows GUI check blocking. It passed in a `main` run (run 43790076928, push of `b5668f94`, `native-desktop (windows-latest)`: the identity, `--host` and `--dir` scenarios, `3 pass`, `0 fail`), which was the condition for removing `continue-on-error` from its workflow step, so a failure of the installed application's window, saved-host dialog or singleton delivery on Windows now fails the job instead of being reported as a success. Test-only; the application is unchanged.
+- @lazysh/account-usage@1.68.2
+  - @lazysh/common@1.68.2
+  - @lazysh/display-idle@1.68.2
+  - @lazysh/et-transport@1.68.2
+  - @lazysh/mosh-transport@1.68.2
+
 ## 1.68.1
 
 ### Patch Changes
