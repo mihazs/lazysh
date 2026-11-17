@@ -14,6 +14,7 @@ pub mod kimi_code;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
+pub mod opencode_service;
 mod private_json;
 pub mod relay;
 pub mod reported_history;

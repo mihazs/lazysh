@@ -4,23 +4,38 @@ use crate::local::LocalState;
 use crate::ssh::{quote, AppState, Result, SshError};
 use tauri::State;
 
+pub(crate) type Reply = std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>>;
+
+/// Runs one host companion command that prints a JSON value, on the host of `session_id` (a remote SSH session or this
+/// device), under the access lease. A command that failed validation is refused here, after the access check, and
+/// nothing is run.
+pub(crate) async fn companion_json(
+    state: &State<'_, AppState>,
+    local: &State<'_, LocalState>,
+    session_id: &str,
+    command: Result<String>,
+    access: &AccessLease,
+) -> Reply {
+    access
+        .run(async {
+            let command = command?;
+            let host = Host::resolve(state, local, session_id, access).await?;
+            Ok(serde_json::from_str(
+                &host.companion(access, command).await?,
+            )?)
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn agent_approvals(
     state: State<'_, AppState>,
     local: State<'_, LocalState>,
     session_id: String,
     access: AccessLease,
-) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<crate::ssh::SshError>> {
-    access
-        .run(async {
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
-            Ok(serde_json::from_str(
-                &host
-                    .companion(&access, "lazysh-agent approval-list --limit 20".into())
-                    .await?,
-            )?)
-        })
-        .await
+) -> Reply {
+    let command = Ok("lazysh-agent approval-list --limit 20".to_owned());
+    companion_json(&state, &local, &session_id, command, &access).await
 }
 
 /// How an approval is answered beyond allow or deny: one of the request's own suggested permission updates (an
@@ -88,26 +103,19 @@ pub async fn resolve_agent_approval(
     option: Option<u8>,
     message: Option<String>,
     access: AccessLease,
-) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<crate::ssh::SshError>> {
-    access
-        .run(async {
-            let command = resolve_command(
-                &id,
-                &expected_hash,
-                &agent_session_id,
-                pane_id.as_deref(),
-                &decision,
-                &Extras {
-                    option,
-                    message: message.as_deref(),
-                },
-            )?;
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
-            Ok(serde_json::from_str(
-                &host.companion(&access, command).await?,
-            )?)
-        })
-        .await
+) -> Reply {
+    let command = resolve_command(
+        &id,
+        &expected_hash,
+        &agent_session_id,
+        pane_id.as_deref(),
+        &decision,
+        &Extras {
+            option,
+            message: message.as_deref(),
+        },
+    );
+    companion_json(&state, &local, &session_id, command, &access).await
 }
 
 #[cfg(test)]
