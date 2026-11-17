@@ -89,7 +89,20 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   expect(await (await connect.$('select')).getValue()).toBe(transport);
   await (supply?supply(connect):enterKey(gui,ssh,connect,false,rememberKey));
   gui.stage='owned SSH explicit fingerprint review';
-  const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
+  const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');
+  try {await trust.waitForDisplayed({timeout:20_000});}
+  catch(error) {
+    // Only structural state: the open connection dialog may still contain the private key.
+    try {
+      const state=await browser.execute(()=>{
+        const dialog=document.querySelector('[role="dialog"][aria-label^="Connect to "]');
+        const button=Array.from(dialog?.querySelectorAll('button')??[]).find(item=>item.textContent?.trim()==='Connect');
+        return {connectionDialog:!!dialog,connectDisabled:button?.disabled??null,alertPresent:!!dialog?.querySelector('[role="alert"]')};
+      });
+      console.info('Owned SSH fingerprint wait state',JSON.stringify(state));
+    } catch { /* The diagnostic must not replace the fingerprint timeout. */ }
+    throw error;
+  }
   expect(await trust.getText()).toContain(ssh.fingerprint);
   await (await trust.$('button=Trust key and connect')).click();
   gui.stage='owned SSH terminal prompt';
