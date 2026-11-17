@@ -72,7 +72,14 @@ export class OwnedProcess {
         force=setTimeout(()=>{void this.liveIdentity().then(current=>{if(current?.start===original.start)try{process.kill(-pid,'SIGKILL');}catch{}}).catch(()=>{});},1000);
       }
       await Promise.race([this.done,new Promise<never>((_,reject)=>{
-        deadline=setTimeout(()=>reject(new Error('Owned fixture process teardown deadline')),2000);
+        deadline=setTimeout(()=>{
+          // Sample synchronously before cleanup changes the streams; never log process data.
+          try {console.error('Owned teardown deadline observation '+JSON.stringify({scope:'at-deadline',
+            leaderExitObserved:teardownFlag(this.child.exitCode!==null || this.child.signalCode!==null),closeObserved:teardownFlag(this.closeObserved),
+            streams:{stdin:teardownStream(this.child.stdin),stdout:teardownStream(this.child.stdout),stderr:teardownStream(this.child.stderr)}}));}
+          catch {/* Diagnostics cannot prevent the original deadline failure. */}
+          reject(new Error('Owned fixture process teardown deadline'));
+        },2000);
       })]);
     } finally {
       if(force)clearTimeout(force);if(deadline)clearTimeout(deadline);
