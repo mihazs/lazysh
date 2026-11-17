@@ -341,3 +341,10 @@ Portuguese and Spanish without another configuration request. Held configuration
 retains its original access header, checkbox identity and opt-in; later access
 authority still wins. Native unsupported-platform reasons stay literal. These
 are component fixtures, not proof of OS authentication or device prompts.
+
+The host browser's address bar, tab list, navigation buttons, page dialogs and
+blocked-download notices also use all three catalogs. Page titles, addresses and
+dialog text are the page's own and are never translated; a test changes the
+language while a page dialog is open and checks that the page's text, including
+a literal `{{value}}`, stays verbatim. These controls are not in a release build
+yet; see [Host browser](host-browser.md#controls).
