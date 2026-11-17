@@ -7,6 +7,7 @@ const INBOX_STATES = {blocked: 'needs_attention', done: 'done'} as const;
 /** The agent names the companion's hooks report, for the kinds whose session id Herdr also knows. */
 const HOOK_NAMES: Record<string, string> = {claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'};
 const remembered = new Map<string, {eventId: string; state: InboxRow['state']; at: number}>();
+const sequences = new Map<string, number>();
 
 /** The pane identity an inbox row carries for a Herdr pane, as the host companion names it (`herdr:<server>:<pane id>`). */
 export const herdrPaneIdentity = (server: string, paneId: string) => `herdr:${server}:${paneId}`;
@@ -21,21 +22,25 @@ export function reportedByHerdr(row: Pick<InboxRow, 'id' | 'state' | 'updatedAt'
  * is to be told (a blocked agent). The row carries the agent, directory and Herdr pane identity, never a command or screen
  * text. One row serves the agent whichever source reports: it is the hook's own row when Herdr names the same agent session
  * or the same pane, and a hook's report of the same transition within a minute neither replaces it nor alerts again. */
-export async function collectHerdrTransition(session: InboxSession, transition: HerdrTransition): Promise<InboxRow | null> {
+export async function collectHerdrTransition(session: InboxSession, transition: HerdrTransition, canCommit = () => true): Promise<InboxRow | null> {
   const state = INBOX_STATES[transition.status as keyof typeof INBOX_STATES];
   if (!state) return null;
   const identity = herdrPaneIdentity(transition.server, transition.paneId);
   const agent = summaryText(HOOK_NAMES[transition.agent ?? ''] ?? transition.agent ?? 'Herdr', 80);
   const agentSessionId = transition.agentSession?.value ?? identity;
   const naturalId = await hash([session.hostId, agent, agentSessionId]);
+  const eventId = await hash([naturalId, 'herdr', state, transition.at, transition.sequence]);
+  if (!canCommit()) return null;
   const inbox = getInbox();
   // A session id names the agent exactly; without one, the same agent kind in the same pane is the same agent.
   const prior = inbox.rows.find(row => row.hostId === session.hostId && row.id === naturalId)
     ?? (transition.agentSession ? undefined : inbox.rows.find(row => row.hostId === session.hostId && row.paneId === identity && row.agent === agent));
   const id = prior?.id ?? naturalId;
-  const eventId = await hash([id, 'herdr', state, transition.at, transition.sequence]);
   if (inbox.latest[id] === eventId) return null;
   const previous = remembered.get(id);
+  if ((sequences.get(id) ?? -1) > transition.sequence) return null;
+  sequences.delete(id); sequences.set(id, transition.sequence);
+  if (sequences.size > 200) sequences.delete(sequences.keys().next().value!);
   if (prior && prior.state === state && prior.eventId !== previous?.eventId && Math.abs(Date.parse(prior.updatedAt) - transition.at) < SAME_TRANSITION_MS) return null;
   remembered.delete(id); remembered.set(id, {eventId, state, at: transition.at});
   if (remembered.size > 200) remembered.delete(remembered.keys().next().value!);

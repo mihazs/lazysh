@@ -71,14 +71,15 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
       const transition = (event as CustomEvent<HerdrTransition>).detail;
       const session = currentSessions.current.find(item => item.id === transition.sessionId && item.connected);
       if (!session || !active || !getInbox().monitoring) return;
-      const alert = await collectHerdrTransition(session, transition);
-      if (alert && active && getInbox().notifications && await isPermissionGranted()) {
+      const valid = () => active && getInbox().monitoring && currentSessions.current.some(item => item.id === session.id && item.hostId === session.hostId && item.connected);
+      const alert = await collectHerdrTransition(session, transition, valid);
+      if (alert && valid() && getInbox().notifications && await isPermissionGranted() && valid() && getInbox().notifications) {
         await invoke('notify_agent_attention', { sessionId: session.id, agent: alert.agent, project: alert.project, eventId: alert.eventId });
       }
     })().catch(e => { if (active) updateInbox({ error: errorMessage(e).slice(0, 2000) }); });
     window.addEventListener(herdrTransitionEvent, changed);
     return () => { active = false; window.removeEventListener(herdrTransitionEvent, changed); };
-  }, [state.monitoring]);
+  }, [state.monitoring, sessionKey]);
   useEffect(() => {
     if (!state.notifications || !isTauri()) return;
     let active = true;
