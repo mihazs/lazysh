@@ -84,6 +84,8 @@ pub enum Fault {
     NoPlatform,
     /// The tag points at another commit than `release.json` records.
     MovedTag,
+    /// The tagged endpoint responds with the newest release instead of the requested tag.
+    WrongTaggedRelease,
     /// Every API call answers this status, optionally with `Retry-After`.
     Status(u16, Option<u64>),
     /// Asset downloads redirect to this absolute URL.
@@ -218,12 +220,14 @@ async fn list(State(state): State<Shared>) -> Response {
 }
 async fn tagged(State(state): State<Shared>, Path(tag): Path<String>) -> Response {
     let state = state.lock().unwrap();
-    match state
-        .releases
-        .iter()
-        .enumerate()
-        .find(|(_, r)| format!("v{}", r.version) == tag && !r.draft)
-    {
+    match state.releases.iter().enumerate().find(|(_, r)| {
+        !r.draft
+            && if state.fault == Some(Fault::WrongTaggedRelease) {
+                format!("v{}", r.version) != tag
+            } else {
+                format!("v{}", r.version) == tag
+            }
+    }) {
         Some((index, release)) => json_response(&release_json(index, release, &state.fault)),
         None => StatusCode::NOT_FOUND.into_response(),
     }
