@@ -306,6 +306,14 @@ impl AppState {
             credential_changes: tokio::sync::broadcast::channel(64).0,
         })
     }
+    async fn note_credentials_changed(&self, host_id: &str) {
+        for session in self.sessions.lock().await.values() {
+            if let Some(control) = session.file_control.as_ref() {
+                control.note_credentials_changed(host_id);
+            }
+        }
+        let _ = self.credential_changes.send(host_id.to_owned());
+    }
     pub(crate) async fn cancel_for_renderer_rebind(&self) {
         crate::terminal_core::close_all();
         let sessions = {
@@ -1593,7 +1601,7 @@ pub async fn connect(
                 }
             }
             if remember_credentials.unwrap_or(false) {
-                let _ = state.credential_changes.send(host_id.clone());
+                state.note_credentials_changed(&host_id).await;
             }
             if operation.check().is_err() {
                 close_failed_connect(&handle).await;
