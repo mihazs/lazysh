@@ -1100,7 +1100,116 @@ mod sdk {
     fn adb_in(directory: &Path) {
         fs::create_dir_all(directory).unwrap();
         let name = if cfg!(windows) { "adb.exe" } else { "adb" };
-        fs::write(directory.join(name), b"").unwrap();
+        let path = directory.join(name);
+        fs::write(&path, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn non_executable_adb_is_not_a_usable_device_capability() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("platform-tools");
+        adb_in(&dir);
+        let adb = dir.join("adb");
+        fs::set_permissions(&adb, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::process::Command::new(&adb).spawn().unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(!crate::host::adb_resolves(
+            Some(temp.path().into()),
+            &OsString::new(),
+            temp.path()
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn device_tool_follows_executable_symlinks_and_skips_unusable_path_entries() {
+        use std::os::unix::{
+            fs::{symlink, PermissionsExt},
+            process::CommandExt,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        adb_in(&first);
+        adb_in(&second);
+        fs::set_permissions(first.join("adb"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(second.join("adb"), b"#!/bin/sh\nexit 0\n").unwrap();
+        symlink(second.join("adb"), temp.path().join("linked-adb")).unwrap();
+        assert!(crate::host::device_tool(
+            &temp.path().join("linked-adb"),
+            temp.path()
+        ));
+        let sdk = temp.path().join("sdk");
+        fs::create_dir_all(sdk.join("platform-tools")).unwrap();
+        let link = sdk.join("platform-tools/adb");
+        symlink(first.join("adb"), &link).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert!(crate::host::device_tool_on_path("adb", &path, temp.path()));
+        assert!(!crate::host::adb_resolves(
+            Some(sdk.clone().into()),
+            &path,
+            temp.path()
+        ));
+        fs::remove_file(&link).unwrap();
+        symlink(second.join("adb"), &link).unwrap();
+        assert!(crate::host::adb_resolves(
+            Some(sdk.into()),
+            &path,
+            temp.path()
+        ));
+        let error = std::process::Command::new(temp.path().join("linked-adb"))
+            .arg0("adb")
+            .status()
+            .unwrap();
+        assert!(error.success());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn relative_sdk_and_path_are_checked_from_the_child_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        adb_in(&home.join("sdk/platform-tools"));
+        fs::write(home.join("sdk/platform-tools/adb"), b"#!/bin/sh\nexit 0\n").unwrap();
+        let path = OsString::from("sdk/platform-tools");
+        assert!(crate::host::adb_resolves(None, &path, &home));
+        assert!(!crate::host::adb_resolves(None, &path, &app));
+        assert!(crate::host::adb_resolves(
+            Some("sdk".into()),
+            &OsString::new(),
+            &home
+        ));
+        assert!(!crate::host::adb_resolves(
+            Some("sdk".into()),
+            &OsString::new(),
+            &app
+        ));
+        assert!(std::process::Command::new("adb")
+            .env("PATH", &path)
+            .current_dir(&home)
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            std::process::Command::new("adb")
+                .env("PATH", &path)
+                .current_dir(&app)
+                .status()
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        adb_in(&home);
+        assert!(crate::host::adb_resolves(None, &OsString::new(), &home));
+        assert!(!crate::host::adb_resolves(None, &OsString::new(), &app));
     }
     #[test]
     fn adb_is_found_only_where_the_companion_looks_for_it() {
@@ -1114,13 +1223,13 @@ mod sdk {
         fs::create_dir_all(&empty_sdk).unwrap();
         let path = std::env::join_paths([&bin]).unwrap();
         let sdk_root = |root: &Path| Some(OsString::from(root));
-        assert!(!adb_resolves(None, &path));
+        assert!(!adb_resolves(None, &path, temp.path()));
         adb_in(&sdk.join("platform-tools"));
         // An SDK root is enough on its own, without any PATH.
-        assert!(adb_resolves(sdk_root(&sdk), &OsString::new()));
+        assert!(adb_resolves(sdk_root(&sdk), &OsString::new(), temp.path()));
         // adb on the PATH counts only when no SDK root is set: the companion never falls back.
         adb_in(&bin);
-        assert!(adb_resolves(None, &path));
-        assert!(!adb_resolves(sdk_root(&empty_sdk), &path));
+        assert!(adb_resolves(None, &path, temp.path()));
+        assert!(!adb_resolves(sdk_root(&empty_sdk), &path, temp.path()));
     }
 }

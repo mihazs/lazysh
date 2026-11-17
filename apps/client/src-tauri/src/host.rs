@@ -882,16 +882,64 @@ pub(crate) async fn local_program(program: &str) -> bool {
         program,
     )
 }
+/// Whether a device tool is a regular file executable by this process. The result is advisory:
+/// the file can change before launch, and execution can still fail for other reasons.
+#[cfg(desktop)]
+fn device_tool(path: &std::path::Path, cwd: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    if !path.is_absolute()
+        && path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::Prefix(_) | std::path::Component::RootDir
+            )
+        })
+    {
+        return false;
+    }
+    let path = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        cwd.join(path)
+    };
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: name is a valid, NUL-terminated path; faccessat only reads it.
+        unsafe { libc::faccessat(libc::AT_FDCWD, name.as_ptr(), libc::X_OK, libc::AT_EACCESS) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+#[cfg(desktop)]
+fn device_tool_on_path(program: &str, path: &std::ffi::OsStr, cwd: &std::path::Path) -> bool {
+    let name = executable(program);
+    std::env::split_paths(path).any(|directory| device_tool(&directory.join(&name), cwd))
+}
 /// Whether `lazysh-agent devices` finds an Android SDK `adb` on this device, where it looks:
 /// under `ANDROID_HOME` or `ANDROID_SDK_ROOT` when either is set (and nowhere else), else the PATH.
 #[cfg(desktop)]
-fn adb_resolves(sdk: Option<std::ffi::OsString>, path: &std::ffi::OsStr) -> bool {
+fn adb_resolves(
+    sdk: Option<std::ffi::OsString>,
+    path: &std::ffi::OsStr,
+    cwd: &std::path::Path,
+) -> bool {
     match sdk {
-        Some(root) => std::path::Path::new(&root)
-            .join("platform-tools")
-            .join(executable("adb"))
-            .is_file(),
-        None => on_path(path, "adb"),
+        Some(root) => device_tool(
+            &std::path::Path::new(&root)
+                .join("platform-tools")
+                .join(executable("adb")),
+            cwd,
+        ),
+        None => device_tool_on_path("adb", path, cwd),
     }
 }
 /// Whether this device can show host devices: Android through an SDK `adb`, iOS simulators
@@ -899,10 +947,15 @@ fn adb_resolves(sdk: Option<std::ffi::OsString>, path: &std::ffi::OsStr) -> bool
 #[cfg(desktop)]
 pub(crate) async fn local_devices() -> bool {
     let path = local_path().await;
+    let Ok(parent_cwd) = std::env::current_dir() else {
+        return false;
+    };
+    let cwd = crate::local::home_dir().map_or(parent_cwd.clone(), |home| parent_cwd.join(home));
     adb_resolves(
         std::env::var_os("ANDROID_HOME").or_else(|| std::env::var_os("ANDROID_SDK_ROOT")),
         &path,
-    ) || (cfg!(target_os = "macos") && on_path(&path, "xcrun"))
+        &cwd,
+    ) || (cfg!(target_os = "macos") && device_tool_on_path("xcrun", &path, &cwd))
 }
 
 /// Polls until process `pid` is gone; false when it still runs after ten seconds.
