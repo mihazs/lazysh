@@ -828,12 +828,11 @@ jobs:
       - name: Exercise native resume policy persistence and cancellation
         run: bunx moon run client-native:test-resume-policy
       # Last, and keyed on the installer step, so an unrelated native failure neither hides nor causes it.
-      # Non-blocking until its first qualifying hosted pass is recorded on #492; then remove continue-on-error.
+      # Blocking since it passed in a `main` run (43790076928, #1632); a failure here fails the job.
       - name: Exercise the installed Windows application GUI
         if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
         # A composite step cannot carry its own timeout: the runner rejects the manifest. This bounds the driver install and the case.
         timeout-minutes: 30
-        continue-on-error: true
         uses: ./.github/actions/windows-installed-gui
 
   native-android:
