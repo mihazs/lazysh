@@ -1,5 +1,19 @@
 # @lazysh/agent
 
+## 1.68.0
+
+### Minor Changes
+
+- 8881a6b: Open and page through larger Codex conversations using a bounded full-history index.
+
+### Patch Changes
+
+- 8881a6b: Open a conversation whose workflow has no summary file instead of refusing the page.
+- @lazysh/account-usage@1.68.0
+  - @lazysh/common@1.68.0
+  - @lazysh/companion-release@1.68.0
+  - @lazysh/notification-client@1.68.0
+
 ## 1.67.1
 
 ### Patch Changes
