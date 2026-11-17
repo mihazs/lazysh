@@ -91,6 +91,8 @@ while a browser uses it, which the relay reports as its `closed` reason) and `ho
 relay that is not asked to keep the profile stays ephemeral and leaves the kept one as it is. An older companion
 answers `--keep-profile` with a usage error and starts nothing, so a session never silently runs without the profile
 the user asked to keep.
+When upgrading, stop older companion sessions before starting a kept session or clearing browser data. Older
+companions do not use the profile coordination lock, so concurrent recovery of stale profiles across versions is not protected.
 
 ### Attaching to the normal profile
 
