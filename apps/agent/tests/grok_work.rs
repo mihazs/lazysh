@@ -132,7 +132,25 @@ fn every_end_is_read_from_its_record_and_a_launch_with_no_end_stays_running() {
     assert_eq!(job(None), ["running"]);
     assert_eq!(job(Some(ended(json!({"exit_code":0})))), ["done"]);
     assert_eq!(job(Some(ended(json!({})))), ["done"]);
+    assert_eq!(
+        job(Some(ended(
+            json!({"exit_code":null,"signal":null,"explicitly_killed":false})
+        ))),
+        ["done"]
+    );
     assert_eq!(job(Some(ended(json!({"exit_code":2})))), ["failed"]);
+    for snapshot in [
+        json!({"exit_code":"invalid"}),
+        json!({"exit_code":2147483648_i64}),
+        json!({"signal":7}),
+        json!({"explicitly_killed":"true"}),
+    ] {
+        assert_eq!(
+            job(Some(ended(snapshot.clone()))),
+            ["running"],
+            "{snapshot}"
+        );
+    }
     assert_eq!(job(Some(ended(json!({"signal":"SIGTERM"})))), ["failed"]);
     assert_eq!(
         job(Some(ended(

@@ -122,14 +122,25 @@ pub(super) fn record(tag: &str, update: &Value, at: &str) -> Option<Record> {
             if snapshot["completed"] != true {
                 return None;
             }
-            let state = if snapshot["explicitly_killed"] == true {
+            // Validate outcome fields before interpreting them: a malformed value is not a successful exit.
+            let exit_code = match snapshot.get("exit_code") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(i32::try_from(value.as_i64()?).ok()?),
+            };
+            let signal = match snapshot.get("signal") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(value.as_str()?),
+            };
+            let killed = match snapshot.get("explicitly_killed") {
+                None => false,
+                Some(value) => value.as_bool()?,
+            };
+            let state = if killed {
                 "stopped"
-            } else if snapshot["signal"] == "session_restart" {
+            } else if signal == Some("session_restart") {
                 // Written for a task the session lost: neither a failure nor a recorded end.
                 "unknown"
-            } else if snapshot["signal"].is_null()
-                && snapshot["exit_code"].as_i64().unwrap_or(0) == 0
-            {
+            } else if signal.is_none() && exit_code.unwrap_or(0) == 0 {
                 "done"
             } else {
                 "failed"
