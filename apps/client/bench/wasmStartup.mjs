@@ -1,9 +1,9 @@
 // Cold start of the "WASM terminal" candidate against xterm.js on the same V8 (Node), one fresh process per sample
-// (docs/architecture/terminal-benchmarks.md, #1323): how long until the first byte is parsed, from nothing loaded.
+// (docs/architecture/terminal-benchmarks.md, #1323): how long until the sample is parsed, from nothing loaded.
 // Usage: node bench/wasmStartup.mjs <ghostty-vt.wasm> [processes]
 // The module is built as described in the benchmarks document. Each child process measures once and prints one JSON line:
-// xterm.js (import of @xterm/headless, `new Terminal`, first 16 KiB written) or wasm (read the file, compile, instantiate,
-// create the terminal, first 16 KiB written), plus the process's resident set before and after.
+// xterm.js (import of @xterm/headless, `new Terminal`, sample written) or wasm (read the file, compile, instantiate,
+// create the terminal, sample written), plus the process's resident set before and after.
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -49,11 +49,11 @@ const run = engine => Array.from({ length: Number(count) }, () => {
   return JSON.parse(done.stdout.trim());
 });
 console.log(`node ${process.version} (V8 ${process.versions.v8}), ${os.cpus()[0]?.model}, ${os.type()} ${os.release()}, load average at start ${os.loadavg().map(x => x.toFixed(2)).join(' ')}`);
-console.log(`${count} fresh processes per engine, first 16 KiB written; milliseconds and MiB, median (min to max); wasm module ${(readFileSync(wasmPath).length / 1048576).toFixed(1)} MiB`);
+console.log(`${count} fresh processes per engine, ${SAMPLE.length} bytes written; milliseconds and MiB, median (min to max); wasm module ${(readFileSync(wasmPath).length / 1048576).toFixed(1)} MiB`);
 const xterm = run('xterm'), wasm = run('wasm');
 const same = xterm.every(s => s.cursor.join() === xterm[0].cursor.join()) && wasm.every(s => s.cursor.join() === wasm[0].cursor.join());
 if (!same || xterm[0].cursor.join() !== wasm[0].cursor.join()) throw new Error(`the engines disagree on the cursor: ${xterm[0].cursor} against ${wasm[0].cursor}`);
-console.log('| engine | load (import or file read) | compile | instantiate | start to first byte parsed, total | resident set added | wasm linear memory |');
+console.log('| engine | load (import or file read) | compile | instantiate | start through sample parsed, total | resident set added | wasm linear memory |');
 console.log('|---|---|---|---|---|---|---|');
 console.log(`| xterm.js headless | ${range(xterm.map(s => s.loadMs))} | | | ${range(xterm.map(s => s.totalMs))} | ${range(xterm.map(s => s.rssAfter - s.rssBefore))} | |`);
 console.log(`| libghostty-vt wasm | ${range(wasm.map(s => s.loadMs))} | ${range(wasm.map(s => s.compileMs))} | ${range(wasm.map(s => s.instantiateMs))} | ${range(wasm.map(s => s.totalMs))} | ${range(wasm.map(s => s.rssAfter - s.rssBefore))} | ${range(wasm.map(s => s.memoryMiB))} |`);
