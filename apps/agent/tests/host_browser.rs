@@ -15,7 +15,8 @@ mod binary;
 #[path = "support/host_browser.rs"]
 mod support;
 use support::{
-    agent, assert_nothing_started, chrome, enable, refusing_states, state_text, switch, wait_gone,
+    agent, assert_kept, assert_nothing_started, chrome, clear_data, cleared, enable,
+    refusing_states, state_text, switch, wait_gone,
 };
 
 fn launcher(state: &Path, extra: &[&str], dev_flag: bool) -> Command {
@@ -131,17 +132,6 @@ fn stop(mut child: Child) {
 fn failure(output: &Output) -> String {
     assert!(!output.status.success(), "{output:?}");
     String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn clear_data(state: &Path) -> Output {
-    agent(state)
-        .args(["host-browser", "--clear-data"])
-        .output()
-        .unwrap()
-}
-
-fn cleared(output: &Output) -> bool {
-    serde_json::from_slice::<Value>(&output.stdout).unwrap()["cleared"] == true
 }
 
 #[test]
@@ -313,14 +303,7 @@ fn keep_profile_survives_the_session_until_browser_data_is_cleared() {
     );
     stop(first);
 
-    assert_eq!(
-        fs::read_to_string(profile.join("Cookies")).unwrap(),
-        "session-cookie"
-    );
-    assert_eq!(
-        fs::metadata(&profile).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
+    assert_kept(&profile);
     let mut again = fixture.spawn(&["--keep-profile"]);
     assert_eq!(profile_of(&first_line(&mut again)), profile);
     stop(again);
