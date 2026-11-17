@@ -694,7 +694,22 @@ fn whatever_a_client_sends_the_browser_only_gets_allow_listed_input_methods() {
         relay.send(message.clone());
     }
     relay.send(json!({"type": "text", "text": "last"}));
-    let calls = fixture.input_calls(1);
+    // The sentinel is sent after every hostile input. Wait until the browser has seen it before
+    // checking the whole preceding sequence; a nonempty prefix is not a completion signal.
+    let deadline = Instant::now() + WAIT;
+    let calls = loop {
+        let calls = fixture.input_calls(1);
+        if calls.iter().any(|call| {
+            call["method"] == "Input.insertText" && call["params"] == json!({"text": "last"})
+        }) {
+            break calls;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "final input sentinel did not reach browser"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert!(!calls.is_empty());
     let allowed = [
         "Input.dispatchMouseEvent",
