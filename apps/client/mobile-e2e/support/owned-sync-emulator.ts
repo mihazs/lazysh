@@ -41,7 +41,7 @@ export async function prepareSyncDevice<T>(env: NodeJS.ProcessEnv, specs: readon
       try { return realpathSync(file) === realpathSync(syncPath); } catch { return true; }
     });
   });
-  const emulator = hostedRunner(env) || uncertain || selected ? await admit(env) : undefined;
+  const emulator = uncertain || selected ? await admit(env) : undefined;
   return {emulator, device: await setup()};
 }
 

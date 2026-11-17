@@ -45,7 +45,8 @@ test('device setup happens only after admission for the sync case or an ambiguou
   events.length = 0;
   expect(localSyncSelection([sync, other], {})).toEqual([other]);
   await prepareSyncDevice({}, [other], [], setup, admit);
-  expect(events).toEqual(['setup']);
+  await prepareSyncDevice(hosted, [other], [], setup, admit);
+  expect(events).toEqual(['setup', 'setup']);
   events.length = 0;
   await prepareSyncDevice({}, [other], ['--suite', 'smoke'], setup, admit, {suite: ['smoke'], suites: {smoke: [other]}});
   await prepareSyncDevice({}, [other], ['--suite', 'smoke'], setup, admit, {suite: ['smoke'], suites: {smoke: [resolve(import.meta.dir, '../specs/smoke/**/*.e2e.ts')]}});
