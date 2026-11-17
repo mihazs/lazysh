@@ -7,6 +7,7 @@ pub(crate) struct Control {
     commands: StdMutex<Arc<SshHandle>>,
     restoring: Arc<Semaphore>,
     automatic_error: StdMutex<Option<SshError>>,
+    credential_revision: std::sync::atomic::AtomicU64,
     files_recovery: bool,
 }
 fn unavailable() -> SshError {
@@ -38,6 +39,16 @@ pub(super) fn silent_recovery_host(original: &Host, current: &Host) -> Result<()
     Ok(())
 }
 impl Control {
+    pub(super) fn note_credentials_changed(&self, host_id: &str) {
+        if self
+            .original
+            .as_ref()
+            .is_some_and(|host| host.id == host_id)
+        {
+            self.credential_revision
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
     pub(super) fn new(handle: Arc<SshHandle>) -> Self {
         Self {
             original: handle.origin.clone(),
@@ -45,6 +56,7 @@ impl Control {
             commands: StdMutex::new(handle),
             restoring: Arc::new(Semaphore::new(1)),
             automatic_error: StdMutex::new(None),
+            credential_revision: std::sync::atomic::AtomicU64::new(0),
             files_recovery: true,
         }
     }
@@ -197,7 +209,7 @@ where
     let mut access = session.access.subscribe();
     let mut credentials = state.credential_changes.subscribe();
     let mut delay = Duration::from_secs(1);
-    let mut blocked: Option<(Host, u64)> = None;
+    let mut blocked: Option<(Host, u64, u64)> = None;
     loop {
         if *cancel.borrow()
             || !state
@@ -218,17 +230,23 @@ where
                 } else if let Some(original) = control.original.as_ref() {
                     if let Ok(host) = state.host(&original.id) {
                         let generation = session.access.generation().unwrap_or_default();
-                        let unchanged = blocked.as_ref().is_some_and(|(previous, epoch)| {
-                            *epoch == generation
-                                && previous.id == host.id
-                                && previous.credential_binding() == host.credential_binding()
-                                && previous.credentials_stored == host.credentials_stored
-                        });
+                        let revision = control.credential_revision.load(Ordering::SeqCst);
+                        let unchanged =
+                            blocked
+                                .as_ref()
+                                .is_some_and(|(previous, epoch, saved_revision)| {
+                                    *epoch == generation
+                                        && *saved_revision == revision
+                                        && previous.id == host.id
+                                        && previous.credential_binding()
+                                            == host.credential_binding()
+                                        && previous.credentials_stored == host.credentials_stored
+                                });
                         if !unchanged {
                             match silent_recovery_host(original, &host) {
                                 Err(error) => {
                                     control.report_automatic(Some(error));
-                                    blocked = Some((host, generation));
+                                    blocked = Some((host, generation, revision));
                                     delay = Duration::from_secs(30);
                                 }
                                 Ok(()) => {
@@ -269,7 +287,7 @@ where
                                             }
                                             Err(error) => {
                                                 control.report_automatic(Some(SshError::new(error.kind(), "Automatic host-tools recovery cannot authenticate or verify the saved host")));
-                                                blocked = Some((host, generation));
+                                                blocked = Some((host, generation, revision));
                                                 delay = Duration::from_secs(30);
                                             }
                                         }
@@ -293,8 +311,8 @@ where
             _ = cancel.changed() => return,
             _ = access.changed() => {},
             change = credentials.recv() => {
-                if change.ok().as_deref() == control.original.as_ref().map(|host| host.id.as_str()) {
-                    blocked = None;
+                // A lagged receiver still wakes and compares the retained per-session revision.
+                if change.is_ok() || matches!(change, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
                     delay = Duration::from_secs(1);
                 }
             },
@@ -833,10 +851,15 @@ mod tests {
         .unwrap();
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        let _ = f.state.credential_changes.send("another-host".into());
+        for _ in 0..65 {
+            let _ = f.state.credential_changes.send("another-host".into());
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        let _ = f.state.credential_changes.send(f.host.id.clone());
+        f.state.note_credentials_changed(&f.host.id).await;
+        for _ in 0..65 {
+            let _ = f.state.credential_changes.send("another-host".into());
+        }
         timeout(Duration::from_secs(2), async {
             while calls.load(Ordering::SeqCst) < 2 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -934,14 +957,8 @@ mod tests {
                 );
             }
             f.state.config().unwrap().hosts[0] = f.host.clone();
-            let control = Control {
-                original: None,
-                current: StdMutex::new(f.session.handle.clone()),
-                commands: StdMutex::new(f.session.handle.clone()),
-                restoring: Arc::new(Semaphore::new(1)),
-                automatic_error: StdMutex::new(None),
-                files_recovery: true,
-            };
+            let mut control = Control::new(f.session.handle.clone());
+            control.original = None;
             assert_eq!(
                 control.begin(purpose).err().unwrap().kind(),
                 "ssh_control_unavailable"
