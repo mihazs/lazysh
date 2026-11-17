@@ -275,6 +275,7 @@ pub fn from_wire(bytes: &[u8]) -> Response {
                     | "disconnected"
                     | "timeout"
                     | "unavailable"
+                    | "disabled"
             )
             || response
                 .source
@@ -284,6 +285,10 @@ pub fn from_wire(bytes: &[u8]) -> Response {
             return None;
         }
         if response.state == "ready" && (response.report.is_none() || response.source.is_none()) {
+            return None;
+        }
+        if response.state == "disabled" && (response.report.is_some() || response.source.is_some())
+        {
             return None;
         }
         if let Some(report) = response.report.as_mut() {

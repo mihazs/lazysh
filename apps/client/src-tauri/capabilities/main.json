@@ -163,6 +163,7 @@
     "allow-agent-history",
     "allow-agent-usage",
     "allow-account-usage",
+    "allow-usage-collector-status",
     "allow-app-icon-status",
     "allow-set-app-icon",
     "allow-terminal-private-keyboard",

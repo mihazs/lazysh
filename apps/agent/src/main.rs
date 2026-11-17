@@ -74,6 +74,16 @@ enum Command {
         #[command(subcommand)]
         command: SettingsCommand,
     },
+    /// Show or change whether this host may read account quotas, without creating state when absent.
+    UsageCollection {
+        #[command(subcommand)]
+        command: UsageCollectionCommand,
+    },
+    /// Record account quota samples on a timer while no app is open (off until you enable it).
+    UsageCollector {
+        #[command(subcommand)]
+        command: lazysh_agent::usage_collector::Command,
+    },
     /// Open a URL on the attached device, or with the next real opener (what the managed
     /// `xdg-open` and `lazysh-open` wrappers run).
     BrowserOpen {
@@ -375,6 +385,16 @@ enum HostBrowserSettingsCommand {
         host_browser_enabled: bool,
     },
 }
+#[derive(Subcommand)]
+enum UsageCollectionCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        account_quota_enabled: bool,
+    },
+}
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     let operation = match &cli.command {
         Command::Discover { .. } | Command::History { .. } | Command::ReportedHistory { .. } => {
@@ -459,6 +479,24 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 )?),
             };
             Some(settings.map_err(|_| Error::InvalidEvent)?)
+        }
+        Command::UsageCollector { .. } => unreachable!("handled before execute"),
+        Command::UsageCollection { command } => {
+            let directory = lazysh_agent::state_directory()?;
+            let policy = match command {
+                UsageCollectionCommand::Show => lazysh_agent::usage_collection::read(&directory)?,
+                UsageCollectionCommand::Update {
+                    expected_revision,
+                    account_quota_enabled,
+                } => lazysh_agent::usage_collection::update(
+                    &directory,
+                    Some(expected_revision),
+                    |policy| {
+                        policy.account_quota_enabled = account_quota_enabled;
+                    },
+                )?,
+            };
+            Some(serde_json::to_value(policy).map_err(|_| Error::InvalidEvent)?)
         }
         Command::Usage {
             agent,
@@ -851,6 +889,9 @@ fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     if let Command::Update(args) = cli.command {
         return lazysh_agent::update::run(args);
+    }
+    if let Command::UsageCollector { command } = cli.command {
+        return lazysh_agent::usage_collector::run(command);
     }
     if let Command::BrowserOpen { args } = &cli.command {
         return lazysh_agent::browser::open("browser-open", args);

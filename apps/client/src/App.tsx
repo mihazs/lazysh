@@ -117,6 +117,7 @@ const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
 const AgentView = lazy(() => import("./AgentView"));
 const UsagePanel = lazy(() => import("./UsagePanel"));
+const UsageCollectorPanel = lazy(() => import("./UsageCollectorPanel"));
 const PreviewPanel = lazy(() => import("./PreviewPanel"));
 const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const AttachmentPanel = lazy(() => import("./AttachmentPanel"));
@@ -2554,6 +2555,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.connected && view === "usage" && (
                   <>
                   <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  {!active.local && <UsageCollectorPanel key={`collector-${active.id}`} sessionId={active.id} />}
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
