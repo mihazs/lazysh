@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {saveFailureArtifacts} from './support/artifacts';
 import {Attempts, mochaGrep, quarantine, reportFlaky, shard, specsFor, tiers} from './support/ci';
 import {forbidPause} from './support/guards';
+import SafeJunitReporter from './support/safe-junit';
 
 export const here = dirname(fileURLToPath(import.meta.url));
 export const reports = join(here, 'reports');
@@ -36,7 +37,7 @@ export const config: Omit<WebdriverIO.Config, 'capabilities'> = {
   // A retry hides a real defect. CI adds one fresh-session retry per spec file (specFileRetries), never per test.
   specFileRetries: process.env.CI ? 1 : 0,
   mochaOpts: {ui: 'bdd', timeout: 120_000, retries: 0, ...mochaGrep(mode)},
-  reporters: ['spec', ['junit', {outputDir: join(reports, 'junit'), outputFileFormat: (options: {cid: string}) => `results-${options.cid}.xml`}]],
+  reporters: ['spec', [SafeJunitReporter, {outputDir: join(reports, 'junit'), outputFileFormat: (options: {cid: string}) => `results-${options.cid}.xml`}]],
   // A spec file that passes only on its retry is a flake: the job summary lists it so an issue is opened the same day.
   onWorkerEnd: (_cid, exitCode, files) => reportFlaky(run, attempts.record(files, exitCode), here),
   before: (_capabilities, _specs, driver) => forbidPause(driver),

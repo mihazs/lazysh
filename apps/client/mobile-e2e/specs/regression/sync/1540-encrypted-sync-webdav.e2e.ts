@@ -14,7 +14,6 @@ import {distrustOwnedCa, reversePort, startOwnedWebdav, trustOwnedCa, type Owned
 // a hosted WebDAV provider are not covered.
 const SETTINGS = 'lazysh-settings-v1.age';
 const CREDENTIALS = 'lazysh-credentials-v1.age';
-const RECOVERY_KEY = /^LAZYSH-SYNC-V1-[0-9a-f]{64}$/;
 const request = ({method, name, status}: {method: string; name: string; status: number}) => `${method} ${name} ${status}`;
 
 describe('Encrypted sync against an owned WebDAV server', () => {
@@ -48,8 +47,8 @@ describe('Encrypted sync against an owned WebDAV server', () => {
     await SyncPanel.open();
     await SyncPanel.configure(account());
     await SyncPanel.in(() => expect(SyncPanel.status).toHaveText('Encrypted sync configured. Nothing has been uploaded.'));
-    const recoveryKey = await SyncPanel.shownRecoveryKey();
-    expect(recoveryKey).toMatch(RECOVERY_KEY);
+    const recoveryDigest = await SyncPanel.shownRecoveryKey();
+    expect(recoveryDigest).toMatch(/^[0-9a-f]{64}$/);
     // Credentials stay off unless enabled, and enrolling reached out to no server at all.
     await SyncPanel.in(async () => {
       await expect(SyncPanel.uploadSettings).toBeEnabled();
@@ -63,7 +62,7 @@ describe('Encrypted sync against an owned WebDAV server', () => {
     await relaunchApp();
     await SyncPanel.open();
     await SyncPanel.showRecoveryKey();
-    expect(await SyncPanel.shownRecoveryKey()).toBe(recoveryKey);
+    expect(await SyncPanel.shownRecoveryKey()).toBe(recoveryDigest);
     expect(server().requests).toEqual([]);
   });
 
@@ -77,8 +76,8 @@ describe('Encrypted sync against an owned WebDAV server', () => {
     await HostEditor.saveHost();
     await HostsList.in(() => expect(HostsList.connectButton(source.name)).toBeDisplayed());
     await SyncPanel.open();
-    await SyncPanel.configure(account());
-    const recoveryKey = await SyncPanel.shownRecoveryKey();
+    const recoveryKey = `LAZYSH-SYNC-V1-${randomBytes(32).toString('hex')}`;
+    await SyncPanel.configure(account({recoveryKey}));
     await SyncPanel.uploadSettingsNow();
     await SyncPanel.in(() => expect(SyncPanel.status).toHaveText('Encrypted settings uploaded.'));
     // The server holds one age (scrypt) ciphertext for settings, no credentials resource, and none of what it must not learn.

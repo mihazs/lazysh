@@ -3,6 +3,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {basename, join} from 'node:path';
 import {adbFor} from './device';
 import {inNative, inWebView} from './contexts';
+import {redactRecoveryKey} from './recovery-key';
 
 const slug = (text: string) => text.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'unnamed';
 // A private key, or an encrypted-sync recovery key (its fixed prefix and the start of its body).
@@ -14,8 +15,9 @@ export async function secretOnScreen() {
   const nativeSource = await quiet(inNative(() => browser.getPageSource()));
   // A key is its header followed by a base64 body; the field's placeholder is the header alone.
   if (nativeSource && (/password="true"/.test(nativeSource) || KEY.test(nativeSource))) return true;
-  return (await quiet(inWebView(() => browser.execute(keyPattern => !!document.querySelector('input[type=password]')
-    || [...document.querySelectorAll('textarea,input')].some(field => new RegExp(keyPattern).test((field as HTMLInputElement).value)), KEY.source)))) === true;
+  const webSecret = await quiet(inWebView(() => browser.execute(keyPattern => !!document.querySelector('input[type=password]')
+    || [...document.querySelectorAll('textarea,input')].some(field => new RegExp(keyPattern).test((field as HTMLInputElement).value)), KEY.source)));
+  return !nativeSource || webSecret !== false;
 }
 
 async function capture(directory: string, name: string, run: <T>(work: () => Promise<T>) => Promise<T>) {
@@ -38,6 +40,6 @@ async function collect(test: {file?: string; title: string}, reports: string, se
   await mkdir(directory, {recursive: true});
   if (await secretOnScreen()) await writeFile(join(directory, 'screen-suppressed.txt'), 'A password or private key was on screen; screenshots and page sources were not captured.\n');
   else { await capture(directory, 'native', inNative); await capture(directory, 'webview', inWebView); }
-  await quiet(adbFor(serial)('logcat', '-d', '-t', '500').then(log => writeFile(join(directory, 'logcat.txt'), log)));
+  await quiet(adbFor(serial)('logcat', '-d', '-t', '500').then(log => writeFile(join(directory, 'logcat.txt'), redactRecoveryKey(log))));
   await quiet(readFile(join(reports, 'wdio-appium.log'), 'utf8').then(log => writeFile(join(directory, 'appium.log'), log.slice(-200_000))));
 }

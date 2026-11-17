@@ -1,4 +1,5 @@
-import {$, $$} from '@wdio/globals';
+import {$, $$, browser} from '@wdio/globals';
+import {adbFor} from '../../support/device';
 import Page from '../page';
 
 /** The Encrypted sync dialog: enrollment, the recovery key, per-category upload and preview, and the review before apply. */
@@ -37,16 +38,34 @@ class SyncPanelComponent extends Page {
   async configure(account: {url: string; username: string; password: string; settings: boolean; credentials?: boolean; recoveryKey?: string}) {
     await this.enter(() => this.directory, account.url);
     await this.enter(() => this.username, account.username);
-    await this.enter(() => this.password, account.password);
-    if (account.recoveryKey) await this.enter(() => this.recoveryImport, account.recoveryKey);
+    const enterSecret = async (field: 'password' | 'recoveryImport', value: string) => {
+      await this.in(async () => {
+        const input = this[field];
+        await input.waitForClickable();
+        await input.click();
+        await browser.keys(['Control', 'a']);
+      });
+      try { await adbFor(process.env.ANDROID_SERIAL ?? '')('shell', 'input', 'text', value); }
+      catch { throw new Error('Could not enter sync credentials'); }
+    };
+    await enterSecret('password', account.password);
+    if (account.recoveryKey) await enterSecret('recoveryImport', account.recoveryKey);
     if (account.settings) await this.tap(() => this.settingsToggle);
     if (account.credentials) await this.tap(() => this.credentialsToggle);
     await this.closeKeyboard();
     await this.tap(() => this.configureButton);
   }
-  /** The recovery key the panel shows, once it is displayed. */
+  /** Return only a digest of the displayed key so WebDriver never receives the secret. */
   shownRecoveryKey() {
-    return this.in(async () => { await this.recoveryKey.waitForDisplayed({timeoutMsg: 'The recovery key was not shown'}); return this.recoveryKey.getValue(); });
+    return this.in(async () => {
+      await this.recoveryKey.waitForDisplayed({timeoutMsg: 'The recovery key was not shown'});
+      return browser.execute(async () => {
+        const value = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Recovery key"]')?.value ?? '';
+        if (!/^LAZYSH-SYNC-V1-[0-9a-f]{64}$/.test(value)) return null;
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+        return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      });
+    });
   }
   async hideRecoveryKey() { await this.tap(() => this.hideRecovery); }
   async showRecoveryKey() { await this.tap(() => this.showRecovery); }
