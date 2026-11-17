@@ -34,25 +34,39 @@ test('device setup happens only after admission for the sync case or an ambiguou
   const events: string[] = [];
   const admit = async () => { events.push('admit'); return {check: async () => {}}; };
   const setup = async () => { events.push('setup'); return 'device'; };
-  const sync = '/repo/specs/regression/sync/1540-encrypted-sync-webdav.e2e.ts';
+  const sync = resolve(import.meta.dir, '../specs/regression/sync/1540-encrypted-sync-webdav.e2e.ts');
+  const other = resolve(import.meta.dir, 'owned-sync-emulator.test.ts');
   await prepareSyncDevice(hosted, [sync], [], setup, admit);
   expect(events).toEqual(['admit', 'setup']);
   events.length = 0;
-  await expect(prepareSyncDevice({}, ['/other.e2e.ts'], ['--spec'], setup,
+  await expect(prepareSyncDevice({}, [other], ['--spec'], setup,
     async () => { events.push('reject'); throw new Error('not owned'); })).rejects.toThrow('not owned');
   expect(events).toEqual(['reject']);
   events.length = 0;
-  expect(localSyncSelection([sync, '/other.e2e.ts'], {})).toEqual(['/other.e2e.ts']);
-  await prepareSyncDevice({}, ['/other.e2e.ts'], [], setup, admit);
+  expect(localSyncSelection([sync, other], {})).toEqual([other]);
+  await prepareSyncDevice({}, [other], [], setup, admit);
   expect(events).toEqual(['setup']);
+  events.length = 0;
+  await prepareSyncDevice({}, [other], ['--suite', 'smoke'], setup, admit, {suite: ['smoke'], suites: {smoke: [other]}});
+  await prepareSyncDevice({}, [other], ['--suite', 'smoke'], setup, admit, {suite: ['smoke'], suites: {smoke: [resolve(import.meta.dir, '../specs/smoke/**/*.e2e.ts')]}});
+  await prepareSyncDevice({}, [other], ['--spec', other], setup, admit, {spec: [other]});
+  await prepareSyncDevice({}, [pathToFileURL(other).href], [], setup, admit);
+  expect(events).toEqual(['setup', 'setup', 'setup', 'setup']);
+  events.length = 0;
+  await prepareSyncDevice({}, [other], ['--spec', sync], setup, admit, {spec: [sync]});
+  await prepareSyncDevice({}, [pathToFileURL(sync).href], [], setup, admit);
+  await prepareSyncDevice({}, [other], ['--suite', 'missing'], setup, admit, {suite: ['missing']});
+  expect(events).toEqual(['admit', 'setup', 'admit', 'setup', 'admit', 'setup']);
 });
 
 test('WDIO cannot proceed to a session after a pre-session safety failure', () => {
+  const root = resolve(import.meta.dir, '../../../..');
+  const helper = pathToFileURL(join(import.meta.dir, 'owned-sync-emulator.ts')).href;
   const script = `import {executeHooksWithArgs} from '@wdio/utils';
-    import {failClosedBeforeSession} from './apps/client/mobile-e2e/support/owned-sync-emulator.ts';
+    import {failClosedBeforeSession} from ${JSON.stringify(helper)};
     await executeHooksWithArgs('beforeSession', [() => failClosedBeforeSession(async () => { throw new Error('lost'); })], []);
     console.log('SESSION_STARTED');`;
-  const child = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8'});
+  const child = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', cwd: root});
   expect(child.status).toBe(1);
   expect(child.stdout).not.toContain('SESSION_STARTED');
   expect(child.stderr).toContain('refusing to start the session');

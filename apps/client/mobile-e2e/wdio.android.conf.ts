@@ -53,10 +53,9 @@ export const config: WebdriverIO.Config = {
   onPrepare: async (resolved) => {
     const requested = Number(process.env.LAZYSH_E2E_LOCK_TIMEOUT_S ?? 600), waitSeconds = Number.isFinite(requested) && requested >= 0 ? requested : 600;
     try {
-      const selected = resolved as typeof resolved & {spec?: unknown[]; suite?: unknown[]};
-      const args = [...process.argv, ...(selected.spec?.length || selected.suite?.length ? ['--spec'] : [])];
-      const prepared = await prepareSyncDevice(process.env, resolved.specs ?? [], args,
-        () => acquireDevice(serial, {recover: process.env.LAZYSH_E2E_RECOVER === '1', lockTimeoutMs: waitSeconds * 1000}));
+      const selected = resolved as typeof resolved & {spec?: string[]; suite?: string[]; suites?: Record<string, string[]>};
+      const prepared = await prepareSyncDevice(process.env, resolved.specs ?? [], process.argv,
+        () => acquireDevice(serial, {recover: process.env.LAZYSH_E2E_RECOVER === '1', lockTimeoutMs: waitSeconds * 1000}), undefined, selected);
       emulator = prepared.emulator;
       device = prepared.device;
     } catch (error) {

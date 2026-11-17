@@ -1,9 +1,11 @@
 import {basename, dirname, join, resolve} from 'node:path';
+import {globSync, realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {attestQrCamera} from '../../../../tests/support/androidQrOwnership';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const syncSpec = '1540-encrypted-sync-webdav.e2e.ts';
+const syncPath = join(repository, 'apps/client/mobile-e2e/specs/regression/sync', syncSpec);
 export const hostedRunner = (env: NodeJS.ProcessEnv) => env.CI === 'true' && env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted';
 
 /** Local default runs omit this destructive CI-only spec before any device session starts. */
@@ -22,11 +24,24 @@ export async function ownedSyncEmulator(env: NodeJS.ProcessEnv, attest = attestQ
   return attest(env, repository);
 }
 
-/** Admit first whenever a CLI override or unresolved pattern could select the CI-only case. */
-export async function prepareSyncDevice<T>(env: NodeJS.ProcessEnv, specs: readonly (string | string[])[], args: readonly string[], setup: () => Promise<T>, admit = ownedSyncEmulator) {
-  const ambiguous = args.some(arg => /^--(?:spec|suite)(?:=|$)/.test(arg));
-  const selected = specs.flat().some(spec => basename(spec) === syncSpec || /[*?\[\]{}]/.test(spec));
-  const emulator = hostedRunner(env) || ambiguous || selected ? await admit(env) : undefined;
+type Selection = {spec?: string[]; suite?: string[]; suites?: Record<string, string[]>};
+
+/** Admit first whenever the resolved selection contains the CI-only case or cannot be resolved safely. */
+export async function prepareSyncDevice<T>(env: NodeJS.ProcessEnv, specs: readonly (string | string[])[], args: readonly string[], setup: () => Promise<T>, admit = ownedSyncEmulator, selection: Selection = {}) {
+  const override = Boolean(selection.spec?.length || selection.suite?.length);
+  const patterns = override ? [...selection.spec ?? [], ...(selection.suite ?? []).flatMap(name => selection.suites?.[name] ?? ['<unresolved>'])] : specs.flat();
+  const uncertain = !override && args.some(arg => /^--(?:spec|suite)(?:=|$)/.test(arg));
+  const selected = patterns.some(pattern => {
+    let path: string;
+    try { path = pattern.startsWith('file:') ? fileURLToPath(pattern) : pattern; } catch { return true; }
+    const files = /[*?\[\]{}]/.test(path) ? globSync(path) : [path];
+    if (!files.length) return true;
+    return files.some(file => {
+      if (basename(file) === syncSpec) return true;
+      try { return realpathSync(file) === realpathSync(syncPath); } catch { return true; }
+    });
+  });
+  const emulator = hostedRunner(env) || uncertain || selected ? await admit(env) : undefined;
   return {emulator, device: await setup()};
 }
 
