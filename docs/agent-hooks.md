@@ -406,10 +406,12 @@ The companion edits one foreign, secret-bearing file, so it only appends:
   printed fragment (`PermissionRequest`, `PermissionResult`, `SessionEnd`) with `event`,
   `command` and `timeout = 5` only. It is deterministic for the inspected companion, so it
   can be found again at the end of the file.
-- Every earlier byte is kept as is: comments, secrets, a BOM, CRLF line endings, a missing
+- Every earlier byte is kept as is: comments, secrets, CRLF line endings, a missing
   final newline, foreign hooks and the file's mode. The text is parsed with `toml_edit`
   before and after, so a result that is not valid TOML, or in which the owned entries are
-  not exactly the last hooks, is never written.
+  not exactly the last hooks, is never written. A UTF-8 BOM is refused without rewriting:
+  Kimi Code 2.4.1 rejects it even when the remaining TOML is valid. Update and remove also
+  refuse a BOM-bearing managed file; resolve it manually before retrying.
 - Update and remove act only when the file ends with exactly the recorded block. A foreign
   line after it, an edit inside it or the block moved elsewhere is a conflict and the file
   is not rewritten; an edit before the block does not prevent removal, which only cuts the

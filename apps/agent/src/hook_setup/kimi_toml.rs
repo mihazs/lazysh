@@ -1,5 +1,5 @@
 //! Kimi Code `config.toml` lane: lazysh owns one deterministic `[[hooks]]` suffix at EOF and nothing else.
-//! Every earlier byte, including comments, secrets, BOM and line endings, is carried over verbatim.
+//! Every earlier byte, including comments, secrets and line endings, is carried over verbatim.
 use super::json::Entry;
 use super::json::{Fault, MAXIMUM};
 use serde_json::Value;
@@ -46,8 +46,10 @@ pub(super) fn suffix(entries: &[Entry]) -> Result<String, Fault> {
     Ok(text)
 }
 fn hooks(text: &str) -> Result<Vec<Hook>, Fault> {
-    // A leading BOM is the reader's concern in TOML, and the bytes stay untouched either way.
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // Kimi Code 2.4.1 rejects a UTF-8 BOM; refuse rather than claiming a usable install or rewriting it.
+    if text.starts_with('\u{feff}') {
+        return Err(Fault::Invalid);
+    }
     let document = text.parse::<DocumentMut>().map_err(|_| Fault::Invalid)?;
     match document.get("hooks") {
         None => Ok(vec![]),
