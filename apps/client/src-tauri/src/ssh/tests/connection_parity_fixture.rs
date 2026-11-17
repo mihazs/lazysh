@@ -278,7 +278,7 @@ async fn shell_marker(app: &App, id: &str, rx: &mut Events, label: &str, remote:
 }
 
 async fn mosh_error(app: &App, id: &str) -> SshError {
-    connect_mosh(
+    connect_mosh_inner(
         access_lease(),
         app.state(),
         id.into(),
@@ -287,6 +287,7 @@ async fn mosh_error(app: &App, id: &str) -> SshError {
         80,
         24,
         Channel::new(|_| Ok(())),
+        None,
     )
     .await
     .err()
@@ -296,7 +297,8 @@ async fn mosh_error(app: &App, id: &str) -> SshError {
 }
 
 async fn et_error(app: &App, id: &str) -> SshError {
-    crate::et::connect_et(
+    crate::et::connect_et_inner(
+        None,
         access_lease(),
         app.state(),
         id.into(),
