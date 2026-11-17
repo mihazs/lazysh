@@ -1,4 +1,4 @@
-import {useId, useState} from 'react';
+import {useId, useState, type CSSProperties} from 'react';
 import {ListChecks} from 'lucide-react';
 import {ChatCard, type Card} from './ChatInteraction';
 import {t} from './i18n/core';
@@ -28,7 +28,7 @@ export default function AgentPlanChip({messages}: {messages: readonly Shape[]}) 
   if (!plan) return null;
   const {done, total, current} = planProgress(plan);
   return <div className="agent-plan-chip">
-    <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
+    <button type="button" aria-expanded={open} aria-controls={id} style={{'--plan-done': `${Math.round(done / total * 100)}%`} as CSSProperties} onClick={() => setOpen(value => !value)}>
       <ListChecks size={16} aria-hidden="true" />
       <span>{t('agentPlanProgress', {done, total})}</span>
       {current && <span className="agent-plan-current">{current}</span>}

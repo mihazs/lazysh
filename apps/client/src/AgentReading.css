@@ -4,9 +4,8 @@
 .agent-search > .icon-button { width: 36px; height: 36px; min-width: 36px; min-height: 36px; padding: 0; }
 ::highlight(agent-search) { background: color-mix(in srgb, var(--accent) 35%, transparent); color: inherit; }
 /* The copy buttons stay out of the reading flow: small, in the bubble's corner. */
-.agent-view .agent-bubble, .agent-view .chat-code { position: relative; }
+.agent-view .agent-bubble { position: relative; }
 .agent-copy { width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; opacity: 0.55; }
 .agent-copy:hover, .agent-copy:focus-visible, .agent-copy[data-state] { opacity: 1; }
-.agent-bubble > .agent-copy, .chat-code > .agent-copy { position: absolute; top: 2px; inset-inline-end: 2px; }
-.chat-code > pre { margin: 0; padding-inline-end: 32px; overflow: auto; }
+.agent-bubble > .agent-copy { position: absolute; top: 2px; inset-inline-end: 2px; }
 .agent-view[data-history="conversation"] .agent-turn-activity { display: none; }

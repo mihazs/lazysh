@@ -1,29 +1,59 @@
-/* One compact row under the conversation: attach, the text field, Stop, Send. Notes and the terminal-input flow take the rows below. */
-.agent-composer { flex: 0 0 auto; display: grid; gap: 4px; margin: 6px 8px 8px; padding: 6px 8px; border: 1px solid var(--theme-border, var(--border)); border-radius: 12px; background: var(--theme-panel, var(--surface)); max-height: 60%; overflow: auto; min-width: 0; }
-.agent-composer-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
-.agent-composer-row > textarea { flex: 1 1 6rem; min-width: 0; min-height: 40px; max-height: 40vh; margin: 0; resize: none; }
-.agent-composer-row > .icon-button, .agent-composer-row > .agent-composer-send { flex: 0 0 auto; width: 40px; height: 40px; min-width: 40px; min-height: 40px; margin: 0; padding: 0; }
-.agent-composer-note { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+/* The message box: one rounded field, tonal like the rows above it, that grows with what is typed. Attach and the mode switch sit
+ * on its leading edge; Stop and Send on its trailing edge, round and 40 px, so a thumb finds them without looking. The quick
+ * inserts, the receipt and the notes take the rows inside it. The ring is drawn by the field's own focus, never a border. */
+.agent-composer { flex: 0 0 auto; display: grid; gap: 6px; margin: 6px 12px 10px; padding: 6px; border: 0; border-radius: 24px; background: var(--av-row); box-shadow: inset 0 0 0 1px var(--av-rule); max-height: 60%; overflow: auto; min-width: 0; }
+.agent-composer:has(> .agent-composer-row > textarea:focus-visible) { box-shadow: inset 0 0 0 2px var(--ui-focus-ring); }
+.agent-composer-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px; min-width: 0; }
+.agent-composer-row > textarea { order: 0; flex: 1 1 0; min-width: 0; min-height: 44px; max-height: min(40vh, 14rem); margin: 0; padding: 11px 6px; border: 0; border-radius: 0; background: transparent; outline: none; resize: none; font-family: inherit; font-size: 16px; line-height: 1.4; color: var(--theme-text); }
+.agent-composer-row > textarea::placeholder { color: var(--muted); }
+.agent-composer-row > .icon-button, .agent-composer-row > .agent-composer-send { flex: 0 0 auto; width: 44px; height: 44px; min-width: 44px; min-height: 44px; margin: 0; padding: 0; border-radius: 50%; }
+.agent-composer-row > .icon-button { background: transparent; color: var(--muted); }
+.agent-composer-row > .icon-button:hover:not(:disabled) { background: var(--av-row-hover); color: var(--theme-text); }
+/* One line: attach and mode, the field, then Stop and Send. Once the text takes a second line the field gets the full width and the
+ * tools drop to a row of their own below it, as in the chat apps; the layout is decided once per draft, so it cannot flip back and forth. */
+.agent-composer-row > .icon-button:not(.agent-composer-stop) { order: -1; }
+.agent-composer-row > :is(.agent-composer-stop, .agent-composer-send) { order: 1; margin-inline-start: auto; }
+.agent-composer-row > .agent-composer-stop + .agent-composer-send { margin-inline-start: 0; }
+.agent-composer[data-multiline] .agent-composer-row > textarea { order: -2; flex-basis: 100%; }
+/* Stop is a solid square in a quiet circle; it asks twice, and the second tap turns it red. */
+.agent-composer-row > .icon-button > svg[class*="lucide-square"] { fill: currentColor; }
+.agent-composer-row > .icon-button[data-armed] { background: var(--theme-danger-bg, var(--av-row-hover)); color: var(--danger); outline: 2px solid var(--danger); outline-offset: -2px; }
+/* Send is the one filled control: the accent when it can send, a quiet disc when it cannot. */
+.agent-composer-row > .agent-composer-send { border: 0; background: var(--accent); color: var(--theme-on-accent, var(--theme-bg)); }
+.agent-composer-row > .agent-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, var(--theme-text)); }
+.agent-composer-row > .agent-composer-send:disabled { background: var(--av-row-hover); color: var(--muted); opacity: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-composer[data-busy] .agent-composer-send > svg { animation: agent-composer-spin 1s linear infinite; }
+  .agent-composer { transition: box-shadow 0.12s ease; }
+}
+@keyframes agent-composer-spin { to { transform: rotate(360deg); } }
+/* The quick inserts show while the box has the focus, as chips with a 44 px tap area around a 34 px pill. */
+.agent-composer-insert { display: none; flex-wrap: wrap; gap: 6px; padding: 0 4px; }
+.agent-composer:focus-within .agent-composer-insert { display: flex; }
+.agent-composer-insert > button { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 14px 0 12px; border: 0; border-radius: 999px; background: var(--av-row-hover); color: var(--av-quiet); font-size: 13px; }
+.agent-composer-insert > button::before { content: ''; position: absolute; inset: -5px -3px; }
+.agent-composer-insert > button > span { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 600; color: var(--theme-text); }
+.agent-composer[data-attachment-open] .agent-composer-insert { display: none; }
+.agent-composer-note { margin: 0 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .agent-composer > section { margin: 0; font-size: 12px; }
 .agent-composer > section > :is(p, div) { margin: 2px 0; }
 .agent-composer-attach { display: grid; gap: 6px; max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
 .agent-composer-attach > p { margin: 0; font-size: 12px; color: var(--muted); }
 /* The slash palette sits right above the field and scrolls inside itself, so the conversation keeps its height. */
-.agent-composer-palette { list-style: none; margin: 0; padding: 4px; max-height: 40vh; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--theme-border, var(--border)); border-radius: 10px; }
-.agent-composer-palette > li > button { display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 40px; padding: 4px 8px; background: transparent; border: 0; text-align: start; color: inherit; font: inherit; }
-.agent-composer-palette > li[aria-selected="true"] > button { background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-palette { list-style: none; margin: 0 0 2px; padding: 4px; max-height: 40vh; overflow: auto; overscroll-behavior: contain; border: 0; border-radius: 18px; background: var(--av-row-hover); }
+.agent-composer-palette > li > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin: 0; padding: 6px 12px; border: 0; border-radius: 14px; background: transparent; text-align: start; color: inherit; font: inherit; }
+.agent-composer-palette > li[aria-selected="true"] > button { background: color-mix(in srgb, var(--accent) 22%, var(--av-row-hover)); }
 .agent-composer-palette small { color: var(--muted); font-size: 12px; }
-.agent-composer-mode { justify-self: start; padding: 0 8px; border-radius: 10px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); }
-.agent-composer-receipt { margin: 0; font-size: 12px; color: var(--muted); }
+.agent-composer-mode { justify-self: start; margin-inline-start: 4px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: color-mix(in srgb, var(--accent) 22%, var(--av-row-hover)); color: var(--theme-text); }
+.agent-composer-receipt { margin: 0 8px; font-size: 12px; color: var(--muted); }
 .agent-composer-receipt[data-state="notSent"] { color: var(--danger, inherit); }
 .agent-composer-receipt > button { min-height: 32px; }
-.agent-composer-row > .icon-button[data-armed] { outline: 2px solid var(--danger, currentColor); }
-.agent-composer-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
-.agent-composer-chips > li { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 4px 0 8px; border-radius: 10px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-chips { list-style: none; margin: 0; padding: 0 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-composer-chips > li { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 4px 0 12px; border-radius: 999px; font-size: 13px; background: var(--av-row-hover); }
 .agent-composer-chips > li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-composer-chips > li > button { min-width: 32px; min-height: 32px; padding: 0; }
 /* One compact notice for a send that was refused or could not be confirmed; the draft stays in the field above it. */
-.agent-composer-notice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 8px; align-items: start; padding: 8px 8px 8px 10px; border: 1px solid var(--theme-border, var(--border)); border-radius: 10px; background: var(--theme-warning-bg, var(--surface)); color: var(--theme-text, inherit); font-size: 13px; min-width: 0; }
+.agent-composer-notice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 8px; align-items: start; padding: 8px 8px 8px 12px; border: 0; border-radius: 16px; background: var(--theme-warning-bg, var(--surface)); color: var(--theme-text, inherit); font-size: 13px; min-width: 0; }
 .agent-composer-notice[data-tone="danger"] { background: var(--theme-danger-bg, var(--surface)); }
 .agent-composer-notice > svg { margin-top: 1px; color: var(--theme-warning, var(--accent)); }
 .agent-composer-notice[data-tone="danger"] > svg { color: var(--danger); }
