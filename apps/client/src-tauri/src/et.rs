@@ -191,6 +191,7 @@ pub(crate) async fn connect_et_inner(
             let parent = state.session(&session_id).await?;
             crate::ssh::check_size(cols, rows)?;
             let bootstrap = bootstrap(&parent, &lease, options).await?;
+            let recovery_events = events.clone();
             let connected = crate::ssh::spawn_native_terminal(
                 &state,
                 lease.clone(),
@@ -220,6 +221,7 @@ pub(crate) async fn connect_et_inner(
                     state.inner().clone(),
                     connected.session_id.clone(),
                     session,
+                    recovery_events,
                 );
             }
             Ok(connected)

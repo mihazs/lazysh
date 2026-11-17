@@ -84,7 +84,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseReportedHistory,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const historyVisibility=useRef(activityVisible);historyVisibility.current=activityVisible;
@@ -137,6 +137,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const now=useNow(30000,panelVisible && activityVisible && visible.length>0);
   const request = useRef(0);
   const snapshotFlight=useRef<number|null>(null);
+  const recoveryRefresh=useRef<string|undefined>(undefined);
   const historyRequest=useRef(0);
   const historyOwner=useRef<{source:string;key:string}|null>(null);
   const historyFlight=useRef<number|null>(null);
@@ -172,7 +173,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   },[sessions,sessionId,error,loadedSessionId]);
 
   async function refresh() {
-    if(!visibility.current || !access.current() || snapshotFlight.current!==null)return;
+    if(!visibility.current || document.hidden || !access.current() || snapshotFlight.current!==null)return;
     const source=sessionId;
     const current = ++request.current;
     snapshotFlight.current=current;
@@ -187,6 +188,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     } finally {
       if(snapshotFlight.current===current)snapshotFlight.current=null;
       if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false);
+      if(recoveryRefresh.current===source && selectedSource.current===source) {recoveryRefresh.current=undefined;void refresh();}
     }
   }
   useEffect(()=>{setSessions([]);setLoaded(false);setError('');},[sessionId]);
@@ -194,7 +196,12 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     if(panelVisible && !document.hidden)void refresh();
     else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
     const interval=panelVisible ? window.setInterval(()=>{if(!document.hidden)void refresh();},5000) : undefined;
-    return()=>{window.clearInterval(interval);request.current++;snapshotFlight.current=null;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
+    const recovered=(event:Event)=>{
+      if(!panelVisible || document.hidden || (event as CustomEvent<unknown>).detail!==sessionId)return;
+      if(snapshotFlight.current!==null)recoveryRefresh.current=sessionId;else void refresh();
+    };
+    window.addEventListener('lazysh-host-tools-restored',recovered);
+    return()=>{window.removeEventListener('lazysh-host-tools-restored',recovered);window.clearInterval(interval);request.current++;snapshotFlight.current=null;recoveryRefresh.current=undefined;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
   },[sessionId,panelVisible]);
 
   const reportSource={host:loadedSessionId,available:panelVisible && access.current() && ready && !error,rows:reports,lease:access};
@@ -247,7 +254,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
       <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
       {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
     </section>
-    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
+    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} />}
     <div className="agent-discovery">
       <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>
         {(['all',...states] as const).map(state=><button type="button" className="filter-chip" key={state} aria-pressed={filter===state} onClick={()=>setFilter(state)}>{state==='all'?t('agentsAll'):t(names[state])} {ready && !error && <span>{formatNumber(state==='all'?matching.length:matching.filter(row=>row.state===state).length)}</span>}</button>)}

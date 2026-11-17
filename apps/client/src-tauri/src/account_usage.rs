@@ -67,6 +67,11 @@ pub async fn account_usage(
                 }
                 Ok(output) => lazysh_account_usage::from_wire(output.as_bytes()),
                 Err(error) => Response::unavailable(match error.kind() {
+                    "ssh_host_tools_credentials" => "host_tools_credentials",
+                    "ssh_host_tools_host_changed" => "host_tools_host_changed",
+                    "ssh_host_tools_unsupported" => "host_tools_unsupported",
+                    "ssh_host_tools_host_missing" => "host_tools_host_missing",
+                    "ssh_host_tools_unavailable" => "host_tools_unavailable",
                     "disconnected" | "ssh_host_tools_closed" => "disconnected",
                     "timeout" => "timeout",
                     "output_too_large" => "invalid_report",

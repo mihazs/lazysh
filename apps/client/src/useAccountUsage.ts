@@ -16,6 +16,12 @@ export function useAccountUsage(sessionId:string|null,active=true,target:UsageTa
   const inflight=useRef(false);
   const refresh=useCallback(()=>setTick(n=>n+1),[]);
   useEffect(()=>{
+    const recovered=(event:Event)=>{if(active && visible && !access.status?.locked && (event as CustomEvent<unknown>).detail===sessionId)refresh();};
+    window.addEventListener('lazysh-host-tools-restored',recovered);
+    window.addEventListener('lazysh-host-tools-status',recovered);
+    return()=>{window.removeEventListener('lazysh-host-tools-restored',recovered);window.removeEventListener('lazysh-host-tools-status',recovered);};
+  },[sessionId,active,visible,access.status?.locked,refresh]);
+  useEffect(()=>{
     const invoke=bindProtectedInvoke(captureAccess());
     const generation=++request.current;
     let live=true;

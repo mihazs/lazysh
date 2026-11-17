@@ -34,6 +34,17 @@ it('follows the focused Herdr pane and its agent, and reports none for a pane wi
   focus='p2';await tick();expect(screen.getByRole('status').textContent).toBe('codex');
   focus='p3';await tick();expect(screen.getByRole('status').textContent).toBe('none');
 });
+it('refreshes the attached tmux pane only for its own recovered session',async()=>{
+  let sessions=[report('Claude Code','%3')];
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions}:command==='tmux_chat'?tmuxChatSnapshot:undefined);
+  const view=render(<Probe attached={{kind:'tmux',name:'work'}}/>);await settle();
+  expect(screen.getByRole('status').textContent).toBe('Claude Code');
+  sessions=[report('Codex','%3')];
+  act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'other'})));await settle();expect(screen.getByRole('status').textContent).toBe('Claude Code');
+  act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'ssh1'})));await settle();expect(screen.getByRole('status').textContent).toBe('Codex');
+  view.rerender(<Probe attached={{kind:'tmux',name:'work'}} enabled={false}/>);
+  vi.mocked(invoke).mockClear();act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'ssh1'})));await settle();expect(invoke).not.toHaveBeenCalled();
+});
 it('reads nothing while the usage item is not on screen',async()=>{
   vi.mocked(invoke).mockResolvedValue(undefined);
   render(<Probe attached={{kind:'herdr',name:'main'}} enabled={false}/>);await tick();await tick();

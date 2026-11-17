@@ -8,25 +8,27 @@ import type {SessionAttachment} from './workspace';
 
 const interval=5000;
 /** Reads `load` now and every few seconds while `enabled`; a failed read keeps the last good one, so a brief outage does not blank the strip. */
-function usePolled<T>(enabled:boolean,key:string,load:()=>Promise<T>) {
+function usePolled<T>(enabled:boolean,key:string,sessionId:string,load:()=>Promise<T>) {
   const [result,setResult]=useState<{key:string;value:T}>();
   const latest=useRef(load);latest.current=load;
   const refresh=useRef<()=>Promise<void>>(async()=>{});
   useEffect(()=>{
     if(!enabled)return;
-    let current=true,flight=false;
+    let current=true,flight=false,pending=false;
     const read=async()=>{
       if(!current || flight || document.hidden)return;
       flight=true;
       try {const value=await latest.current();if(current)setResult({key,value});}
       catch {/* The navigation sheets report host errors; the strip just keeps what it last read. */}
-      finally {flight=false;}
+      finally {flight=false;if(pending){pending=false;void read();}}
     };
     refresh.current=read;
     void read();
     const timer=window.setInterval(()=>void read(),interval);
-    return()=>{current=false;window.clearInterval(timer);};
-  },[enabled,key]);
+    const recovered=(event:Event)=>{if((event as CustomEvent<unknown>).detail!==sessionId || document.hidden)return;if(flight)pending=true;else void read();};
+    window.addEventListener('lazysh-host-tools-restored',recovered);
+    return()=>{current=false;window.clearInterval(timer);window.removeEventListener('lazysh-host-tools-restored',recovered);};
+  },[enabled,key,sessionId]);
   return {value:result?.key===key?result.value:undefined,refresh:()=>refresh.current()};
 }
 
@@ -40,8 +42,8 @@ export function useMultiplexerStrip({sessionId,attached,enabled,onError}:{sessio
   const {access,mounted}=useMountedAccess();
   const kind=attached?.kind,name=attached?.name??'';
   const herdr=useHerdrNavigation({sessionId,herdrSession:kind==='herdr'?name:undefined,visible:enabled && kind==='herdr'});
-  const zellij=usePolled(enabled && kind==='zellij',`${sessionId}:${name}`,()=>invoke<ZellijTabRow[]>('zellij_tabs',{sessionId,name}));
-  const tmux=usePolled(enabled && kind==='tmux',sessionId,()=>api.tmuxJumpSnapshot(sessionId));
+  const zellij=usePolled(enabled && kind==='zellij',`${sessionId}:${name}`,sessionId,()=>invoke<ZellijTabRow[]>('zellij_tabs',{sessionId,name}));
+  const tmux=usePolled(enabled && kind==='tmux',sessionId,sessionId,()=>api.tmuxJumpSnapshot(sessionId));
   const herdrTree=herdr.data?.snapshot;
   const read=useMemo(()=>kind==='herdr'?herdrTree && herdrStrip(herdrTree):kind==='zellij'?zellij.value && zellijStrip(name,zellij.value):kind==='tmux'?tmux.value && tmuxStrip(tmux.value):undefined,
     [kind,name,herdrTree,zellij.value,tmux.value]);

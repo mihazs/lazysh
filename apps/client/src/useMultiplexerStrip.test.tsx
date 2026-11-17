@@ -57,6 +57,15 @@ it('lists Zellij tabs and goes to one by its 1-based position through the existi
   expect(sent('zellij_tabs')[0]).toEqual(['zellij_tabs',{sessionId:'ssh:1',name:"my 'session"}]);
   expect(sent('zellij_action')[0]).toEqual(['zellij_action',{sessionId:'ssh:1',name:"my 'session",action:{type:'goToTab',index:2}}]);
 });
+it('refreshes an owned Zellij strip when its host tools recover',async()=>{
+  let label='shell';vi.mocked(invoke).mockImplementation(async command=>command==='zellij_tabs'?[{position:0,name:label,active:true}]:undefined);
+  const view=render(<Strip attached={{kind:'zellij',name:'work'}}/>);await screen.findByRole('button',{name:/^shell/});
+  label='new shell';act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'other'})));
+  expect(screen.queryByRole('button',{name:/^new shell/})).toBeNull();
+  act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'ssh:1'})));await screen.findByRole('button',{name:/^new shell/});
+  view.rerender(<Strip attached={{kind:'zellij',name:'work'}} enabled={false}/>);vi.mocked(invoke).mockClear();
+  act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'ssh:1'})));expect(invoke).not.toHaveBeenCalled();
+});
 it('selects a tmux window with the snapshot generation of the list the chip was drawn from',async()=>{
   const generation='a'.repeat(36);
   const snapshot=(windowId:string)=>({generation,current:{sessionId:'$1',windowId},sessions:[{id:'$1',name:'work',restoreName:null,windows:[{id:'@1',index:0,name:'zsh'},{id:'@2',index:1,name:'vim'}]}]});

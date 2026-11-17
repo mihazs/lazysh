@@ -1029,6 +1029,8 @@ pub(crate) enum Input {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SshEvent {
+    HostToolsRestored,
+    HostToolsStatus,
     Data {
         data: Vec<u8>,
     },
@@ -2158,6 +2160,7 @@ async fn connect_mosh_inner(
                 target_os = "ios"
             ))]
             {
+                let recovery_events = events.clone();
                 let connected = spawn_native_terminal(
                     &state,
                     lease.clone(),
@@ -2183,6 +2186,7 @@ async fn connect_mosh_inner(
                         state.inner().clone(),
                         connected.session_id.clone(),
                         session,
+                        recovery_events,
                     );
                 }
                 Ok(connected)

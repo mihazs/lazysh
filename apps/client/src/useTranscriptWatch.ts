@@ -68,7 +68,12 @@ export function useTranscriptWatch<M extends {id: string}>({enabled, sessionId, 
       }, () => { if (!cancelled && events === channel) lose('delayed'); });
     }
     connect();
-    return () => { cancelled = true; clearTimeout(timer); stop(); };
+    const recovered = (event: Event) => {
+      if ((event as CustomEvent<unknown>).detail !== sessionId || cancelled || !lease.current() || document.hidden) return;
+      clearTimeout(timer); stop(); failures = 0; connect();
+    };
+    window.addEventListener('lazysh-host-tools-restored', recovered);
+    return () => { cancelled = true; window.removeEventListener('lazysh-host-tools-restored', recovered); clearTimeout(timer); stop(); };
     // `key` stands for sessionId and target.
   }, [enabled, key, lease, invoke]);
   return {state, live: state === 'live'};

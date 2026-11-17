@@ -34,6 +34,8 @@ export type Host = {
   et?: EtOptions | null;
 };
 export type SshEvent =
+  | { type: "hosttoolsrestored" }
+  | { type: "hosttoolsstatus" }
   | { type: "data"; data: number[] }
   | { type: "closed"; message?: string; lost?: boolean };
 export type SshError = { kind: string; message: string; fingerprint?: string; hostId?: string };
