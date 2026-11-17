@@ -33,7 +33,6 @@ const DONE_VISIBLE: Duration = Duration::minutes(10);
 const ACTIVE_TURN: Duration = Duration::seconds(crate::ACTIVE_TURN_SECONDS);
 const DEFER: Duration = Duration::minutes(2);
 const BUSY_RETRY: Duration = Duration::seconds(60);
-const INTERRUPTED_RETRY: Duration = Duration::minutes(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,12 +207,9 @@ fn decide(
         Ok(None) => return report(State::Running, None),
         Err(_) => return report(State::Failed, Some("internal")),
     }
-    // The runner records `running` while it holds the lock, so a free lock means it died. That is
-    // retried, but not on every request.
-    if let Some(record) = record.filter(|record| record.state == State::Running) {
-        if time(&record.started_at).is_some_and(|at| now - at < INTERRUPTED_RETRY) {
-            return report(State::Failed, Some("interrupted"));
-        }
+    // A free lock with a running record means the prior outcome is unknown.
+    if record.is_some_and(|record| record.state == State::Running) {
+        return report(State::Failed, Some("interrupted"));
     }
     match spawn(app) {
         Ok(()) => report(State::Started, None),
@@ -344,7 +340,14 @@ fn admit_and_settle(
             record.finished_at = Some(stamp(Utc::now()));
             record
         }
-        Err(_) => settle(record, None, Utc::now()),
+        // A spawn error proves no child started, unlike an unknown child exit.
+        Err(_) => {
+            let now = Utc::now();
+            let mut record = record;
+            record.pid = None;
+            record.finished_at = Some(stamp(now));
+            failed(record, "internal", false, now)
+        }
     }
 }
 
@@ -406,14 +409,15 @@ fn settle(mut record: Record, code: Option<i32>, now: DateTime<Utc>) -> Record {
         // A mismatch, a refused downgrade, a failed self-test or restore, an unsafe location or an
         // unconfirmed result: the same release would fail the same way.
         Some(code @ (22..=25 | 27 | 29)) => failed(record, kind(code), true, now),
-        Some(code) => failed(record, kind(code), false, now),
-        None => failed(record, kind(1), false, now),
+        Some(21) => failed(record, kind(21), false, now),
+        // An abnormal exit, signal or timed-out child may have replaced the binary.
+        Some(_) | None => failed(record, "uncertain", true, now),
     }
 }
 fn failed(mut record: Record, kind: &str, blocked: bool, now: DateTime<Utc>) -> Record {
     record.state = State::Failed;
     record.reason = Some(kind.into());
-    record.failures += 1;
+    record.failures = record.failures.saturating_add(1);
     record.blocked = blocked;
     record.not_before = Some(stamp(now + backoff(record.failures)));
     record
@@ -450,6 +454,16 @@ pub fn run(app: &str) -> Result<Value> {
     let earlier = read_record(&directory).filter(|record| record.to == app);
     // Several commands may have spawned runners before the first one acquired this lock. A
     // delayed runner must honor the result that runner committed before considering another try.
+    if let Some(mut record) = earlier
+        .clone()
+        .filter(|record| record.state == State::Running)
+    {
+        record.pid = None;
+        record.finished_at = Some(stamp(now));
+        let record = failed(record, "uncertain", true, now);
+        save(&directory, &record)?;
+        return serde_json::to_value(record).map_err(|_| Error::InvalidArgument);
+    }
     if let Some(record) = earlier.as_ref().filter(|record| postponed(record, now)) {
         return serde_json::to_value(record).map_err(|_| Error::InvalidArgument);
     }
@@ -594,13 +608,30 @@ mod tests {
     #[test]
     fn updater_spawn_failure_settles_the_running_record() {
         let home = tempfile::tempdir().unwrap();
-        let record = Record::new("1.0.0", "2.0.0", State::Running);
+        let mut record = Record::new("1.0.0", "2.0.0", State::Running);
+        record.pid = Some(123);
         let record = admit_and_settle(home.path(), record, || {
             Err(io::Error::other("spawn failed"))
         });
         assert_eq!(record.state, State::Failed);
         assert!(record.finished_at.is_some());
+        assert_eq!(record.pid, None);
         assert_eq!(record.failures, 1);
+        assert!(!record.blocked, "no child was spawned");
+    }
+
+    #[test]
+    fn unknown_child_outcomes_block_automatic_retries() {
+        let now = Utc::now();
+        for code in [None, Some(1), Some(137)] {
+            let record = settle(Record::new("1.0.0", "2.0.0", State::Running), code, now);
+            assert!(record.blocked, "{code:?}");
+            assert_eq!(record.reason.as_deref(), Some("uncertain"));
+        }
+        assert!(!settle(Record::new("1.0.0", "2.0.0", State::Running), Some(21), now).blocked);
+        let mut saturated = Record::new("1.0.0", "2.0.0", State::Running);
+        saturated.failures = u32::MAX;
+        assert_eq!(settle(saturated, None, now).failures, u32::MAX);
     }
 
     #[cfg(unix)]

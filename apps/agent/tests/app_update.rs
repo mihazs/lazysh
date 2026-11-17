@@ -463,7 +463,7 @@ fn unreadable_session_store_defers_an_update_without_contacting_the_release_host
 }
 
 #[test]
-fn a_runner_that_died_is_replaced_but_not_on_every_request() {
+fn a_runner_that_died_stays_blocked_until_reconciled() {
     let host = Host::new();
     let died = |started: &str| json!({"schemaVersion":1,"from":THIS,"to":NEW,"state":"running","pid":2147483646,"startedAt":started});
     host.write_state(
@@ -474,8 +474,13 @@ fn a_runner_that_died_is_replaced_but_not_on_every_request() {
     Host::assert_outcome(&update, "failed", "interrupted");
     host.assert_offline();
     host.write_state("app-update.json", &died("2000-01-01T00:00:00Z"));
-    assert_eq!(host.connect(NEW).unwrap()["state"], "started");
-    assert_eq!(host.settled()["state"], "done");
+    Host::assert_outcome(&host.connect(NEW).unwrap(), "failed", "interrupted");
+    let output = host.run(None, &["auto-update", "run", "--app-version", NEW]);
+    assert!(output.status.success());
+    let record = host.record().unwrap();
+    Host::assert_outcome(&record, "failed", "uncertain");
+    assert_eq!(record["blocked"], true);
+    host.assert_offline();
 }
 
 #[test]
