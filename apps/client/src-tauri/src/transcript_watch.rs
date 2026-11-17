@@ -462,6 +462,7 @@ mod tests {
             agent: agent.into(),
             path: "/db/opencode.db".into(),
             inline_images: images,
+            allow_large_history: false,
             transcript_session_id: id.map(Into::into),
         };
         assert_eq!(

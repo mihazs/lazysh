@@ -216,6 +216,8 @@ impl Watcher {
                     &super::window::Window::Tail,
                     true,
                 ),
+                // `with_large_history` admits Codex only, and an OpenCode watch reads a database.
+                Source::Database { .. } => Err(Error::InvalidArgument),
             };
         }
         match &self.source {
