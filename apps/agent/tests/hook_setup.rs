@@ -2607,8 +2607,8 @@ fn kimi_code_install_appends_only_the_owned_suffix_and_remove_restores_every_for
     use std::{fs, os::unix::fs::PermissionsExt};
     let foreign_hook = "[[hooks]]\r\nevent = \"Stop\"\r\ncommand = \"echo foreign\"\r\n";
     for original in [
-        // A BOM, CRLF line endings, a secret and a foreign hook.
-        format!("\u{feff}# keep\r\napi_key = \"sk-PRIVATE\"\r\n\r\n{foreign_hook}"),
+        // CRLF line endings, a secret and a foreign hook.
+        format!("# keep\r\napi_key = \"sk-PRIVATE\"\r\n\r\n{foreign_hook}"),
         // No trailing newline, and a table header as the last line.
         "x = 1\n[providers.local]\nname = \"a\"".to_string(),
         String::new(),
@@ -2747,6 +2747,7 @@ fn kimi_code_refuses_a_missing_config_and_a_config_the_suffix_cannot_extend() {
         twin["event"], twin["command"]
     );
     for original in [
+        "\u{feff}telemetry = false\n",
         "hooks = []\n",
         "[hooks]\nevent = \"Stop\"\n",
         "key = [unterminated\n",
@@ -2764,6 +2765,17 @@ fn kimi_code_refuses_a_missing_config_and_a_config_the_suffix_cannot_extend() {
         assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), original);
         assert!(!fixture.manifest().exists());
     }
+    // A BOM introduced after a reviewed valid plan is still refused before creating a manifest.
+    kimi_write(&fixture, "telemetry = false\n");
+    let valid_plan = fixture.plan(Action::Install);
+    let bom = "\u{feff}telemetry = false\n";
+    kimi_write(&fixture, bom);
+    assert!(matches!(
+        fixture.apply(Action::Install, &valid_plan),
+        Err(Error::Installation("HooksConflict"))
+    ));
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), bom);
+    assert!(!fixture.manifest().exists());
     assert_missing_provider_is_unsupported(&fixture, "HooksKimiConfigRequired");
     assert!(!fixture.manifest().exists());
 }
