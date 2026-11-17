@@ -4,8 +4,9 @@ import { captureAccess, useProtectedApi } from './access';
 import { errorMessage } from './SessionTools';
 import {t,useUi,formatNumber} from './i18n/core';
 
-export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange }: {
-  sessionId: string; onClose: () => void; onJump: (snapshot: TmuxJumpSnapshot) => void; onBusyChange?:(busy:boolean)=>void;
+/** Jump To for the tmux display `sessionId`, or, with `zellij`, for the tabs of that named Zellij session. */
+export default function TmuxJumpPanel({ sessionId, zellij, onClose, onJump, onBusyChange }: {
+  sessionId: string; zellij?: string; onClose: () => void; onJump?: (snapshot: TmuxJumpSnapshot) => void; onBusyChange?:(busy:boolean)=>void;
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
@@ -24,7 +25,7 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
     if(!access.current() || pending.current)return;
     const request=++revision.current;
     setSnapshot(null);setBusy(true);setError('');pending.current=true;busyListener.current?.(true);
-    void api.tmuxJumpSnapshot(sessionId).then(value=>{
+    void (zellij===undefined ? api.tmuxJumpSnapshot(sessionId) : api.zellijJumpSnapshot(sessionId,zellij)).then(value=>{
       if(access.current() && revision.current===request)setSnapshot(value);
     }).catch(reason=>{
       if(access.current() && revision.current===request)setError(errorMessage(reason));
@@ -35,7 +36,7 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
   useEffect(()=>{
     pending.current=false;refresh();
     return()=>{revision.current++;pending.current=false;busyListener.current?.(false);};
-  },[sessionId]);
+  },[sessionId,zellij]);
   useEffect(() => {
     if (!access.current()) return;
     try { localStorage.setItem('lazysh.multiplexer.layout', layout); } catch { /* Layout works without persistence. */ }
@@ -46,8 +47,11 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
     pending.current = true; setBusy(true); setError('');busyListener.current?.(true);
     const request = revision.current;
     try {
-      const result = await api.tmuxJump(sessionId, snapshot.generation, targetSessionId, windowId);
-      if (access.current() && revision.current === request) { setSnapshot(result);onJump(result); onClose(); }
+      // Zellij answers a jump with nothing and applies it a moment later: the target is the current row from now on.
+      const result = zellij===undefined
+        ? await api.tmuxJump(sessionId, snapshot.generation, targetSessionId, windowId)
+        : await api.zellijJump(sessionId, zellij, Number(windowId)).then(()=>({...snapshot,current:{sessionId:targetSessionId,windowId}}));
+      if (access.current() && revision.current === request) { setSnapshot(result);onJump?.(result); onClose(); }
     } catch (reason) {
       if (access.current() && revision.current === request) {
         // Never allow another action against a failed or retired binding's snapshot.
@@ -57,11 +61,11 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
       if (access.current() && revision.current === request) { pending.current = false; setBusy(false);busyListener.current?.(false); }
     }
   }
-  return <section className="multiplexer-panel" aria-label={`tmux ${t('appJumpTo')}`}>
+  return <section className="multiplexer-panel" aria-label={`${zellij===undefined?'tmux':'Zellij'} ${t('appJumpTo')}`}>
     <div className="tool-bar"><label>{t('jumpLayout')}<select value={layout} onChange={event => { if (access.current()) setLayout(event.target.value); }}>
       <option value="list">{t('preferencesList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option>
     </select></label><button className="subtle-button" disabled={busy} onClick={refresh}>{t('agentsRefresh')}</button></div>
-    {busy && <p role="status">{t('appReadingTmuxDestinations')}</p>}
+    {busy && <p role="status">{t(zellij===undefined?'appReadingTmuxDestinations':'appReadingZellijDestinations')}</p>}
     {error && <p role="alert">{t('jumpUnavailable')} {error}</p>}
     <div className={`mux-list mux-layout-${layout}`}>{snapshot?.sessions.map(session => <details key={`${layout}:${session.id}`} open={layout !== 'accordion' || session.id === snapshot.current.sessionId}>
       <summary>{session.name}</summary>
@@ -72,6 +76,6 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
         </button></div>;
       })}
     </details>)}</div>
-    <p>{t('jumpHint')}</p>
+    <p>{t(zellij===undefined?'jumpHint':'jumpHintZellij')}</p>
   </section>;
 }
