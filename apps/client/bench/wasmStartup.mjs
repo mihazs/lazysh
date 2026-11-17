@@ -49,7 +49,7 @@ const run = engine => Array.from({ length: Number(count) }, () => {
   return JSON.parse(done.stdout.trim());
 });
 console.log(`node ${process.version} (V8 ${process.versions.v8}), ${os.cpus()[0]?.model}, ${os.type()} ${os.release()}, load average at start ${os.loadavg().map(x => x.toFixed(2)).join(' ')}`);
-console.log(`${count} fresh processes per engine, ${SAMPLE.length} bytes written; milliseconds and MiB, median (min to max); wasm module ${(readFileSync(wasmPath).length / 1048576).toFixed(1)} MiB`);
+console.log(`${count} fresh processes per engine, ${SAMPLE.length} bytes written; milliseconds and MiB, upper median (min to max); wasm module ${(readFileSync(wasmPath).length / 1048576).toFixed(1)} MiB`);
 const xterm = run('xterm'), wasm = run('wasm');
 const same = xterm.every(s => s.cursor.join() === xterm[0].cursor.join()) && wasm.every(s => s.cursor.join() === wasm[0].cursor.join());
 if (!same || xterm[0].cursor.join() !== wasm[0].cursor.join()) throw new Error(`the engines disagree on the cursor: ${xterm[0].cursor} against ${wasm[0].cursor}`);
