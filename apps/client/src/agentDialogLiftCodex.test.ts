@@ -7,6 +7,12 @@ const lift = (name: string, rows = dialogScreen(name)) => liftCodexDialog(rows);
 const dialog = (name: string, rows?: string[]) => {const result = lift(name, rows); if (result.kind !== 'dialog') throw new Error(`${name}: ${result.kind}`); return result.dialog;};
 
 describe('liftCodexDialog on recorded Codex screens', () => {
+  it('treats a changed option description as a different dialog', () => {
+    const original = dialog('codex-model');
+    const changed = dialog('codex-model', dialogScreen('codex-model').map(row => row.replace('GPT-6.1 Terra Codex model.', 'Different model details.')));
+    expect(changed.options.map(option => option.label)).toEqual(original.options.map(option => option.label));
+    expect(changed.signature).not.toBe(original.signature);
+  });
   it('reads the /model picker: label, description and the row Codex highlights', () => {
     const found = dialog('codex-model');
     expect(found.title).toBe('Select Model and Effort');

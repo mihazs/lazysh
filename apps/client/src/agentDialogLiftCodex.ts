@@ -93,5 +93,5 @@ export function liftCodexDialog(screen: readonly string[]): Lift {
   });
   const hint = question ? [] : [lines[footer!].trim()];
   return {kind: 'dialog', dialog: Object.freeze({title: clip(title), body: body.map(clip), options: Object.freeze(options), highlighted: items.findIndex(item => item.marked), hint,
-    ...(question ? {interrupts: true as const} : {}), signature: JSON.stringify([title, body, options.map(item => item.label), hint])})};
+    ...(question ? {interrupts: true as const} : {}), signature: JSON.stringify([title, body, options, hint, question])})};
 }

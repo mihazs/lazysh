@@ -94,5 +94,5 @@ export function liftDialog(screen: readonly string[]): Lift {
     || hint.length > limits.hint || !enterTakesRow.some(pattern => pattern.test(hint.join(' '))) || questionRows.test(lines.slice(top, esc).join('\n'))) return unliftable;
   const title = clip(lines[titleRow].trim());
   return {kind: 'dialog', dialog: Object.freeze({title, body: body.map(clip), options: Object.freeze(options), highlighted, hint: hint.map(clip),
-    signature: JSON.stringify([title, body, options.map(option => option.label), hint])})};
+    signature: JSON.stringify([title, body, options, hint])})};
 }

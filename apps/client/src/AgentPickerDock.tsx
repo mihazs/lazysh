@@ -56,20 +56,24 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   const open = shown && lift.kind !== 'none';
   useEffect(() => {publishDialogOpen(sessionId, open); return () => publishDialogOpen(sessionId, false);}, [sessionId, open]);
   const [phase, setPhase] = useState<Phase>('idle');
-  const [ready, setReady] = useState(false);
+  const [readySignature, setReadySignature] = useState<string>();
+  const answerSequence = useRef(0);
   const signature = dialog?.signature;
   // A tap that landed as the card appeared, or as the dialog changed under the finger, must not answer.
-  useEffect(() => {setReady(false); setPhase('idle'); if (!signature) return; const timer = setTimeout(() => setReady(true), 400); return () => clearTimeout(timer);}, [signature]);
+  useEffect(() => {answerSequence.current++; setReadySignature(undefined); setPhase('idle'); if (!signature) return; const timer = setTimeout(() => setReadySignature(signature), 400); return () => clearTimeout(timer);}, [signature, terminal, guard, sessionId]);
   const live = !!control?.ready && !control.busy && answerable;
-  const busy = !ready || phase === 'sending' || !live;
-  const latest = useRef({dialog, terminal, control});
-  latest.current = {dialog, terminal, control};
+  const busy = !signature || readySignature !== signature || phase === 'sending' || !live;
+  const latest = useRef({dialog, terminal, control, guard, sessionId});
+  latest.current = {dialog, terminal, control, guard, sessionId};
 
   /** Chooses one option, or cancels the dialog (no target), only while the screen still shows the dialog the person chose from. Moving the highlight
    * comes first and is read back: Enter is pressed only once the dialog shows the chosen option highlighted. */
   async function answer(target?: number) {
     const {dialog: before, terminal: screen, control: bound} = latest.current;
     if (!before || !screen || !bound?.ready || phase === 'sending') return;
+    const sequence = ++answerSequence.current;
+    const current = () => answerSequence.current === sequence && latest.current.terminal === screen && latest.current.guard === guard && latest.current.sessionId === sessionId && latest.current.dialog?.signature === before.signature;
+    const finish = (next: Phase) => {if (current()) setPhase(next);};
     setPhase('sending');
     const onScreen = () => {const now = readLift(screen, agent); return now.kind === 'dialog' && now.dialog.signature === before.signature && now.dialog.highlighted === before.highlighted;};
     // A list that scrolls as the highlight moves shows other rows, so the chosen option is found by what it says, not by its place.
@@ -78,15 +82,16 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
     const highlightsChosen = () => {const now = readLift(screen, agent); const row = now.kind === 'dialog' ? now.dialog.options[now.dialog.highlighted] : undefined;
       return now.kind === 'dialog' && now.dialog.title === before.title && row?.label === chosen?.label && row?.detail === chosen?.detail && (!twins || now.dialog.highlighted === target);};
     const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); if (test()) return true;} return false;};
-    if (!onScreen() || !await guard()) {setPhase('stale'); return;}
+    if (!onScreen() || !await guard()) {finish('stale'); return;}
+    if (!current() || latest.current.control !== bound || !onScreen()) {finish('stale'); return;}
     const rows = target === undefined ? 0 : target - before.highlighted;
     if (rows !== 0) {
-      if (!await bound.answer({kind: 'pick', rows, enter: false})) {setPhase('failed'); return;}
-      if (!await settles(highlightsChosen)) {setPhase('notMoved'); return;}
+      if (!await bound.answer({kind: 'pick', rows, enter: false})) {finish('failed'); return;}
+      if (!await settles(highlightsChosen)) {finish('notMoved'); return;}
     }
-    if (!await bound.answer(target === undefined ? {kind: 'request_stop'} : {kind: 'pick', rows: 0, enter: true})) {setPhase('failed'); return;}
+    if (!await bound.answer(target === undefined ? {kind: 'request_stop'} : {kind: 'pick', rows: 0, enter: true})) {finish('failed'); return;}
     // The card is gone once the dialog closes; one that is still open says so.
-    setPhase(await settles(() => !onScreen() && !highlightsChosen()) ? 'idle' : 'still');
+    finish(await settles(() => !onScreen() && !highlightsChosen()) ? 'idle' : 'still');
   }
   const [confirm, setConfirm] = useState<number>();
   useEffect(() => setConfirm(undefined), [signature]);

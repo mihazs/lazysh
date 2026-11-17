@@ -8,6 +8,13 @@ const lift = (name: string) => liftDialog(screen(name));
 const dialog = (name: string) => {const result = lift(name); if (result.kind !== 'dialog') throw new Error(`${name}: ${result.kind}`); return result.dialog;};
 
 describe('liftDialog on recorded Claude Code screens', () => {
+  it('treats a changed option description as a different dialog', () => {
+    const original = dialog('model');
+    const changed = liftDialog(screen('model').map(row => row.replace('Most capable for your hardest and longest-running tasks', 'Different capabilities')));
+    if (changed.kind !== 'dialog') throw new Error(`changed model: ${changed.kind}`);
+    expect(changed.dialog.options.map(option => option.label)).toEqual(original.options.map(option => option.label));
+    expect(changed.dialog.signature).not.toBe(original.signature);
+  });
   it('reads the /model picker with its highlighted option and the footer that says what Enter does', () => {
     const found = dialog('model');
     expect(found.title).toBe('Select model');
