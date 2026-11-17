@@ -199,3 +199,22 @@ fn a_session_id_never_leaves_the_projects_directory() {
     append(&host.config.path().join("escape.jsonl"), &rejection());
     assert_eq!(host.row()["state"], "needs_attention");
 }
+
+#[test]
+fn incomplete_trailing_record_cannot_settle_an_earlier_rejection() {
+    let host = Host::new();
+    host.hook("PermissionRequest", Some("Write"));
+    host.append(&rejection());
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(host.conversation())
+        .unwrap();
+    write!(file, "{{\"type\":\"user\",\"message\":").unwrap();
+    file.flush().unwrap();
+    assert_eq!(host.row()["state"], "needs_attention");
+    writeln!(file, "{{\"role\":\"user\",\"content\":\"carry on\"}}}}").unwrap();
+    file.flush().unwrap();
+    assert_eq!(host.row()["state"], "needs_attention");
+    host.append(&rejection());
+    assert_eq!(host.row()["state"], "done");
+}

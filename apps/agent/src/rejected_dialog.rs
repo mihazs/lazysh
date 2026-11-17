@@ -55,23 +55,23 @@ fn interrupted_since(session_id: &str, since: f64) -> bool {
         return false;
     }
     let text = String::from_utf8_lossy(&bytes);
-    // The first line of a window that starts mid-record is not valid JSON, so it is never taken for a record.
-    // Other records (queue operations, snapshots, a sub-agent's own messages) say nothing about the dialog.
-    let last = text
-        .lines()
-        .rev()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|record| {
-            matches!(record["type"].as_str(), Some("user" | "assistant"))
-                && record["isSidechain"] != true
-        });
-    last.is_some_and(|record| {
-        crate::transcript::interrupted(&record)
-            && record["timestamp"]
-                .as_str()
-                .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
-                .is_some_and(|time| time.timestamp_micros() as f64 / 1_000_000.0 >= since)
-    })
+    // An incomplete newer line makes the state unknown; never skip it to settle from an older marker.
+    // A window starting mid-record is harmless when a complete newer relevant record is found first.
+    for line in text.lines().rev() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+        if matches!(record["type"].as_str(), Some("user" | "assistant"))
+            && record["isSidechain"] != true
+        {
+            return crate::transcript::interrupted(&record)
+                && record["timestamp"]
+                    .as_str()
+                    .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
+                    .is_some_and(|time| time.timestamp_micros() as f64 / 1_000_000.0 >= since);
+        }
+    }
+    false
 }
 
 impl Store {
