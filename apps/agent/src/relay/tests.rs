@@ -331,9 +331,12 @@ fn concurrent_same_state_ingest_admits_one_transition_in_the_local_transaction()
             std::thread::spawn(move || {
                 let mut store = Store::open(&directory).unwrap();
                 barrier.wait();
+                let started = std::time::Instant::now();
                 store
                     .ingest(&event(SessionState::Working), Utc::now())
-                    .unwrap();
+                    .unwrap_or_else(|error| {
+                        panic!("ingest elapsed {:?}: {error:?}", started.elapsed())
+                    });
             })
         })
         .collect();
