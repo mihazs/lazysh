@@ -6,11 +6,13 @@ pub(crate) struct Control {
     current: StdMutex<Arc<SshHandle>>,
     commands: StdMutex<Arc<SshHandle>>,
     restoring: Arc<Semaphore>,
+    automatic_error: StdMutex<Option<SshError>>,
+    files_recovery: bool,
 }
 fn unavailable() -> SshError {
     SshError::new(
         "ssh_control_unavailable",
-        "SSH control recovery requires the original verified direct Mosh connection",
+        "Host-tools recovery requires a direct connection without jump hosts or agent forwarding",
     )
 }
 pub(super) fn same_host(original: &Host, current: &Host) -> Result<()> {
@@ -22,6 +24,19 @@ pub(super) fn same_host(original: &Host, current: &Host) -> Result<()> {
     }
     Ok(())
 }
+pub(super) fn silent_recovery_host(original: &Host, current: &Host) -> Result<()> {
+    same_host(original, current)?;
+    if original.jump_host_id.is_some() || original.forward_agent {
+        return Err(unavailable());
+    }
+    if !current.credentials_stored || current.biometric_unlock {
+        return Err(SshError::new(
+            "credentials_required",
+            "Automatic host-tools recovery needs saved credentials that do not require a biometric prompt",
+        ));
+    }
+    Ok(())
+}
 impl Control {
     pub(super) fn new(handle: Arc<SshHandle>) -> Self {
         Self {
@@ -29,7 +44,14 @@ impl Control {
             current: StdMutex::new(handle.clone()),
             commands: StdMutex::new(handle),
             restoring: Arc::new(Semaphore::new(1)),
+            automatic_error: StdMutex::new(None),
+            files_recovery: true,
         }
+    }
+    pub(super) fn commands_only(handle: Arc<SshHandle>) -> Self {
+        let mut control = Self::new(handle);
+        control.files_recovery = false;
+        control
     }
     pub(super) fn current(&self) -> Result<Arc<SshHandle>> {
         self.current
@@ -42,6 +64,25 @@ impl Control {
             .lock()
             .map(|handle| handle.clone())
             .map_err(|_| unavailable())
+    }
+    fn report_automatic(&self, error: Option<SshError>) {
+        if let Ok(mut slot) = self.automatic_error.lock() {
+            *slot = error;
+        }
+    }
+    pub(super) fn command_unavailable(&self) -> SshError {
+        let detail = self
+            .automatic_error
+            .lock()
+            .ok()
+            .and_then(|error| error.clone());
+        SshError::new(
+            "ssh_host_tools_closed",
+            detail.map_or_else(
+                || "The host-tools SSH connection is closed; automatic recovery is pending".into(),
+                |error| error.message,
+            ),
+        )
     }
     pub(super) fn for_shutdown(&self) -> Vec<Arc<SshHandle>> {
         [&self.current, &self.commands]
@@ -57,6 +98,9 @@ impl Control {
         &self,
         purpose: Purpose,
     ) -> Result<(tokio::sync::OwnedSemaphorePermit, Arc<SshHandle>, Host)> {
+        if matches!(purpose, Purpose::Files) && !self.files_recovery {
+            return Err(unavailable());
+        }
         let permit = self.restoring.clone().try_acquire_owned().map_err(|_| {
             SshError::new(
                 "ssh_control_busy",
@@ -111,6 +155,9 @@ impl Control {
                 fresh.origin.as_ref().ok_or_else(unavailable)?,
             )?;
             *current = fresh;
+            if matches!(purpose, Purpose::Commands) {
+                self.report_automatic(None);
+            }
             Ok(())
         })?
     }
@@ -120,6 +167,195 @@ pub(super) enum Purpose {
     Files,
     Commands,
 }
+
+async fn session_replaced(state: &AppState, id: &str, session: &Arc<Session>) {
+    loop {
+        if !state
+            .sessions
+            .lock()
+            .await
+            .get(id)
+            .is_some_and(|active| Arc::ptr_eq(active, session))
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// One session owns one watcher. A failed command is never passed to this loop or replayed.
+async fn automatic_watch<F, Fut>(state: AppState, id: String, session: Arc<Session>, mut attempt: F)
+where
+    F: FnMut(AccessLease) -> Fut,
+    Fut: std::future::Future<Output = Result<Restored>>,
+{
+    use std::sync::atomic::Ordering;
+    let Some(control) = session.file_control.as_ref() else {
+        return;
+    };
+    let mut cancel = session.cancel.subscribe();
+    let mut access = session.access.subscribe();
+    let mut credentials = state.credential_changes.subscribe();
+    let mut delay = Duration::from_secs(1);
+    let mut blocked: Option<(Host, u64)> = None;
+    loop {
+        if *cancel.borrow()
+            || !state
+                .sessions
+                .lock()
+                .await
+                .get(&id)
+                .is_some_and(|active| Arc::ptr_eq(active, &session))
+        {
+            return;
+        }
+        if session.adopted.load(Ordering::SeqCst) && !session.access.is_locked() {
+            if let Ok(handle) = control.command_handle() {
+                if !handle.is_closed() {
+                    control.report_automatic(None);
+                    blocked = None;
+                    delay = Duration::from_secs(1);
+                } else if let Some(original) = control.original.as_ref() {
+                    if let Ok(host) = state.host(&original.id) {
+                        let generation = session.access.generation().unwrap_or_default();
+                        let unchanged = blocked.as_ref().is_some_and(|(previous, epoch)| {
+                            *epoch == generation
+                                && previous.id == host.id
+                                && previous.credential_binding() == host.credential_binding()
+                                && previous.credentials_stored == host.credentials_stored
+                        });
+                        if !unchanged {
+                            match silent_recovery_host(original, &host) {
+                                Err(error) => {
+                                    control.report_automatic(Some(error));
+                                    blocked = Some((host, generation));
+                                    delay = Duration::from_secs(30);
+                                }
+                                Ok(()) => {
+                                    let lease = session.access.status().ok().and_then(|status| {
+                                        session.access.lease(status.nonce.as_deref()).ok()
+                                    });
+                                    if let Some(lease) = lease {
+                                        let result = tokio::select! {
+                                            _ = cancel.changed() => return,
+                                            _ = lease.cancelled() => continue,
+                                            _ = session_replaced(&state, &id, &session) => return,
+                                            result = attempt(lease.clone()) => result,
+                                        };
+                                        match result {
+                                            Ok(_) => {
+                                                blocked = None;
+                                                delay = Duration::from_secs(1);
+                                            }
+                                            Err(error)
+                                                if matches!(
+                                                    error.kind(),
+                                                    "ssh_control_busy" | "ssh_control_ready"
+                                                ) => {}
+                                            Err(error)
+                                                if matches!(
+                                                    error.kind(),
+                                                    "ssh_error"
+                                                        | "timeout"
+                                                        | "disconnected"
+                                                        | "cancelled"
+                                                ) =>
+                                            {
+                                                control.report_automatic(Some(SshError::new(
+                                                    "ssh_error",
+                                                    "Host tools are reconnecting",
+                                                )));
+                                                delay = (delay * 2).min(Duration::from_secs(30));
+                                            }
+                                            Err(error) => {
+                                                control.report_automatic(Some(SshError::new(error.kind(), "Automatic host-tools recovery cannot authenticate or verify the saved host")));
+                                                blocked = Some((host, generation));
+                                                delay = Duration::from_secs(30);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        control.report_automatic(Some(SshError::new(
+                            "missing_host",
+                            "The saved host is no longer available",
+                        )));
+                        delay = Duration::from_secs(30);
+                    }
+                } else {
+                    control.report_automatic(Some(unavailable()));
+                }
+            }
+        }
+        tokio::select! {
+            _ = cancel.changed() => return,
+            _ = access.changed() => {},
+            change = credentials.recv() => {
+                if change.ok().as_deref() == control.original.as_ref().map(|host| host.id.as_str()) {
+                    blocked = None;
+                    delay = Duration::from_secs(1);
+                }
+            },
+            _ = tokio::time::sleep(delay) => {},
+        }
+    }
+}
+pub(crate) fn start_automatic(
+    app: tauri::AppHandle,
+    state: AppState,
+    id: String,
+    session: Arc<Session>,
+) {
+    let attempt_state = state.clone();
+    let attempt_id = id.clone();
+    let attempt_session = session.clone();
+    tauri::async_runtime::spawn(automatic_watch(state, id, session, move |lease| {
+        let app = app.clone();
+        let state = attempt_state.clone();
+        let id = attempt_id.clone();
+        let session = attempt_session.clone();
+        async move {
+            let operation = app.vault().operation();
+            let auth_app = app.clone();
+            let auth_state = state.clone();
+            let auth_lease = lease.clone();
+            let auth_operation = operation.clone();
+            restore_for(
+                Purpose::Commands,
+                &state,
+                &id,
+                &session,
+                &lease,
+                &operation,
+                move |original, permit| async move {
+                    authenticated_connection(
+                        auth_app,
+                        &auth_state,
+                        original.id.clone(),
+                        crate::vault::Credentials {
+                            password: None,
+                            private_key: None,
+                            passphrase: None,
+                        },
+                        true,
+                        None,
+                        &auth_operation,
+                        &auth_lease,
+                        None,
+                        Some(&original),
+                        Some(permit),
+                        true,
+                    )
+                    .await
+                },
+            )
+            .await
+        }
+    }));
+}
+
 struct Fresh {
     handle: Option<Arc<SshHandle>>,
     retained: Arc<tokio::sync::OwnedSemaphorePermit>,
@@ -189,6 +425,7 @@ macro_rules! recovery_command {
                                     None,
                                     Some(&original),
                                     Some(permit),
+                                    false,
                                 )
                                 .await
                             }
@@ -400,6 +637,273 @@ mod tests {
         .await
         .unwrap();
     }
+    async fn automatic_fixture() -> Fixture {
+        let fixture = fixture().await;
+        fixture.state.config().unwrap().hosts[0].credentials_stored = true;
+        fixture
+            .session
+            .adopted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        fixture
+    }
+    fn watch<F, Fut>(fixture: &Fixture, attempt: F) -> tokio::task::JoinHandle<()>
+    where
+        F: FnMut(AccessLease) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<Restored>> + Send + 'static,
+    {
+        tokio::spawn(automatic_watch(
+            fixture.state.clone(),
+            "owned-mosh".into(),
+            fixture.session.clone(),
+            attempt,
+        ))
+    }
+    #[tokio::test]
+    async fn silent_recovery_requires_the_same_verified_host_and_noninteractive_credentials() {
+        let f = fixture().await;
+        let mut saved = f.host.clone();
+        saved.credentials_stored = true;
+        assert!(silent_recovery_host(&f.host, &saved).is_ok());
+        assert_eq!(
+            silent_recovery_host(&f.host, &f.host).unwrap_err().kind(),
+            "credentials_required"
+        );
+        for (_, changed) in crate::ssh::test_support::changed_host_bindings(&f.host) {
+            assert!(silent_recovery_host(&f.host, &changed).is_err());
+        }
+        let mut biometric = saved.clone();
+        biometric.biometric_unlock = true;
+        assert_eq!(
+            silent_recovery_host(&biometric, &biometric)
+                .unwrap_err()
+                .kind(),
+            "credentials_required"
+        );
+        for unsupported in ["jump", "forward"] {
+            let mut host = saved.clone();
+            if unsupported == "jump" {
+                host.jump_host_id = Some("bastion".into());
+            } else {
+                host.forward_agent = true;
+            }
+            assert_eq!(
+                silent_recovery_host(&host, &host).unwrap_err().kind(),
+                "ssh_control_unavailable"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn commands_only_control_does_not_enable_file_transfer_recovery() {
+        let f = fixture().await;
+        let control = Control::commands_only(f.session.handle.clone());
+        assert_eq!(
+            control.begin(Purpose::Files).err().unwrap().kind(),
+            "ssh_control_unavailable"
+        );
+        assert!(control.begin(Purpose::Commands).is_ok());
+    }
+    #[tokio::test]
+    async fn automatic_recovery_retries_transient_failure_once_and_keeps_the_file_control() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let f = automatic_fixture().await;
+        let fresh = f.peer.reconnect().await;
+        let session = f.session.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let attempts = calls.clone();
+        let worker = watch(&f, move |_| {
+            let session = session.clone();
+            let fresh = fresh.clone();
+            let count = attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if count == 0 {
+                    return Err(SshError::new("timeout", "owned transient"));
+                }
+                *session
+                    .file_control
+                    .as_ref()
+                    .unwrap()
+                    .commands
+                    .lock()
+                    .unwrap() = fresh;
+                Ok(Restored {
+                    schema_version: 1,
+                    status: "restored",
+                })
+            }
+        });
+        timeout(Duration::from_secs(8), async {
+            while calls.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let control = f.session.file_control.as_ref().unwrap();
+        assert!(!control.command_handle().unwrap().is_closed());
+        assert!(Arc::ptr_eq(&control.current().unwrap(), &f.session.handle));
+        assert!(!*f.session.cancel.borrow());
+        f.session.cancel.send_replace(true);
+        timeout(Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+    #[tokio::test]
+    async fn automatic_recovery_publishes_a_probed_connection_for_the_owned_session() {
+        let f = automatic_fixture().await;
+        f.peer.respond_to_commands(b"lazysh-host-tools");
+        let fresh = f.peer.reconnect().await;
+        let operation = tauri_plugin_lazysh_vault::CredentialOperations::default().begin();
+        let state = f.state.clone();
+        let session = f.session.clone();
+        let worker = watch(&f, move |lease| {
+            let state = state.clone();
+            let session = session.clone();
+            let fresh = fresh.clone();
+            let operation = operation.clone();
+            async move {
+                let auth_state = state.clone();
+                restore_for(
+                    Purpose::Commands,
+                    &state,
+                    "owned-mosh",
+                    &session,
+                    &lease,
+                    &operation,
+                    move |host, _| async move {
+                        Ok(AuthenticatedConnection {
+                            _guard: auth_state.credential_guard(&host.id).await,
+                            host,
+                            credentials: crate::vault::Credentials {
+                                password: None,
+                                private_key: None,
+                                passphrase: None,
+                            },
+                            handle: fresh,
+                        })
+                    },
+                )
+                .await
+            }
+        });
+        timeout(Duration::from_secs(3), async {
+            while f
+                .session
+                .file_control
+                .as_ref()
+                .unwrap()
+                .command_handle()
+                .unwrap()
+                .is_closed()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let control = f.session.file_control.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&control.current().unwrap(), &f.session.handle));
+        assert!(Arc::ptr_eq(
+            &f.state.session("owned-mosh").await.unwrap(),
+            &f.session
+        ));
+        f.session.cancel.send_replace(true);
+        timeout(Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    #[tokio::test]
+    async fn automatic_recovery_does_not_repeat_rejected_credentials() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let f = automatic_fixture().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let attempts = calls.clone();
+        let worker = watch(&f, move |_| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async { Err(SshError::new("authentication_failed", "owned rejection")) }
+        });
+        timeout(Duration::from_secs(2), async {
+            while calls.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let _ = f.state.credential_changes.send("another-host".into());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let _ = f.state.credential_changes.send(f.host.id.clone());
+        timeout(Duration::from_secs(2), async {
+            while calls.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(f
+            .session
+            .file_control
+            .as_ref()
+            .unwrap()
+            .command_unavailable()
+            .message()
+            .contains("cannot authenticate"));
+        f.session.cancel.send_replace(true);
+        timeout(Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    #[tokio::test]
+    async fn automatic_recovery_cancels_on_lock_or_session_removal() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        for remove in [false, true] {
+            let f = automatic_fixture().await;
+            let started = Arc::new(tokio::sync::Notify::new());
+            let dropped = Arc::new(AtomicBool::new(false));
+            let signal = started.clone();
+            let marker = dropped.clone();
+            let worker = watch(&f, move |_| {
+                let guard = Dropped(marker.clone());
+                let signal = signal.clone();
+                async move {
+                    let _guard = guard;
+                    signal.notify_one();
+                    std::future::pending::<Result<Restored>>().await
+                }
+            });
+            timeout(Duration::from_secs(2), started.notified())
+                .await
+                .unwrap();
+            if remove {
+                f.state.sessions.lock().await.remove("owned-mosh");
+            } else {
+                f.access.lock().unwrap();
+            }
+            timeout(Duration::from_secs(2), async {
+                while !dropped.load(Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            f.session.cancel.send_replace(true);
+            timeout(Duration::from_secs(2), worker)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
     #[tokio::test]
     async fn changed_identity_and_policy_are_rejected_before_authentication() {
         for purpose in [Purpose::Files, Purpose::Commands] {
@@ -435,6 +939,8 @@ mod tests {
                 current: StdMutex::new(f.session.handle.clone()),
                 commands: StdMutex::new(f.session.handle.clone()),
                 restoring: Arc::new(Semaphore::new(1)),
+                automatic_error: StdMutex::new(None),
+                files_recovery: true,
             };
             assert_eq!(
                 control.begin(purpose).err().unwrap().kind(),
