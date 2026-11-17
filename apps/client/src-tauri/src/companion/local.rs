@@ -147,7 +147,13 @@ fn argv(line: &str, program: &str) -> Result<Cmd> {
     if words.next().as_deref() != Some("lazysh-agent") {
         return Err(error("companion_command", "Invalid companion command"));
     }
-    Ok(words.fold(Cmd::new(&[], &[program]), |cmd, word| cmd.arg(&word)))
+    Ok(words.fold(
+        Cmd::new(
+            &[("LAZYSH_APP_VERSION", env!("CARGO_PKG_VERSION"))],
+            &[program],
+        ),
+        |cmd, word| cmd.arg(&word),
+    ))
 }
 
 /// `lazysh-agent --version` of an executable that answers in time: the bare version.

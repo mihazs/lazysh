@@ -84,7 +84,7 @@ it('retains the exact settings revision/booleans through held save and translate
   await languagesKeep(()=>{expect(screen.getByRole('status').textContent).toBe(t('companionBusy'));expect(screen.getByLabelText(t('companionDevices'))).toHaveProperty('checked',false);});
   expect(invoke).toHaveBeenLastCalledWith('update_companion_settings',{sessionId:agentBoardSession,settings:{expectedRevision:7,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:false}},{headers:{'X-Lazysh-Access':'c'.repeat(64)}});
   const raw='companionUnsupported <native/user/path> {{error}}';await act(async()=>{reject({key:'companionUnsupported',message:raw});});
-  await languagesKeep(()=>{expect(screen.getByRole('alert').textContent).toBe(t('companionRefreshWarning',{error:raw}));expect(screen.getByLabelText(t('companionDevices'))).toHaveProperty('checked',false);expect(screen.queryByText(t('companionSaved'))).toBeNull();});
+  await languagesKeep(()=>{expect(screen.getByRole('alert').textContent).toBe(t('companionRefreshWarning',{error:raw}));expect(screen.queryByRole('button',{name:t('companionSave')})).toBeNull();expect(screen.queryByText(t('companionSaved'))).toBeNull();});
 });
 it.each([
   {command:'agent_snapshot',key:'agentsUnsupportedSnapshot',value:null},
