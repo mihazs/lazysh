@@ -288,7 +288,8 @@ test.each([
   { owner:'appium', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'unknown', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
-])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow }) => {
+  { owner:'tmux', mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false, adbServerLog:false },
+])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow, adbServerLog = true }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
   temporary.push(directory);
@@ -299,6 +300,9 @@ test.each([
   const fakeBun = join(bin, 'bun');
   const fakeAdb = join(bin, 'adb');
   const fakeCargo = join(bin, 'cargo');
+  // The server's log outgrows the 1 MiB cap, so only its tail (the last transport event) can be retained.
+  const lastServerEvent = '10-24 23:56:30.414 381553 381561 I adb     : transport.cpp:1222 emulator-5580: connection terminated: read failed\n';
+  if (adbServerLog) await writeFile(join(directory, `adb.${process.getuid!()}.log`), `--- adb starting (pid 381553) ---\nOLDEST-SERVER-LINE\n${'10-24 23:39:16.686 381553 381553 I adb     : main.cpp:65 padding\n'.repeat(20_000)}${lastServerEvent}`);
   const sdkSerial = join(directory, 'sdk-serial.txt');
   const sdkArguments = join(directory, 'sdk-arguments.bin');
   const qrPidFile = join(directory, 'qr-pid-file.txt');
@@ -342,7 +346,7 @@ exit "$SDK_EXIT"
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
       MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
       ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
-      RUNNER_TEMP: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
+      RUNNER_TEMP: directory, TMPDIR: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
     stdout: 'pipe', stderr: 'pipe',
@@ -380,11 +384,20 @@ exit "$SDK_EXIT"
   expect(() => process.kill(pid, 0)).toThrow();
   const diagnostics = join(directory, 'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics');
   const files = await readdir(diagnostics);
-  expect(files.length).toBe(expectedExit ? 8 : 4);
+  expect(files.length).toBe(expectedExit ? 9 : 4);
   const status = await readFile(join(diagnostics, 'status.txt'), 'utf8');
   for (const name of files) expect((await stat(join(diagnostics, name))).size).toBeLessThanOrEqual(1024 * 1024);
   expect(status).toContain(`test exit=${expectedExit}`);
   expect(status).toContain('collector exit=143');
+  if (expectedExit) {
+    // A failed job keeps why the adb server dropped the emulator's transport; a passing job reads nothing.
+    expect(status).toContain(adbServerLog ? 'adb-server-log exit=0' : 'adb-server-log exit=1');
+    const serverLog = await readFile(join(diagnostics, 'adb-server-log.txt'), 'utf8');
+    if (adbServerLog) {
+      expect(serverLog.endsWith(lastServerEvent)).toBe(true);
+      expect(serverLog).not.toContain('OLDEST-SERVER-LINE');
+    } else expect(serverLog).not.toContain('connection terminated');
+  }
   if (diagnosticFailure) {
     for (const name of ['start-load', ...(expectedExit ? ['lastanr', 'lastanr-traces', 'cpu-load', 'kernel-load'] : [])]) {
       expect(status).toContain(`${name} exit=79`);
