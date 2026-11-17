@@ -160,10 +160,16 @@ async fn version_probe_recovers_after_a_transient_busy_executable() {
             .raw_os_error(),
         Some(libc::ETXTBSY)
     );
-    let probe = tokio::spawn(async move { version_of(&executable).await });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let probe = version_of(&executable);
+    tokio::pin!(probe);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut probe)
+            .await
+            .is_err(),
+        "the probe must keep trying while the executable is busy"
+    );
     drop(writer);
-    assert_eq!(probe.await.unwrap().as_deref(), Some("1.4.0"));
+    assert_eq!(probe.await.as_deref(), Some("1.4.0"));
 }
 
 #[cfg(unix)]
