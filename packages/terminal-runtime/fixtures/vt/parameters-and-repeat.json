@@ -1,0 +1,387 @@
+[
+  {
+    "id": "explicit-zero-counts-agreeing",
+    "about": "An explicit 0 means the default 1 for ICH, ECH, CUU, CUD, CUF, CUB, CNL, CPL, CHA, HPA, VPA and REP, and 0;0 for CUP, HVP and DECSTBM means the defaults: both engines agree",
+    "cols": 20,
+    "rows": 8,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "abc\r\u001b[0@\r\nabc\r\u001b[0X\r\nabc\u001b[0Dd\u001b[0Ce\u001b[0Af\u001b[0Bg\u001b[0Eh\u001b[0Fi\u001b[0Gj\u001b[0`k\u001b[5;5H\u001b[0dl\u001b[0;0Hm\u001b[0;0fn\u001b[0;0r\u001b[2;2Ho"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "nabcl",
+        " oc  f",
+        "kbd e g",
+        "h",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 2,
+        "y": 1
+      }
+    }
+  },
+  {
+    "id": "explicit-zero-counts-ignored-by-the-core",
+    "about": "An explicit 0 means 1 for DCH, IL, DL, SU, SD, CHT and CBT in the standard and in xterm.js; libghostty-vt treats it as 0 and does nothing",
+    "cols": 20,
+    "rows": 6,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "abc\r\u001b[0P\r\nabc\r\u001b[0L\r\nabc\r\u001b[0M\u001b[1;1H\u001b[0S\u001b[0T\u001b[3;1H\u001b[0Ix\u001b[20G\u001b[0Zy"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "        x       y",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 17,
+        "y": 2
+      }
+    },
+    "core": {
+      "divergence": [
+        "explicit-zero-count-ignored"
+      ],
+      "expect": {
+        "lines": [
+          "abc",
+          "abc",
+          "xbc                y",
+          "",
+          "",
+          ""
+        ],
+        "cursor": {
+          "x": 19,
+          "y": 2
+        }
+      }
+    }
+  },
+  {
+    "id": "repeat-preceding-character",
+    "about": "REP repeats the preceding graphic character; right after the print it works the same in both engines, wide glyphs and the margin included",
+    "cols": 10,
+    "rows": 5,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "ab\u001b[2b\r\n日\u001b[2b\r\nabcdefghi\u001b[5b"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abbb",
+        "日日日",
+        "abcdefghii",
+        "iiii",
+        ""
+      ],
+      "cursor": {
+        "x": 4,
+        "y": 3
+      }
+    }
+  },
+  {
+    "id": "repeat-after-other-sequences",
+    "about": "REP after a cursor move, a carriage return, an SGR or another REP: xterm.js repeats only a character printed immediately before, libghostty-vt repeats the last printed one wherever the cursor is, and a base letter with a combining mark repeats whole in xterm.js and as the base only in the core",
+    "cols": 10,
+    "rows": 6,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "ab\u001b[1;1H\u001b[2b\r\ncd\r\u001b[2b\r\nef\u001b[31m\u001b[2b\r\ngh\u001b[2b\u001b[2b\r\né\u001b[2b"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "ab",
+        "cd",
+        "ef",
+        "ghhh",
+        "ééé",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 4
+      }
+    },
+    "core": {
+      "divergence": [
+        "repeat-last-printed-character"
+      ],
+      "expect": {
+        "lines": [
+          "bb",
+          "dd",
+          "efff",
+          "ghhhhh",
+          "éee",
+          ""
+        ]
+      }
+    }
+  },
+  {
+    "id": "wrap-pending-erase-and-edit",
+    "about": "With a glyph in the last column the cursor is wrap-pending at the last cell: ECH, DCH, ICH and a backspace act on it in both engines, but EL 0, 1 and 2 miss it in xterm.js, which keeps the cursor beyond the last column",
+    "cols": 10,
+    "rows": 8,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "\u001b[1;1Habcdefghij\u001b[K\u001b[2;1Habcdefghij\u001b[1K\u001b[3;1Habcdefghij\u001b[2KQ\u001b[4;1Habcdefghij\u001b[X\u001b[5;1Habcdefghij\u001b[P\u001b[6;1Habcdefghij\u001b[@\u001b[7;1Habcdefghij\bZ"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abcdefghij",
+        "",
+        "",
+        "abcdefghi",
+        "abcdefghi",
+        "abcdefghi",
+        "abcdefghZj",
+        ""
+      ],
+      "cursor": {
+        "x": 9,
+        "y": 6
+      }
+    },
+    "core": {
+      "divergence": [
+        "wrap-pending-state"
+      ],
+      "expect": {
+        "lines": [
+          "abcdefghi",
+          "",
+          "         Q",
+          "abcdefghi",
+          "abcdefghi",
+          "abcdefghi",
+          "abcdefghZj",
+          ""
+        ]
+      }
+    }
+  },
+  {
+    "id": "wrap-pending-save-and-restore",
+    "about": "DECSC and CSI s save the wrap-pending state and DECRC and CSI u restore it (VT510): the next glyph wraps in the core; xterm.js restores the last column without it and overwrites the last cell",
+    "cols": 10,
+    "rows": 6,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "\u001b[1;1Habcdefghij\u001b7\u001b[3;1Hxyz\u001b8k\u001b[4;1Habcdefghij\u001b[s\u001b[5;1Hxyz\u001b[um"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "abcdefghik",
+        "",
+        "xyz",
+        "abcdefghim",
+        "xyz",
+        ""
+      ],
+      "cursor": {
+        "x": 10,
+        "y": 3
+      }
+    },
+    "core": {
+      "divergence": [
+        "wrap-pending-state"
+      ],
+      "expect": {
+        "lines": [
+          "abcdefghij",
+          "k",
+          "xyz",
+          "abcdefghij",
+          "myz",
+          ""
+        ],
+        "cursor": {
+          "x": 1,
+          "y": 4
+        }
+      }
+    }
+  },
+  {
+    "id": "tab-clear-parameter",
+    "about": "TBC with an explicit 0 clears the stop at the cursor in both engines; without a parameter (CSI g, the usual spelling) it clears it in xterm.js and is ignored by libghostty-vt; CSI 3 g clears them all",
+    "cols": 30,
+    "rows": 6,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "\t\u001b[0g\r\tx\r\n\t\u001b[g\r\tx\r\n\u001b[1;17H\u001b[g\r\u001b[2Iy\r\n\u001b[3g\r\tz"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "                x            y",
+        "                        x    z",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 30,
+        "y": 1
+      }
+    },
+    "core": {
+      "divergence": [
+        "tab-clear-without-parameter"
+      ],
+      "expect": {
+        "lines": [
+          "                x       y",
+          "                x            z",
+          "",
+          "",
+          "",
+          ""
+        ],
+        "cursor": {
+          "x": 29,
+          "y": 1
+        }
+      }
+    }
+  },
+  {
+    "id": "origin-mode-relative-moves",
+    "about": "With origin mode on and a top margin below row 1, relative cursor moves (CUU, CUD, CUF, CUB) stay where the arithmetic puts them in the core; xterm.js adds the top margin again after every relative move",
+    "cols": 20,
+    "rows": 9,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "\u001b[2;7r\u001b[?6h\u001b[3;1Ha\u001b[1Bb\u001b[1Ac\u001b[3Dd\u001b[1Ce"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        "",
+        "a",
+        "",
+        " bc",
+        "d e",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 6
+      }
+    },
+    "core": {
+      "divergence": [
+        "origin-mode-cursor-movement"
+      ],
+      "expect": {
+        "lines": [
+          "",
+          "",
+          "",
+          "d e",
+          " b",
+          "",
+          "",
+          "",
+          ""
+        ],
+        "cursor": {
+          "x": 3,
+          "y": 3
+        }
+      }
+    }
+  },
+  {
+    "id": "origin-mode-restore-without-save",
+    "about": "DECRC with nothing saved: the core restores the defaults, origin mode off included, so the cursor goes to the top left; xterm.js keeps origin mode and homes to the top margin",
+    "cols": 20,
+    "rows": 9,
+    "scrollback": 50,
+    "steps": [
+      {
+        "write": "\u001b[2;7r\u001b[?6h\u001b[3;3Hx\u001b8y"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "y",
+        "",
+        "  x",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 1,
+        "y": 1
+      }
+    },
+    "core": {
+      "divergence": [
+        "origin-mode-cursor-movement"
+      ],
+      "expect": {
+        "lines": [
+          "y",
+          "",
+          "",
+          "  x",
+          "",
+          "",
+          "",
+          "",
+          ""
+        ],
+        "cursor": {
+          "x": 1,
+          "y": 0
+        }
+      }
+    }
+  }
+]

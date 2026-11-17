@@ -1,0 +1,479 @@
+[
+  {
+    "id": "mouse-off",
+    "about": "With no tracking enabled nothing is reported, for any event.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "",
+    "events": [
+      "press left 5,2",
+      "release left 5,2",
+      "wheel up 5,2",
+      "motion none 6,2"
+    ],
+    "expect": [
+      "",
+      "",
+      "",
+      ""
+    ]
+  },
+  {
+    "id": "mouse-x10",
+    "about": "X10 (1000-less, mode 9) reports presses only and drops the modifiers.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?9h",
+    "events": [
+      "press left 5,2",
+      "release left 5,2",
+      "press middle 5,2",
+      "release middle 5,2",
+      "press right 5,2",
+      "release right 5,2",
+      "press left 6,2 ctrl",
+      "press left 7,2 shift+alt",
+      "wheel up 5,2",
+      "wheel down 5,2",
+      "motion none 8,2",
+      "motion left 8,2"
+    ],
+    "expect": [
+      "\u001b[M &#",
+      "",
+      "\u001b[M!&#",
+      "",
+      "\u001b[M\"&#",
+      "",
+      "\u001b[M '#",
+      "\u001b[M (#",
+      "",
+      "",
+      "",
+      ""
+    ]
+  },
+  {
+    "id": "mouse-normal-default",
+    "about": "Normal tracking (1000) with the default byte encoding: press, release (always button 3), modifiers and wheel; motion is not reported.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h",
+    "events": [
+      "press left 5,2",
+      "release left 5,2",
+      "press middle 5,2",
+      "release middle 5,2",
+      "press right 5,2",
+      "release right 5,2",
+      "press left 0,0",
+      "press left 39,9",
+      "press left 6,3 shift",
+      "press left 6,3 alt",
+      "press left 6,3 ctrl",
+      "press left 6,3 shift+alt+ctrl",
+      "release left 6,3 ctrl",
+      "wheel up 5,2",
+      "wheel down 5,2",
+      "wheel up 5,2 ctrl",
+      "wheel left 5,2",
+      "wheel right 5,2",
+      "motion none 8,2",
+      "motion left 8,2"
+    ],
+    "expect": [
+      "\u001b[M &#",
+      "\u001b[M#&#",
+      "\u001b[M!&#",
+      "\u001b[M#&#",
+      "\u001b[M\"&#",
+      "\u001b[M#&#",
+      "\u001b[M !!",
+      "\u001b[M H*",
+      "\u001b[M$'$",
+      "\u001b[M('$",
+      "\u001b[M0'$",
+      "\u001b[M<'$",
+      "\u001b[M3'$",
+      "\u001b[M`&#",
+      "\u001b[Ma&#",
+      "\u001b[Mp&#",
+      "\u001b[Mb&#",
+      "\u001b[Mc&#",
+      "",
+      ""
+    ]
+  },
+  {
+    "id": "mouse-drag-default",
+    "about": "Button-event tracking (1002): motion is reported only while a button is held.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1002h",
+    "events": [
+      "press left 5,2",
+      "motion left 6,2",
+      "motion left 6,2",
+      "motion left 7,3",
+      "motion none 8,3",
+      "release left 7,3",
+      "motion none 9,3",
+      "press right 2,2",
+      "motion right 3,2",
+      "release right 3,2"
+    ],
+    "expect": [
+      "\u001b[M &#",
+      "\u001b[M@'#",
+      "",
+      "\u001b[M@($",
+      "",
+      "\u001b[M#($",
+      "",
+      "\u001b[M\"##",
+      "\u001b[MB$#",
+      "\u001b[M#$#"
+    ]
+  },
+  {
+    "id": "mouse-any-default",
+    "about": "Any-event tracking (1003): motion with and without a button; repeats in the same cell are dropped.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1003h",
+    "events": [
+      "motion none 5,2",
+      "motion none 5,2",
+      "motion none 6,2",
+      "press left 6,2",
+      "motion left 7,2",
+      "motion left 7,2",
+      "release left 7,2",
+      "motion none 7,2",
+      "motion none 7,3"
+    ],
+    "expect": [
+      "\u001b[MC&#",
+      "",
+      "\u001b[MC'#",
+      "\u001b[M '#",
+      "\u001b[M@(#",
+      "",
+      "\u001b[M#(#",
+      "\u001b[MC(#",
+      "\u001b[MC($"
+    ]
+  },
+  {
+    "id": "mouse-sgr-normal",
+    "about": "Normal tracking with the SGR encoding (1006): release keeps its button and ends in m, wheel and modifiers.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1006h",
+    "events": [
+      "press left 5,2",
+      "release left 5,2",
+      "press middle 5,2",
+      "release middle 5,2",
+      "press right 5,2",
+      "release right 5,2",
+      "press left 0,0",
+      "press left 39,9",
+      "press left 6,3 shift",
+      "press left 6,3 alt",
+      "press left 6,3 ctrl",
+      "press left 6,3 shift+alt+ctrl",
+      "release left 6,3 ctrl",
+      "wheel up 5,2",
+      "wheel down 5,2",
+      "wheel up 5,2 shift",
+      "wheel left 5,2",
+      "wheel right 5,2",
+      "motion none 8,2",
+      "motion left 8,2"
+    ],
+    "expect": [
+      "\u001b[<0;6;3M",
+      "\u001b[<0;6;3m",
+      "\u001b[<1;6;3M",
+      "\u001b[<1;6;3m",
+      "\u001b[<2;6;3M",
+      "\u001b[<2;6;3m",
+      "\u001b[<0;1;1M",
+      "\u001b[<0;40;10M",
+      "\u001b[<4;7;4M",
+      "\u001b[<8;7;4M",
+      "\u001b[<16;7;4M",
+      "\u001b[<28;7;4M",
+      "\u001b[<16;7;4m",
+      "\u001b[<64;6;3M",
+      "\u001b[<65;6;3M",
+      "\u001b[<68;6;3M",
+      "\u001b[<66;6;3M",
+      "\u001b[<67;6;3M",
+      "",
+      ""
+    ]
+  },
+  {
+    "id": "mouse-sgr-wide",
+    "about": "SGR coordinates beyond the 223 limit of the default encoding.",
+    "cols": 300,
+    "rows": 50,
+    "setup": "\u001b[?1000h\u001b[?1006h",
+    "events": [
+      "press left 0,0",
+      "press left 222,0",
+      "press left 223,0",
+      "press left 224,0",
+      "press left 299,49",
+      "release left 299,49",
+      "wheel down 250,25"
+    ],
+    "expect": [
+      "\u001b[<0;1;1M",
+      "\u001b[<0;223;1M",
+      "\u001b[<0;224;1M",
+      "\u001b[<0;225;1M",
+      "\u001b[<0;300;50M",
+      "\u001b[<0;300;50m",
+      "\u001b[<65;251;26M"
+    ]
+  },
+  {
+    "id": "mouse-sgr-drag",
+    "about": "Button-event tracking with SGR: drag motion carries the held button.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1002h\u001b[?1006h",
+    "events": [
+      "press left 5,2",
+      "motion left 6,2",
+      "motion left 6,2",
+      "motion left 7,3",
+      "motion none 8,3",
+      "release left 7,3",
+      "press middle 1,1",
+      "motion middle 2,1",
+      "release middle 2,1"
+    ],
+    "expect": [
+      "\u001b[<0;6;3M",
+      "\u001b[<32;7;3M",
+      "",
+      "\u001b[<32;8;4M",
+      "",
+      "\u001b[<0;8;4m",
+      "\u001b[<1;2;2M",
+      "\u001b[<33;3;2M",
+      "\u001b[<1;3;2m"
+    ]
+  },
+  {
+    "id": "mouse-sgr-any",
+    "about": "Any-event tracking with SGR.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1003h\u001b[?1006h",
+    "events": [
+      "motion none 5,2",
+      "motion none 5,2",
+      "motion none 6,2",
+      "press right 6,2",
+      "motion right 7,2",
+      "release right 7,2",
+      "motion none 7,3"
+    ],
+    "expect": [
+      "\u001b[<35;6;3M",
+      "",
+      "\u001b[<35;7;3M",
+      "\u001b[<2;7;3M",
+      "\u001b[<34;8;3M",
+      "\u001b[<2;8;3m",
+      "\u001b[<35;8;4M"
+    ]
+  },
+  {
+    "id": "mouse-sgr-pixels",
+    "about": "SGR-pixels (1016) reports surface pixels, not cells (cells are 10x20 pixels).",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1016h",
+    "events": [
+      "press left 5,2",
+      "release left 5,2",
+      "press left 5,2 @0,0",
+      "press left 5,2 @399,199",
+      "press left 5,2 @53,47",
+      "wheel up 5,2 @53,47",
+      "press left 6,3 @64,69 ctrl"
+    ],
+    "expect": [
+      "\u001b[<0;55;50M",
+      "\u001b[<0;55;50m",
+      "\u001b[<0;0;0M",
+      "\u001b[<0;399;199M",
+      "\u001b[<0;53;47M",
+      "\u001b[<64;53;47M",
+      "\u001b[<16;64;69M"
+    ]
+  },
+  {
+    "id": "mouse-pixels-any",
+    "about": "Any-event tracking with SGR-pixels: sub-cell motion inside one cell is reported.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1003h\u001b[?1016h",
+    "events": [
+      "motion none 5,2 @50,40",
+      "motion none 5,2 @50,40",
+      "motion none 5,2 @51,40",
+      "motion none 5,2 @51,41",
+      "motion left 6,2 @60,40"
+    ],
+    "expect": [
+      "\u001b[<35;50;40M",
+      "",
+      "\u001b[<35;51;40M",
+      "\u001b[<35;51;41M",
+      "\u001b[<32;60;40M"
+    ]
+  },
+  {
+    "id": "mouse-default-range",
+    "about": "The default encoding stops at 223 (one byte per coordinate plus 32): xterm.js drops the report.",
+    "cols": 300,
+    "rows": 300,
+    "setup": "\u001b[?1000h",
+    "events": [
+      "press left 222,0",
+      "press left 223,0",
+      "press left 0,222",
+      "press left 0,223",
+      "press left 100,10",
+      "release left 222,222"
+    ],
+    "expect": [
+      "\u001b[M ÿ!",
+      "",
+      "\u001b[M !ÿ",
+      "",
+      "\u001b[M +",
+      "\u001b[M#ÿÿ"
+    ]
+  },
+  {
+    "id": "mouse-utf8-urxvt-ignored",
+    "about": "xterm.js 5.5.0 ignores 1005 (UTF-8) and 1015 (urxvt) and keeps the default byte encoding.",
+    "cols": 300,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1005h",
+    "events": [
+      "press left 5,2",
+      "press left 150,2",
+      "press left 250,2"
+    ],
+    "expect": [
+      "\u001b[M &#",
+      "\u001b[M ·#",
+      ""
+    ],
+    "core": {
+      "divergence": [
+        "mouse-extended-encodings-honoured"
+      ],
+      "expect": [
+        "\u001b[M &#",
+        "\u001b[M Â·#",
+        "\u001b[M Ä#"
+      ]
+    }
+  },
+  {
+    "id": "mouse-urxvt-ignored",
+    "about": "Mode 1015 (urxvt) is ignored by xterm.js 5.5.0 as well.",
+    "cols": 300,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1015h",
+    "events": [
+      "press left 5,2",
+      "press left 250,2"
+    ],
+    "expect": [
+      "\u001b[M &#",
+      ""
+    ],
+    "core": {
+      "divergence": [
+        "mouse-extended-encodings-honoured"
+      ],
+      "expect": [
+        "\u001b[32;6;3M",
+        "\u001b[32;251;3M"
+      ]
+    }
+  },
+  {
+    "id": "mouse-encoding-reset",
+    "about": "Resetting the SGR encoding (1006) returns to the default encoding, resetting the tracking mode stops reports.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1006h\u001b[?1006l",
+    "events": [
+      "press left 5,2"
+    ],
+    "expect": [
+      "\u001b[M &#"
+    ]
+  },
+  {
+    "id": "mouse-tracking-reset",
+    "about": "After 1000l no event is reported even though the encoding stays selected.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1006h\u001b[?1000l",
+    "events": [
+      "press left 5,2",
+      "release left 5,2",
+      "wheel up 5,2"
+    ],
+    "expect": [
+      "",
+      "",
+      ""
+    ]
+  },
+  {
+    "id": "mouse-modes-switch",
+    "about": "Switching 1000 to 1003 changes which events are reported.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1006h\u001b[?1003h",
+    "events": [
+      "motion none 5,2",
+      "press left 5,2"
+    ],
+    "expect": [
+      "\u001b[<35;6;3M",
+      "\u001b[<0;6;3M"
+    ]
+  },
+  {
+    "id": "mouse-out-of-range",
+    "about": "Events outside the grid are never reported.",
+    "cols": 40,
+    "rows": 10,
+    "setup": "\u001b[?1000h\u001b[?1006h",
+    "events": [
+      "press left 40,0",
+      "press left 0,10",
+      "press left 39,9"
+    ],
+    "expect": [
+      "",
+      "",
+      "\u001b[<0;40;10M"
+    ]
+  }
+]
