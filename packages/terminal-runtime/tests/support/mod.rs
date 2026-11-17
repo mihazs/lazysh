@@ -218,7 +218,9 @@ impl Fixture {
     }
 
     pub fn settle(&self, total: u64) {
-        wait_until(|| self.session.stats().unwrap().processed == total);
+        wait_until(|| {
+            self.session.stats().unwrap().processed == total && self.credited.load(SeqCst) == total
+        });
     }
 }
 
