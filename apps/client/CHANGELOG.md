@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.68.3
+
+### Patch Changes
+
+- e49e9b7: Keep the host adb server's own log (`adb-server-log.txt`, last 1 MiB) in the Android runtime artifact when a job fails, so an interrupted emulator transport records why the server dropped it (`connection terminated: <reason>`). Test infrastructure only; no product change.
+- 910aef8: Run the companion's exact pane focus against a real stock Herdr server in the desktop acceptance: a live pane without focus becomes the only focused pane and its tab becomes the focused tab. Test coverage only; no product change.
+- 8f2a455: Make the client's unit tests compile on Windows again: the ConPTY lifecycle test called `desktop::connect` without the `attach` argument added with local multiplexer attach, so no Windows step that builds the client library tests could run (#1905). Test-only; no user-visible change.
+- @lazysh/account-usage@1.68.3
+  - @lazysh/common@1.68.3
+  - @lazysh/display-idle@1.68.3
+  - @lazysh/et-transport@1.68.3
+  - @lazysh/mosh-transport@1.68.3
+
 ## 1.68.2
 
 ### Patch Changes
