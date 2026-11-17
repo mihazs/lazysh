@@ -47,7 +47,10 @@ impl Host {
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(binary::path());
         command
+            .env_clear()
             .args(args)
+            .env("HOME", self.dir.path())
+            .env("PATH", "/usr/bin:/bin")
             .env("XDG_STATE_HOME", self.xdg())
             .env("LAZYSH_STATE_DIR", self.dir.path().join("state"))
             .env_remove("TMUX_PANE");
@@ -297,14 +300,7 @@ fn two_resolvers_of_the_same_request_send_one_answer() {
     host.service
         .permission("per_a", "bash", &["echo hi"], &["echo *"]);
     let args = Host::reply_args(&host.request("per_a"), &["--decision", "once"]);
-    let children: Vec<_> = (0..2)
-        .map(|_| {
-            host.command(&args.iter().map(String::as_str).collect::<Vec<_>>())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap()
-        })
-        .collect();
+    let children: Vec<_> = (0..2).map(|_| spawn_command(&host, args.clone())).collect();
     let mut results: Vec<(bool, String)> = children
         .into_iter()
         .map(|child| {
@@ -538,4 +534,201 @@ fn identities_that_could_reach_another_route_are_rejected_before_any_request() {
         assert!(!host.run(&args).status.success(), "{args:?}");
     }
     assert_eq!(host.sent(), 0);
+}
+
+#[cfg(target_os = "linux")]
+fn near_expiry(host: &Host) -> (Value, String) {
+    use sha2::{Digest, Sha256};
+    host.service
+        .permission("per_expiry", "bash", &["echo hi"], &["echo *"]);
+    let mut item = host.request("per_expiry");
+    let expiry = (chrono::Utc::now() + chrono::Duration::seconds(3))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let content = json!({"action":"bash", "resources":["echo hi"], "save":["echo *"]});
+    let identity = json!([
+        1,
+        "service-1",
+        SESSION,
+        "permission",
+        "per_expiry",
+        content,
+        true,
+        expiry
+    ]);
+    item["expiresAt"] = json!(expiry);
+    item["expectedHash"] = json!(format!("{:x}", Sha256::digest(identity.to_string())));
+    (item, expiry)
+}
+
+#[cfg(target_os = "linux")]
+fn wait_expiry(expiry: &str) {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+    let expiry = chrono::DateTime::parse_from_rfc3339(expiry).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while chrono::Utc::now() < expiry && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(chrono::Utc::now() >= expiry);
+}
+
+fn spawn_command(host: &Host, args: Vec<String>) -> std::process::Child {
+    host.command(&args.iter().map(String::as_str).collect::<Vec<_>>())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_reply(host: &Host, item: &Value) -> std::process::Child {
+    spawn_command(host, Host::reply_args(item, &["--decision", "once"]))
+}
+
+#[cfg(target_os = "linux")]
+fn assert_refused(host: &Host, child: std::process::Child, reason: &str) {
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success());
+    let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(outcome(&output), (false, reason));
+    assert_eq!(host.sent(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn permission_expiring_while_waiting_for_the_host_lock_is_not_sent() {
+    use std::{fs, thread, time::Duration};
+    let host = Host::new();
+    let (item, expiry) = near_expiry(&host);
+    let state = host.dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state.join("opencode-service.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    let mut child = spawn_reply(&host, &item);
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "reply did not wait for the lock"
+    );
+    wait_expiry(&expiry);
+    drop(lock);
+    assert_refused(&host, child, "expired");
+}
+
+#[cfg(target_os = "linux")]
+fn wait_gate(gate: &fixture::Gate) {
+    use std::{
+        sync::atomic::Ordering,
+        thread,
+        time::{Duration, Instant},
+    };
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !gate.entered.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        gate.entered.load(Ordering::SeqCst),
+        "service revalidation did not start"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_pane_action(host: &Host, item: &Value, abort: bool) -> std::process::Child {
+    let args: Vec<String> = if abort {
+        [
+            "opencode-service",
+            "abort",
+            "--session-id",
+            SESSION,
+            "--pane-id",
+            "%7",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    } else {
+        Host::reply_args(item, &["--pane-id", "%7", "--decision", "once"])
+    };
+    spawn_command(host, args)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn permission_expiring_during_service_revalidation_is_not_sent() {
+    use std::sync::atomic::Ordering;
+    let host = Host::new();
+    let (item, expiry) = near_expiry(&host);
+    let gate = host.service.pause_next_permission_read();
+    let child = spawn_reply(&host, &item);
+    wait_gate(&gate);
+    wait_expiry(&expiry);
+    gate.release.store(true, Ordering::SeqCst);
+    assert_refused(&host, child, "expired");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pane_report_expiring_while_waiting_for_lock_cannot_authorize_actions() {
+    use std::{fs, thread, time::Duration};
+    for abort in [false, true] {
+        let host = Host::new();
+        host.report(SESSION, "%7");
+        host.service
+            .permission("per_retention", "bash", &["echo hi"], &["echo *"]);
+        host.service.run();
+        let item = host.request("per_retention");
+        let cutoff = chrono::Utc::now() + chrono::Duration::seconds(2);
+        let db = rusqlite::Connection::open(host.dir.path().join("state/events.sqlite3")).unwrap();
+        db.execute(
+            "UPDATE sessions SET updated_at=?1",
+            [(cutoff - chrono::Duration::days(7)).timestamp_micros() as f64 / 1_000_000.0],
+        )
+        .unwrap();
+        drop(db);
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(host.dir.path().join("state/opencode-service.lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        let mut child = spawn_pane_action(&host, &item, abort);
+        thread::sleep(Duration::from_millis(200));
+        assert!(child.try_wait().unwrap().is_none());
+        while chrono::Utc::now() < cutoff {
+            thread::sleep(Duration::from_millis(10));
+        }
+        drop(lock);
+        assert_refused(&host, child, "pane");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pane_change_during_service_revalidation_cannot_authorize_actions() {
+    use std::sync::atomic::Ordering;
+    for abort in [false, true] {
+        let host = Host::new();
+        host.report(SESSION, "%7");
+        host.service
+            .permission("per_race", "bash", &["echo hi"], &["echo *"]);
+        host.service.run();
+        let item = host.request("per_race");
+        let gate = if abort {
+            host.service.pause_second_active_read()
+        } else {
+            host.service.pause_next_permission_read()
+        };
+        let child = spawn_pane_action(&host, &item, abort);
+        wait_gate(&gate);
+        host.report("ses_other", "%7");
+        gate.release.store(true, Ordering::SeqCst);
+        assert_refused(&host, child, "pane");
+    }
 }

@@ -126,12 +126,7 @@ pub fn run(command: Command) -> Result<Value> {
         Command::Abort {
             session_id,
             pane_id,
-        } => abort(
-            &crate::state_directory()?,
-            &session_id,
-            pane_id.as_deref(),
-            now,
-        ),
+        } => abort(&crate::state_directory()?, &session_id, pane_id.as_deref()),
     }
 }
 
@@ -270,6 +265,17 @@ impl Service {
         path: &str,
         body: Option<&Value>,
     ) -> std::result::Result<(u16, Value), Refusal> {
+        self.call_until(method, path, body, None)
+    }
+
+    /// For a decision POST, check the expiry immediately before writing the request bytes.
+    fn call_until(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        expires: Option<DateTime<chrono::FixedOffset>>,
+    ) -> std::result::Result<(u16, Value), Refusal> {
         let payload = body.map(Value::to_string);
         let mut request = format!(
             "{method} {path} HTTP/1.0\r\nHost: {}\r\nAuthorization: {}\r\nAccept: application/json\r\nConnection: close\r\n",
@@ -291,6 +297,9 @@ impl Service {
         stream
             .set_write_timeout(Some(Wait::from_secs(5)))
             .map_err(|_| "unreachable")?;
+        if expires.is_some_and(|expires| Utc::now() >= expires) {
+            return Err("expired");
+        }
         stream
             .write_all(request.as_bytes())
             .map_err(|_| "unreachable")?;
@@ -621,12 +630,15 @@ pub fn reply(state: &Path, resolve: &Resolve, now: DateTime<Utc>) -> Result<Valu
         return Ok(refused("expired"));
     }
     let _lock = exclusive(state)?;
+    if Utc::now() >= expires {
+        return Ok(refused("expired"));
+    }
     let service = match discover() {
         Ok(service) => service,
         Err(_) => return Ok(refused("unavailable")),
     };
     if let Some(pane) = resolve.pane_id {
-        if !pane_shows(state, pane, resolve.session_id, now)? {
+        if !pane_shows(state, pane, resolve.session_id, Utc::now())? {
             return Ok(refused("pane"));
         }
     }
@@ -676,25 +688,38 @@ pub fn reply(state: &Path, resolve: &Resolve, now: DateTime<Utc>) -> Result<Valu
             None => return Ok(refused("invalid")),
         },
     };
+    // The report may have changed while the service was re-read. This is a fresh observation,
+    // not an atomic transaction with the subsequent network request.
+    if let Some(pane) = resolve.pane_id {
+        if !pane_shows(state, pane, session, Utc::now())? {
+            return Ok(refused("pane"));
+        }
+    }
     Ok(
-        match service.call("POST", &format!("{path}/reply"), Some(&payload)) {
+        match service.call_until(
+            "POST",
+            &format!("{path}/reply"),
+            Some(&payload),
+            Some(expires),
+        ) {
             Ok((204, _)) => accepted(),
             Ok((404 | 409, _)) => refused("gone"),
             Ok((400, _)) => refused("invalid"),
             Ok(_) => refused("refused"),
+            Err("expired") => refused("expired"),
             Err(_) => refused("unavailable"),
         },
     )
 }
 
-pub fn abort(state: &Path, session: &str, pane: Option<&str>, now: DateTime<Utc>) -> Result<Value> {
+pub fn abort(state: &Path, session: &str, pane: Option<&str>) -> Result<Value> {
     valid_session(session)?;
     let _lock = exclusive(state)?;
     let Ok(service) = discover() else {
         return Ok(refused("unavailable"));
     };
     if let Some(pane) = pane {
-        if !pane_shows(state, pane, session, now)? {
+        if !pane_shows(state, pane, session, Utc::now())? {
             return Ok(refused("pane"));
         }
     }
@@ -702,6 +727,11 @@ pub fn abort(state: &Path, session: &str, pane: Option<&str>, now: DateTime<Utc>
         Ok(true) => {}
         Ok(false) => return Ok(refused("idle")),
         Err(_) => return Ok(refused("unavailable")),
+    }
+    if let Some(pane) = pane {
+        if !pane_shows(state, pane, session, Utc::now())? {
+            return Ok(refused("pane"));
+        }
     }
     Ok(
         match service.call("POST", &format!("/api/session/{session}/interrupt"), None) {

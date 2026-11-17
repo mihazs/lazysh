@@ -27,7 +27,7 @@ lazysh-agent opencode-service abort --session-id SES --pane-id %3
 
 `list` prints the requests the service holds for the session, with `expectedHash` and `expiresAt` (two minutes ahead). `reply` and `abort` print `{"schemaVersion":1,"accepted":true}` or `{"accepted":false,"reason":…}` and exit successfully for a refusal, so the app can say why. Nothing is sent to the service for a refusal.
 
-| Check, in order | Refusal |
+| Check | Refusal |
 | --- | --- |
 | `--expires-at` has passed | `expired` |
 | No usable service (see below) | `unavailable` |
@@ -36,6 +36,9 @@ lazysh-agent opencode-service abort --session-id SES --pane-id %3
 | What the person saw (action, resources, rules, message; or the form's title and fields), the request id, the service identity and `--expires-at` no longer hash to `--expected-hash` | `changed` |
 | The request is one the app cannot answer (oversized, unsupported field) or an **Always allow** with no listed rule | `unsupported` |
 | A form answer that does not fit its fields (wrong type, unknown or missing required field) | `invalid` |
+
+The companion checks expiry again after the host lock and immediately before writing a decision request to the socket. It checks pane reports again after service revalidation, using the current host time for retention. These are local observations: the service does not atomically enforce the expiry or pane identity, so time or pane state may change after the last check and before the service receives the request. The expiry uses the host wall clock, which can move.
+
 | `abort` and the service says the session is not running | `idle` |
 
 All answers on a host take one exclusive lock, so two resolvers of the same request cannot both read it as pending: the second finds it gone and sends nothing. A reply the service itself rejects with 404 or 409 is `gone`; 400 is `invalid`.

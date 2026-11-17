@@ -5,8 +5,12 @@ use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
+    time::{Duration, Instant},
 };
 
 pub const PASSWORD: &str = "fixture-password-1d4c";
@@ -18,6 +22,19 @@ struct State {
     forms: Vec<Value>,
     running: Vec<String>,
     posts: Vec<(String, Value)>,
+    pause: Option<Pause>,
+}
+
+struct Pause {
+    gate: Arc<Gate>,
+    path: &'static str,
+    skip: usize,
+}
+
+#[derive(Default)]
+pub struct Gate {
+    pub entered: AtomicBool,
+    pub release: AtomicBool,
 }
 
 pub struct Service {
@@ -38,6 +55,24 @@ impl Service {
             }
         });
         Self { port, state }
+    }
+    pub fn pause_next_permission_read(&self) -> Arc<Gate> {
+        let gate = Arc::new(Gate::default());
+        self.state.lock().unwrap().pause = Some(Pause {
+            gate: gate.clone(),
+            path: "/permission/per_",
+            skip: 0,
+        });
+        gate
+    }
+    pub fn pause_second_active_read(&self) -> Arc<Gate> {
+        let gate = Arc::new(Gate::default());
+        self.state.lock().unwrap().pause = Some(Pause {
+            gate: gate.clone(),
+            path: "/api/session/active",
+            skip: 1,
+        });
+        gate
     }
     pub fn permission(&self, id: &str, action: &str, resources: &[&str], save: &[&str]) {
         self.state.lock().unwrap().permissions.push(
@@ -105,6 +140,28 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>) {
         first.next().unwrap_or_default().to_owned(),
         first.next().unwrap_or_default().to_owned(),
     );
+    if method == "GET" {
+        let gate = {
+            let mut state = state.lock().unwrap();
+            match state.pause.as_mut() {
+                Some(pause) if path.contains(pause.path) && pause.skip > 0 => {
+                    pause.skip -= 1;
+                    None
+                }
+                Some(pause) if path.contains(pause.path) => {
+                    state.pause.take().map(|pause| pause.gate)
+                }
+                _ => None,
+            }
+        };
+        if let Some(gate) = gate {
+            gate.entered.store(true, Ordering::SeqCst);
+            let limit = Instant::now() + Duration::from_secs(4);
+            while !gate.release.load(Ordering::SeqCst) && Instant::now() < limit {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
     let authorized = head.lines().any(|line| {
         line.eq_ignore_ascii_case(&format!("Authorization: Basic {}", base64_basic(PASSWORD)))
     });
