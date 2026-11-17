@@ -639,8 +639,9 @@ compile the feature, so every real endpoint keeps the web PKI roots. The `sync.r
 refusing the same server until it is given the root.
 
 **Limits.** The earlier version was run on a Waydroid guest, but the current test refuses local and shared guests because it clears
-app data. It runs only in the GitHub-hosted API 36 job after attesting the nominated emulator process, and assumes the hosted runner
-and its emulator are isolated from other users. This restriction has not yet been exercised on API 36. No physical device, Samsung or other OEM keystore behaviour and
+app data. Local default runs explicitly report that they skip this case; selecting it directly fails before device setup. It runs only
+in the GitHub-hosted API 36 job after attesting the nominated emulator process, and assumes the hosted runner and its emulator are
+isolated from other users. This restriction has not yet been exercised on API 36. No physical device, Samsung or other OEM keystore behaviour and
 no hosted WebDAV provider were exercised. The credentials category is shown to stay off and unused, but uploading saved credentials
 needs a saved vault entry and is not part of this case. Run it like any Appium spec; it needs `openssl` on the host:
 

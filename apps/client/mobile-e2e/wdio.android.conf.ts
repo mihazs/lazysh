@@ -3,6 +3,7 @@ import {SevereServiceError} from 'webdriverio';
 import {acquireDevice, adbFor, ensurePhoneScreen, ensureThreeButtonNavigation, restoreFromJournal, type DeviceSession} from './support/device';
 import {ENDPOINTS_ENV, hostKinds, startHosts, type OwnedHosts} from './support/hosts';
 import {config as shared, here, reports} from './wdio.conf';
+import {prepareSyncDevice} from './support/owned-sync-emulator';
 
 const serial = process.env.ANDROID_SERIAL;
 if (!serial) throw new Error('Set ANDROID_SERIAL to the one device the suite may use (adb devices); it is never guessed.');
@@ -15,6 +16,8 @@ const port = Number(process.env.LAZYSH_E2E_APPIUM_PORT ?? 4723); // override whe
 const chromedriver = process.env.LAZYSH_E2E_CHROMEDRIVER;
 let device: DeviceSession | undefined;
 let hosts: OwnedHosts | undefined;
+let emulator: Awaited<ReturnType<typeof prepareSyncDevice>>['emulator'];
+let workerEmulator: typeof emulator;
 
 export const config: WebdriverIO.Config = {
   ...shared,
@@ -47,10 +50,15 @@ export const config: WebdriverIO.Config = {
   }],
   // wdio logs an onPrepare failure and starts the workers anyway, which then fail on missing hosts and hide the cause. Only a
   // SevereServiceError stops the run: an unavailable device (a busy lock, a dirty baseline) must end it here, non-zero, naming why.
-  onPrepare: async () => {
+  onPrepare: async (resolved) => {
     const requested = Number(process.env.LAZYSH_E2E_LOCK_TIMEOUT_S ?? 600), waitSeconds = Number.isFinite(requested) && requested >= 0 ? requested : 600;
     try {
-      device = await acquireDevice(serial, {recover: process.env.LAZYSH_E2E_RECOVER === '1', lockTimeoutMs: waitSeconds * 1000});
+      const selected = resolved as typeof resolved & {spec?: unknown[]; suite?: unknown[]};
+      const args = [...process.argv, ...(selected.spec?.length || selected.suite?.length ? ['--spec'] : [])];
+      const prepared = await prepareSyncDevice(process.env, resolved.specs ?? [], args,
+        () => acquireDevice(serial, {recover: process.env.LAZYSH_E2E_RECOVER === '1', lockTimeoutMs: waitSeconds * 1000}));
+      emulator = prepared.emulator;
+      device = prepared.device;
     } catch (error) {
       throw new SevereServiceError((error as Error).message);
     }
@@ -63,11 +71,17 @@ export const config: WebdriverIO.Config = {
     }
   },
   // Before the session starts the app, so it never sees the tablet-shaped window a Waydroid guest has or a gestural overlay left behind.
-  beforeSession: async () => { await ensurePhoneScreen(adbFor(serial)); await ensureThreeButtonNavigation(adbFor(serial)); },
+  beforeSession: async (_config, _capabilities, specs) => {
+    const admitted = await prepareSyncDevice(process.env, specs ?? [], process.argv, async () => undefined);
+    workerEmulator = admitted.emulator;
+    await workerEmulator?.check();
+    await ensurePhoneScreen(adbFor(serial)); await ensureThreeButtonNavigation(adbFor(serial));
+  },
   // Every worker runs one spec file: put the device back to the recorded baseline between files, even after a failure.
-  after: () => restoreFromJournal(serial),
+  after: async () => { await workerEmulator?.check(); await restoreFromJournal(serial); },
   // Hosts first (their forwards and processes), then the device baseline and lock, even when the first step fails.
   onComplete: async () => {
+    await emulator?.check();
     try { await hosts?.stop(); } finally { await device?.release(); }
   },
 };

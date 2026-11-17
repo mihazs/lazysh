@@ -4,6 +4,7 @@ import {saveFailureArtifacts} from './support/artifacts';
 import {Attempts, mochaGrep, quarantine, reportFlaky, shard, specsFor, tiers} from './support/ci';
 import {forbidPause} from './support/guards';
 import SafeJunitReporter from './support/safe-junit';
+import {localSyncSelection} from './support/owned-sync-emulator';
 
 export const here = dirname(fileURLToPath(import.meta.url));
 export const reports = join(here, 'reports');
@@ -11,7 +12,7 @@ const serial = () => process.env.ANDROID_SERIAL ?? '';
 // CI names the run (gating or quarantine) in the flaky-spec summary; a local run is just `local`.
 const run = process.env.LAZYSH_E2E_RUN ?? 'local';
 const mode = quarantine();
-const specs = specsFor(here, tiers(), mode);
+const specs = localSyncSelection(specsFor(here, tiers(), mode), process.env);
 if (mode === 'only' && !specs.length) throw new Error('LAZYSH_E2E_FLAKY=only found no spec that mentions @flaky; there is nothing to quarantine.');
 const attempts = new Attempts();
 
