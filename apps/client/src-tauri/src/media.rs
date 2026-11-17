@@ -25,14 +25,92 @@ pub struct Media {
     data: String,
 }
 
+/// Visit every sibling box without following opaque payloads; lengths are relative to this slice.
+fn boxes(mut bytes: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> Option<()>) -> Option<()> {
+    while !bytes.is_empty() {
+        let size = u32::from_be_bytes(bytes.get(..4)?.try_into().ok()?);
+        let name = bytes.get(4..8)?;
+        let (header, length) = match size {
+            0 => (8, bytes.len()),
+            1 => (
+                16,
+                usize::try_from(u64::from_be_bytes(bytes.get(8..16)?.try_into().ok()?)).ok()?,
+            ),
+            n => (8, usize::try_from(n).ok()?),
+        };
+        if length < header || length > bytes.len() {
+            return None;
+        }
+        visit(name, &bytes[header..length])?;
+        bytes = &bytes[length..];
+    }
+    Some(())
+}
+
+/// Conservative classification, not full ISO BMFF validation: all tracks must declare sound and
+/// the complete box tree we inspect must be well formed. Fragmented and ambiguous files stay video.
+fn mp4_audio_only(data: &[u8]) -> bool {
+    let mut movies = 0usize;
+    let mut tracks = 0usize;
+    let valid = boxes(data, |name, body| {
+        if name == b"moof" {
+            return None;
+        }
+        if name != b"moov" {
+            return Some(());
+        }
+        movies += 1;
+        if movies != 1 {
+            return None;
+        }
+        boxes(body, |name, body| {
+            if name == b"mvex" {
+                return None;
+            }
+            if name != b"trak" {
+                return Some(());
+            }
+            tracks += 1;
+            let mut media = 0usize;
+            boxes(body, |name, body| {
+                if name != b"mdia" {
+                    return Some(());
+                }
+                media += 1;
+                if media != 1 {
+                    return None;
+                }
+                let mut handlers = 0usize;
+                boxes(body, |name, body| {
+                    if name == b"hdlr" {
+                        handlers += 1;
+                        if handlers != 1
+                            || body.len() < 24
+                            || body.get(..4) != Some(&[0, 0, 0, 0])
+                            || body.get(8..12) != Some(b"soun")
+                        {
+                            return None;
+                        }
+                    }
+                    Some(())
+                })?;
+                (handlers == 1).then_some(())
+            })?;
+            (media == 1).then_some(())
+        })
+    });
+    valid.is_some() && movies == 1 && tracks > 0
+}
+
 /// The kind and MIME type the signature at the start of `data` names, whatever the file is called.
 fn sniff(data: &[u8]) -> Option<(MediaKind, &'static str)> {
     use MediaKind::{Audio, Video};
     if data.get(4..8) == Some(b"ftyp") {
-        // The major brand tells audio-only MP4 (M4A, M4B) from video.
-        return Some(match data.get(8..12) {
-            Some(b"M4A ") | Some(b"M4B ") => (Audio, "audio/mp4"),
-            _ => (Video, "video/mp4"),
+        // A container brand alone does not tell whether a movie has audio or video tracks.
+        return Some(if mp4_audio_only(data) {
+            (Audio, "audio/mp4")
+        } else {
+            (Video, "video/mp4")
         });
     }
     if data.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
@@ -60,6 +138,11 @@ fn preview(bytes: &[u8], kind: MediaKind) -> Result<Media> {
         ));
     }
     match sniff(bytes) {
+        // The video element also plays audio-only MP4s named `.mp4`, as it did before track sniffing.
+        Some((MediaKind::Audio, "audio/mp4")) if kind == MediaKind::Video => Ok(Media {
+            mime: "video/mp4",
+            data: STANDARD.encode(bytes),
+        }),
         Some((found, mime)) if found == kind => Ok(Media {
             mime,
             data: STANDARD.encode(bytes),
@@ -171,7 +254,11 @@ mod tests {
     fn names_each_container_by_its_signature() {
         let cases: [(Vec<u8>, MediaKind, &str); 9] = [
             (mp4(b"isom"), Video, "video/mp4"),
-            (mp4(b"M4A "), Audio, "audio/mp4"),
+            (
+                include_bytes!("../tests/fixtures/media/isom-audio.m4a").to_vec(),
+                Audio,
+                "audio/mp4",
+            ),
             (vec![0x1a, 0x45, 0xdf, 0xa3, 1], Video, "video/webm"),
             (b"OggS\0".to_vec(), Audio, "audio/ogg"),
             (b"fLaC\0".to_vec(), Audio, "audio/flac"),
@@ -200,6 +287,95 @@ mod tests {
             assert_eq!(sniff(bytes), None, "{bytes:?}");
         }
     }
+    fn atom(name: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut value = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        value.extend_from_slice(name);
+        value.extend_from_slice(body);
+        value
+    }
+    fn track(handler: &[u8; 4]) -> Vec<u8> {
+        let mut body = vec![0; 24];
+        body[8..12].copy_from_slice(handler);
+        atom(b"trak", &atom(b"mdia", &atom(b"hdlr", &body)))
+    }
+    fn container(movie: &[u8]) -> Vec<u8> {
+        [atom(b"ftyp", b"isom\0\0\0\0"), atom(b"moov", movie)].concat()
+    }
+    #[test]
+    fn audio_classification_checks_every_track_and_box_boundary() {
+        let sound = track(b"soun");
+        let video = track(b"vide");
+        let mut body = [0u8; 24];
+        body[8..12].copy_from_slice(b"soun");
+        let handler = atom(b"hdlr", &body);
+        assert!(mp4_audio_only(&container(&sound)));
+        assert!(mp4_audio_only(&container(
+            &[sound.clone(), track(b"soun")].concat()
+        )));
+        for movie in [
+            vec![],
+            video.clone(),
+            [sound.clone(), video].concat(),
+            track(b"meta"),
+            [sound.clone(), atom(b"mvex", &[])].concat(),
+            atom(b"trak", &atom(b"mdia", &[])),
+            atom(
+                b"trak",
+                &atom(b"mdia", &[handler.clone(), handler].concat()),
+            ),
+        ] {
+            assert!(!mp4_audio_only(&container(&movie)));
+        }
+        for length in 0..24 {
+            let mut handler = vec![0; length];
+            if length >= 12 {
+                handler[8..12].copy_from_slice(b"soun");
+            }
+            assert!(!mp4_audio_only(&container(&atom(
+                b"trak",
+                &atom(b"mdia", &atom(b"hdlr", &handler))
+            ))));
+        }
+        let full = container(&sound);
+        assert!(!mp4_audio_only(&full[..full.len() - 1]));
+        assert!(!mp4_audio_only(
+            &[full.clone(), atom(b"moov", &sound)].concat()
+        ));
+        assert!(!mp4_audio_only(
+            &[full.clone(), atom(b"moof", &[])].concat()
+        ));
+        assert!(!mp4_audio_only(
+            &[atom(b"ftyp", b"isom\0\0\0\0"), atom(b"mdat", &sound)].concat()
+        ));
+        let mut overflow = vec![0, 0, 0, 1, b'm', b'o', b'o', b'v'];
+        overflow.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(!mp4_audio_only(&overflow));
+        let mut extended = vec![0, 0, 0, 1, b'm', b'o', b'o', b'v'];
+        extended.extend_from_slice(&((sound.len() + 16) as u64).to_be_bytes());
+        extended.extend_from_slice(&sound);
+        assert!(mp4_audio_only(&extended));
+        let mut to_end = vec![0, 0, 0, 0, b'm', b'o', b'o', b'v'];
+        to_end.extend_from_slice(&sound);
+        assert!(mp4_audio_only(&to_end));
+    }
+
+    #[test]
+    fn accepts_real_isom_audio_fixture() {
+        let audio = include_bytes!("../tests/fixtures/media/isom-audio.m4a");
+        let video = include_bytes!("../tests/fixtures/media/isom-video.mp4");
+        let mixed = include_bytes!("../tests/fixtures/media/mixed-m4a.mp4");
+        assert_eq!(preview(audio, Audio).unwrap().mime, "audio/mp4");
+        assert_eq!(preview(audio, Video).unwrap().mime, "video/mp4");
+        assert_eq!(
+            preview(video, Audio).unwrap_err().kind(),
+            "media_mislabeled"
+        );
+        assert_eq!(
+            preview(mixed, Audio).unwrap_err().kind(),
+            "media_mislabeled"
+        );
+    }
+
     #[test]
     fn returns_the_bytes_only_for_the_requested_kind_within_the_bound() {
         let video = mp4(b"mp42");
