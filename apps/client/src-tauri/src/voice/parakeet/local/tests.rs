@@ -190,6 +190,35 @@ fn one_cache_owner_and_exact_owned_partial_cleanup() {
 }
 
 #[test]
+fn dropped_owner_releases_the_lock_even_if_a_fork_inherited_its_descriptor() {
+    let (directory, manager, _authority) = fixture();
+    let inherited = manager.cache._lock.try_clone().unwrap();
+    assert!(Manager::new(
+        directory.path().join("parakeet"),
+        Arc::new(AtomicBool::new(false))
+    )
+    .is_err());
+    drop(manager);
+    let replacement = Manager::new(
+        directory.path().join("parakeet"),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert!(Manager::new(
+        directory.path().join("parakeet"),
+        Arc::new(AtomicBool::new(false))
+    )
+    .is_err());
+    drop(inherited);
+    assert!(Manager::new(
+        directory.path().join("parakeet"),
+        Arc::new(AtomicBool::new(false))
+    )
+    .is_err());
+    drop(replacement);
+}
+
+#[test]
 fn cache_rejects_links_and_publication_never_overwrites() {
     let directory = private_tempdir();
     let target = directory.path().join("target");

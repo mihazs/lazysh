@@ -39,6 +39,12 @@ struct Cache {
     root: PathBuf,
     _lock: File,
 }
+impl Drop for Cache {
+    fn drop(&mut self) {
+        // A concurrent fork can retain this open file description after the owner drops it.
+        let _ = self._lock.unlock();
+    }
+}
 impl Cache {
     fn new(root: PathBuf) -> Result<Self> {
         let parent = platform::trusted_parent(&root)?;
@@ -60,8 +66,9 @@ impl Cache {
             false,
         )?;
         lock.try_lock().map_err(|_| CACHE_ERROR)?;
+        let cache = Self { root, _lock: lock };
         // Exclusive process ownership precedes cleanup; never remove another live recognizer's files.
-        for entry in fs::read_dir(&root).map_err(|_| CACHE_ERROR)? {
+        for entry in fs::read_dir(&cache.root).map_err(|_| CACHE_ERROR)? {
             let entry = entry.map_err(|_| CACHE_ERROR)?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if name.strip_suffix(".part").is_some_and(valid_id) {
@@ -74,7 +81,7 @@ impl Cache {
                 fs::remove_dir_all(entry.path()).map_err(|_| CACHE_ERROR)?;
             }
         }
-        Ok(Self { root, _lock: lock })
+        Ok(cache)
     }
     fn archive(&self) -> PathBuf {
         self.root.join(ARCHIVE_NAME)
