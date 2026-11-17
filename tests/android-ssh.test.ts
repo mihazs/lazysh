@@ -1013,11 +1013,13 @@ test('passive native tap evidence retains only bounded trusted/target flags and 
   const observe=new Function('window',`${source};return ownedNativeTapObservation;`)(window)(target);
   listeners.get('pointerdown')!({isTrusted:true,target,clientX:51,clientY:22,message:'private-data',preventDefault(){throw new Error('Must remain passive');}});
   listeners.get('pointerup')!({isTrusted:false,target:{value:'other-private-value'},clientX:Infinity,clientY:NaN});
+  listeners.get('pointercancel')!({isTrusted:true,target,clientX:51,clientY:22});
   for(let count=0;count<4;count++)listeners.get('click')!({isTrusted:true,target,clientX:51,clientY:22});
   const sample=observe.read();
   expect(sample.before).toMatchObject({enabled:true,connected:true,focused:false});
   expect(sample.down).toEqual({count:1,overflow:false,trusted:true,target:true,point:[51,22]});
   expect(sample.up).toEqual({count:1,overflow:false,trusted:false,target:false,point:[null,null]});
+  expect(sample.cancel).toEqual({count:1,overflow:false,trusted:true,target:true,point:[51,22]});
   expect(sample.click.count).toBe(2);expect(sample.click.overflow).toBe(true);
   expect(JSON.stringify(sample)).not.toContain('private');
   expect(observe.close()).toBe(true);expect(listeners.size).toBe(0);expect(observe.close()).toBe(true);
