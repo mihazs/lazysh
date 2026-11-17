@@ -81,7 +81,7 @@ impl From<ghostty_vt::Error> for Error {
 /// more bytes per row and keeps fewer rows, and content that defeats cell sharing (a different
 /// truecolor foreground and background on every cell: 5.5 times the plain cost at 80 columns) or
 /// leans on graphemes and hyperlinks keeps fewer rows too. The hub clamps the request to its
-/// per-session cap, so very wide terminals with the largest setting are clamped as well.
+/// per-session cap and remaining global budget, so either can reduce the granted history.
 pub fn scrollback_bytes_for_lines(lines: usize, cols: u16) -> usize {
     lines
         .saturating_mul(usize::from(cols).max(SCROLLBACK_REFERENCE_COLS))

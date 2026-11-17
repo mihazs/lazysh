@@ -400,8 +400,8 @@ const HISTORY_LINES: std::ops::RangeInclusive<u32> = 100..=20_000;
 
 /// Like the terminal commands, the two that create or read a screen belong to the current renderer:
 /// a replaced renderer's lease is refused. `scrollback_lines` is the History lines setting; the core
-/// keeps at least that many rows of ordinary output (see `scrollback_bytes_for_lines`), and the
-/// core's default history when it is absent.
+/// requests a budget for that many rows of ordinary output (see `scrollback_bytes_for_lines`);
+/// the hub may grant less. When absent, the core uses its default history budget.
 #[tauri::command]
 pub async fn terminal_core_open(
     lease: AccessLease,
