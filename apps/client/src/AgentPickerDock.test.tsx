@@ -85,6 +85,7 @@ it('presses no Enter when the dialog does not move to the chosen option', async 
 
 it.each([
   ['the screen no longer shows the dialog that was tapped', ({set}: ReturnType<typeof fakeTerminal>) => set(fixture('rewind-list'), false)],
+  ['an option description changed after the card was drawn', ({set}: ReturnType<typeof fakeTerminal>) => set(model(5).map(row => row.replace('Efficient for routine tasks', 'Different capabilities')), false)],
   ['the pane is no longer the one the agent reported', (_: ReturnType<typeof fakeTerminal>, guard?: ReturnType<typeof vi.fn>) => guard?.mockResolvedValue(false)],
 ])('sends nothing when %s', async (_, change) => {
   const {guard} = mount(model(5));
@@ -253,13 +254,109 @@ it('answers the questions Codex asks one after the other, with the arrows and En
   ahead = 0;
   await waitFor(() => expect(option('Small').disabled).toBe(false));
   fireEvent.click(option('Small'));
+  await waitFor(() => expect(answers.slice(2)).toEqual([{kind: 'pick', rows: 0, enter: true}]));
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
-  expect(answers.slice(2)).toEqual([{kind: 'pick', rows: 0, enter: true}]);
 }, 20000);
+
+it('waits for the safety delay again when a new question replaces the previous one', async () => {
+  vi.useFakeTimers();
+  try {
+    mount(codexQuestion('codex-question-multi', 1), {agent: 'Codex', waiting: 'question'});
+    await act(async () => {await vi.advanceTimersByTimeAsync(400);});
+    expect(option('Green').disabled).toBe(false);
+    act(() => screenOf.set(codexQuestion('codex-question-last', 1)));
+    await act(async () => {await vi.advanceTimersByTimeAsync(150);});
+    expect(option('Small').disabled).toBe(true);
+    fireEvent.click(option('Small'));
+    expect(answers).toEqual([]);
+    await act(async () => {await vi.advanceTimersByTimeAsync(400);});
+    expect(option('Small').disabled).toBe(false);
+  } finally {vi.useRealTimers();}
+});
+
+it('does not send a second answer while the first answer is still pending', async () => {
+  bindTo(vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    screenOf.set(closed);
+    return true;
+  }));
+  mount(model(5));
+  await waitFor(() => expect(option('Haiku').disabled).toBe(false));
+  fireEvent.click(option('Haiku'));
+  fireEvent.click(option('Haiku'));
+  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+  expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]);
+});
 
 it('says the notes box of a Codex question waits in the terminal and sends nothing', async () => {
   mount(onTmux(fixture('codex-question-notes')), {agent: 'Codex'});
   expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
   expect(screen.queryAllByRole('button').map(button => button.textContent)).not.toContain('Green');
   expect(answers).toEqual([]);
+});
+
+it('keeps a new answer pending when an older question finishes late', async () => {
+  let releaseFirst!: () => void;
+  let releaseSecond!: () => void;
+  const first = new Promise<void>(resolve => {releaseFirst = resolve;});
+  const second = new Promise<void>(resolve => {releaseSecond = resolve;});
+  const answer = vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    if (answers.length === 1) {screenOf.set(codexQuestion('codex-question-last', 1)); await first;}
+    else {await second; screenOf.set(onTmux([]));}
+    return true;
+  });
+  bindTo(answer);
+  mount(codexQuestion('codex-question-multi', 1), {agent: 'Codex', waiting: 'question'});
+  await waitFor(() => expect(option('Red').disabled).toBe(false));
+  fireEvent.click(option('Red'));
+  await waitFor(() => expect(screen.getByRole('heading', {name: 'Which size?'})).toBeTruthy());
+  await waitFor(() => expect(option('Small').disabled).toBe(false));
+  fireEvent.click(option('Small'));
+  await waitFor(() => expect(answers).toHaveLength(2));
+  await act(async () => {releaseFirst(); await new Promise(resolve => setTimeout(resolve, 350));});
+  expect(option('Small').disabled).toBe(true);
+  fireEvent.click(option('Small'));
+  expect(answers).toHaveLength(2);
+  await act(async () => {releaseSecond();});
+  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+});
+
+it.each(['screen', 'composer binding'] as const)('sends nothing if the %s changes while the pane guard is pending', async change => {
+  let release!: (allowed: boolean) => void;
+  const pending = new Promise<boolean>(resolve => {release = resolve;});
+  const {guard} = mount(codexQuestion('codex-question-multi', 1), {agent: 'Codex', waiting: 'question'});
+  guard.mockReturnValue(pending);
+  await waitFor(() => expect(option('Red').disabled).toBe(false));
+  fireEvent.click(option('Red'));
+  await waitFor(() => expect(guard).toHaveBeenCalledTimes(1));
+  if (change === 'screen') act(() => screenOf.set(codexQuestion('codex-question-last', 1), false));
+  else bindTo(vi.fn(async (body: DialogAnswer) => {answers.push(body); return true;}));
+  await act(async () => {release(true);});
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(t('agentPickerStale')));
+  expect(answers).toEqual([]);
+});
+
+it('releases a replaced guard without letting its result release the new answer', async () => {
+  let releaseOld!: (allowed: boolean) => void, releaseNew!: (allowed: boolean) => void;
+  const oldGuard = vi.fn(() => new Promise<boolean>(resolve => {releaseOld = resolve;}));
+  const newGuard = vi.fn(() => new Promise<boolean>(resolve => {releaseNew = resolve;}));
+  bindTo(vi.fn(async (body: DialogAnswer) => {answers.push(body); screenOf.set(closed); return true;}));
+  screenOf = fakeTerminal(model(5));
+  const props = {sessionId: 's', shown: true, terminal: screenOf.terminal, answerable: true, onShowTerminal: vi.fn()};
+  const view = render(<AgentPickerDock {...props} guard={oldGuard}/>);
+  await waitFor(() => expect(option('Haiku').disabled).toBe(false));
+  fireEvent.click(option('Haiku'));
+  await waitFor(() => expect(oldGuard).toHaveBeenCalledTimes(1));
+  view.rerender(<AgentPickerDock {...props} guard={newGuard}/>);
+  await waitFor(() => expect(option('Haiku').disabled).toBe(false));
+  fireEvent.click(option('Haiku'));
+  await waitFor(() => expect(newGuard).toHaveBeenCalledTimes(1));
+  await act(async () => {releaseOld(true);});
+  expect(option('Haiku').disabled).toBe(true);
+  expect(answers).toEqual([]);
+  await act(async () => {releaseNew(true);});
+  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+  expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]);
 });

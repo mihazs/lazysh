@@ -231,18 +231,21 @@ mod runtime {
         let tty = printed.split("TTY_").nth(1).unwrap().split("_END").next();
         let identity: Identity = desktop::display_identity(&state, &connected.session_id).unwrap();
         assert_eq!(Some(identity.tty.as_str()), tty);
-        // The shell exec'd into `sleep`, so the PTY child is that process.
-        let command = std::fs::read_to_string(format!("/proc/{}/comm", identity.pid))
-            .or_else(|_| {
-                Ok::<_, std::io::Error>(text(Command::new("ps").args([
-                    "-o",
-                    "comm=",
-                    "-p",
-                    &identity.pid.to_string(),
-                ])))
-            })
-            .unwrap();
-        assert!(command.trim().ends_with("sleep"), "{command}");
+        // The TTY can arrive before the shell execs into `sleep`.
+        eventually("PTY child must exec sleep", || {
+            let command = std::fs::read_to_string(format!("/proc/{}/comm", identity.pid))
+                .or_else(|_| {
+                    Ok::<_, std::io::Error>(text(Command::new("ps").args([
+                        "-o",
+                        "comm=",
+                        "-p",
+                        &identity.pid.to_string(),
+                    ])))
+                })
+                .unwrap();
+            command.trim().ends_with("sleep").then_some(())
+        })
+        .await;
         desktop::disconnect(&state, &connected.session_id);
     }
 

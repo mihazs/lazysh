@@ -79,9 +79,9 @@ class NativeGestureNavigationTest {
 
     /** A renderer-side IPC call as the page makes it: the access header carries the unlock nonce, and the outcome lands in `window.__outcome`. */
     private fun invokeFromPage(command: String, arguments: String = "{}") {
-        js("""(()=>{window.__outcome='pending';
+        js("""(()=>{const ticket=window.__outcomeTicket={};window.__outcome='pending';
             window.__TAURI_INTERNALS__.invoke('app_lock_status').then(status=>window.__TAURI_INTERNALS__.invoke('$command',$arguments,{headers:{'X-Lazysh-Access':status.nonce??''}}))
-              .then(value=>{window.__outcome=JSON.stringify(value??null)},error=>{window.__outcome='error '+error});return true})()""")
+              .then(value=>{if(window.__outcomeTicket===ticket)window.__outcome=JSON.stringify(value??null)},error=>{if(window.__outcomeTicket===ticket)window.__outcome='error '+error});return true})()""")
     }
 
     private fun outcome(what: String): String = poll(what, 30) { js("window.__outcome").takeIf { it != "\"pending\"" } }.trim('"').replace("\\\"", "\"")
@@ -273,6 +273,11 @@ class NativeGestureNavigationTest {
         assertFalse("the private keyboard mode follows the command back off", PrivateKeyboard.active)
     }
 
+    private fun exclusionCleanup() = AutoCloseable {
+        invokeFromPage("edge_gesture_exclusion", "{left:false,right:false,zoneDp:40,rowTopDp:0,rowBottomDp:1}")
+        assertEquals("the exclusion cleanup completed", "null", outcome("the exclusion cleanup"))
+    }
+
     /** The Rust command refuses what Android would clamp or ignore: a row taller than the 200 dp cap, an inverted row, a zone outside 1 to 96 dp. */
     @Test fun theShellRefusesRowsAndZonesAndroidCouldNotHonour() {
         awaitStartPage()
@@ -284,14 +289,12 @@ class NativeGestureNavigationTest {
             "zoneDp:96,rowTopDp:100,rowBottomDp:300" to "claimed",
             "zoneDp:1,rowTopDp:100,rowBottomDp:300" to "claimed",
         )
-        try {
+        exclusionCleanup().use {
             for ((arguments, expected) in outcomes) {
                 invokeFromPage("edge_gesture_exclusion", "{left:true,right:true,$arguments}")
                 val result = outcome("the outcome of $arguments")
                 assertEquals(arguments, expected, if (result.startsWith("error")) "refused" else "claimed")
             }
-        } finally {
-            invokeFromPage("edge_gesture_exclusion", "{left:false,right:false,zoneDp:40,rowTopDp:0,rowBottomDp:1}")
         }
     }
 
@@ -304,16 +307,17 @@ class NativeGestureNavigationTest {
         var content: View? = null
         var original = 0
         scenario.onActivity { content = it.findViewById(android.R.id.content); original = content!!.paddingBottom }
-        try {
-            scenario.onActivity { content!!.setPadding(content!!.paddingLeft, content!!.paddingTop, content!!.paddingRight, original + 600) }
-            poll("the bands inside the smaller WebView") {
-                var inside = false
-                onActivityView { view -> inside = view.systemGestureExclusionRects.let { r -> r.size == 2 && r.all { it.bottom <= view.height && it.top >= 0 } } && view.height > 0 }
-                inside.takeIf { it }
+        exclusionCleanup().use {
+            try {
+                scenario.onActivity { content!!.setPadding(content!!.paddingLeft, content!!.paddingTop, content!!.paddingRight, original + 600) }
+                poll("the bands inside the smaller WebView") {
+                    var inside = false
+                    onActivityView { view -> inside = view.systemGestureExclusionRects.let { r -> r.size == 2 && r.all { it.bottom <= view.height && it.top >= 0 } } && view.height > 0 }
+                    inside.takeIf { it }
+                }
+            } finally {
+                scenario.onActivity { content!!.setPadding(content!!.paddingLeft, content!!.paddingTop, content!!.paddingRight, original) }
             }
-        } finally {
-            scenario.onActivity { content!!.setPadding(content!!.paddingLeft, content!!.paddingTop, content!!.paddingRight, original) }
-            invokeFromPage("edge_gesture_exclusion", "{left:false,right:false,zoneDp:40,rowTopDp:0,rowBottomDp:1}")
         }
     }
 
