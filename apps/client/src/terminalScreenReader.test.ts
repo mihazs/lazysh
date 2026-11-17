@@ -158,6 +158,44 @@ describe('screen reader mirror', () => {
     expect(host.querySelector('[aria-current]')).toBeNull();
   });
 
+  it.each([false, true])('drops queued live output across a history visit (return=%s)', returnLive => {
+    const state = screen(['', '']);
+    const {adapter, emit} = fakeAdapter(state);
+    mountScreenReaderMirror(adapter, host);
+    write(state, ['', 'first']); emit({type: 'output'}); vi.advanceTimersByTime(150);
+    write(state, ['first', 'queued']); emit({type: 'output'}); vi.advanceTimersByTime(150);
+    state.following = false;
+    emit({type: 'viewport', viewport: {top: 0, rows: 2, length: 200, following: false}});
+    if (returnLive) {
+      state.following = true;
+      emit({type: 'viewport', viewport: {top: 198, rows: 2, length: 200, following: true}});
+    }
+    vi.advanceTimersByTime(1000);
+    expect(spoken()).toEqual(['first']);
+  });
+
+  it('does not compare across a history visit before output settles', () => {
+    const state = screen(['', 'first']);
+    const {adapter, emit} = fakeAdapter(state);
+    mountScreenReaderMirror(adapter, host);
+    write(state, ['first', 'queued']); emit({type: 'output'});
+    for (const following of [false, true]) {
+      state.following = following;
+      emit({type: 'viewport', viewport: {top: following ? 198 : 0, rows: 2, length: 200, following}});
+    }
+    vi.advanceTimersByTime(1000);
+    expect(spoken()).toEqual([]);
+  });
+
+  it('announces an explicit selection while viewing history', () => {
+    const state = screen(['old', 'text'], {following: false, selected: 'old'});
+    const {adapter, emit} = fakeAdapter(state);
+    mountScreenReaderMirror(adapter, host);
+    emit({type: 'selection', range: {start: {x: 0, y: 0}, end: {x: 3, y: 0}}});
+    vi.advanceTimersByTime(1000);
+    expect(spoken()).toEqual(['Selected: old']);
+  });
+
   it('does not announce the difference between history and the live screen when the reader returns to it', () => {
     const state = screen(['old', 'older'], {following: false});
     const {adapter, emit} = fakeAdapter(state);

@@ -79,7 +79,7 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
 
   const announce = () => {
     announceTimer = undefined;
-    const messages = [...pending, ...(selection ? [t('terminalA11ySelected', {text: selection})] : [])];
+    const messages = [...(adapter.viewport().following ? pending : []), ...(selection ? [t('terminalA11ySelected', {text: selection})] : [])];
     pending = []; selection = undefined;
     if (!messages.length) return;
     lastAnnounced = Date.now();
@@ -110,7 +110,7 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
       if (item.textContent !== text) item.textContent = text;
       if ((index === cursor) !== item.hasAttribute('aria-current')) index === cursor ? item.setAttribute('aria-current', 'location') : item.removeAttribute('aria-current');
     });
-    // Reading history is the reader's own navigation: nothing is announced unless the view is live.
+    // Reading history is the reader's own navigation: do not announce live output there.
     if (view.following) {
       const added = newScreenLines(before, rows);
       if (added.length > limits.maxLines) pending = [t('terminalA11yChanged', {count: added.length})];
@@ -126,6 +126,7 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
   const wake = () => { if (!settleTimer && !disposed) settleTimer = setTimeout(settle, limits.settleMs); };
 
   const subscription = adapter.subscribe(event => {
+    if (event.type === 'viewport' && !event.viewport.following) { pending = []; before = []; cursorRow = -1; }
     if (event.type === 'selection') {
       selection = event.range ? truncate(adapter.selectedText(), limits.maxSelectionChars) || undefined : undefined;
     }
