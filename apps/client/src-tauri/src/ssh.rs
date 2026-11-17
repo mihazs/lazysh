@@ -5109,7 +5109,7 @@ mod tests {
         /// Every exec request now answers with this stdout and exit status.
         pub(crate) fn script_exec(&self, stdout: &str, status: u32) {
             *self.server.scripted_exec.lock().unwrap() =
-                Some((vec![stdout.as_bytes().to_vec()], status));
+                Some((vec![stdout.as_bytes().to_vec()], Vec::new(), status));
         }
         pub(crate) fn quiet(&self) {
             self.server.tmux_metadata.store(true, Ordering::SeqCst);
