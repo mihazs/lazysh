@@ -2992,6 +2992,12 @@ pub(crate) fn check_exit(status: Option<u32>, error: &[u8]) -> Result<()> {
         },
     ))
 }
+pub(crate) fn unsupported_large_history_flag(error: &SshError) -> bool {
+    error.kind() == "remote_command_failed" && unknown_large_history_flag(error.message())
+}
+fn unknown_large_history_flag(message: &str) -> bool {
+    message.contains("unexpected argument '--allow-large-history'")
+}
 pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
     String::from_utf8(bytes)
         .map_err(|_| SshError::new("invalid_output", "Remote command did not return UTF-8"))
@@ -3003,6 +3009,9 @@ pub(crate) struct ExecOutput {
     stderr: Vec<u8>,
 }
 impl ExecOutput {
+    pub(crate) fn unsupported_large_history_flag(&self) -> bool {
+        self.status == Some(2) && unknown_large_history_flag(&String::from_utf8_lossy(&self.stderr))
+    }
     /// The output of a command that had to succeed.
     fn text(self) -> Result<String> {
         check_exit(self.status, &self.stderr)?;
@@ -3520,6 +3529,7 @@ pub async fn agent_transcript(
     checkpoint: Option<String>,
     checkpointed: Option<bool>,
     inline_images: Option<bool>,
+    allow_large_history: Option<bool>,
     transcript_session_id: Option<String>,
     window: Option<TranscriptWindow>,
 ) -> AccessResult<serde_json::Value> {
@@ -3545,15 +3555,41 @@ pub async fn agent_transcript(
                 ));
             }
             command.push_str(&flags);
-            transcript_result(
+            let large = allow_large_history.unwrap_or(false);
+            if large && (agent != "codex" || view.as_deref() != Some("conversation")) {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "Large history is only available for Codex conversations",
+                ));
+            }
+            let requested = if large {
+                format!("{command} --allow-large-history")
+            } else {
+                command.clone()
+            };
+            let result = transcript_result(
                 &lease,
                 &state,
                 &local,
                 &session_id,
-                command,
-                transcript_session_id,
+                requested,
+                transcript_session_id.clone(),
             )
-            .await
+            .await;
+            match result {
+                Err(error) if large && unsupported_large_history_flag(&error) => {
+                    transcript_result(
+                        &lease,
+                        &state,
+                        &local,
+                        &session_id,
+                        command,
+                        transcript_session_id,
+                    )
+                    .await
+                }
+                other => other,
+            }
         })
         .await
 }
@@ -4882,6 +4918,31 @@ mod tests {
             }
             if self.legacy_exec.load(Ordering::SeqCst) {
                 let probe = text.starts_with("sh -c ");
+                if text.starts_with("lazysh-agent herdr-conversation ") {
+                    if text.contains("--owned-too-large") {
+                        session.extended_data(
+                            channel,
+                            1,
+                            b"lazysh-agent: TooLarge: operation failed\n".to_vec(),
+                        )?;
+                        session.exit_status_request(channel, 1)?;
+                    } else if text.contains("--owned-unrelated") {
+                        session.extended_data(channel, 1, b"owned unrelated failure".to_vec())?;
+                        session.exit_status_request(channel, 1)?;
+                    } else if text.contains("--allow-large-history") {
+                        session.extended_data(
+                            channel,
+                            1,
+                            b"error: unexpected argument '--allow-large-history' found\n".to_vec(),
+                        )?;
+                        session.exit_status_request(channel, 2)?;
+                    } else {
+                        session.data(channel, b"owned-legacy-response".to_vec())?;
+                        session.exit_status_request(channel, 0)?;
+                    }
+                    session.close(channel)?;
+                    return Ok(());
+                }
                 session.data(
                     channel,
                     if probe {
@@ -5782,6 +5843,51 @@ mod tests {
                 original.as_bytes()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn herdr_conversation_retries_old_companion_after_an_inconclusive_unix_probe() {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        fixture.server.legacy_exec.store(true, Ordering::SeqCst);
+        let original = "lazysh-agent herdr-conversation --agent codex --session-id owned";
+        let result =
+            crate::herdr::conversation_read(&fixture.session, original.into(), true, &lease)
+                .await
+                .unwrap();
+        assert_eq!(result, "owned-legacy-response");
+        let commands = fixture.server.commands.lock().unwrap().clone();
+        assert!(commands[0].starts_with("sh -c "));
+        assert_eq!(commands[1], format!("{original} --allow-large-history"));
+        assert!(commands[2].starts_with("sh -c "));
+        assert_eq!(commands[3], original);
+
+        let before = commands.len();
+        let error = crate::herdr::conversation_read(
+            &fixture.session,
+            format!("{original} --owned-unrelated"),
+            true,
+            &lease,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.message(), "Remote command exited with status Some(1)");
+        let commands = fixture.server.commands.lock().unwrap();
+        assert_eq!(
+            commands.len(),
+            before + 2,
+            "unrelated failure must not retry"
+        );
+        drop(commands);
+        let error = crate::herdr::conversation_read(
+            &fixture.session,
+            format!("{original} --owned-too-large"),
+            true,
+            &lease,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.message(), "lazysh-agent: TooLarge: operation failed");
     }
     #[tokio::test]
     async fn exec_status_returns_a_failing_exit_with_streamed_stdout_where_exec_bounded_discards_it(

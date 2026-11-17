@@ -49,7 +49,7 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
     expect(sessions.getAttribute('aria-expanded')).toBe('false');fireEvent.click(sessions);
     expect(screen.getByRole('region',{name:'Last-reported agent sessions'})).toBeTruthy();fireEvent.click(options().querySelector('button')!);
     // Claude Code previews of attached images are on by default; Codex waits for the switch.
-    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0,...(agent==='claude'?{inlineImages:true}:{})}]);
+    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0,...(agent==='claude'?{inlineImages:true}:{allowLargeHistory:true})}]);
     const turns=screen.getAllByRole('region',{name:'Turn'});
     expect(turns).toHaveLength(1);
     // Prompt and answer are bubbles named by role, without the recorded reader's role headings or follow controls.
@@ -287,7 +287,7 @@ it('opens the conversation of the focused Herdr pane by itself through the reval
   expect(screen.queryByText(/not verified as belonging|association with this pane is unverified/)).toBeNull();
   expect(within(options()).getByText(/^Herdr links this conversation to the focused pane of this terminal: Work · Code\./)).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
-  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
+  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one',allowLargeHistory:true}}]);
   expect(calls('agent_transcript')).toEqual([]);
   // The guarded terminal is the pane Herdr links the conversation to, so no destination step is shown and nothing is sent until Send.
   const guarded=()=>calls('herdr_chat').map(args=>(args as {action:{kind:string}}).action.kind);

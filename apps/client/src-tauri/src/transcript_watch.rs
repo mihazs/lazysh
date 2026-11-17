@@ -37,6 +37,8 @@ pub enum WatchTarget {
         /// Also carry the bounded previews of the images the user attached.
         #[serde(default)]
         inline_images: bool,
+        #[serde(default)]
+        allow_large_history: bool,
     },
     /// A Herdr pane's agent session, resolved on the host and re-checked while it is watched.
     #[serde(rename_all = "camelCase")]
@@ -46,6 +48,8 @@ pub enum WatchTarget {
         herdr_session: String,
         pane_id: String,
         terminal_id: String,
+        #[serde(default)]
+        allow_large_history: bool,
     },
 }
 
@@ -78,11 +82,12 @@ impl TranscriptWatches {
 }
 
 fn target_command(target: &WatchTarget) -> Result<String> {
-    let (agent, source) = match target {
+    let (agent, source, large) = match target {
         WatchTarget::Path {
             agent,
             path,
             inline_images,
+            allow_large_history,
         } => {
             ssh::check_path(path)?;
             let images = if *inline_images {
@@ -90,11 +95,16 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             } else {
                 ""
             };
-            (agent, format!("--path {}{images}", quote(path)))
+            (
+                agent,
+                format!("--path {}{images}", quote(path)),
+                *allow_large_history,
+            )
         }
         WatchTarget::Herdr {
             agent,
             agent_session_id,
+            allow_large_history,
             ..
         } => {
             if uuid::Uuid::parse_str(agent_session_id)
@@ -106,7 +116,11 @@ fn target_command(target: &WatchTarget) -> Result<String> {
                     "Invalid agent session reference",
                 ));
             }
-            (agent, format!("--session-id {}", quote(agent_session_id)))
+            (
+                agent,
+                format!("--session-id {}", quote(agent_session_id)),
+                *allow_large_history,
+            )
         }
     };
     if !matches!(agent.as_str(), "claude" | "codex") {
@@ -115,8 +129,15 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             "Live updates cover Claude Code and Codex",
         ));
     }
+    if large && agent != "codex" {
+        return Err(SshError::new(
+            "invalid_input",
+            "Large history is only available for Codex",
+        ));
+    }
+    let large = if large { " --allow-large-history" } else { "" };
     Ok(format!(
-        "lazysh-agent transcript-watch --agent {agent} {source} --limit 50"
+        "lazysh-agent transcript-watch --agent {agent} {source} --limit 50{large}"
     ))
 }
 
@@ -282,6 +303,7 @@ pub async fn agent_watch_start(
                     terminal_id,
                     agent,
                     agent_session_id,
+                    ..
                 } => {
                     let pane = HerdrCheck {
                         server: herdr_session.clone(),
@@ -397,12 +419,14 @@ mod tests {
             agent: "claude".into(),
             path: "/home/o wner/it's.jsonl".into(),
             inline_images: false,
+            allow_large_history: false,
         };
         assert_eq!(target_command(&path).unwrap(), "lazysh-agent transcript-watch --agent claude --path '/home/o wner/it'\\''s.jsonl' --limit 50");
         let with_images = WatchTarget::Path {
             agent: "codex".into(),
             path: "/x".into(),
             inline_images: true,
+            allow_large_history: false,
         };
         assert_eq!(
             target_command(&with_images).unwrap(),
@@ -414,11 +438,32 @@ mod tests {
             herdr_session: "s".into(),
             pane_id: "p_1".into(),
             terminal_id: "t".into(),
+            allow_large_history: false,
         };
         assert_eq!(
             target_command(&herdr("codex", ID)).unwrap(),
             format!("lazysh-agent transcript-watch --agent codex --session-id '{ID}' --limit 50")
         );
+        let mut opted_in = herdr("codex", ID);
+        if let WatchTarget::Herdr {
+            allow_large_history,
+            ..
+        } = &mut opted_in
+        {
+            *allow_large_history = true;
+        }
+        assert!(target_command(&opted_in)
+            .unwrap()
+            .ends_with(" --allow-large-history"));
+        let mut invalid = herdr("claude", ID);
+        if let WatchTarget::Herdr {
+            allow_large_history,
+            ..
+        } = &mut invalid
+        {
+            *allow_large_history = true;
+        }
+        assert!(target_command(&invalid).is_err());
         for bad in [
             herdr("pi", ID),
             herdr("claude", "not-a-uuid"),
@@ -430,6 +475,7 @@ mod tests {
             agent: "grok-acp".into(),
             path: "/x".into(),
             inline_images: false,
+            allow_large_history: false,
         };
         assert!(target_command(&other).is_err());
     }

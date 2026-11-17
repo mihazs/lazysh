@@ -296,6 +296,7 @@ async fn transcript(app: &App<MockRuntime>, id: &str, path: &Path) -> Result<Val
         None,
         None,
         None,
+        None,
     ))
     .await
 }

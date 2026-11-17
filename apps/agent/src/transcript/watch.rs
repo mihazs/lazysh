@@ -40,6 +40,7 @@ pub struct Options {
     pub interval: Duration,
     /// Previews of the user's attached images, as `transcript --view conversation --inline-images`.
     pub inline_images: bool,
+    pub allow_large_history: bool,
 }
 
 struct Entry {
@@ -78,6 +79,7 @@ pub struct Watcher {
     source: Source,
     limit: u8,
     inline_images: bool,
+    allow_large_history: bool,
     generation: u64,
     sequence: u64,
     entries: Vec<Entry>,
@@ -85,6 +87,7 @@ pub struct Watcher {
     queued: Vec<Value>,
     work: Option<Vec<Value>>,
     session: Option<Value>,
+    truncated: bool,
     seen: Option<Fingerprint>,
     located: Option<PathBuf>,
     /// Duration of the last projection; the next check waits at least three times as long.
@@ -124,6 +127,7 @@ impl Watcher {
             source,
             limit,
             inline_images: false,
+            allow_large_history: false,
             generation: 0,
             sequence: 0,
             entries: Vec::new(),
@@ -131,6 +135,7 @@ impl Watcher {
             queued: Vec::new(),
             work: None,
             session: None,
+            truncated: false,
             seen: None,
             located: None,
             cost: Duration::ZERO,
@@ -143,6 +148,14 @@ impl Watcher {
             return Err(Error::InvalidArgument);
         }
         self.inline_images = inline_images;
+        Ok(self)
+    }
+
+    pub fn with_large_history(mut self, allow: bool) -> Result<Self> {
+        if allow && !matches!(self.agent, TranscriptAgent::Codex) {
+            return Err(Error::InvalidArgument);
+        }
+        self.allow_large_history = allow;
         Ok(self)
     }
 
@@ -164,6 +177,25 @@ impl Watcher {
     }
 
     fn project(&self) -> Result<TranscriptPage> {
+        if self.allow_large_history {
+            return match &self.source {
+                Source::Path(path) => super::conversation_window_large(
+                    path,
+                    self.agent,
+                    self.limit,
+                    self.inline_images,
+                    &super::window::Window::Tail,
+                    true,
+                ),
+                Source::Session(id) => herdr_session::read_herdr_conversation_window_large(
+                    self.agent,
+                    id,
+                    self.limit,
+                    &super::window::Window::Tail,
+                    true,
+                ),
+            };
+        }
         match &self.source {
             Source::Path(path)
                 if self.inline_images && matches!(self.agent, TranscriptAgent::Codex) =>
@@ -219,6 +251,8 @@ impl Watcher {
         self.work.clone_from(&page.work);
         let session_changed = self.session != page.session;
         self.session = page.session;
+        let truncated_changed = self.truncated != page.truncated;
+        self.truncated = page.truncated;
         let dropped = if rewritten || self.generation == 0 {
             None
         } else {
@@ -263,6 +297,7 @@ impl Watcher {
             || queued_changed
             || work_changed
             || session_changed
+            || truncated_changed
         {
             self.sequence += 1;
             let mut frame = json!({
@@ -281,6 +316,9 @@ impl Watcher {
             }
             if session_changed {
                 frame["session"] = json!(self.session);
+            }
+            if truncated_changed {
+                frame["truncated"] = json!(self.truncated);
             }
             Some(frame)
         } else {
@@ -354,8 +392,9 @@ pub fn run_stdio(options: Options) -> Result<()> {
         (None, Some(id)) => Source::Session(id),
         _ => return Err(Error::InvalidArgument),
     };
-    let watcher =
-        Watcher::new(options.agent, source, options.limit)?.with_images(options.inline_images)?;
+    let watcher = Watcher::new(options.agent, source, options.limit)?
+        .with_images(options.inline_images)?
+        .with_large_history(options.allow_large_history)?;
     let (closed_tx, closed) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buffer = [0; 64];
@@ -397,6 +436,19 @@ mod tests {
     }
     fn watcher(path: &Path, limit: u8) -> Watcher {
         Watcher::new(TranscriptAgent::Claude, Source::Path(path.into()), limit).unwrap()
+    }
+    #[test]
+    fn paging_boundary_changes_are_sent_even_without_message_changes() {
+        let (_dir, path) = fixture(&chain(2));
+        let mut stream = watcher(&path, 50);
+        let mut page = stream.project().unwrap();
+        page.truncated = true;
+        let snapshot = stream.diff(page, false);
+        assert_eq!(snapshot[0]["truncated"], true);
+        let page = stream.project().unwrap();
+        let delta = stream.diff(page, false);
+        assert_eq!(delta[0]["type"], "delta");
+        assert_eq!(delta[0]["truncated"], false);
     }
     fn ids(frame: &Value, key: &str) -> Vec<String> {
         frame[key]

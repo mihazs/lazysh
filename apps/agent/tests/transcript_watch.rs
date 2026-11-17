@@ -104,6 +104,149 @@ fn an_append_reaches_the_stream_within_one_interval_and_closing_stdin_ends_it() 
 }
 
 #[test]
+fn codex_watch_crosses_the_size_limit_without_admitting_a_partial_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rollout.jsonl");
+    jsonl::write(
+        &path,
+        &[
+            json!({"type":"session_meta","payload":{"id":ID,"history_mode":"legacy"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"before crossing"}}),
+        ],
+    );
+    let mut watch = Watch::start(
+        &[
+            "--agent",
+            "codex",
+            "--path",
+            path.to_str().unwrap(),
+            "--interval-ms",
+            "50",
+            "--allow-large-history",
+        ],
+        &[],
+    );
+    watch.next_of("hello");
+    let initial = watch.next_of("snapshot");
+    assert_ne!(initial["earlierOmitted"], true);
+    assert!(initial.to_string().contains("before crossing"));
+
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let padding = "x".repeat(1024 * 1024);
+        for _ in 0..17 {
+            writeln!(
+                file,
+                "{}",
+                json!({"type":"event_msg","payload":{"type":"token_count","padding":padding}})
+            )
+            .unwrap();
+        }
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"after crossing"}})
+        )
+        .unwrap();
+    }
+    let mut received_after = false;
+    let crossing_deadline = Instant::now() + Duration::from_secs(30);
+    while !received_after {
+        assert!(
+            Instant::now() < crossing_deadline,
+            "missing post-crossing message"
+        );
+        let frame = watch.next();
+        assert_ne!(frame["type"], "end", "watch ended while crossing the limit");
+        assert_ne!(frame["earlierOmitted"], true);
+        received_after |= frame.to_string().contains("after crossing");
+    }
+    let output = Command::new(binary::path())
+        .args([
+            "transcript",
+            "--agent",
+            "codex",
+            "--path",
+            path.to_str().unwrap(),
+            "--view",
+            "conversation",
+            "--allow-large-history",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let page: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_ne!(page["earlierOmitted"], true);
+    let page_text = page.to_string();
+    assert!(page_text.contains("before crossing"));
+    assert!(page_text.contains("after crossing"));
+
+    let record =
+        json!({"type":"event_msg","payload":{"type":"agent_message","message":"completed append"}})
+            .to_string();
+    let split = record.len() / 2;
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&record.as_bytes()[..split]).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_millis(800);
+    while let Ok(frame) = watch
+        .lines
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    {
+        assert!(!frame.to_string().contains("completed append"));
+        assert_ne!(frame["earlierOmitted"], true);
+        assert_ne!(frame["type"], "end", "watch ended on an incomplete record");
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&record.as_bytes()[split..]).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+    loop {
+        let frame = watch.next();
+        assert_ne!(
+            frame["type"], "end",
+            "watch ended after completing the record"
+        );
+        assert_ne!(frame["earlierOmitted"], true);
+        if frame.to_string().contains("completed append") {
+            break;
+        }
+    }
+    drop(watch.stdin.take());
+    assert!(watch.child.wait().unwrap().success());
+
+    let mut old = Watch::start(
+        &[
+            "--agent",
+            "codex",
+            "--path",
+            path.to_str().unwrap(),
+            "--interval-ms",
+            "50",
+        ],
+        &[],
+    );
+    old.next_of("hello");
+    assert_eq!(old.next_of("end")["reason"], "TooLarge");
+    assert!(!old.child.wait().unwrap().success());
+}
+
+#[test]
 fn a_provider_session_id_is_resolved_inside_the_agent_data_root_only() {
     let home = tempfile::tempdir().unwrap();
     let project = home.path().join("projects/one");

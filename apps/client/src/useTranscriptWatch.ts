@@ -4,8 +4,8 @@ import {guardAccessCallback, type AccessLease} from './access';
 import {createWatchApplier, parseWatchFrame, type PageParser, type WatchEvent, type WatchOp} from './transcriptWatch';
 
 export type WatchTarget =
-  | {kind: 'path'; agent: string; path: string; inlineImages?: boolean}
-  | {kind: 'herdr'; agent: string; agentSessionId: string; herdrSession: string; paneId: string; terminalId: string};
+  | {kind: 'path'; agent: string; path: string; inlineImages?: boolean; allowLargeHistory?: boolean}
+  | {kind: 'herdr'; agent: string; agentSessionId: string; herdrSession: string; paneId: string; terminalId: string; allowLargeHistory?: boolean};
 /** `off` and `connecting` show nothing; `live` is the quiet normal state; `delayed` polls because no stream has
  * opened; `stale` lost a stream that was live; `unsupported` needs a newer host companion. */
 export type WatchState = 'off' | 'connecting' | 'live' | 'delayed' | 'stale' | 'unsupported';

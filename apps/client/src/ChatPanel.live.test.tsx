@@ -99,6 +99,19 @@ describe('a bound conversation with a live watch',()=>{
     expect(order()).toEqual(['Replaced twice']);
     expect(document.querySelector('section.chat-panel')!.getAttribute('data-watch')).toBe('live');
   });
+  it('updates the earlier-page boundary from live Codex watch frames',async()=>{
+    poll={...polled(...first),agent:'codex',truncated:false};
+    render(<ChatPanel sessionId="host" shown bound={{agent:'codex',path:'/host/session.jsonl'}} timeline/>);
+    await advance(0);
+    expect((starts[0] as {target:{allowLargeHistory?:boolean}}).target.allowLargeHistory).toBe(true);
+    await send({type:'hello',protocol:1,agent:'codex'});
+    await send(snapshot(1,1,first.map(message=>entry(message))));
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+    await send(delta(1,2,[],{truncated:true}));
+    expect(screen.getByRole('button',{name:'Load earlier messages'})).toBeTruthy();
+    await send({...snapshot(2,3,first.map(message=>entry(message))),truncated:false});
+    expect(screen.queryByRole('button',{name:'Load earlier messages'})).toBeNull();
+  });
   it('offers the messages the window pushed out of its head, and no longer claims the session starts at the top',async()=>{
     render_();await advance(0);await send(hello);
     const line=(index:number)=>entry(text(`m${index}`,index%2?'assistant':'user',`Line ${index}`));

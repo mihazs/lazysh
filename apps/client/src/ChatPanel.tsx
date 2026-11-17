@@ -406,19 +406,24 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   autoRead.current = () => {void read(false,true);};
   // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
   const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex'].includes(bound.agent)
-    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path,...(inlineImages?{inlineImages:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
+    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : {kind:'path',agent:bound.agent,path:bound.path,...(inlineImages?{inlineImages:true}:{}),...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
   const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current() && !history.newer,sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
       // The window is away from the newest messages: they are read back by Jump to latest, not patched in.
       if(historyRef.current.newer)return;
       holdPosition();setError('');
-      if(historyRef.current.paging && op.kind==='replace')place({kind:'tail'},op.messages);
+      if(historyRef.current.paging && op.kind==='replace'){
+        const sameStart=messagesRef.current[0]?.id===op.messages[0]?.id;
+        place({kind:'tail'},op.messages,{older:op.truncated ?? historyRef.current.older,newer:false});
+        if(sameStart && op.truncated !== undefined)setHistory(previous=>({...previous,older:op.truncated!}));
+      }
       else{
         // The window keeps its newest messages; when live ones push the head out, the session no longer starts there.
         const merged=applyWatchOp(messagesRef.current,op,Infinity),dropped=merged.length>WINDOW_CAP;
         messagesRef.current=dropped?merged.slice(-WINDOW_CAP):merged;setMessages(messagesRef.current);
         if(dropped && !historyRef.current.older)setHistory(previous=>({...previous,older:true}));
       }
+      if(op.kind==='patch' && op.truncated === true && !historyRef.current.older)setHistory(previous=>({...previous,older:true}));
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
       if(op.kind==='replace')setWork(op.work);else if(op.work)setWork(op.work.value);
       if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
@@ -545,9 +550,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (!currentRequest(current)) return;
       }
       const page = parseTranscript(
-        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : invoke("agent_transcript", {
+        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{}),...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : invoke("agent_transcript", {
           sessionId,
           ...source,
+          ...(source.agent==='codex' && source.view==='conversation'?{allowLargeHistory:true}:{}),
           offset: cursor,
           ...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {}),
           ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),

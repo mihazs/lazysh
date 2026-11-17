@@ -45,6 +45,26 @@ const open = async () => {
 };
 
 describe('reading a 12k message session from the Agent view', () => {
+  it('opts into Codex history paging and reaches the start', async () => {
+    TOTAL = 75;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'agent_transcript') {
+        const options = args as {window?: Parameters<typeof host>[0]; allowLargeHistory?: boolean};
+        expect(options.allowLargeHistory).toBe(true);
+        return {...host(options.window), agent: 'codex'};
+      }
+      if (command === 'agent_watch_start') throw new Error('no channel');
+      throw new Error(`Unexpected ${command}`);
+    });
+    render(<ChatPanel sessionId="host" bound={{agent: 'codex', path: '/host/session.jsonl'}} />);
+    await screen.findByText('message 74');
+    expect(screen.getByRole('button', {name: 'Jump to start'})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', {name: 'Load earlier messages'}));
+    await screen.findByText('message 0');
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+    expect(screen.queryByRole('button', {name: 'Load earlier messages'})).toBeNull();
+  });
+
   it('loads earlier pages in place until the first message, and never holds more than the window', async () => {
     TOTAL = 1_000;
     await open();
