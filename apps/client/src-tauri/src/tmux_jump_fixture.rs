@@ -3294,7 +3294,7 @@ async fn mosh_entry_child(
     .unwrap();
     let (events, receiver) = super::test_support::json_events();
     eprintln!("owned-mosh-startup stage=fixture-connect-begin");
-    let result = connect_mosh(
+    let result = connect_mosh_inner(
         lease.clone(),
         app.state(),
         source.session_id.clone(),
@@ -3303,6 +3303,7 @@ async fn mosh_entry_child(
         80,
         24,
         events,
+        None,
     )
     .await
     .unwrap_or_else(|error| {
