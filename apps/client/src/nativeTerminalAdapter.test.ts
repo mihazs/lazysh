@@ -7,6 +7,11 @@ import type {NativeCoreBridge, NativeCoreSnapshot} from './nativeCoreBridge';
 
 const text = (value: string) => new TextEncoder().encode(value);
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+function deferred() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return {promise, release};
+}
 let anchors = 0;
 function anchor() {
   const element = document.createElement('div');
@@ -118,6 +123,7 @@ describe('native backend specifics', () => {
     await adapter.write!(text('\x1b[?2004h'));
     adapter.paste('a\x1b[201~b');
     adapter.sendInput('\x1b[0n', 'terminal-reply');
+    await adapter.write!(text(''));
     expect(core.inputs).toEqual([
       {data: 'one\rtwo\rthree', origin: 'paste'},
       {data: '\x1b[200~ab\x1b[201~', origin: 'paste'},
@@ -201,6 +207,67 @@ describe('native runtime path (the core owns the transport)', () => {
 });
 
 describe('native lifecycle', () => {
+  it('settles a write if its applied callback throws and continues the queue', async () => {
+    const {adapter} = await open();
+    await expect(adapter.write!(text('first'), () => { throw new Error('callback failed'); })).rejects.toThrow('callback failed');
+    await adapter.write!(text('second'));
+    expect(adapter.readRows!(0, 1)).toEqual(['firstsecond']);
+    await adapter.dispose();
+  });
+
+  it('settles a write if an output listener throws', async () => {
+    const {adapter} = await open();
+    const listener = adapter.subscribe(() => { throw new Error('listener failed'); }, ['output']);
+    await expect(adapter.write!(text('first'))).rejects.toThrow('listener failed');
+    listener.dispose();
+    await adapter.write!(text('second'));
+    await adapter.dispose();
+  });
+
+  it('serializes input and waits for a started input before closing', async () => {
+    const core = createHeadlessCore();
+    const sent: string[] = [];
+    const first = deferred();
+    core.input = async data => {
+      if (data === 'first') await first.promise;
+      sent.push(String(data));
+    };
+    const adapter = await openNativeTerminalAdapter(core);
+    adapter.sendInput('first', 'keyboard');
+    adapter.sendInput('second', 'keyboard');
+    await sleep(0);
+    expect(sent).toEqual([]);
+    first.release();
+    await adapter.write!(text(''));
+    expect(sent).toEqual(['first', 'second']);
+    await adapter.dispose();
+  });
+
+  it('drops queued input on disposal and makes no bridge calls afterward', async () => {
+    const core = createHeadlessCore();
+    const sent: string[] = [];
+    const first = deferred();
+    core.input = async data => { await first.promise; sent.push(String(data)); };
+    let activeCalls = 0;
+    core.setActive = () => { activeCalls++; };
+    const adapter = await openNativeTerminalAdapter(core);
+    adapter.sendInput('first', 'keyboard');
+    await sleep(0);
+    adapter.sendInput('stale', 'keyboard');
+    const closed = adapter.dispose();
+    adapter.sendInput('later', 'keyboard');
+    adapter.scroll({kind: 'toTop'});
+    adapter.requestSize({columns: 10, rows: 3});
+    adapter.setActive(false);
+    expect(core.closed).toBe(false);
+    first.release();
+    await closed;
+    expect(sent).toEqual(['first']);
+    expect(core.closed).toBe(true);
+    expect(core.calls.filter(call => call === 'scroll' || call === 'resize')).toEqual([]);
+    expect(activeCalls).toBe(0);
+  });
+
   it('rejects bytes it never applied, finishes the commands already issued and closes its core once', async () => {
     const {adapter, core} = await open();
     const late = adapter.write!(text('late'));

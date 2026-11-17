@@ -60,6 +60,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   async detach() { this.anchor = undefined; }
 
   setActive(active: boolean) {
+    if (this.disposed) return;
     this.active = active;
     this.bridge.setActive?.(active);
     if (active && this.stale) this.ring();
@@ -87,10 +88,12 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       this.pending.add(reject);
       this.command(() => this.bridge.feed!(bytes)).then(snapshot => {
         if (!this.pending.delete(reject)) return;
-        this.apply(snapshot);
-        this.emit({type: 'output'});
-        onApplied?.();
-        resolve();
+        try {
+          this.apply(snapshot);
+          this.emit({type: 'output'});
+          onApplied?.();
+          resolve();
+        } catch (error) { reject(error); }
       }, error => { if (this.pending.delete(reject)) reject(error); });
     });
     // Disposal rejects what it did not apply; a caller that dropped the promise must not see that as a crash.
@@ -114,17 +117,20 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   /** The core says the screen changed: pull its state at most once per refresh interval, and not at all while inactive. */
   private ring() {
+    if (this.disposed) return;
     if (!this.active) { this.stale = true; return; }
     if (this.pulling) { this.again = true; return; }
     this.pulling = true; this.stale = false;
     this.command(() => this.bridge.snapshot()).then(snapshot => { this.apply(snapshot); this.emit({type: 'output'}); }, noop)
+      .catch(noop)
       .then(() => new Promise(resolve => setTimeout(resolve, this.options.refreshMs ?? REFRESH_MS)))
       .then(() => { this.pulling = false; if (this.again) { this.again = false; this.ring(); } });
   }
 
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
     // A refused write (input gated, app locked) is dropped by the transport on purpose: a stale key must not arrive later.
-    this.bridge.input(data, origin).catch(noop);
+    if (this.disposed) return;
+    this.queue = this.queue.then(() => this.disposed ? undefined : this.bridge.input(data, origin)).catch(noop);
   }
 
   paste(text: string) {
@@ -134,13 +140,14 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
 
   requestSize({columns, rows}: TerminalSize) {
+    if (this.disposed) return;
     // An intent: the mirror follows at once (the contract reads it synchronously) and the core's answer replaces it.
     const {state} = this.mirror;
     this.mirror = {...this.mirror, state: {...state, columns, rows, viewport: {...state.viewport, rows}}};
     this.emit({type: 'geometry', size: {columns, rows}, authority: 'local'});
     this.emit({type: 'resizeIntent', size: {columns, rows}});
     const {resize} = this.bridge;
-    if (resize) this.command(() => resize.call(this.bridge, {columns, rows})).then(snapshot => this.apply(snapshot), noop);
+    if (resize) this.command(() => resize.call(this.bridge, {columns, rows})).then(snapshot => this.apply(snapshot)).catch(noop);
   }
 
   size() { return {columns: this.mirror.state.columns, rows: this.mirror.state.rows}; }
@@ -158,6 +165,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   applyPreferences() { /* The renderer applies fonts and colours; the core has no use for them. */ }
 
   scroll(action: TerminalScrollAction) {
+    if (this.disposed) return;
     const {state} = this.mirror, {top, rows, length} = state.viewport, last = Math.max(0, length - rows);
     const clamp = (row: number) => Math.min(last, Math.max(0, row));
     const next = clamp(action.kind === 'lines' ? top + action.delta : action.kind === 'pages' ? top + action.delta * (rows - 1)
@@ -167,7 +175,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       this.mirror = {...this.mirror, state: {...state, viewport}};
       this.emit({type: 'viewport', viewport});
     }
-    this.command(() => this.bridge.scroll(action)).then(snapshot => this.apply(snapshot), noop);
+    this.command(() => this.bridge.scroll(action)).then(snapshot => this.apply(snapshot)).catch(noop);
   }
 
   viewport(): TerminalViewport { return this.mirror.state.viewport; }
