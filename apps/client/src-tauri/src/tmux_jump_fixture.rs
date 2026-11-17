@@ -3130,6 +3130,45 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     );
 }
 
+fn snapshot_failure(error: GuardedError<SshError>) -> ! {
+    let category = match error.into_inner() {
+        Err(_) => "access_changed",
+        Ok(error) => match error.kind() {
+            "tmux_stale" => "tmux_stale",
+            "tmux_unavailable" => "tmux_unavailable",
+            "tmux_protocol" => "tmux_protocol",
+            "tmux_pane_gone" => "tmux_pane_gone",
+            _ => "other",
+        },
+    };
+    panic!("owned tmux snapshot failed: {category}");
+}
+
+#[test]
+fn snapshot_failure_reports_only_fixed_categories() {
+    let (access, lease) = unlocked_authority();
+    let diagnostic = |error| {
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| snapshot_failure(error)))
+                .expect_err("snapshot errors must fail the fixture");
+        panic.downcast_ref::<String>().unwrap().clone()
+    };
+    assert_eq!(
+        diagnostic(lease.error(SshError::new("tmux_stale", "private detail"))),
+        "owned tmux snapshot failed: tmux_stale"
+    );
+    assert_eq!(
+        diagnostic(lease.error(SshError::new("private kind", "private detail"))),
+        "owned tmux snapshot failed: other"
+    );
+    let revoked = lease.error(SshError::new("tmux_stale", "private detail"));
+    access.lock().unwrap();
+    assert_eq!(
+        diagnostic(revoked),
+        "owned tmux snapshot failed: access_changed"
+    );
+}
+
 /// `tmux_jump_snapshot` as the renderer calls it, serialized.
 async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
     app: &M,
@@ -3144,7 +3183,7 @@ async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
             id.to_owned(),
         )
         .await
-        .unwrap()
+        .unwrap_or_else(|error| snapshot_failure(error))
         .into_inner()
         .unwrap(),
     )
