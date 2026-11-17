@@ -139,7 +139,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         {mode==='spaces' && tree && <ul className={`herdr-navigation-tree herdr-layout-${layout}`}>{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,shownPath(pane.cwd),pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
-          const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || (spaceOpen[key] ?? (layout!=='accordion' || workspace.focused));
+          const key=JSON.stringify([sessionId,data.server,workspace.workspace_id]),open=!!term || (spaceOpen[key] ?? (layout!=='accordion' || workspace.focused));
           return <li key={workspace.workspace_id} className="herdr-space">
             <div className="herdr-navigation-heading" onContextMenu={event=>{if(!navigationOnly && !working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
               {row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status,t('herdrTabCount',{total:formatNumber(tabs.length),count:tabs.length}))}

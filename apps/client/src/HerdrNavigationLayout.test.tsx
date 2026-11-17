@@ -96,3 +96,15 @@ it.each(['list','accordion','grid'])('marks only the focused space as current in
   expect(current(/^Work/)).toHaveLength(1);
   expect(current(/^Review/)).toHaveLength(0);
 });
+
+it('keeps manual space disclosure separate between hosts with the same workspace IDs',async()=>{
+  const {view}=await mount();
+  fireEvent.click(screen.getByRole('button',{name:t('herdrNavigationCollapse',{name:'Review'})}));
+  expect(screen.queryByText('Review tab')).toBeNull();
+  view.rerender(<HerdrNavigation {...props} sessionId="other-host" onNavigate={vi.fn(async()=>{})}/>);
+  await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+  expect(screen.getByText('Review tab')).toBeTruthy();
+  view.rerender(<HerdrNavigation {...props} onNavigate={vi.fn(async()=>{})}/>);
+  await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+  expect(screen.queryByText('Review tab')).toBeNull();
+});
