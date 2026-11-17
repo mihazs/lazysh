@@ -6983,7 +6983,9 @@ class NativeWorkspaceTest {
                       const hit=document.elementFromPoint(x,y), bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
                       return {ok:hit===area,bounds:[x,y,innerWidth],diagnostic:{
                         hit:hit===area?'textarea':hit===null?'none':area.contains(hit)?'descendant':
-                          hit.closest('.chat-panel')?'chat':hit.closest('.terminal-canvas')?'terminal':'other',
+                          hit.contains(area)?'ancestor':hit.closest('.dialog-backdrop')?'dialog':
+                          hit.closest('.sidebar, .sidebar-scrim')?'sidebar':hit.closest('.chat-panel')?'chat':
+                          hit.closest('.terminal-canvas')?'terminal':hit.closest('.session-body')?'session':'other',
                         rect:[rect.left,rect.top,rect.width,rect.height].map(bounded),viewport:[innerWidth,innerHeight].map(bounded)}};})()
                 """))
                 assertTrue("Owned Chat composer hit target required [${target.getJSONObject("diagnostic")}]", target.getBoolean("ok"))

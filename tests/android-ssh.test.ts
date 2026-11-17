@@ -14,6 +14,24 @@ import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
 import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,IME_TRANSACTION_WIRE,IME_CHAT_WIRE,imeExpectedWire,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
+test('Chat IME hit diagnostic uses bounded geometry and fixed categories without DOM text', async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const expression=source.match(/\(\(\)=>\{const area=\$area,rect=area\.getBoundingClientRect\(\)[\s\S]*?viewport:\[innerWidth,innerHeight\]\.map\(bounded\)\}\};\}\)\(\)/)?.[0];
+  expect(expression).toBeDefined();
+  const area={getBoundingClientRect:()=>({left:-20000,top:581,width:363,height:80}),contains:()=>false};
+  const run=new Function('target','document','innerWidth','innerHeight',`return ${expression!.replace('$area','target')}`);
+  const hit=(category:string)=>({contains:()=>category==='ancestor',closest:(selector:string)=>
+    category==='dialog'&&selector==='.dialog-backdrop'||category==='sidebar'&&selector==='.sidebar, .sidebar-scrim'||
+    category==='chat'&&selector==='.chat-panel'||category==='terminal'&&selector==='.terminal-canvas'||
+    category==='session'&&selector==='.session-body',get textContent(){throw Error('private text read');}});
+  for(const category of ['ancestor','dialog','sidebar','chat','terminal','session','other']) {
+    const result=run(area,{elementFromPoint:()=>hit(category)},412,660);
+    expect(result.ok).toBe(false);expect(result.diagnostic).toEqual({hit:category,rect:[-10000,581,363,80],viewport:[412,660]});
+  }
+  expect(run(area,{elementFromPoint:()=>area},412,660).ok).toBe(true);
+  expect(run(area,{elementFromPoint:()=>null},412,660).diagnostic.hit).toBe('none');
+});
+
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
   const error=await owned.finish('synthetic failure',1000).catch(error=>error as Error);
