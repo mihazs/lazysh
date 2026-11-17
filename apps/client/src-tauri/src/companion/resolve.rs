@@ -108,8 +108,10 @@ impl Unix {
             .ok_or_else(|| error("companion_command", "Invalid companion command"))?;
         // Positive Unix proof is required before this fixed read-only POSIX helper.
         // No SFTP requirement is introduced for existing exec-only hosts.
+        // The app's own version, for a companion that can update itself to it; older ones ignore it.
         let script = format!(
             r#"
+LAZYSH_APP_VERSION={app}; export LAZYSH_APP_VERSION
 invalid() {{ printf 'Invalid managed companion namespace or executable\n' >&2; exit 73; }}
 set -f
 p={path}
@@ -137,6 +139,7 @@ else
     exec {original}
 fi
 "#,
+            app = ssh::quote(env!("CARGO_PKG_VERSION")),
             path = ssh::quote(&self.managed()),
             stat = self.stat(),
             uid = self.uid
@@ -174,12 +177,14 @@ mod tests {
             os::unix::fs::{MetadataExt, PermissionsExt},
             process::Command,
         };
+        const LEGACY: &[u8] = b"#!/bin/sh\nprintf 'legacy-owned %s' \"$LAZYSH_APP_VERSION\"\n";
+        let version = env!("CARGO_PKG_VERSION");
         let root = tempfile::tempdir().unwrap();
         let base = root.path().canonicalize().unwrap();
         let bin = base.join("bin");
         fs::create_dir(&bin).unwrap();
         let legacy = bin.join("lazysh-agent");
-        fs::write(&legacy, b"#!/bin/sh\nprintf legacy-owned\n").unwrap();
+        fs::write(&legacy, LEGACY).unwrap();
         fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
         let data = base.join("data's folder");
         let host = Unix {
@@ -204,16 +209,30 @@ mod tests {
         };
         let missing = execute();
         assert!(missing.status.success());
-        assert_eq!(missing.stdout, b"legacy-owned");
+        // Every command the app runs tells the companion which app asks, whichever copy answers.
+        assert_eq!(missing.stdout, format!("legacy-owned {version}").as_bytes());
         fs::create_dir(&data).unwrap();
         fs::set_permissions(&data, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(
             !execute().status.success(),
             "a mutable existing namespace is not an absent managed executable"
         );
+        assert_eq!(fs::read(&legacy).unwrap(), LEGACY);
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+        let managed = data.join("lazysh/companion/lazysh-agent");
+        fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        for directory in [data.join("lazysh"), data.join("lazysh/companion")] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::write(
+            &managed,
+            b"#!/bin/sh\nprintf 'managed-owned %s' \"$LAZYSH_APP_VERSION\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&managed, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(
-            fs::read(&legacy).unwrap(),
-            b"#!/bin/sh\nprintf legacy-owned\n"
+            execute().stdout,
+            format!("managed-owned {version}").as_bytes()
         );
     }
 }

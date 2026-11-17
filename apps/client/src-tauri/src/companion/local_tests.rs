@@ -16,6 +16,18 @@ fn line(argv: &[&str]) -> String {
 }
 
 #[test]
+fn local_companion_commands_carry_the_compiled_app_version() {
+    let command = argv("lazysh-agent snapshot --limit 50", "/owned/lazysh-agent").unwrap();
+    assert_eq!(
+        command.render(),
+        format!(
+            "LAZYSH_APP_VERSION={} /owned/lazysh-agent snapshot --limit 50",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+}
+
+#[test]
 fn a_rendered_command_splits_back_into_exactly_its_argv() {
     for argv in [
         vec!["lazysh-agent", "snapshot", "--limit", "50"],
@@ -306,6 +318,25 @@ async fn session(home: &Path) -> (App<MockRuntime>, String) {
     let id = adopted_test_session(&app.state::<LocalState>(), lease()).await;
     (app, id)
 }
+#[cfg(unix)]
+#[tokio::test]
+async fn local_companion_child_receives_the_app_version() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("owned-agent");
+    fs::write(&script, b"#!/bin/sh\nprintf '%s' \"$LAZYSH_APP_VERSION\"\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let (app, id) = session(temp.path()).await;
+    let host = crate::host::Host::resolve(&app.state(), &app.state(), &id, &lease())
+        .await
+        .unwrap();
+    let command = argv("lazysh-agent snapshot", script.to_str().unwrap()).unwrap();
+    assert_eq!(
+        host.run_bytes(&lease(), &command).await.unwrap(),
+        env!("CARGO_PKG_VERSION").as_bytes()
+    );
+}
+
 // Boxed when called, not when awaited: a command future held in a test's own state overflows
 // the test thread's stack in debug.
 fn call<T>(
