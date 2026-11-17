@@ -147,6 +147,8 @@ impl Ladder {
     /// The parameters to start the screencast with (at the start and when the view is shown again).
     pub fn apply(&mut self, now: Instant) -> Screencast {
         self.applied = self.wanted(now);
+        // A restarted or resumed screencast has not yet demonstrated a fitting link.
+        self.settled = now;
         self.restart(now);
         self.applied
     }
@@ -183,6 +185,7 @@ impl Ladder {
         let boosted = self.boost_until.is_some_and(|until| now < until);
         if boosted || self.pinned.is_some() {
             // Full rate is not the ladder's rate, and a pinned rung is not judged.
+            self.settled = now;
             self.restart(now);
         } else if now.duration_since(self.window) >= WINDOW {
             self.judge(now);
@@ -193,8 +196,14 @@ impl Ladder {
 
     fn judge(&mut self, now: Instant) {
         let seconds = now.duration_since(self.window).as_secs_f32();
+        if self.produced < MIN_FRAMES {
+            // Silence cannot demonstrate link recovery or count towards a measured fitting interval.
+            self.settled = now;
+            self.restart(now);
+            return;
+        }
         let wanted = (self.produced as f32 / seconds).min(USEFUL_FPS);
-        let fits = self.produced < MIN_FRAMES || self.delivered as f32 / seconds >= FIT * wanted;
+        let fits = self.delivered as f32 / seconds >= FIT * wanted;
         self.restart(now);
         if !fits {
             self.settled = now;
@@ -293,6 +302,21 @@ mod tests {
             !sim.run(2, 10, 2).is_empty(),
             "a page that is mostly not delivered"
         );
+        let degraded = sim.rung();
+        assert!(
+            sim.run(20, 0, 0).is_empty(),
+            "idle windows do not prove recovery"
+        );
+        assert_eq!(sim.rung(), degraded);
+        assert!(
+            sim.run(9, 60, 30).is_empty(),
+            "idle time cannot count towards recovery"
+        );
+        assert_eq!(
+            sim.run(2, 60, 30).len(),
+            1,
+            "measured recovery still promotes"
+        );
     }
 
     #[test]
@@ -328,6 +352,29 @@ mod tests {
         assert_eq!(changes[0].1.quality, Rung::Minimal.screencast().quality);
         assert_eq!(changes[1].0, 3 * SECOND + BOOST);
         assert_eq!(sim.rung(), (Rung::Minimal, false));
+    }
+
+    #[test]
+    fn boosted_and_resumed_time_do_not_prove_link_recovery() {
+        let mut sim = Sim::new();
+        sim.run(3, 60, 3);
+        assert_eq!(sim.rung().0, Rung::Minimal);
+        sim.run(9, 60, 30);
+        sim.ladder.input(sim.now());
+        sim.run(2, 60, 30);
+        sim.run(1, 60, 30);
+        assert_eq!(sim.rung().0, Rung::Minimal, "boost is not fitting evidence");
+        sim.run(10, 60, 30);
+        assert_eq!(sim.rung().0, Rung::Low);
+        // Apply is also used when a paused stream resumes after a long absence.
+        sim.ticks += 200;
+        sim.ladder.apply(sim.now());
+        sim.run(1, 60, 30);
+        assert_eq!(
+            sim.rung().0,
+            Rung::Low,
+            "paused time is not fitting evidence"
+        );
     }
 
     #[test]
