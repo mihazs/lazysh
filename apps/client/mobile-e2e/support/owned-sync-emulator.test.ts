@@ -83,23 +83,32 @@ test('a real WDIO worker sends no session request when pre-session admission fai
     const spec = join(dir, 'gate.e2e.js'), config = join(dir, 'wdio.conf.ts');
     await writeFile(spec, "describe('gate', () => { it('would create a session', () => {}); });\n");
     const helper = pathToFileURL(join(import.meta.dir, 'owned-sync-emulator.ts')).href;
-    const run = async (fail: boolean) => {
-      await writeFile(config, `import {failClosedBeforeSession} from ${JSON.stringify(helper)};\nexport const config = {
+    const run = async (selected: string, fail: boolean) => {
+      await writeFile(config, `import {failClosedBeforeSession, prepareSyncDevice} from ${JSON.stringify(helper)};\nexport const config = {
         runner: 'local', framework: 'mocha', reporters: [], logLevel: 'error', hostname: '127.0.0.1', port: ${port}, path: '/',
         connectionRetryCount: 0, connectionRetryTimeout: 1000, specs: [${JSON.stringify(spec)}],
         capabilities: [{browserName: 'chrome'}], maxInstances: 1,
-        beforeSession: () => failClosedBeforeSession(async () => { ${fail ? "throw new Error('lost');" : ''} }) };\n`);
-      const child = spawn(join(root, 'node_modules/.bin/wdio'), ['run', config], {cwd: root, stdio: 'ignore'});
-      return new Promise<number | null>((done, reject) => {
+        beforeSession: (_config, _caps, specs) => failClosedBeforeSession(async () => {
+          await prepareSyncDevice({}, specs, [], async () => {}); ${fail ? "throw new Error('lost');" : ''} }) };\n`);
+      const child = spawn(join(root, 'node_modules/.bin/wdio'), ['run', config, '--spec', selected], {cwd: root, stdio: ['ignore', 'pipe', 'pipe']});
+      let output = '';
+      child.stdout.on('data', data => { output += String(data); });
+      child.stderr.on('data', data => { output += String(data); });
+      return new Promise<{code: number | null; output: string}>((done, reject) => {
         const timer = setTimeout(() => { child.kill(); reject(new Error('WDIO gate timed out')); }, 20_000);
         child.once('error', error => { clearTimeout(timer); reject(error); });
-        child.once('exit', code => { clearTimeout(timer); done(code); });
+        child.once('close', code => { clearTimeout(timer); done({code, output}); });
       });
     };
-    expect(await run(false)).toBe(1);
+    expect((await run(spec, false)).code).toBe(1);
     expect(requests).toContain('POST /session');
     requests.length = 0;
-    expect(await run(true)).toBe(1);
+    const sync = resolve(import.meta.dir, '../specs/regression/sync/1540-encrypted-sync-webdav.e2e.ts');
+    const rejected = await run(sync, false);
+    expect(rejected.code).toBe(1);
+    expect(rejected.output).toContain('refusing to start the session');
+    expect(requests).toEqual([]);
+    expect((await run(spec, true)).code).toBe(1);
     expect(requests).toEqual([]);
   } finally {
     await new Promise<void>(done => server.close(() => done()));

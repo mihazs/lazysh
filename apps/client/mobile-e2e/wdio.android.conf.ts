@@ -71,7 +71,7 @@ export const config: WebdriverIO.Config = {
   },
   // Before the session starts the app, so it never sees the tablet-shaped window a Waydroid guest has or a gestural overlay left behind.
   beforeSession: async (_config, _capabilities, specs) => failClosedBeforeSession(async () => {
-    const admitted = await prepareSyncDevice(process.env, specs ?? [], process.argv, async () => undefined);
+    const admitted = await prepareSyncDevice(process.env, specs ?? [], [], async () => undefined);
     workerEmulator = admitted.emulator;
     await workerEmulator?.check();
     await ensurePhoneScreen(adbFor(serial)); await ensureThreeButtonNavigation(adbFor(serial));
