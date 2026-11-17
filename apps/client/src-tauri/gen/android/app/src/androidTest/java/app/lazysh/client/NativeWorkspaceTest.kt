@@ -116,6 +116,24 @@ private class OwnedFingerWindowObserver(
         }
         JSONObject().put("state",state).put("overflow",overflow).put("eventCount",events.length()).put("events",projected).toString()
     } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
+    // Report motion relative to DOWN, without exposing absolute touch coordinates.
+    fun verticalFailureSummary(): String = try {
+        val source = JSONObject(snapshot())
+        val events = source.getJSONArray("events")
+        require(source.getString("state") == "observed" && !source.getBoolean("overflow") && events.length() in 1..6)
+        require(events.getJSONObject(0).getString("action") == "down")
+        val first = events.getJSONObject(0).getJSONArray("point").getDouble(3)
+        require(first.isFinite())
+        val deltas = JSONArray()
+        for (index in 0 until events.length()) {
+            val event = events.getJSONObject(index)
+            val action = event.getString("action")
+            val y = event.getJSONArray("point").getDouble(3)
+            require(action in listOf("down", "move", "up", "cancel", "other") && y.isFinite())
+            deltas.put(JSONObject().put("action", action).put("rawYFromDown", (y - first).coerceIn(-65_535.0, 65_535.0)))
+        }
+        JSONObject().put("state", "observed").put("events", deltas).toString()
+    } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
     private fun elapsed(value: Long) = (value - epoch).coerceIn(0, 65_535)
     private fun record(row: JSONObject?, outcome: String) {
         try {
@@ -2078,6 +2096,20 @@ class NativeWorkspaceTest {
                     val row=JSONObject(clamped.failureSummary()).getJSONArray("events").getJSONObject(0)
                     assertEquals(expectedTime,row.getInt("dispatchAtMs"));assertEquals(expectedTime,row.getInt("returnedAtMs"))
                 }
+                val vertical = OwnedFingerWindowObserver(delegate, epoch) { epoch + 2 }
+                val down = android.view.MotionEvent.obtain(epoch, epoch, android.view.MotionEvent.ACTION_DOWN, 10f, 200f, 0)
+                val move = android.view.MotionEvent.obtain(epoch, epoch + 1, android.view.MotionEvent.ACTION_MOVE, 10f, 175f, 0)
+                try {
+                    expected = down; vertical.dispatchTouchEvent(down)
+                    expected = move; vertical.dispatchTouchEvent(move)
+                    val movement = JSONObject(vertical.verticalFailureSummary())
+                    assertEquals("observed", movement.getString("state"))
+                    val rows = movement.getJSONArray("events")
+                    assertEquals(0.0, rows.getJSONObject(0).getDouble("rawYFromDown"), 0.0)
+                    assertEquals(-25.0, rows.getJSONObject(1).getDouble("rawYFromDown"), 0.0)
+                    assertFalse(movement.toString().contains("200")); assertFalse(movement.toString().contains("point"))
+                    assertEquals("unavailable", JSONObject(observer.verticalFailureSummary()).getString("state"))
+                } finally { down.recycle(); move.recycle(); expected = event }
                 val unavailable = OwnedFingerWindowObserver(delegate, epoch) { throw IllegalStateException("private observation failure") }
                 handled = false
                 assertFalse(unavailable.dispatchTouchEvent(event))
@@ -6210,6 +6242,7 @@ class NativeWorkspaceTest {
             val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
             val pointer=android.view.MotionEvent.PointerProperties().apply {id=0;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER}
             var observer:OwnedFingerWindowObserver?=null
+            var viewportObserver:OwnedDpadViewportObservation?=null
             var held=false
             var point=floatArrayOf(x,start)
             var primary:Throwable?=null
@@ -6251,6 +6284,7 @@ class NativeWorkspaceTest {
                     val target=activity.window
                     val own=OwnedFingerWindowObserver(checkNotNull(target.callback),epoch)
                     target.callback=own;observer=own
+                    viewportObserver=OwnedDpadViewportObservation(target,web,epoch).also { it.install() }
                 }
                 fun dispatch(action:Int,y:Float) {
                     assertTrue("Past-bottom pointer stays within original five-second gesture budget",System.nanoTime()<deadline)
@@ -6271,10 +6305,16 @@ class NativeWorkspaceTest {
                     assertTrue("Original trusted touch pointer/source",row.getBoolean("pointerMatches")&&row.getBoolean("finger")&&row.getBoolean("touchscreen"))
                     assertEquals("Actual WebView handled native touch","handled",row.getString("outcome"))
                 }
-            }catch(failure:Throwable){primary=failure;throw failure}
+            }catch(failure:Throwable){
+                primary=failure
+                runCatching { failure.addSuppressed(AssertionError("Past-bottom native input[${observer?.verticalFailureSummary() ?: "unavailable"}]")) }
+                runCatching { failure.addSuppressed(AssertionError("Past-bottom native viewport[${viewportObserver?.failureSummary() ?: "unavailable"}]")) }
+                throw failure
+            }
             finally {
                 finishCleanup(primary,listOf<()->Unit>(
                     {if(held)sendOwnedFinger(pointer,epoch,android.view.MotionEvent.ACTION_CANCEL,point)},
+                    {scenario.onActivity {viewportObserver?.close()}},
                     {scenario.onActivity {activity->observer?.restore(activity.window)}},
                     {if(receiptAttempted)assertEquals("Passive touch receipt removed only by its owner","true",evaluate(scenario,
                         "(()=>{const own=window[$key];if(own?.token!==$token)return false;own.dispose();delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()",1000))}
