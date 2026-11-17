@@ -401,6 +401,46 @@ fn selected_agent(tree: &HerdrTree, pane: &str, terminal: &str, agent: &str, id:
 /// Printed instead of a page when the host companion predates `herdr-conversation`.
 const CONVERSATION_COMPANION_REQUIRED: &str = "lazysh-herdr-conversation-companion-required";
 
+pub(crate) async fn conversation_read(
+    session: &crate::ssh::Session,
+    original: String,
+    allow_large_history: bool,
+    access: &AccessLease,
+) -> Result<String> {
+    let requested = if allow_large_history {
+        format!("{original} --allow-large-history")
+    } else {
+        original.clone()
+    };
+    let command = crate::companion::required_command_with_diagnostics(
+        session,
+        requested,
+        CONVERSATION_COMPANION_REQUIRED,
+        access,
+        true,
+    )
+    .await?;
+    let result = crate::ssh::exec_conversation_status(session, command, access).await?;
+    let unsupported = result.unsupported_large_history_flag()
+        || std::str::from_utf8(&result.stdout)
+            .is_ok_and(|raw| raw.trim() == CONVERSATION_COMPANION_REQUIRED);
+    if allow_large_history && unsupported {
+        let command = crate::companion::required_command_with_diagnostics(
+            session,
+            original,
+            CONVERSATION_COMPANION_REQUIRED,
+            access,
+            true,
+        )
+        .await?;
+        crate::ssh::exec_conversation_status(session, command, access)
+            .await?
+            .conversation_text()
+    } else {
+        result.conversation_text()
+    }
+}
+
 fn conversation_page(raw: &str, agent: &str) -> Result<serde_json::Value> {
     if raw.trim() == CONVERSATION_COMPANION_REQUIRED {
         return Err(SshError::new(
@@ -449,6 +489,8 @@ pub struct HerdrConversationTarget {
     agent: String,
     agent_session_id: String,
     window: Option<crate::ssh::TranscriptWindow>,
+    #[serde(default)]
+    allow_large_history: bool,
 }
 
 #[tauri::command]
@@ -465,12 +507,14 @@ pub async fn agent_herdr_conversation(
         agent,
         agent_session_id,
         window,
+        allow_large_history,
     } = target;
     access
         .run(async {
             self::target(&pane_id, Some('p'))?;
             text(&terminal_id, 256)?;
             if !matches!(agent.as_str(), "claude" | "codex")
+                || (allow_large_history && agent != "codex")
                 || uuid::Uuid::parse_str(&agent_session_id)
                     .ok()
                     .is_none_or(|id| id.to_string() != agent_session_id)
@@ -488,16 +532,10 @@ pub async fn agent_herdr_conversation(
             ) + &window.unwrap_or_default().flags()?;
             // The check of the pane and the read of the conversation do not depend on each other, so they overlap; what the
             // check found still decides first, and the tree is read again after the conversation (below).
-            let (before, raw) = tokio::join!(read_tree(&session, &herdr_session, &access), async {
-                let command = crate::companion::required_command(
-                    &session,
-                    command,
-                    CONVERSATION_COMPANION_REQUIRED,
-                    &access,
-                )
-                .await?;
-                crate::ssh::exec_for_access(&session, command, &access).await
-            });
+            let (before, raw) = tokio::join!(
+                read_tree(&session, &herdr_session, &access),
+                conversation_read(&session, command, allow_large_history, &access)
+            );
             if !selected_agent(&before?, &pane_id, &terminal_id, &agent, &agent_session_id) {
                 return Err(SshError::new(
                     "herdr_target_missing",
@@ -611,6 +649,13 @@ mod tests {
     fn conversation_target_requires_exact_ipc_fields() {
         let target = serde_json::json!({"herdrSession":"owned","paneId":"w1:p3","terminalId":"terminal-3","agent":"codex","agentSessionId":"id"});
         assert!(serde_json::from_value::<HerdrConversationTarget>(target.clone()).is_ok());
+        let mut opted_in = target.clone();
+        opted_in["allowLargeHistory"] = true.into();
+        assert!(
+            serde_json::from_value::<HerdrConversationTarget>(opted_in)
+                .unwrap()
+                .allow_large_history
+        );
         let mut missing = target.clone();
         missing.as_object_mut().unwrap().remove("terminalId");
         assert!(serde_json::from_value::<HerdrConversationTarget>(missing).is_err());

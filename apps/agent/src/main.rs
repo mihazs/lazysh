@@ -267,6 +267,9 @@ enum Command {
         agent: lazysh_agent::transcript::TranscriptAgent,
         #[arg(long)]
         session_id: String,
+        /// Allow bounded indexing of larger Codex conversation history.
+        #[arg(long)]
+        allow_large_history: bool,
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
         #[command(flatten)]
@@ -286,6 +289,9 @@ enum Command {
         /// Admit bounded static PNG/JPEG previews (Grok/Codex Records or Claude user images).
         #[arg(long)]
         inline_images: bool,
+        /// Allow bounded indexing of larger Codex conversation history.
+        #[arg(long)]
+        allow_large_history: bool,
         #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
@@ -322,6 +328,9 @@ enum Command {
         /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path`.
         #[arg(long, requires = "path")]
         inline_images: bool,
+        /// Allow bounded indexing of larger Codex conversation history.
+        #[arg(long)]
+        allow_large_history: bool,
     },
 }
 #[derive(Subcommand)]
@@ -624,15 +633,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::HerdrConversation {
             agent,
             session_id,
+            allow_large_history,
             limit,
             window,
         } => Some(
-            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation_window(
-                agent,
-                &session_id,
-                limit,
-                &window.window(),
-            )?)
+            serde_json::to_value(
+                lazysh_agent::transcript::read_herdr_conversation_window_large(
+                    agent,
+                    &session_id,
+                    limit,
+                    &window.window(),
+                    allow_large_history,
+                )?,
+            )
             .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::Transcript {
@@ -641,6 +654,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             checkpoint,
             checkpointed,
             inline_images,
+            allow_large_history,
             session_id,
             offset,
             limit,
@@ -648,6 +662,12 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             window,
         } => {
             let window = window.window();
+            if allow_large_history
+                && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::Codex)
+                    || !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation))
+            {
+                return Err(Error::InvalidArgument);
+            }
             if window != lazysh_agent::transcript::window::Window::Tail
                 && !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation)
             {
@@ -736,12 +756,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                                 &window,
                             )?
                         } else {
-                            lazysh_agent::transcript::conversation_window(
+                            lazysh_agent::transcript::conversation_window_large(
                                 &path,
                                 agent,
                                 limit,
                                 inline_images,
                                 &window,
+                                allow_large_history,
                             )?
                         }
                     }
@@ -757,6 +778,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             interval_ms,
             protocol: _,
             inline_images,
+            allow_large_history,
         } => {
             lazysh_agent::transcript::watch::run_stdio(lazysh_agent::transcript::watch::Options {
                 agent,
@@ -765,6 +787,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 limit,
                 interval: std::time::Duration::from_millis(interval_ms),
                 inline_images,
+                allow_large_history,
             })?;
             None
         }

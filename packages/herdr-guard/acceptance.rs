@@ -431,9 +431,36 @@ fn claim(fixture: &Fixture, session: &str, registration: &Value) -> Value {
     response["result"]["owner"].clone()
 }
 
+fn preparation_error_class(result: &Value) -> &'static str {
+    match result["error"]["code"].as_str() {
+        Some("guard_stale") => "guard_stale",
+        Some("guard_busy") => "guard_busy",
+        Some("guard_invalid") => "guard_invalid",
+        Some("guard_unavailable") => "guard_unavailable",
+        Some("timeout") => "timeout",
+        _ => "other",
+    }
+}
+
+#[test]
+fn preparation_diagnostic_reports_only_known_error_classes() {
+    assert_eq!(
+        preparation_error_class(&json!({"error":{"code":"guard_stale"}})),
+        "guard_stale"
+    );
+    assert_eq!(
+        preparation_error_class(&json!({"error":{"code":"private-ticket","message":"private"}})),
+        "other"
+    );
+}
+
 fn prepare(fixture: &Fixture, session: &str, owner: &Value, number: u64, source: &str) -> Value {
     let result = fixture.api(session, "lazysh.guard.prepare", json!({"boot":owner["boot"],"ownership":owner["ownership"],"preparation":number,"source":source}));
-    assert!(result.get("error").is_none(), "owned preparation failed");
+    assert!(
+        result.get("error").is_none(),
+        "owned preparation failed: {}",
+        preparation_error_class(&result)
+    );
     let guard = result["result"]["guard"].clone();
     assert!(guard["source"] == source && guard["preparation"] == number);
     guard

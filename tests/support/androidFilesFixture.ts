@@ -38,3 +38,9 @@ export async function writeFilesFixture(home:string,nonce:string):Promise<FilesF
   await writeFile(join(root,'notes/untracked.txt'),`${fixture.untracked}\n`);
   return fixture;
 }
+
+/**
+ * Entry names from the output of an sftp batch `ls -l <directory>`. OpenSSH 8.9 (the Ubuntu 22.04 CI runner) prints the
+ * bare name; 10.x prints the path relative to the session directory, so only the last path segment is the name.
+ */
+export const sftpListingNames=(output:string)=>output.split('\n').flatMap(line=>/^[-d]\S+ .*[/\s]([^/\s]+)$/.exec(line)?.[1]??[]).sort();

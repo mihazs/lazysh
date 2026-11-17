@@ -76,10 +76,21 @@ pub(crate) async fn required_command(
     marker: &str,
     lease: &AccessLease,
 ) -> Result<String> {
+    required_command_with_diagnostics(session, original, marker, lease, false).await
+}
+
+pub(crate) async fn required_command_with_diagnostics(
+    session: &Session,
+    original: String,
+    marker: &str,
+    lease: &AccessLease,
+    diagnostics: bool,
+) -> Result<String> {
     match resolve::detect(session, lease).await? {
         Some(unix) => {
             let resolved = unix.command(&original)?;
-            let script=format!("{resolved} 2>/dev/null; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
+            let redirect = if diagnostics { "" } else { "2>/dev/null" };
+            let script=format!("{resolved} {redirect}; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
             Ok(format!("sh -c {}", ssh::quote(&script)))
         }
         None => Ok(original),

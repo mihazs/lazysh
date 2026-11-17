@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
 import {androidSshParityAcceptance,parityControl,previewListener,sshdLogFacts,validateSshParityReport,sshParityCases} from './support/androidSshParity';
 import {sshCommand} from './support/sshFixture';
-import {writeFilesFixture} from './support/androidFilesFixture';
+import {sftpListingNames,writeFilesFixture} from './support/androidFilesFixture';
 
 const parity=process.env.LAZYSH_ANDROID_UI_SSH_PARITY==='1';
 
@@ -118,8 +118,7 @@ test.skipIf(!parity)('owned files sshd serves the fixture over SFTP and its repo
     expect(commits).toEqual([expect.stringMatching(/^[0-9a-f]{40} second commit$/),`${files.firstCommit} first commit`]);
     const listing=await fixture.sftp();
     listing.child.stdin!.end(`ls -l ${files.directory}\nquit\n`);
-    expect((await listing.finish('owned files listing',10_000)).split('\n').flatMap(line=>/^[-d]\S+ .*\/([^/\s]+)$/.exec(line)?.[1]??[]).sort())
-      .toEqual(['blob.bin','huge.txt','notes.txt','review']);
+    expect(sftpListingNames(await listing.finish('owned files listing',10_000))).toEqual(['blob.bin','huge.txt','notes.txt','review']);
     // The refusals depend on these exact shapes: invalid UTF-8, and one byte over the 1 MiB preview limit.
     expect((await stat(join(fixture.directory,files.directory,'huge.txt'))).size).toBe(1024*1024+1);
     expect(()=>new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from([0xff,0xfe,0x00,0x80]))).toThrow();
@@ -128,6 +127,13 @@ test.skipIf(!parity)('owned files sshd serves the fixture over SFTP and its repo
     expect(facts.execRequests).toBe(2);
   } finally {await fixture.stop();}
 },40_000);
+
+test('sftp listing names read the bare names of OpenSSH 8.9 and the relative paths of 10.x',()=>{
+  const row=(name:string)=>`-rw-r--r--    1 runner   runner         27 Nov 15 20:09 ${name}`;
+  expect(sftpListingNames(['sftp> ls -l browse',row('notes.txt'),row('blob.bin'),row('review'),'sftp> quit',''].join('\n'))).toEqual(['blob.bin','notes.txt','review']);
+  expect(sftpListingNames(['sftp> ls -l browse',row('browse/notes.txt'),row('browse/blob.bin'),row('browse/review'),'sftp> quit',''].join('\n'))).toEqual(['blob.bin','notes.txt','review']);
+  expect(sftpListingNames('Connection closed\n')).toEqual([]);
+});
 
 test('parity report counts only every expected native case passing exactly once',()=>{
   const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;
