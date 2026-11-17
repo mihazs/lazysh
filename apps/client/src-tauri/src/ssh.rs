@@ -6033,13 +6033,8 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.message(), "Remote command exited with status Some(1)");
-        let commands = fixture.server.commands.lock().unwrap();
-        assert_eq!(
-            commands.len(),
-            before + 2,
-            "unrelated failure must not retry"
-        );
-        drop(commands);
+        let attempts = fixture.server.commands.lock().unwrap().len();
+        assert_eq!(attempts, before + 2, "unrelated failure must not retry");
         let error = crate::herdr::conversation_read(
             &fixture.session,
             format!("{original} --owned-too-large"),
