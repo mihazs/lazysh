@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.69.0
+
+### Minor Changes
+
+- 9bccde7: Let the host companion update itself to this app's version. Every command the app runs on a Linux or macOS host now carries the app's version in `LAZYSH_APP_VERSION` (companions that do not know it ignore it). When a companion that is older than the app updates itself, the Agents panel shows one non-blocking line, "Updating the host companion to X…", then the new version, and views that were waiting for a newer companion (the live conversation stream) ask again at once. Host companion settings gain **Companion updates** (Update automatically, Only tell me, Never) for a companion that has `lazysh-agent auto-update`. English, Brazilian Portuguese and Spanish.
+
+### Patch Changes
+
+- 5484ebb: Fix typing stopping in the terminal with the SwiftKey keyboard until Backspace was pressed (#1505): the terminal now notices that Android's WebView dropped a composition the keyboard erased whole, instead of waiting for an end that never comes and holding back every key after it.
+- @lazysh/account-usage@1.69.0
+  - @lazysh/common@1.69.0
+  - @lazysh/display-idle@1.69.0
+  - @lazysh/et-transport@1.69.0
+  - @lazysh/mosh-transport@1.69.0
+
 ## 1.68.3
 
 ### Patch Changes
