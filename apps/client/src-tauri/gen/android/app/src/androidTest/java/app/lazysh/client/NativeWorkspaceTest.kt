@@ -6978,11 +6978,16 @@ class NativeWorkspaceTest {
             var chatFailure: Throwable? = null
             try {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "form.chat-composer textarea")).perform(webScrollIntoView())
-                tapAt(JSONArray(evaluate(scenario, """
+                val target = JSONObject(evaluate(scenario, """
                     (()=>{const area=$area,rect=area.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
-                      if(document.elementFromPoint(x,y)!==area)throw Error('Owned Chat composer hit target required');
-                      return [x,y,innerWidth];})()
-                """)))
+                      const hit=document.elementFromPoint(x,y), bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
+                      return {ok:hit===area,bounds:[x,y,innerWidth],diagnostic:{
+                        hit:hit===area?'textarea':hit===null?'none':area.contains(hit)?'descendant':
+                          hit.closest('.chat-panel')?'chat':hit.closest('.terminal-canvas')?'terminal':'other',
+                        rect:[rect.left,rect.top,rect.width,rect.height].map(bounded),viewport:[innerWidth,innerHeight].map(bounded)}};})()
+                """))
+                assertTrue("Owned Chat composer hit target required [${target.getJSONObject("diagnostic")}]", target.getBoolean("ok"))
+                tapAt(target.getJSONArray("bounds"))
                 awaitDocument(scenario, "Chat composer owns DOM focus", "document.activeElement===$area")
                 val editor = ime.awaitIme("Chat composer remote editor required") {
                     it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("remoteProxy") && it.getLong("generation") > previousGeneration
