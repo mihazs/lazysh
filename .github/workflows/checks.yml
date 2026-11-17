@@ -1359,7 +1359,7 @@ jobs:
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
             biometric) bun run test:android-biometric; exit $? ;;
-            appium) bun run test:mobile-e2e:ci; exit $? ;;
+            appium) LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:mobile-e2e:ci; exit $? ;;
             auxiliary) ;;
             *) printf "%s\n" "Unknown Android runtime owner" >&2; exit 1 ;;
             esac;

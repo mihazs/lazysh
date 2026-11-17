@@ -286,19 +286,11 @@ const ACCEPTANCE_ROOT: &str = "sync-test-ca.pem";
 #[cfg(feature = "sync-tls-acceptance")]
 static ACCEPTANCE_ROOT_FILES: std::sync::OnceLock<Vec<std::path::PathBuf>> =
     std::sync::OnceLock::new();
-/// Where the fixture may leave its root: the app config directory (`adb run-as`), the app's external files directory or
-/// `/data/local/tmp` (`adb push`), the last two for a guest whose `run-as` is unavailable.
+/// The acceptance fixture leaves its root in the app config directory of its disposable emulator.
 #[cfg(feature = "sync-tls-acceptance")]
 pub fn install_acceptance_root(app: &tauri::App) -> tauri::Result<()> {
     use tauri::Manager;
-    #[allow(unused_mut)]
-    let mut files = vec![app.path().app_config_dir()?.join(ACCEPTANCE_ROOT)];
-    #[cfg(target_os = "android")]
-    {
-        let id = &app.config().identifier;
-        files.push(format!("/storage/emulated/0/Android/data/{id}/files/{ACCEPTANCE_ROOT}").into());
-        files.push(format!("/data/local/tmp/{id}.{ACCEPTANCE_ROOT}").into());
-    }
+    let files = vec![app.path().app_config_dir()?.join(ACCEPTANCE_ROOT)];
     let _ = ACCEPTANCE_ROOT_FILES.set(files);
     Ok(())
 }

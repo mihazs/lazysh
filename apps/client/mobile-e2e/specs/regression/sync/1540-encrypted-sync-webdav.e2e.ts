@@ -6,7 +6,8 @@ import HostsList from '../../../pageobjects/components/hosts-list.component';
 import SyncPanel from '../../../pageobjects/components/sync-panel.component';
 import {relaunchApp, resetApp} from '../../../support/app';
 import {adbFor} from '../../../support/device';
-import {distrustOwnedCa, reversePort, startOwnedWebdav, trustOwnedCa, type OwnedWebdav} from '../../../support/webdav';
+import {reversePort, startOwnedWebdav, trustOwnedCa, type OwnedWebdav} from '../../../support/webdav';
+import {ownedSyncEmulator} from '../../../support/owned-sync-emulator';
 
 // Encrypted sync through the real Sync panel against an owned HTTPS WebDAV server (#1540, child of #17). The server runs on the
 // host, the guest reaches it as 127.0.0.1 through `adb reverse`, and the app trusts only the owned CA that the debug build is
@@ -19,31 +20,33 @@ const request = ({method, name, status}: {method: string; name: string; status: 
 describe('Encrypted sync against an owned WebDAV server', () => {
   const adb = adbFor(process.env.ANDROID_SERIAL ?? '');
   let webdav: OwnedWebdav | undefined, unforward: (() => Promise<void>) | undefined;
+  let emulator: Awaited<ReturnType<typeof ownedSyncEmulator>> | undefined;
+  const checkEmulator = async () => { if (!emulator) throw new Error('Owned emulator was not admitted'); await emulator.check(); };
   const server = () => { if (!webdav) throw new Error('The owned WebDAV server did not start'); return webdav; };
   const account = (extra: {recoveryKey?: string} = {}) =>
     ({url: server().url, username: server().username, password: server().password, settings: true, ...extra});
 
   before(async () => {
+    emulator = await ownedSyncEmulator(process.env);
     webdav = await startOwnedWebdav();
+    await checkEmulator();
     unforward = await reversePort(adb, webdav.port);
   });
   // Every test starts from an app with no data and a server with no objects, and leaves the same behind.
   beforeEach(async () => {
-    await distrustOwnedCa(adb);
+    await checkEmulator();
     await resetApp();
     server().objects.clear();
     server().requests.length = 0;
   });
   after(async () => {
-    try { await resetApp(); } finally {
-      try { await distrustOwnedCa(adb); } finally {
-        try { await unforward?.(); } finally { await webdav?.stop(); }
-      }
+    try { if (emulator) { await checkEmulator(); await resetApp(); } } finally {
+      try { if (emulator && unforward) { await checkEmulator(); await unforward(); } } finally { await webdav?.stop(); }
     }
   });
 
   it('enrolls, keeps the recovery key in the native credential store, and uploads nothing before an explicit action', async () => {
-    await trustOwnedCa(adb, server());
+    await checkEmulator(); await trustOwnedCa(adb, server());
     await SyncPanel.open();
     await SyncPanel.configure(account());
     await SyncPanel.in(() => expect(SyncPanel.status).toHaveText('Encrypted sync configured. Nothing has been uploaded.'));
@@ -70,7 +73,7 @@ describe('Encrypted sync against an owned WebDAV server', () => {
     this.timeout(300_000);
     // Its own nonce, so the case does not depend on which owned SSH hosts the run started.
     const source = {name: `e2e-${randomBytes(4).toString('hex')}-sync-source`, hostname: 'sync-source.example.invalid', port: 2222, username: 'syncer'};
-    await trustOwnedCa(adb, server());
+    await checkEmulator(); await trustOwnedCa(adb, server());
     await Home.openHostEditor();
     await HostEditor.fill(source);
     await HostEditor.saveHost();
@@ -89,8 +92,8 @@ describe('Encrypted sync against an owned WebDAV server', () => {
     expect(server().objects.has(CREDENTIALS)).toBe(false);
 
     // A second install is the same app with its data cleared: it knows nothing until it is enrolled with the recovery key.
-    await resetApp();
-    await trustOwnedCa(adb, server());
+    await checkEmulator(); await resetApp();
+    await checkEmulator(); await trustOwnedCa(adb, server());
     await Home.in(() => expect(Home.addFirstHost).toBeDisplayed());
     await SyncPanel.open();
     await SyncPanel.configure(account({recoveryKey}));
@@ -120,7 +123,7 @@ describe('Encrypted sync against an owned WebDAV server', () => {
     await SyncPanel.previewRemoteSettings();
     await SyncPanel.in(() => expect(SyncPanel.alert).toHaveText(expect.stringContaining('Cannot fetch encrypted sync data')));
     expect(server().requests).toEqual([]);
-    await trustOwnedCa(adb, server());
+    await checkEmulator(); await trustOwnedCa(adb, server());
     await SyncPanel.previewRemoteSettings();
     await SyncPanel.in(() => expect(SyncPanel.alert).toHaveText('No remote snapshot for this category'));
     expect(server().requests.map(request)).toEqual([`GET ${SETTINGS} 404`]);

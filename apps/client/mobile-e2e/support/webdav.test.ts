@@ -1,8 +1,12 @@
 import {afterEach, expect, test} from 'bun:test';
-import {access} from 'node:fs/promises';
+import {access, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {promisify} from 'node:util';
 import {request} from 'node:https';
 import type {Adb} from './device';
-import {ROOT_FILE, distrustOwnedCa, reversePort, startOwnedWebdav, trustOwnedCa, type OwnedWebdav} from './webdav';
+import {ROOT_FILE, reversePort, startOwnedWebdav, trustOwnedCa, type OwnedWebdav} from './webdav';
 
 const started: OwnedWebdav[] = [];
 const start = async () => { const webdav = await startOwnedWebdav(); started.push(webdav); return webdav; };
@@ -80,21 +84,21 @@ const recorder = (failing: string[] = []) => {
   return {adb, calls};
 };
 
-test('the owned CA is left for the app through run-as and adb push, and one working route is enough', async () => {
-  const webdav = {ca: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n', caFile: '/tmp/ca.pem'};
-  const all = recorder();
-  await trustOwnedCa(all.adb, webdav);
-  const external = `/sdcard/Android/data/app.lazysh.client/files`, shared = `/data/local/tmp/app.lazysh.client.${ROOT_FILE}`;
-  expect(all.calls.slice(1)).toEqual([
-    ['shell', 'mkdir', '-p', external], ['push', '/tmp/ca.pem', `${external}/${ROOT_FILE}`],
-    ['push', '/tmp/ca.pem', shared], ['shell', 'chmod', '644', shared],
-  ]);
-  const [shell, script] = all.calls[0];
-  expect([shell, script.startsWith('run-as app.lazysh.client sh -c ')]).toEqual(['shell', true]);
-  expect(Buffer.from(/echo (\S+) \|/.exec(script)![1], 'base64').toString()).toBe(webdav.ca);
-  await trustOwnedCa(recorder(['run-as']).adb, webdav);
-  await trustOwnedCa(recorder(['/sdcard/', 'chmod']).adb, webdav);
-  await expect(trustOwnedCa(recorder(['run-as', 'push']).adb, webdav)).rejects.toThrow('could not be left for the app (run-as: adb failed; external files: adb failed; local tmp: adb failed)');
+test('the CA is created only in private app data, without overwriting an existing file', async () => {
+  const ca = '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n';
+  const {adb, calls} = recorder();
+  await trustOwnedCa(adb, {ca});
+  expect(calls).toEqual([['shell', `run-as app.lazysh.client sh -c 'set -C; echo ${Buffer.from(ca).toString('base64')} | base64 -d > ${ROOT_FILE}'`]]);
+  await expect(trustOwnedCa(recorder(['run-as']).adb, {ca})).rejects.toThrow('adb failed');
+  const dir = await mkdtemp(join(tmpdir(), 'lazysh-sync-root-'));
+  try {
+    const path = join(dir, ROOT_FILE);
+    await writeFile(path, 'foreign');
+    const exec = promisify(execFile);
+    const local: Adb = async (_shell, command) => (await exec('sh', ['-c', command.replace('run-as app.lazysh.client sh -c ', 'sh -c ')], {cwd: dir})).stdout;
+    await expect(trustOwnedCa(local, {ca})).rejects.toThrow();
+    expect(await readFile(path, 'utf8')).toBe('foreign');
+  } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
 test('the guest port is forwarded without rebinding and the forward can be removed', async () => {
@@ -102,10 +106,4 @@ test('the guest port is forwarded without rebinding and the forward can be remov
   const release = await reversePort(adb, 4455);
   await release();
   expect(calls).toEqual([['reverse', '--no-rebind', 'tcp:4455', 'tcp:4455'], ['reverse', '--remove', 'tcp:4455']]);
-});
-
-test('what the shared guest keeps of the owned CA is removed by name', async () => {
-  const {adb, calls} = recorder();
-  await distrustOwnedCa(adb);
-  expect(calls).toEqual([['shell', 'rm', '-f', `/data/local/tmp/app.lazysh.client.${ROOT_FILE}`, `/sdcard/Android/data/app.lazysh.client/files/${ROOT_FILE}`]]);
 });

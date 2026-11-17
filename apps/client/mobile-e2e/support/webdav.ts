@@ -113,32 +113,8 @@ export async function reversePort(adb: Adb, port: number) {
   return async () => { await adb('reverse', '--remove', `tcp:${port}`); };
 }
 
-const locations = () => ({external: `/sdcard/Android/data/${APP_PACKAGE}/files`, shared: `/data/local/tmp/${APP_PACKAGE}.${ROOT_FILE}`});
-
-/**
- * Leaves the owned CA where the debug acceptance build looks for its extra root: the app's private config directory through
- * `run-as`, and the app's external files directory and `/data/local/tmp` through `adb push` (the shared Waydroid guest has no
- * working `run-as`). It fails only when no route worked. Clearing the app's data empties the first two, but not the shared
- * `/data/local/tmp` copy: end every run with `distrustOwnedCa`.
- */
-export async function trustOwnedCa(adb: Adb, webdav: Pick<OwnedWebdav, 'ca' | 'caFile'>) {
-  const {external, shared} = locations();
+/** Leaves the owned CA in the disposable emulator's private app data. Clearing that data removes it. */
+export async function trustOwnedCa(adb: Adb, webdav: Pick<OwnedWebdav, 'ca'>) {
   const encoded = Buffer.from(webdav.ca).toString('base64');
-  const attempts = {
-    // run-as starts in the app's data directory, which is what Tauri reports as the app config directory on Android.
-    'run-as': () => adb('shell', `run-as ${APP_PACKAGE} sh -c 'echo ${encoded} | base64 -d > ${ROOT_FILE}'`),
-    'external files': async () => { await adb('shell', 'mkdir', '-p', external); await adb('push', webdav.caFile, `${external}/${ROOT_FILE}`); },
-    'local tmp': async () => { await adb('push', webdav.caFile, shared); await adb('shell', 'chmod', '644', shared); },
-  };
-  const failures: string[] = [];
-  for (const [name, attempt] of Object.entries(attempts)) {
-    try { await attempt(); } catch (error) { failures.push(`${name}: ${(error as Error).message.split('\n')[0]}`); }
-  }
-  if (failures.length === Object.keys(attempts).length) throw new Error(`The owned CA could not be left for the app (${failures.join('; ')})`);
-}
-
-/** Removes what `trustOwnedCa` left that clearing the app's data does not: the shared guest keeps nothing of this run. */
-export async function distrustOwnedCa(adb: Adb) {
-  const {external, shared} = locations();
-  await adb('shell', 'rm', '-f', shared, `${external}/${ROOT_FILE}`);
+  await adb('shell', `run-as ${APP_PACKAGE} sh -c 'set -C; echo ${encoded} | base64 -d > ${ROOT_FILE}'`);
 }

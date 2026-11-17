@@ -631,16 +631,16 @@ through `adb reverse --no-rebind` like the owned SSH hosts. Its own tests (`supp
 preconditions, the size limit, refusal of a client holding another CA, teardown and the staging helpers.
 
 **The trust.** Production sync requires HTTPS with the web PKI roots, and a private CA is refused. The `client:build-android-emulator`
-task, which only owned emulator and Waydroid runs use, builds with the `sync-tls-acceptance` Cargo feature (`sync.rs`). That build
-adds one root, read from `sync-test-ca.pem` in the app's config directory (left through `run-as`), its external files directory or
-`/data/local/tmp` (left through `adb push`, for a guest without a working `run-as` such as the shared Waydroid guest), and only for
-the literal `127.0.0.1`. The case removes the shared `/data/local/tmp` copy before and after every test. A published build does not
+task builds with the `sync-tls-acceptance` Cargo feature (`sync.rs`). That build adds one root, read from `sync-test-ca.pem` in the
+app's private config directory (left through `run-as`), and only for the literal `127.0.0.1`. The test clears the disposable app's
+data to remove it. A published build does not
 compile the feature, so every real endpoint keeps the web PKI roots. The `sync.rs` test
 `an_extra_root_is_trusted_for_the_loopback_literal_only` holds the loopback-only rule, and the third case above shows the app
 refusing the same server until it is given the root.
 
-**Limits.** The local run used a Waydroid guest (Android 13, x86_64, no SELinux enforcement), at its 1920x1080 landscape layout and at
-1080x2340 at density 420; the API 36 emulator evidence is the `native-android-appium` job. An emulator or a Waydroid guest is the only runtime: no physical device, no Samsung or other OEM keystore behaviour and
+**Limits.** The earlier version was run on a Waydroid guest, but the current test refuses local and shared guests because it clears
+app data. It runs only in the GitHub-hosted API 36 job after attesting the nominated emulator process, and assumes the hosted runner
+and its emulator are isolated from other users. This restriction has not yet been exercised on API 36. No physical device, Samsung or other OEM keystore behaviour and
 no hosted WebDAV provider were exercised. The credentials category is shown to stay off and unused, but uploading saved credentials
 needs a saved vault entry and is not part of this case. Run it like any Appium spec; it needs `openssl` on the host:
 
