@@ -3008,6 +3008,23 @@ impl ExecOutput {
         check_exit(self.status, &self.stderr)?;
         command_text(self.stdout)
     }
+
+    /// Only the companion's closed error classes may cross this boundary, never host text.
+    pub(crate) fn conversation_text(self) -> Result<String> {
+        if self.status == Some(0) {
+            return command_text(self.stdout);
+        }
+        for class in ["TooLarge", "InvalidEvent", "InvalidArgument", "IoError"] {
+            if self.stderr == format!("lazysh-agent: {class}: operation failed\n").as_bytes() {
+                return Err(SshError::new(
+                    "remote_command_failed",
+                    format!("lazysh-agent: {class}: operation failed"),
+                ));
+            }
+        }
+        check_exit(self.status, &[])?;
+        unreachable!()
+    }
 }
 /// Runs a host command whose exit status the caller interprets, handing every stdout chunk to
 /// `on_stdout` as it arrives. `exec_bounded` stays the only way to run a command that must succeed.
@@ -3018,6 +3035,43 @@ pub(crate) async fn exec_status(
     duration: Duration,
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
+    on_stdout: &mut (dyn FnMut(&[u8]) + Send),
+) -> Result<ExecOutput> {
+    exec_status_inner(
+        session,
+        command,
+        lease,
+        (duration, limit, retained, false),
+        on_stdout,
+    )
+    .await
+}
+
+pub(crate) async fn exec_conversation_status(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+) -> Result<ExecOutput> {
+    exec_status_inner(
+        session,
+        command,
+        lease,
+        (OP_TIMEOUT, FILE_LIMIT as usize, None, true),
+        &mut |_| {},
+    )
+    .await
+}
+
+async fn exec_status_inner(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+    (duration, limit, retained, bounded_diagnostic): (
+        Duration,
+        usize,
+        Option<Arc<dyn Send + Sync>>,
+        bool,
+    ),
     on_stdout: &mut (dyn FnMut(&[u8]) + Send),
 ) -> Result<ExecOutput> {
     until_closed(lease, session.cancel.subscribe(), async {
@@ -3041,6 +3095,7 @@ pub(crate) async fn exec_status(
             (duration, limit),
             retained,
             on_stdout,
+            bounded_diagnostic,
         )
         .await
         .map_err(|error| {
@@ -3068,6 +3123,7 @@ async fn exec_inner_with_handle(
         (duration, limit),
         retained,
         &mut |_| {},
+        false,
     )
     .await?
     .text()
@@ -3079,6 +3135,7 @@ async fn collect(
     (duration, limit): (Duration, usize),
     retained: Option<Arc<dyn Send + Sync>>,
     on_stdout: &mut (dyn FnMut(&[u8]) + Send),
+    bounded_diagnostic: bool,
 ) -> Result<ExecOutput> {
     #[cfg(test)]
     handle
@@ -3103,11 +3160,26 @@ async fn collect(
                     on_stdout(&data);
                     output.stdout.extend_from_slice(&data)
                 }
-                ChannelMsg::ExtendedData { data, .. } => output.stderr.extend_from_slice(&data),
+                ChannelMsg::ExtendedData { data, .. } => {
+                    if bounded_diagnostic {
+                        // Keep one byte beyond any admitted class, so excess text cannot match.
+                        capture_diagnostic(&mut output.stderr, &data);
+                    } else {
+                        output.stderr.extend_from_slice(&data);
+                    }
+                }
                 ChannelMsg::ExitStatus { exit_status } => output.status = Some(exit_status),
                 _ => {}
             }
-            check_output_budget(output.stdout.len() + output.stderr.len(), limit)?;
+            check_output_budget(
+                output.stdout.len()
+                    + if bounded_diagnostic {
+                        0
+                    } else {
+                        output.stderr.len()
+                    },
+                limit,
+            )?;
         }
         Ok(output)
     })
@@ -3115,6 +3187,10 @@ async fn collect(
     .map_err(|_| SshError::new("timeout", "Remote command timed out"));
     let _ = timeout(Duration::from_secs(2), channel.close()).await;
     result?
+}
+fn capture_diagnostic(stderr: &mut Vec<u8>, data: &[u8]) {
+    let remaining = 128usize.saturating_sub(stderr.len());
+    stderr.extend_from_slice(&data[..data.len().min(remaining)]);
 }
 #[tauri::command]
 pub async fn get_diff(
@@ -3810,6 +3886,36 @@ async fn attach_tmux_inner(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn conversation_errors_only_expose_exact_known_classes() {
+        use super::ExecOutput;
+        let result = |stderr: &[u8]| {
+            ExecOutput {
+                status: Some(1),
+                stdout: Vec::new(),
+                stderr: stderr.to_vec(),
+            }
+            .conversation_text()
+            .unwrap_err()
+            .message()
+            .to_owned()
+        };
+        assert!(result(b"lazysh-agent: TooLarge: operation failed\n").contains("TooLarge"));
+        for stderr in [
+            b"lazysh-agent: TooLarge: operation failed\nsecret".as_slice(),
+            b"secret",
+            b"",
+        ] {
+            let error = result(stderr);
+            assert!(error.contains("Remote command exited"));
+            assert!(!error.contains("secret"));
+        }
+        let mut noisy = Vec::new();
+        super::capture_diagnostic(&mut noisy, b"lazysh-agent: TooLarge: operation failed\n");
+        super::capture_diagnostic(&mut noisy, &vec![b'x'; 2 * 1024 * 1024]);
+        assert_eq!(noisy.len(), 128);
+        assert!(result(&noisy).contains("Remote command exited"));
+    }
     #[cfg(unix)]
     #[path = "account_usage_fixture.rs"]
     mod account_usage_fixture;
@@ -4566,7 +4672,7 @@ mod tests {
     }
 
     /// Stdout chunks and the exit status of a scripted exec.
-    type ScriptedExec = (Vec<Vec<u8>>, u32);
+    type ScriptedExec = (Vec<Vec<u8>>, Vec<Vec<u8>>, u32);
     #[derive(Clone)]
     struct TestServer {
         /// When set, public-key authentication accepts only this exact key.
@@ -4763,9 +4869,12 @@ mod tests {
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
             let scripted = self.scripted_exec.lock().unwrap().clone();
-            if let Some((chunks, status)) = scripted {
+            if let Some((chunks, errors, status)) = scripted {
                 for chunk in chunks {
                     session.data(channel, chunk)?;
+                }
+                for chunk in errors {
+                    session.extended_data(channel, 1, chunk)?;
                 }
                 session.exit_status_request(channel, status)?;
                 session.close(channel)?;
@@ -5680,7 +5789,7 @@ mod tests {
         let lease = access_lease();
         let fixture = guard_admission_fixture(lease.clone()).await;
         let chunks = vec![b"{\"stage\":1}\n{\"sta".to_vec(), b"ge\":2}\n".to_vec()];
-        *fixture.server.scripted_exec.lock().unwrap() = Some((chunks.clone(), 22));
+        *fixture.server.scripted_exec.lock().unwrap() = Some((chunks.clone(), vec![], 22));
         let mut seen = Vec::new();
         let output = exec_status(
             &fixture.session,
@@ -5718,6 +5827,20 @@ mod tests {
         )
         .await;
         assert_eq!(over.err().unwrap().kind(), "output_too_large");
+    }
+
+    #[tokio::test]
+    async fn conversation_status_drains_noisy_stderr_without_losing_capability_marker() {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        let marker = b"lazysh-herdr-conversation-companion-required\n".to_vec();
+        *fixture.server.scripted_exec.lock().unwrap() =
+            Some((vec![marker.clone()], vec![vec![b'x'; 16 * 1024]; 80], 0));
+        let output = exec_conversation_status(&fixture.session, "owned test".into(), &lease)
+            .await
+            .unwrap();
+        assert_eq!(output.stderr.len(), 128);
+        assert_eq!(output.conversation_text().unwrap().as_bytes(), marker);
     }
     #[tokio::test]
     async fn non_unix_herdr_probe_runs_once_per_ssh_handle() {

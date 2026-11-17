@@ -489,14 +489,17 @@ pub async fn agent_herdr_conversation(
             // The check of the pane and the read of the conversation do not depend on each other, so they overlap; what the
             // check found still decides first, and the tree is read again after the conversation (below).
             let (before, raw) = tokio::join!(read_tree(&session, &herdr_session, &access), async {
-                let command = crate::companion::required_command(
+                let command = crate::companion::required_command_with_diagnostics(
                     &session,
                     command,
                     CONVERSATION_COMPANION_REQUIRED,
                     &access,
+                    true,
                 )
                 .await?;
-                crate::ssh::exec_for_access(&session, command, &access).await
+                crate::ssh::exec_conversation_status(&session, command, &access)
+                    .await?
+                    .conversation_text()
             });
             if !selected_agent(&before?, &pane_id, &terminal_id, &agent, &agent_session_id) {
                 return Err(SshError::new(
