@@ -25,6 +25,7 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       const agent=await start(),{browser,terminal}=agent;
       await agent.type('hold the build');
       await browser.waitUntil(async()=>(await agent.log()).includes('HOLD'),{timeout:20_000,timeoutMsg:'The held turn did not start'});
+      expect(await agent.submitted()).toEqual(['hold the build']);
       const before={pane:await agent.pane(),keys:await agent.keys(),node:terminal.elementId};
       expect(before.pane.count).toBe(1);
 

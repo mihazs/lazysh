@@ -32,7 +32,15 @@ export abstract class ReportingAgent {
   submitted() {return this.log().then(rows=>rows.filter(row=>row.startsWith('SUBMIT ')).map(row=>row.slice(7)));}
   /** Waits for the agent to log `row` and returns when it was seen, to the poll's resolution. */
   async waitFor(row:string) {
-    await this.browser.waitUntil(async()=>(await this.log()).includes(row),{timeout:20_000,interval:20,timeoutMsg:`The agent did not log ${row}`});
+    try {await this.browser.waitUntil(async()=>(await this.log()).includes(row),{timeout:20_000,interval:20,timeoutMsg:`The agent did not log ${row}`});}
+    catch(error) {
+      // The stand-in logs key codes from this owned test pane, not the SSH key used to connect.
+      try {
+        const keys=await this.keys(),submitted=await this.submitted();
+        console.info('Owned reporting agent input state',JSON.stringify({keyCount:keys.length,recentKeyCodes:keys.slice(-64).filter(key=>/^\d{1,3}$/.test(key)),submittedCount:submitted.length}));
+      } catch { /* Keep the original wait failure if diagnostics fail. */ }
+      throw error;
+    }
     return Date.now();
   }
   /** Lets a `hold` turn finish. */
