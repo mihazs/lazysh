@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.67.1
+
+### Patch Changes
+
+- deedfe4: Mark the Agent board and remote-approval rows of the parity matrix that the real companion hook cases already proved on `main` (desktop owned OpenSSH, Android companion install) as verified, and list what remains. Documentation only. No user-visible behaviour changes.
+- @lazysh/account-usage@1.67.1
+  - @lazysh/common@1.67.1
+  - @lazysh/display-idle@1.67.1
+  - @lazysh/et-transport@1.67.1
+  - @lazysh/mosh-transport@1.67.1
+
 ## 1.67.0
 
 ### Patch Changes
