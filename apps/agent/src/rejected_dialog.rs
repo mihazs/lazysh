@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 const AGENT: &str = "Claude Code";
@@ -41,19 +41,18 @@ fn conversation(session_id: &str) -> Option<PathBuf> {
 /// Whether the last record of the conversation is an interruption written at or after `since` (seconds since the
 /// epoch): nothing was said after the person rejected the dialog, and no newer dialog opened.
 fn interrupted_since(session_id: &str, since: f64) -> bool {
-    let Some(mut file) = conversation(session_id).and_then(|path| File::open(path).ok()) else {
+    let Some(path) = conversation(session_id) else {
         return false;
     };
-    let Ok(length) = file.metadata().map(|metadata| metadata.len()) else {
+    let Ok(file) = crate::transcript::open_transcript(&path) else {
         return false;
     };
-    let start = length.saturating_sub(TAIL);
-    let mut bytes = Vec::new();
-    if file.seek(SeekFrom::Start(start)).is_err()
-        || file.take(TAIL).read_to_end(&mut bytes).is_err()
-    {
+    let Ok(before) = crate::transcript::SourceSnapshot::capture(&file) else {
         return false;
-    }
+    };
+    let Some(bytes) = stable_tail(&path, file, before) else {
+        return false;
+    };
     let text = String::from_utf8_lossy(&bytes);
     // An incomplete newer line makes the state unknown; never skip it to settle from an older marker.
     // A window starting mid-record is harmless when a complete newer relevant record is found first.
@@ -72,6 +71,29 @@ fn interrupted_since(session_id: &str, since: f64) -> bool {
         }
     }
     false
+}
+
+// The final observation bounds the evidence; later writes may still change the conversation.
+fn stable_tail(
+    path: &Path,
+    mut file: File,
+    before: crate::transcript::SourceSnapshot,
+) -> Option<Vec<u8>> {
+    let length = before.len();
+    let start = length.saturating_sub(TAIL);
+    let mut bytes = Vec::new();
+    file.seek(SeekFrom::Start(start)).ok()?;
+    (&mut file).take(TAIL).read_to_end(&mut bytes).ok()?;
+    let selected = crate::transcript::open_transcript(path).ok()?;
+    let after = crate::transcript::SourceSnapshot::capture(&selected).ok()?;
+    before.same_file(&selected).ok()?;
+    if before.len() != after.len()
+        || before.modified().ok()? != after.modified().ok()?
+        || bytes.len() as u64 != length - start
+    {
+        return None;
+    }
+    Some(bytes)
 }
 
 impl Store {
@@ -107,5 +129,52 @@ impl Store {
         }
         transaction.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn changed_or_replaced_transcript_makes_tail_inconclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conversation.jsonl");
+        fs::write(&path, vec![b'x'; TAIL as usize + 1]).unwrap();
+        let capture = || {
+            let file = File::open(&path).unwrap();
+            let before = crate::transcript::SourceSnapshot::capture(&file).unwrap();
+            (file, before)
+        };
+        let (file, before) = capture();
+        writeln!(
+            fs::OpenOptions::new().append(true).open(&path).unwrap(),
+            "new record"
+        )
+        .unwrap();
+        assert!(stable_tail(&path, file, before).is_none());
+
+        let (file, before) = capture();
+        let modified = before.modified().unwrap() + std::time::Duration::from_secs(5);
+        fs::write(&path, vec![b'y'; before.len() as usize]).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(stable_tail(&path, file, before).is_none());
+
+        let (file, before) = capture();
+        fs::rename(&path, dir.path().join("old.jsonl")).unwrap();
+        fs::write(&path, vec![b'x'; before.len() as usize]).unwrap();
+        assert!(stable_tail(&path, file, before).is_none());
+
+        let (file, before) = capture();
+        assert_eq!(
+            stable_tail(&path, file, before).unwrap().len(),
+            TAIL as usize
+        );
     }
 }
