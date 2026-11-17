@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {cleanup,fireEvent,render,screen,within} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
-import {parseHostBrowserSettings} from './HostBrowserSwitch';
+import HostBrowserSwitch,{parseHostBrowserSettings} from './HostBrowserSwitch';
 import {isHostBrowserConfirmed} from './hostBrowserConfirmation';
 import {getPreferences,syncablePreferences} from './preferences';
 import {answer,calls} from './test/routedInvoke';
@@ -131,4 +131,25 @@ it('keeps the confirmation on this device: not in the sync snapshot, and no addr
   expect(stored).toEqual({'lazysh.hostBrowserConfirmed.v1':'["host-a"]'});
   expect(sessionStorage.length).toBe(0);
   expect(Object.values(stored).join('')).not.toMatch(/:\/\/|title|frame|url/i);
+});
+
+it.each([false,true])('reconciles a hidden save when reopen is before completion: %s',async(reopenBeforeFinish)=>{
+  let finish!:(value:typeof on)=>void;
+  const pending=new Promise<typeof on>(resolve=>{finish=resolve;});
+  answer({get_host_browser_settings:[off,on],update_host_browser_settings:[()=>pending]});
+  const view=render(<HostBrowserSwitch sessionId="s1" hostKey="host-a" visible reload={0}/>);
+  const box=await screen.findByRole('checkbox',{name:'Host browser'});
+  await vi.waitFor(()=>expect(box.matches(':disabled')).toBe(false));
+  fireEvent.click(box);fireEvent.click(screen.getByRole('button',{name:'Save host browser setting'}));allow();
+  view.rerender(<HostBrowserSwitch sessionId="s1" hostKey="host-a" visible={false} reload={0}/>);
+  if(reopenBeforeFinish){
+    view.rerender(<HostBrowserSwitch sessionId="s1" hostKey="host-a" visible reload={0}/>);
+    await act(async()=>{});
+    expect(calls('get_host_browser_settings')).toHaveLength(1);
+    expect(box.matches(':disabled')).toBe(true);
+  }
+  await act(async()=>finish(on));
+  if(!reopenBeforeFinish)view.rerender(<HostBrowserSwitch sessionId="s1" hostKey="host-a" visible reload={0}/>);
+  await vi.waitFor(()=>expect(calls('get_host_browser_settings')).toHaveLength(2));
+  expect((box as HTMLInputElement).checked).toBe(true);
 });

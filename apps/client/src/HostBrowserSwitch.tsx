@@ -29,6 +29,7 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
   const [confirming,setConfirming]=useState(false);
   const request=useRef(0);
   const loadedFor=useRef<number|undefined>(undefined);
+  const pendingSave=useRef<Promise<unknown>|undefined>(undefined);
   const confirmation=useRef<HTMLDivElement>(null);
   const checkbox=useRef<HTMLInputElement>(null);
   const headingId=useId();
@@ -41,6 +42,9 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
   async function load(version:number) {
     const current=++request.current;setBusy(true);setError('');setSaved(false);setConfirming(false);setOutdatedCompanion(false);
     try {
+      // A hidden save can still change the host. Read after its response to avoid racing the write.
+      if(pendingSave.current)await pendingSave.current.catch(()=>{});
+      if(!owns(current))return;
       const value=parseHostBrowserSettings(await invoke('get_host_browser_settings',{sessionId}));
       if(owns(current)){loadedFor.current=version;setSettings(value);setDraft(value.hostBrowserEnabled);}
     } catch(failure) {
@@ -49,6 +53,7 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
   }
   useEffect(()=>{
     request.current++;setBusy(false);
+    if(!visible){loadedFor.current=undefined;setSettings(undefined);setConfirming(false);}
     if(visible && loadedFor.current!==reload)void load(reload);
     return()=>{request.current++;};
   },[sessionId,visible,reload]);
@@ -58,10 +63,12 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
     if(!settings || busy)return;
     const current=++request.current;setBusy(true);setError('');setSaved(false);setConfirming(false);
     try {
-      const value=parseHostBrowserSettings(await invoke('update_host_browser_settings',{sessionId,settings:{expectedRevision:settings.revision,hostBrowserEnabled:draft}}));
+      const write=invoke('update_host_browser_settings',{sessionId,settings:{expectedRevision:settings.revision,hostBrowserEnabled:draft}});
+      pendingSave.current=write;
+      const value=parseHostBrowserSettings(await write);
       if(owns(current)){setSettings(value);setDraft(value.hostBrowserEnabled);setSaved(true);if(value.hostBrowserEnabled)confirmHostBrowser(hostKey);}
     } catch(failure) {if(owns(current))fail(failure,true);}
-    finally {if(owns(current))setBusy(false);}
+    finally {pendingSave.current=undefined;if(owns(current))setBusy(false);}
   }
   // Turning it off needs no confirmation; turning it on does, once per host on this device.
   function submit() {
