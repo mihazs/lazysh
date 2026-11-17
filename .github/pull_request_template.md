@@ -17,6 +17,14 @@
 - [ ] Relevant moon, Bun frontend, browser, and native platform checks pass
 - [ ] Manual test: <!-- describe what you ran and what you observed -->
 
+## Regression test
+
+<!-- Required when the title starts with `fix`: check exactly one box. The `regression-test` check reads this section; other pull
+     requests leave both unticked. Rule: "Bug fixes" in AGENTS.md. Index: docs/regression-tests.md. -->
+
+- [ ] **Added**: a test at the lowest layer that reproduces the bug fails on the parent commit and passes here, and `docs/regression-tests.md` has its row. Test: <!-- path and title -->
+- [ ] **Not applicable**: an existing test already covers the bug, or no layer can reproduce it. Reason: <!-- the test that already fails on the parent commit, or why none can and the follow-up issue -->
+
 ## Commit attribution
 
 - [ ] I verified the name and email on every commit in this PR and corrected
