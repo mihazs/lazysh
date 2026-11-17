@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.68.0
+
+### Minor Changes
+
+- 8881a6b: Open and page through larger Codex conversations using a bounded full-history index.
+
+### Patch Changes
+
+- 8881a6b: Fix Android Appium CI task selection so the regression suite runs.
+- 8881a6b: Fix the owned Android SSH parity job on the Ubuntu 22.04 CI runner (#1737): its host-side check of the Files fixture read the SFTP listing as OpenSSH 10 prints it (path-prefixed names) and found nothing in OpenSSH 8.9's bare names, so the job failed after the emulator cases had passed. The listing now accepts both. Test infrastructure only; the app is unchanged.
+- 8881a6b: Open a conversation whose workflow has no summary file instead of refusing the page.
+- 8881a6b: Show a clear notice when a Herdr agent conversation exceeds its supported size.
+- 8881a6b: Accept the compaction line of a Codex conversation in the Agent view instead of refusing the page.
+- @lazysh/account-usage@1.68.0
+  - @lazysh/common@1.68.0
+  - @lazysh/display-idle@1.68.0
+  - @lazysh/et-transport@1.68.0
+  - @lazysh/mosh-transport@1.68.0
+
 ## 1.67.1
 
 ### Patch Changes
