@@ -281,6 +281,7 @@ pub struct AppState {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     retiring: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     credential_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    credential_changes: tokio::sync::broadcast::Sender<String>,
 }
 impl AppState {
     pub fn new(dir: PathBuf) -> std::io::Result<Self> {
@@ -302,6 +303,7 @@ impl AppState {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             retiring: Arc::new(Mutex::new(HashMap::new())),
             credential_locks: Arc::new(Mutex::new(HashMap::new())),
+            credential_changes: tokio::sync::broadcast::channel(64).0,
         })
     }
     pub(crate) async fn cancel_for_renderer_rebind(&self) {
@@ -1409,11 +1411,23 @@ async fn authenticated_connection(
     attempt: Option<&crate::desktop_launch::HostAttempt>,
     original: Option<&Host>,
     retained: Option<Arc<dyn Send + Sync>>,
+    silent_recovery: bool,
 ) -> Result<AuthenticatedConnection> {
     let (host, guard) =
         during_connect(operation, locked_connect_host(state, &host_id, attempt)).await?;
     if let Some(original) = original {
         file_control::same_host(original, &host)?;
+    }
+    if silent_recovery {
+        file_control::silent_recovery_host(
+            original.ok_or_else(|| {
+                SshError::new(
+                    "ssh_control_unavailable",
+                    "The original verified host is unavailable",
+                )
+            })?,
+            &host,
+        )?;
     }
     let handle = during_connect(
         operation,
@@ -1513,6 +1527,7 @@ pub async fn connect(
                 attempt.as_ref(),
                 None,
                 None,
+                false,
             )
             .await?;
             let (channel, initial) = match during_connect(
@@ -1576,6 +1591,9 @@ pub async fn connect(
                         .await;
                     return Err(SshError::new("storage", message));
                 }
+            }
+            if remember_credentials.unwrap_or(false) {
+                let _ = state.credential_changes.send(host_id.clone());
             }
             if operation.check().is_err() {
                 close_failed_connect(&handle).await;
@@ -2142,7 +2160,7 @@ impl TerminalEnding {
 #[allow(clippy::too_many_arguments)]
 pub async fn connect_mosh(
     lease: AccessLease,
-
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     options: crate::mosh::Options,
@@ -2150,6 +2168,32 @@ pub async fn connect_mosh(
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
+) -> AccessResult<Connected> {
+    connect_mosh_inner(
+        lease,
+        state,
+        session_id,
+        options,
+        entry,
+        cols,
+        rows,
+        events,
+        Some(app),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_mosh_inner(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    options: crate::mosh::Options,
+    entry: Option<crate::multiplexer::Entry>,
+    cols: u32,
+    rows: u32,
+    events: Channel<SshEvent>,
+    app: Option<tauri::AppHandle>,
 ) -> AccessResult<Connected> {
     lease
         .run(async {
@@ -2173,7 +2217,7 @@ pub async fn connect_mosh(
                 target_os = "ios"
             ))]
             {
-                spawn_native_terminal(
+                let connected = spawn_native_terminal(
                     &state,
                     lease.clone(),
                     parent,
@@ -2190,7 +2234,17 @@ pub async fn connect_mosh(
                         })
                     },
                 )
-                .await
+                .await?;
+                if let Some(app) = app {
+                    let session = state.session(&connected.session_id).await?;
+                    file_control::start_automatic(
+                        app,
+                        state.inner().clone(),
+                        connected.session_id.clone(),
+                        session,
+                    );
+                }
+                Ok(connected)
             }
             #[cfg(not(any(
                 target_os = "linux",
@@ -2199,7 +2253,7 @@ pub async fn connect_mosh(
                 target_os = "ios"
             )))]
             {
-                let _ = (bootstrap, startup, events);
+                let _ = (bootstrap, startup, events, app);
                 Err(SshError::new(
                     "mosh_unsupported",
                     "Mosh is not available on this platform",
@@ -2264,6 +2318,8 @@ where
     );
     if matches!(kind, NativeTerminalKind::Mosh) {
         session.file_control = Some(file_control::Control::new(parent.handle.clone()));
+    } else if matches!(kind, NativeTerminalKind::EternalTerminal) {
+        session.file_control = Some(file_control::Control::commands_only(parent.handle.clone()));
     }
     let session = Arc::new(session);
     let mut pending = PendingTerminal {
@@ -3179,11 +3235,12 @@ async fn exec_status_inner(
             Some(control) => control.command_handle()?,
             None => session.handle.clone(),
         };
-        let closed = || {
-            SshError::new(
+        let closed = || match &session.file_control {
+            Some(control) => control.command_unavailable(),
+            None => SshError::new(
                 "ssh_host_tools_closed",
-                "The host-tools SSH connection is closed. Reconnect host tools to continue.",
-            )
+                "The host-tools SSH connection is closed",
+            ),
         };
         if handle.is_closed() {
             return Err(closed());
@@ -3198,15 +3255,28 @@ async fn exec_status_inner(
             bounded_diagnostic,
         )
         .await
+        .and_then(|output| {
+            if output.status.is_none() {
+                Err(command_indeterminate())
+            } else {
+                Ok(output)
+            }
+        })
         .map_err(|error| {
             if error.kind() == "ssh_error" && handle.is_closed() {
-                closed()
+                command_indeterminate()
             } else {
                 error
             }
         })
     })
     .await
+}
+fn command_indeterminate() -> SshError {
+    SshError::new(
+        "ssh_command_indeterminate",
+        "The command ended without an exit status; its result is unknown",
+    )
 }
 async fn exec_inner_with_handle(
     handle: &SshHandle,
@@ -5231,6 +5301,9 @@ mod tests {
         pub(crate) async fn reconnect(&self) -> Arc<SshHandle> {
             password_handle(&self._state, self.session.handle.origin.as_ref().unwrap()).await
         }
+        pub(crate) fn respond_to_commands(&self, response: &[u8]) {
+            *self.server.scripted_exec.lock().unwrap() = Some((vec![response.to_vec()], 0));
+        }
         pub(crate) fn hold(&self) {
             self.server.hold_opens.store(true, Ordering::SeqCst);
         }
@@ -6254,6 +6327,46 @@ mod tests {
             fixture.server.commands.lock().unwrap().len(),
             4,
             "the answer is remembered"
+        );
+    }
+    #[tokio::test]
+    async fn interrupted_command_reports_an_indeterminate_result_without_replaying() {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        let session = fixture.session.clone();
+        let worker = tokio::spawn(async move {
+            exec_status(
+                &session,
+                "owned-mutation".into(),
+                &lease,
+                Duration::from_secs(5),
+                1024,
+                None,
+                &mut |_| {},
+            )
+            .await
+        });
+        timeout(Duration::from_secs(2), fixture.server.executed.notified())
+            .await
+            .unwrap();
+        fixture
+            .session
+            .handle
+            .disconnect(russh::Disconnect::ByApplication, "owned interruption", "")
+            .await
+            .unwrap();
+        let error = worker.await.unwrap().err().unwrap();
+        assert_eq!(error.kind(), "ssh_command_indeterminate");
+        assert_eq!(
+            fixture
+                .server
+                .commands
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|command| *command == "owned-mutation")
+                .count(),
+            1
         );
     }
     #[tokio::test]
@@ -8050,7 +8163,8 @@ mod tests {
             )
             .await
             .unwrap();
-            let error = crate::et::connect_et(
+            let error = crate::et::connect_et_inner(
+                None,
                 access_lease(),
                 app.state(),
                 forwarding.session_id.clone(),
@@ -8094,7 +8208,7 @@ mod tests {
                 serde_json::from_value(serde_json::json!({"portMin":udp_port,"portMax":udp_port}))
                     .unwrap();
             let (events, mut rx) = json_events();
-            let connected = connect_mosh(
+            let connected = connect_mosh_inner(
                 access_lease(),
                 app.state(),
                 id.clone(),
@@ -8103,6 +8217,7 @@ mod tests {
                 80,
                 24,
                 events,
+                None,
             )
             .await
             .unwrap()
