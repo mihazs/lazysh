@@ -431,7 +431,29 @@ mod tests {
                 .then_some(tabs)
             }
         };
-        until("the first tab", || active(0, 1)).await;
+        let first_tab_attempts = std::sync::atomic::AtomicUsize::new(0);
+        until("the first tab", || async {
+            let observed = tabs().await;
+            let ready = observed.as_ref().is_some_and(|tabs| {
+                tabs.len() == 1 && tabs.iter().any(|tab| tab.active && tab.position == 0)
+            });
+            if !ready
+                && first_tab_attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 249
+            {
+                let summary = observed.as_ref().map(|tabs| {
+                    (
+                        tabs.len(),
+                        tabs.iter().filter(|tab| tab.active).count(),
+                        tabs.iter().any(|tab| tab.active && tab.position == 0),
+                    )
+                });
+                eprintln!(
+                    "Zellij first-tab final observation (total, active, first active): {summary:?}"
+                );
+            }
+            observed.filter(|_| ready)
+        })
+        .await;
         let literal = "literal 'quote' $(touch nope)";
         let directory = home.path().join("tab dir 'q'");
         std::fs::create_dir(&directory).unwrap();
