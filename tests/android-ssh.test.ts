@@ -8,7 +8,7 @@ import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
 import {commandLine,moonTask} from './support/moon';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
-import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
+import {reportOwnedSshPromptFailure,receiverProbeErrors,stopOwnedTree} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
@@ -38,6 +38,31 @@ test('owned process failures never include captured output or arguments',async()
   const error=await owned.finish('synthetic failure',1000).catch(error=>error as Error);
   expect((error as Error).message).toBe('Owned fixture failed: synthetic failure; exit=31');
   expect(await owned.startupDiagnostic()).toEqual({state:'early-exit',exitCode:31});
+});
+
+test.skipIf(process.platform!=='linux')('owned tree identity failure reports only pre-stop exit category',async()=>{
+  const owned=new OwnedProcess('sleep',['60']);
+  const live=owned.liveIdentity.bind(owned);let reads=0;
+  const probe=spyOn(owned,'liveIdentity').mockImplementation(async()=>++reads===2?undefined:live());
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await expect(stopOwnedTree(owned,'Herdr',true)).rejects.toThrow('Owned Herdr root identity lost');
+    expect(warning).toHaveBeenCalledWith('Owned tree pre-stop {"label":"Herdr","cleanSupervisorExit":true,"exit":"unobserved"}');
+    expect(owned.child.exitCode!==null || owned.child.signalCode!==null).toBe(true);
+  } finally {probe.mockRestore();warning.mockRestore();await owned.stop();}
+});
+
+test.skipIf(process.platform!=='linux').each(['clean','nonzero','signaled'] as const)('owned exited root reports %s without process data',async exit=>{
+  const owned=exit==='signaled'?new OwnedProcess('sleep',['60']):
+    new OwnedProcess(process.execPath,['-e',`process.exit(${exit==='clean'?0:31})`,'private-fixture-secret']);
+  if(exit==='signaled')process.kill(owned.child.pid!,'SIGKILL');
+  await owned.done;
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await expect(stopOwnedTree(owned,'Herdr',true)).rejects.toThrow('Owned Herdr root identity unavailable');
+    expect(warning).toHaveBeenCalledWith('Owned tree pre-stop '+JSON.stringify({label:'Herdr',cleanSupervisorExit:true,exit}));
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('private-fixture-secret');
+  } finally {warning.mockRestore();}
 });
 
 test.skipIf(process.platform!=='linux').each(['missing','denied'] as const)('owned startup distinguishes %s launcher without exposing paths or arguments',async failure=>{

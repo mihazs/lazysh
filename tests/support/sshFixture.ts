@@ -89,7 +89,12 @@ export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'|'tmu
     // The explicit mount supervisor exits cleanly when its owned child is
     // retired. A root missing before retirement still fails the check above.
     if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
-  } catch(error){primary=error;}
+  } catch(error){
+    primary=error;
+    const {exitCode,signalCode}=daemon.child;
+    const exit=exitCode===0?'clean':exitCode!==null?'nonzero':signalCode!==null?'signaled':'unobserved';
+    try{console.error('Owned tree pre-stop '+JSON.stringify({label,cleanSupervisorExit,exit}));}catch{/* Preserve the original failure. */}
+  }
   try{await daemon.stop();}catch(error){primary??=error;}
   if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':label==='tmux'?'tmux-stop':'ssh-stop');throw primary;}
 }
