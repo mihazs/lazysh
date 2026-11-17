@@ -7,7 +7,6 @@ pub(crate) use host::Checked;
 pub(crate) enum Route {
     Host,
     Device,
-    Rollback,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,7 +54,7 @@ struct Operation {
 impl Route {
     fn seconds(self) -> u64 {
         match self {
-            Route::Host | Route::Rollback => host::OPERATION_SECONDS,
+            Route::Host => host::OPERATION_SECONDS,
             Route::Device => 240,
         }
     }
@@ -166,7 +165,6 @@ impl Operation {
         match self.route {
             Route::Host => self.perform_host(work, publisher).await,
             Route::Device => self.perform_device(work, publisher).await,
-            Route::Rollback => self.perform_rollback(work).await,
         }
     }
     async fn perform_device(

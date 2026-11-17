@@ -187,23 +187,6 @@ pub async fn install_companion_from_device(
 ) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
     install_from(state, session_id, progress, access, install::Route::Device).await
 }
-/// Restores the previous companion the host kept, through the host's own `update --rollback`.
-#[tauri::command]
-pub async fn rollback_companion(
-    progress: Channel<Progress>,
-    access: AccessLease,
-    state: State<'_, AppState>,
-    session_id: String,
-) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
-    install_from(
-        state,
-        session_id,
-        progress,
-        access,
-        install::Route::Rollback,
-    )
-    .await
-}
 /// Compares the installed companion with the latest verified release. Reads only; the phone fetches metadata.
 #[tauri::command]
 pub async fn check_companion_update(

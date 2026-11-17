@@ -113,7 +113,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(({geometry,sessionNames})=>{
-    const calls:string[]=[];const state={updated:false,installed:false,offline:false,rolledBack:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,offline:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       // Herdr display replies can be slowed to mimic a network round trip.
@@ -133,11 +133,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
       }if(state.visualStates){tree.agents=tree.agents.map((agent,index)=>({...agent,agent_status:index%3===0?'blocked':index%3===1?'working':'done'}));tree.panes=tree.panes.map((pane,index)=>({...pane,agent_status:tree.agents[index].agent_status}));}if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
-      if(command==='check_companion_update')return {schemaVersion:1,via:'update',installed:'1.0.0',previous:state.rolledBack?null:'0.9.0',latest:'1.1.0',state:'available'};
-      if(command==='rollback_companion'){
-        (args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'installing'});state.rolledBack=true;
-        return {schemaVersion:1,status:'rolledBack',version:'0.9.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
-      }
+      if(command==='check_companion_update')return {schemaVersion:1,via:'update',installed:'1.0.0',previous:'0.9.0',latest:'1.1.0',state:'available'};
       if(command==='install_companion'||command==='install_companion_from_device'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
         // A host with no route to GitHub fails the default route; only the labelled device route still installs.
@@ -558,7 +554,7 @@ test('a host that cannot reach GitHub offers the labelled device install and the
   expect([await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,1]);
 });
 
-test('Check for updates reports the host companion and Roll back restores the kept one, never installing or downloading',async({page},testInfo)=>{
+test('Check for updates reports the host companion without installing or downloading',async({page},testInfo)=>{
   const {board,calls}=await openCompanionBoard(page,testInfo,{installed:true});
   const setup=board.getByRole('button',{name:'Setup',exact:true});
   if(await setup.getAttribute('aria-expanded')==='false')await setup.click();
@@ -566,14 +562,8 @@ test('Check for updates reports the host companion and Roll back restores the ke
   if(!await panel.evaluate(node=>(node as HTMLDetailsElement).open))await panel.locator('summary').click();
   await panel.getByRole('button',{name:'Check for updates',exact:true}).click();
   await expect(panel.getByText('Host companion 1.0.0 can be updated to 1.1.0.',{exact:true})).toBeVisible();
-  const back=panel.getByRole('button',{name:'Roll back to 0.9.0',exact:true});
-  await back.scrollIntoViewIfNeeded();await expect(back).toBeInViewport();
-  expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(testInfo.project.name==='phone'?32:20);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
-  await back.click();
-  await expect(panel.getByText('Restored host companion 0.9.0.',{exact:true})).toBeVisible();
-  await expect(back).toHaveCount(0);
-  expect([await calls('check_companion_update'),await calls('rollback_companion'),await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,1,0,0]);
+  expect([await calls('check_companion_update'),await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,0,0]);
 });
 
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{

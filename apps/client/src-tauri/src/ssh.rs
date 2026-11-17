@@ -7123,7 +7123,6 @@ mod tests {
         for command in [
             "install_companion",
             "install_companion_from_device",
-            "rollback_companion",
             "check_companion_update",
             "restore_file_transfer",
             "restore_host_tools",
@@ -7167,7 +7166,6 @@ mod tests {
                 crate::companion_settings::update_companion_settings,
                 crate::companion::install_companion,
                 crate::companion::install_companion_from_device,
-                crate::companion::rollback_companion,
                 crate::companion::check_companion_update
             ])
             .build(context)
@@ -7250,11 +7248,7 @@ mod tests {
             failure["kind"], "disconnected",
             "the real check handler must be reached before session preflight fails"
         );
-        for command in [
-            "install_companion",
-            "install_companion_from_device",
-            "rollback_companion",
-        ] {
+        for command in ["install_companion", "install_companion_from_device"] {
             let failure = tauri::test::get_ipc_response(
                 &main,
                 request(local_url, command, installer.clone()),
@@ -7305,7 +7299,6 @@ mod tests {
         for (command, body) in [
             ("install_companion", installer.clone()),
             ("install_companion_from_device", installer.clone()),
-            ("rollback_companion", installer),
             ("check_companion_update", checked.clone()),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),

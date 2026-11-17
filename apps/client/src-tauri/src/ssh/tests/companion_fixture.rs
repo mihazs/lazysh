@@ -26,7 +26,7 @@ pub(super) fn environment(directory: &Path) -> String {
     fs::write(assets.join("mode"), "ok").unwrap();
     fs::write(
         bin.join("lazysh-agent"),
-        b"#!/bin/sh\nprintf 'owned-legacy-unchanged\\n'\n",
+        b"#!/bin/sh\ncase \"$1\" in --version) printf 'lazysh-agent 1.0.0\\n';; --help) printf 'Usage: lazysh-agent <COMMAND>\\n\\nCommands:\\n  ingest  report\\n  snapshot  state\\n  help  help\\n\\nOptions:\\n  -h, --help  help\\n  -V, --version  version\\n';; update) exit 2;; *) printf 'owned-legacy-unchanged\\n';; esac\n",
     )
     .unwrap();
     fs::write(bin.join("curl"), CURL).unwrap();
@@ -145,12 +145,13 @@ result() { # exit outcome error current
   exit "$1"
 }
 case "$1" in
-  --status) action=status; result 0 status null;;
-  --rollback)
-    action=rollback
-    event stage '"stage":"replacing"'
-    mv "$dir/previous" "$dir/version"; previous=null
-    result 0 rolledBack null;;
+  --status)
+    case $(cat "$dir/probe" 2>/dev/null || true) in
+      fail) exit 1;;
+      malformed) printf 'not-json\n'; exit 0;;
+      contradictory) result 1 status null;;
+    esac
+    action=status; result 0 status null;;
 esac
 action=update
 event stage '"stage":"resolving"'
@@ -161,7 +162,16 @@ code=$(cat "$dir/outcome")
 case $code in
   0) event stage '"stage":"selfTesting"'; event stage '"stage":"replacing"'
      cp "$dir/version" "$dir/previous"; echo "$4" > "$dir/version"; result 0 updated null;;
-  *) result "$code" failed '{"kind":"x","detail":"digestMismatch","message":"m","retryAfterSeconds":null}';;
+  137) exit 137;;
+  138) result 22 updated null;;
+  140) event result '"action":"update","outcome":"failed","exitCode":22,"error":{"kind":"verificationFailed"}'
+       event stage '"stage":"replacing"'; echo "$4" > "$dir/version"; exit 22;;
+  139) cp "$dir/version" "$dir/previous"; echo "$4" > "$dir/version"
+       event result '"action":"update","outcome":"updated","exitCode":0'
+       result 22 failed '{"kind":"verificationFailed","detail":"digestMismatch"}';;
+  22) result 22 failed '{"kind":"verificationFailed","detail":"digestMismatch"}';;
+  24) result 24 failed '{"kind":"selfTestFailed","detail":"digestMismatch"}';;
+  *) result "$code" failed '{"kind":"internal","detail":"digestMismatch"}';;
 esac
 "#;
 pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str, directory: &Path) {
@@ -217,6 +227,9 @@ async fn host_update(session: &Arc<Session>, directory: &Path) {
     };
 
     // A host with nothing installed: the host downloads, the device fetches only metadata.
+    let legacy_path = directory.join("bin/lazysh-agent");
+    let saved_legacy = directory.join("bin/legacy-fixture");
+    fs::rename(&legacy_path, &saved_legacy).unwrap();
     let owned = crate::companion::Owned::new(&candidate, version);
     let first = report(
         &owned
@@ -232,6 +245,7 @@ async fn host_update(session: &Arc<Session>, directory: &Path) {
         (first["status"].as_str(), first["cleanup"].as_str()),
         (Some("installed"), Some("complete"))
     );
+    fs::rename(&saved_legacy, &legacy_path).unwrap();
     assert_eq!(first["path"], agent.to_str().unwrap());
     assert_eq!(fs::read(&agent).unwrap(), fs::read(&candidate).unwrap());
     assert_eq!(
@@ -401,7 +415,7 @@ async fn device_fallback(session: &Arc<Session>, directory: &Path) {
             .await
             .unwrap()
             .trim(),
-        "owned-legacy-unchanged"
+        "lazysh-agent 1.0.0"
     );
     assert_eq!(
         execs() - started,
@@ -722,6 +736,23 @@ async fn update_command_route(session: &Arc<Session>, directory: &Path) {
     let candidate = owned_agent_binary();
     let owned = crate::companion::Owned::new(&candidate, version);
     let calls = curl_calls(directory);
+    // A PATH executable can claim a managed target version, but cannot stand in for the managed file.
+    let path_agent = directory.join("bin/lazysh-agent");
+    let original_path_agent = fs::read(&path_agent).unwrap();
+    fs::remove_file(&agent).unwrap();
+    fs::write(&path_agent, CLI).unwrap();
+    state("version", version);
+    let outcome = owned.install(session.clone(), &lease, Route::Host).await;
+    assert!(
+        outcome.is_err(),
+        "a missing managed companion cannot be confirmed"
+    );
+    assert!(!agent.exists());
+    assert_eq!(curl_calls(directory), calls);
+    fs::write(&path_agent, original_path_agent).unwrap();
+    fs::write(&agent, CLI).unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o700)).unwrap();
+    state("version", "1.28.0");
     assert_eq!(
         checked(&owned, session).await,
         (
@@ -776,40 +807,28 @@ async fn update_command_route(session: &Arc<Session>, directory: &Path) {
         "1.28.0"
     );
 
-    // Roll back to the kept previous companion; a second rollback has nothing to restore.
-    let restored = serde_json::to_value(
-        owned
-            .install(session.clone(), &lease, Route::Rollback)
+    // A broken modern status must not silently fall back to bootstrap.
+    state("version", "1.28.0");
+    for fault in ["fail", "malformed", "contradictory"] {
+        state("probe", fault);
+        let before = curl_calls(directory);
+        let failure = owned
+            .install(session.clone(), &lease, Route::Host)
             .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        (restored["status"].as_str(), restored["version"].as_str()),
-        (Some("rolledBack"), Some("1.28.0")),
-        "{restored}"
-    );
-    assert!(argv().lines().any(|line| line == "--rollback --yes --json"));
-    let again = owned
-        .install(session.clone(), &lease, Route::Rollback)
-        .await
-        .unwrap_err();
-    assert_eq!(again.kind(), "companion_no_previous");
-    assert_eq!(
-        argv()
-            .lines()
-            .filter(|line| line.starts_with("--rollback"))
-            .count(),
-        1,
-        "nothing is dispatched without a previous companion"
-    );
-
+            .unwrap_err();
+        assert_eq!(failure.kind(), "companion_installer_invalid", "{fault}");
+        assert_eq!(curl_calls(directory), before, "{fault} must not bootstrap");
+        assert_eq!(
+            fs::read_to_string(cli.join("version")).unwrap().trim(),
+            "1.28.0"
+        );
+    }
+    state("probe", "");
     // A refusal the command reports is named, keeps its closed detail and changes nothing; the full table is unit tested.
     state("version", "1.28.0");
     for (code, kind) in [
         (22, "companion_verification_failed"),
         (24, "companion_self_test_failed"),
-        (1, "companion_installer_invalid"),
     ] {
         state("outcome", &code.to_string());
         let failure = owned
@@ -824,6 +843,19 @@ async fn update_command_route(session: &Arc<Session>, directory: &Path) {
             "exit {code}"
         );
     }
+    for code in ["1", "137", "138", "139", "140"] {
+        state("version", "1.28.0");
+        state("outcome", code);
+        let outcome = serde_json::to_value(
+            owned
+                .install(session.clone(), &lease, Route::Host)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(outcome["status"], "uncertain", "exit {code}");
+    }
+    state("version", "1.28.0");
     state("outcome", "29");
     let uncertain = serde_json::to_value(
         owned
@@ -833,27 +865,17 @@ async fn update_command_route(session: &Arc<Session>, directory: &Path) {
     )
     .unwrap();
     assert_eq!(uncertain["status"], "uncertain");
-    // A companion without the command is never asked to roll back.
     fs::write(
         &agent,
-        "#!/bin/sh\ncase \"$1\" in --version) echo 'lazysh-agent 1.28.0';; *) exit 2;; esac\n",
+        "#!/bin/sh\ncase \"$1\" in --version) echo 'lazysh-agent 1.28.0';; --help) printf 'Usage: lazysh-agent <COMMAND>\\n\\nCommands:\\n  ingest  report\\n  snapshot  state\\n  help  help\\n\\nOptions:\\n  -h, --help  help\\n  -V, --version  version\\n';; *) exit 2;; esac\n",
     )
     .unwrap();
-    assert_eq!(
-        owned
-            .install(session.clone(), &lease, Route::Rollback)
-            .await
-            .unwrap_err()
-            .kind(),
-        "companion_update_unsupported"
-    );
     assert_eq!(checked(&owned, session).await.0, "bootstrap");
 }
 
-/// The shipped `lazysh-agent update`, when the current-source build has it: the app's probe, check and rollback
-/// refusal run against the real command, not the contract stub. (Its network paths are the command's own tests.)
+/// The shipped `lazysh-agent update`, when the current-source build has it: the app's probe and check
+/// run against the real command, not the contract stub. (Its network paths are the command's own tests.)
 async fn shipped_update_command(session: &Arc<Session>, directory: &Path) {
-    use crate::companion::install::Route;
     use std::os::unix::fs::PermissionsExt;
     let candidate = owned_agent_binary();
     let probe = std::process::Command::new(&candidate)
@@ -866,7 +888,6 @@ async fn shipped_update_command(session: &Arc<Session>, directory: &Path) {
         return;
     }
     settled(session).await;
-    let lease = access_lease();
     let agent = directory.join("data/lazysh/companion/lazysh-agent");
     let _ = fs::remove_file(agent.with_extension("previous"));
     fs::copy(&candidate, &agent).unwrap();
@@ -881,11 +902,6 @@ async fn shipped_update_command(session: &Arc<Session>, directory: &Path) {
             None
         )
     );
-    let refused = owned
-        .install(session.clone(), &lease, Route::Rollback)
-        .await
-        .unwrap_err();
-    assert_eq!(refused.kind(), "companion_no_previous");
     assert_eq!(
         fs::read(&agent).unwrap(),
         fs::read(&candidate).unwrap(),

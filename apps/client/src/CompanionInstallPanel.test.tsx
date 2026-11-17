@@ -3,15 +3,14 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 const install=vi.hoisted(()=>vi.fn());
 const fromDevice=vi.hoisted(()=>vi.fn());
-const rollback=vi.hoisted(()=>vi.fn());
 const check=vi.hoisted(()=>vi.fn());
-vi.mock('./bridge',()=>({api:{installCompanion:install,installCompanionFromDevice:fromDevice,rollbackCompanion:rollback,checkCompanionUpdate:check}}));
+vi.mock('./bridge',()=>({api:{installCompanion:install,installCompanionFromDevice:fromDevice,checkCompanionUpdate:check}}));
 import CompanionInstallPanel,{companionInstallStage,companionInstallProgress,companionInstallFailure,parseCompanionInstall,parseCompanionCheck} from './CompanionInstallPanel';
 import {applyAccessStatus} from './access';
 import {uiI18n} from './i18n/core';
 const result={schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh-agent',cleanup:'complete'};
 let generation=0;
-beforeEach(async()=>{install.mockReset();fromDevice.mockReset();rollback.mockReset();check.mockReset();await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++generation),nonce:'a'.repeat(64)});});
+beforeEach(async()=>{install.mockReset();fromDevice.mockReset();check.mockReset();await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++generation),nonce:'a'.repeat(64)});});
 afterEach(()=>cleanup());
 
 it('accepts only finite progress and complete installation results',()=>{
@@ -294,7 +293,7 @@ it.each([
   expect(screen.getByRole('button',{name:'Checking…'})).toHaveProperty('disabled',true);
   await act(async()=>{});
   expect(screen.getByText(message)).toBeTruthy();expect(check).toHaveBeenCalledWith('checking');
-  expect(install).not.toHaveBeenCalled();expect(fromDevice).not.toHaveBeenCalled();expect(rollback).not.toHaveBeenCalled();
+  expect(install).not.toHaveBeenCalled();expect(fromDevice).not.toHaveBeenCalled();
 });
 it('names a host without a companion and offers no rollback when none is kept',async()=>{
   check.mockResolvedValue({...checked,via:'bootstrap',installed:null,previous:null,state:'notInstalled'});
@@ -302,32 +301,6 @@ it('names a host without a companion and offers no rollback when none is kept',a
   fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
   expect(screen.getByText('No host companion is installed. 1.55.0 is available.')).toBeTruthy();
   expect(screen.queryByRole('button',{name:/Roll back/})).toBeNull();
-});
-it('rolls back to the kept previous companion only after a check found one, and reports the restored version',async()=>{
-  check.mockResolvedValue(checked);const requests=[] as {progress:(value:unknown)=>void;finish:(value:unknown)=>void}[];
-  rollback.mockImplementation((_id:string,progress:(value:unknown)=>void)=>new Promise(finish=>requests.push({progress,finish})));
-  const installed=vi.fn();render(<CompanionInstallPanel sessionId="rollback-host" ready onInstalled={installed}/>);
-  expect(screen.queryByRole('button',{name:/Roll back/})).toBeNull();
-  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
-  fireEvent.click(screen.getByRole('button',{name:'Roll back to 1.50.0'}));
-  expect(rollback).toHaveBeenCalledTimes(1);expect(install).not.toHaveBeenCalled();
-  act(()=>requests[0].progress({stage:'installing'}));expect(screen.getByText('Installing the host companion…')).toBeTruthy();
-  await act(async()=>{requests[0].finish({...result,status:'rolledBack',version:'1.50.0'});});
-  expect(screen.getByText('Restored host companion 1.50.0.')).toBeTruthy();expect(installed).toHaveBeenCalledTimes(1);
-  expect(document.querySelector('details')?.dataset).toMatchObject({installRoute:'rollback',installOutcome:'rolledBack'});
-  expect(screen.queryByRole('button',{name:/Roll back/}),'the kept companion is consumed until the next check').toBeNull();
-});
-it.each([
-  ['companion_no_previous','The host has no previous companion to restore.'],
-  ['companion_update_unsupported',"This host's companion cannot roll itself back yet. Update it first."],
-  ['companion_rolled_back','The new companion failed after installation, so the previous one was restored.'],
-])('reports %s from a rollback without offering the device download',async(kind,message)=>{
-  check.mockResolvedValue(checked);rollback.mockRejectedValue({kind,phase:null,message:'Native diagnostic text'});
-  render(<CompanionInstallPanel sessionId="rollback-refused" onInstalled={vi.fn()}/>);
-  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
-  fireEvent.click(screen.getByRole('button',{name:'Roll back to 1.50.0'}));await act(async()=>{});
-  expect(screen.getByRole('alert').textContent).toBe(message);
-  expect(screen.queryByText('Install through this device')).toBeNull();expect(fromDevice).not.toHaveBeenCalled();
 });
 it('keeps actions exclusive while an operation runs, retires a check with its source and surfaces check failures',async()=>{
   let finish!:(value:unknown)=>void;check.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
@@ -344,9 +317,9 @@ it('keeps actions exclusive while an operation runs, retires a check with its so
   fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
   expect(screen.getByRole('alert').textContent).toBe('Invalid companion installation response.');
 });
-it.each([['pt-BR','Verificar atualizações','Voltar para 1.50.0'],['es','Buscar actualizaciones','Volver a 1.50.0']])('shows check and rollback in %s',async(language,label,back)=>{
+it.each([['pt-BR','Verificar atualizações'],['es','Buscar actualizaciones']])('shows the check action in %s',async(language,label)=>{
   await uiI18n.changeLanguage(language);check.mockResolvedValue(checked);
   render(<CompanionInstallPanel sessionId={`check-${language}`} onInstalled={vi.fn()}/>);
   fireEvent.click(screen.getByRole('button',{name:label}));await act(async()=>{});
-  expect(screen.getByRole('button',{name:back})).toBeTruthy();
+  expect(check).toHaveBeenCalledOnce();
 });

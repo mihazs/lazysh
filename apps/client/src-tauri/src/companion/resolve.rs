@@ -103,6 +103,13 @@ impl Unix {
         }
     }
     pub(super) fn command(&self, original: &str) -> Result<String> {
+        self.command_inner(original, false)
+    }
+    /// Confirm the private managed executable itself, without falling back to PATH.
+    pub(super) fn managed_command(&self, original: &str) -> Result<String> {
+        self.command_inner(original, true)
+    }
+    fn command_inner(&self, original: &str, managed_only: bool) -> Result<String> {
         let suffix = original
             .strip_prefix("lazysh-agent ")
             .ok_or_else(|| error("companion_command", "Invalid companion command"))?;
@@ -136,13 +143,18 @@ if [ -e "$p" ] || [ -L "$p" ]; then
     [ -f "$p" ] && [ -x "$p" ] && [ "$({stat} "$p")" = '{uid} 700 1' ] || invalid
     exec "$p" {suffix}
 else
-    exec {original}
+    {fallback}
 fi
 "#,
             app = ssh::quote(env!("CARGO_PKG_VERSION")),
             path = ssh::quote(&self.managed()),
             stat = self.stat(),
-            uid = self.uid
+            uid = self.uid,
+            fallback = if managed_only {
+                "exit 127".to_owned()
+            } else {
+                format!("exec {original}")
+            }
         );
         Ok(format!("sh -c {}", ssh::quote(&script)))
     }
@@ -198,23 +210,33 @@ mod tests {
             home: base.to_string_lossy().into(),
             data: data.to_string_lossy().into(),
         };
-        let execute = || {
+        let execute = |managed: bool| {
+            let script = if managed {
+                host.managed_command("lazysh-agent --version")
+            } else {
+                host.command("lazysh-agent --version")
+            }
+            .unwrap();
             Command::new("/bin/sh")
-                .args(["-c", &host.command("lazysh-agent --version").unwrap()])
+                .args(["-c", &script])
                 .env_clear()
                 .env("HOME", root.path())
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
                 .output()
                 .unwrap()
         };
-        let missing = execute();
+        let missing = execute(false);
         assert!(missing.status.success());
         // Every command the app runs tells the companion which app asks, whichever copy answers.
         assert_eq!(missing.stdout, format!("legacy-owned {version}").as_bytes());
+        assert!(
+            !execute(true).status.success(),
+            "PATH is not evidence of a managed executable"
+        );
         fs::create_dir(&data).unwrap();
         fs::set_permissions(&data, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(
-            !execute().status.success(),
+            !execute(false).status.success(),
             "a mutable existing namespace is not an absent managed executable"
         );
         assert_eq!(fs::read(&legacy).unwrap(), LEGACY);
@@ -230,9 +252,11 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&managed, fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(
-            execute().stdout,
-            format!("managed-owned {version}").as_bytes()
-        );
+        for managed in [false, true] {
+            assert_eq!(
+                execute(managed).stdout,
+                format!("managed-owned {version}").as_bytes()
+            );
+        }
     }
 }
