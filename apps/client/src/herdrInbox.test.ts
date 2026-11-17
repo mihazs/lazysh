@@ -101,3 +101,40 @@ it('does not record the same frame twice',async()=>{
   expect(await collectHerdrTransition(session,frame)).toBeNull();
   expect(getInbox().rows).toHaveLength(1);
 });
+
+it('retains independent transitions received together',async()=>{
+  const alerts=await Promise.all([
+    collectHerdrTransition(session,transition({paneId:'w1:p10'})),
+    collectHerdrTransition(session,transition({paneId:'w1:p11'})),
+  ]);
+  expect(alerts.every(Boolean)).toBe(true);
+  expect(getInbox().rows.map(row=>row.paneId).sort()).toEqual(['herdr:main:w1:p10','herdr:main:w1:p11']);
+});
+
+it('does not commit a transition after its caller loses permission',async()=>{
+  let allowed=true;
+  const pending=collectHerdrTransition(session,transition(),()=>allowed);
+  allowed=false;
+  expect(await pending).toBeNull();
+  expect(getInbox().rows).toEqual([]);
+});
+
+it.each([false,true])('keeps a newer state when an earlier hash is delayed (hook=%s)',async withHook=>{
+  if(withHook)await collectInbox(session,hook({state:'done'}),true);
+  const digest=crypto.subtle.digest.bind(crypto.subtle);
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  let first=true;
+  const spy=vi.spyOn(crypto.subtle,'digest').mockImplementation(async (...args)=>{
+    if(first){first=false;await gate;}
+    return digest(...args);
+  });
+  try {
+    const agentSession={agent:'codex',value:'codex-session'};
+    const old=collectHerdrTransition(session,transition({agentSession}));
+    await collectHerdrTransition(session,transition({agentSession,status:'done',at:T0+1000}));
+    release();
+    expect(await old).toBeNull();
+    expect(getInbox().rows.map(row=>row.state)).toEqual(['done']);
+  } finally {release();spy.mockRestore();}
+});

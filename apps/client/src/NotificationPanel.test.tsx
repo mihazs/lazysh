@@ -140,8 +140,9 @@ const watchHerdr = async () => {
   vi.mocked(isPermissionGranted).mockResolvedValue(true);
   vi.mocked(invoke).mockImplementation(async command => command === 'agent_snapshot' ? { schemaVersion: 1, sessions: [] } : undefined);
   updateInbox({ monitoring: true, notifications: true });
-  render(<NotificationMonitor sessions={sessions} />);
+  const view = render(<NotificationMonitor sessions={sessions} />);
   await act(async () => {});
+  return view;
 };
 const notified = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === 'notify_agent_attention');
 
@@ -184,4 +185,33 @@ it('lists the pane without notifying while system notifications are paused, and 
   updateInbox({ notifications: true });
   await announce(herdrTransition({ paneId: 'w1:p9', agentSession: null, sequence: 9 }));
   await waitFor(() => expect(getInbox().error).toContain('notification service down'));
+});
+
+
+it.each(['monitoring','connection'])('invalidates delayed events after %s is disabled and restored', async kind => {
+  const view = await watchHerdr();
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let first = true;
+  let finished!: () => void;
+  const completed = new Promise<void>(resolve => { finished = resolve; });
+  const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (...args) => {
+    if (first) { first = false; await gate; }
+    else { const result = await digest(...args); finished(); return result; }
+    return digest(...args);
+  });
+  try {
+    await announce(herdrTransition());
+    if (kind === 'monitoring') {
+      act(() => updateInbox({ monitoring: false }));
+      act(() => updateInbox({ monitoring: true }));
+    } else {
+      view.rerender(<NotificationMonitor sessions={[]} />);
+      view.rerender(<NotificationMonitor sessions={sessions} />);
+    }
+    await act(async () => { release(); await completed; });
+    expect(getInbox().rows).toEqual([]);
+    expect(notified()).toHaveLength(0);
+  } finally { release(); spy.mockRestore(); }
 });
