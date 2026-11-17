@@ -192,7 +192,7 @@ fn unshifted_codepoint(input: &KeyInput) -> Option<u32> {
     from_key.or_else(|| {
         let mut chars = input.text.as_deref()?.chars();
         let only = chars.next().filter(|_| chars.next().is_none())?;
-        Some(only.to_lowercase().next().map_or(only, |c| c) as u32)
+        Some(only.to_lowercase().next().unwrap_or(only) as u32)
     })
 }
 
