@@ -13,6 +13,18 @@ export function parseHostBrowserSettings(value:unknown):HostBrowser {
 }
 const outdated=(cause:UiErrorCause)=>cause instanceof LocalUiError && cause.key==='hostBrowserUnsupported';
 
+// A save can outlive its switch instance. Keep same-device remounts from reading ahead of it.
+const pendingSaves=new Map<string,Set<Promise<unknown>>>();
+function trackSave(host:string,write:Promise<unknown>) {
+  const pending=pendingSaves.get(host) ?? new Set<Promise<unknown>>();
+  pending.add(write);pendingSaves.set(host,pending);
+  const release=()=>{pending.delete(write);if(!pending.size)pendingSaves.delete(host);};
+  void write.then(release,release);
+}
+async function waitForSaves(host:string) {
+  while(pendingSaves.get(host)?.size)await Promise.allSettled([...pendingSaves.get(host)!]);
+}
+
 /**
  * The host browser switch. The companion keeps it in its own file, so it is read and written by its own
  * commands with its own revision; the three companion switches never travel in the same call.
@@ -29,7 +41,6 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
   const [confirming,setConfirming]=useState(false);
   const request=useRef(0);
   const loadedFor=useRef<number|undefined>(undefined);
-  const pendingSave=useRef<Promise<unknown>|undefined>(undefined);
   const confirmation=useRef<HTMLDivElement>(null);
   const checkbox=useRef<HTMLInputElement>(null);
   const headingId=useId();
@@ -43,7 +54,7 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
     const current=++request.current;setBusy(true);setError('');setSaved(false);setConfirming(false);setOutdatedCompanion(false);
     try {
       // A hidden save can still change the host. Read after its response to avoid racing the write.
-      if(pendingSave.current)await pendingSave.current.catch(()=>{});
+      await waitForSaves(hostKey);
       if(!owns(current))return;
       const value=parseHostBrowserSettings(await invoke('get_host_browser_settings',{sessionId}));
       if(owns(current)){loadedFor.current=version;setSettings(value);setDraft(value.hostBrowserEnabled);}
@@ -64,11 +75,11 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
     const current=++request.current;setBusy(true);setError('');setSaved(false);setConfirming(false);
     try {
       const write=invoke('update_host_browser_settings',{sessionId,settings:{expectedRevision:settings.revision,hostBrowserEnabled:draft}});
-      pendingSave.current=write;
+      trackSave(hostKey,write);
       const value=parseHostBrowserSettings(await write);
       if(owns(current)){setSettings(value);setDraft(value.hostBrowserEnabled);setSaved(true);if(value.hostBrowserEnabled)confirmHostBrowser(hostKey);}
     } catch(failure) {if(owns(current))fail(failure,true);}
-    finally {pendingSave.current=undefined;if(owns(current))setBusy(false);}
+    finally {if(owns(current))setBusy(false);}
   }
   // Turning it off needs no confirmation; turning it on does, once per host on this device.
   function submit() {

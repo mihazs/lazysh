@@ -153,3 +153,22 @@ it.each([false,true])('reconciles a hidden save when reopen is before completion
   await vi.waitFor(()=>expect(calls('get_host_browser_settings')).toHaveLength(2));
   expect((box as HTMLInputElement).checked).toBe(true);
 });
+
+it('reconciles a save that completes after the switch remounts',async()=>{
+  let finish!:()=>void;
+  let remote=off;
+  const pending=new Promise<typeof on>(resolve=>{finish=()=>{remote=on;resolve(on);};});
+  vi.mocked(invoke).mockImplementation(async command=>command==='get_host_browser_settings'?remote:command==='update_host_browser_settings'?pending:undefined);
+  const first=render(<HostBrowserSwitch sessionId="s1" hostKey="host-a" visible reload={0}/>);
+  const box=await screen.findByRole('checkbox',{name:'Host browser'});
+  await vi.waitFor(()=>expect(box.matches(':disabled')).toBe(false));
+  fireEvent.click(box);fireEvent.click(screen.getByRole('button',{name:'Save host browser setting'}));allow();
+  first.unmount();
+  render(<HostBrowserSwitch sessionId="s1" hostKey="host-a" visible reload={0}/>);
+  await act(async()=>{});
+  expect(calls('get_host_browser_settings')).toHaveLength(1);
+  expect(screen.getByRole('checkbox',{name:'Host browser'}).matches(':disabled')).toBe(true);
+  await act(async()=>finish());
+  await vi.waitFor(()=>expect(calls('get_host_browser_settings')).toHaveLength(2));
+  expect((screen.getByRole('checkbox',{name:'Host browser'}) as HTMLInputElement).checked).toBe(true);
+});
