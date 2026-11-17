@@ -42,6 +42,7 @@
     "allow-device-action",
     "allow-ios-device-probe",
     "allow-android-device-probe",
+    "allow-android-device-action",
     "allow-ios-device-action",
     "allow-device-stream-start",
     "allow-device-stream-next",
