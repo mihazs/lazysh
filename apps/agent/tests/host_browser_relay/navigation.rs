@@ -470,6 +470,19 @@ fn a_page_that_opens_windows_without_end_is_held_to_sixteen_tabs() {
         known.tabs().len() == 16 && known.refused("OperationRefused", 1)
     });
     assert_eq!(client.known.tabs["activeId"], "T16");
+    // The tab list can arrive before the fake browser records the last screencast start.
+    let deadline = Instant::now() + WAIT;
+    while !fixture
+        .made()
+        .iter()
+        .any(|call| call["method"] == "Page.startScreencast" && call["sessionId"] == "S16")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the final tab did not start its screencast"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     // A page that opens one more: the browser has it, and the relay closes it again without showing it.
     let before = fixture.made().len();
     client.send(json!({"type": "navigate", "url": "http://fake.test/popup"}));
