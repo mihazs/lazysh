@@ -515,7 +515,7 @@ mod tests {
         let codex = temp.path().join("codex");
         std::fs::write(
             &codex,
-            "#!/bin/sh\nprintf '  Question 1/1 (1 unanswered)\\n  Which color?\\n\\n  › 1. Red  Choose red.\\n    2. Green  Choose green.\\n\\n  tab to add notes | enter to submit answer | esc to interrupt\\n'\nsleep 600\n",
+            "#!/bin/sh\nprintf '  Question 1/1 (1 unanswered)\\n  Which color?\\n\\n  › 1. Red  Choose red.\\n    2. Green  Choose green.\\n\\n  esc to interrupt\\n'\nsleep 600\n",
         )
         .unwrap();
         std::fs::set_permissions(&codex, std::os::unix::fs::PermissionsExt::from_mode(0o755))
@@ -543,10 +543,11 @@ mod tests {
             rows = screen_rows(&String::from_utf8_lossy(
                 &run(&screen_command(&asker)).stdout,
             ));
-            // The whole last row, not a piece of it: the pane's first resize reflows the line and can drop the space at its wrap.
-            if rows.iter().any(|row| {
-                row.trim_end() == "  tab to add notes | enter to submit answer | esc to interrupt"
-            }) {
+            // The whole last row, not a piece of it. It is short enough to fit the narrowest pane, because Zellij 0.45 drops the space at the wrap of a longer line.
+            if rows
+                .iter()
+                .any(|row| row.trim_end() == "  esc to interrupt")
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -554,10 +555,7 @@ mod tests {
         let text = |row: &str| rows.iter().any(|line| line.trim_end() == row);
         assert!(text("  Question 1/1 (1 unanswered)"), "{rows:?}");
         assert!(text("  › 1. Red  Choose red."), "{rows:?}");
-        assert!(
-            text("  tab to add notes | enter to submit answer | esc to interrupt"),
-            "{rows:?}"
-        );
+        assert!(text("  esc to interrupt"), "{rows:?}");
         // A pane running something else (a shell would take the prompt as a command) and a missing pane are refused.
         let other = String::from_utf8(
             run(&format!(
