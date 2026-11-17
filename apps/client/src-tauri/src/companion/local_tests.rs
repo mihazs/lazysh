@@ -143,6 +143,29 @@ fn reporting(path: &Path, version: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn version_probe_recovers_after_a_transient_busy_executable() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = temp.path().join("agent");
+    reporting(&executable, "1.4.0");
+    let writer = fs::OpenOptions::new()
+        .write(true)
+        .open(&executable)
+        .unwrap();
+    assert_eq!(
+        std::process::Command::new(&executable)
+            .output()
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::ETXTBSY)
+    );
+    let probe = tokio::spawn(async move { version_of(&executable).await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(writer);
+    assert_eq!(probe.await.unwrap().as_deref(), Some("1.4.0"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn the_bundled_companion_is_copied_privately_and_only_replaced_by_a_newer_one() {
@@ -151,7 +174,16 @@ async fn the_bundled_companion_is_copied_privately_and_only_replaced_by_a_newer_
     let bundled = temp.path().join("mount/usr/bin/lazysh-agent");
     let target = temp.path().join("data/lazysh/companion/lazysh-agent");
     let run = |path: &Path| {
-        let output = std::process::Command::new(path).output().unwrap();
+        let mut attempts = 0;
+        let output = loop {
+            match std::process::Command::new(path).output() {
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 100 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
         String::from_utf8(output.stdout).unwrap()
     };
     reporting(&bundled, "1.4.0");

@@ -152,12 +152,27 @@ fn argv(line: &str, program: &str) -> Result<Cmd> {
 
 /// `lazysh-agent --version` of an executable that answers in time: the bare version.
 async fn version_of(path: &Path) -> Option<String> {
-    let run = tokio::process::Command::new(path)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
+    let run = async {
+        let mut attempts = 0;
+        loop {
+            let output = tokio::process::Command::new(path)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            match output {
+                Err(ref error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 100 =>
+                {
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                result => break result,
+            }
+        }
+    };
     let output = tokio::time::timeout(std::time::Duration::from_secs(10), run)
         .await
         .ok()?
