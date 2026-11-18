@@ -67,7 +67,7 @@ describe('agent activity', () => {
 });
 
 const reported={schemaVersion:1,status:'available',sessionId:'a',path:'/work/Claude 世界.jsonl ',reportedAt:'2026-10-24T19:30:00Z',paneId:'%1'};
-async function historyFixture(result:unknown, rows=[session]) {
+async function historyFixture(result:unknown, rows:object[]=[session]) {
   const {invoke}=await import('@tauri-apps/api/core');
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
@@ -201,6 +201,24 @@ it('keeps selected reported context, search focus and draft through locale updat
     fireEvent.change(search,{target:{value:'Codex'}});expect(screen.queryByRole('region',{name:'Relato selecionado'})).toBeNull();
     fireEvent.change(search,{target:{value:''}});expect(screen.queryByRole('region',{name:'Relato selecionado'})).toBeNull();
   } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
+it.each([
+  ['en','Reported multiplexer server'],['pt-BR','Servidor do multiplexador reportado'],['es','Servidor del multiplexor reportado'],
+])('names the tmux server of a reported pane in %s and omits it for a companion that does not record it',async(locale,label)=>{
+  await historyFixture(reported,[{...session,paneServer:'tmux:work'},{...session,sessionId:'older',project:'/old'}]);render(<AgentPanel sessionId="pane-server"/>);
+  const open=async(name:string)=>{fireEvent.click(await screen.findByRole('button',{name}));const region=screen.getByRole('region',{name:/Selected report|Relato selecionado|Informe seleccionado/});fireEvent.click(within(region).getByText(/Report details|Detalhes do relato|Detalles del informe/));return region;};
+  try {
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    const named=await open(t('agentsSelectReport',{agent:'Claude Code',project:'/work'}));
+    expect(within(named).getByText(label)).toBeTruthy();expect(within(named).getByText('tmux:work')).toBeTruthy();
+    fireEvent.click(within(named).getByRole('button',{name:t('agentsClearSelection')}));
+    const older=await open(t('agentsSelectReport',{agent:'Claude Code',project:'/old'}));
+    expect(within(older).queryByText(label)).toBeNull();expect(within(older).getByText('%1')).toBeTruthy();
+  } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
+it('accepts a snapshot that names a pane server and rejects one that is not text',()=>{
+  expect(parseSnapshot({schemaVersion:1,sessions:[{...session,paneServer:'rmux:work'}]})[0].paneServer).toBe('rmux:work');
+  for(const paneServer of [7,null,'x'.repeat(257)]) expect(()=>parseSnapshot({schemaVersion:1,sessions:[{...session,paneServer}]})).toThrow();
 });
 it('retires selection across host changes while preserving the search draft',async()=>{
   await historyFixture(reported);const view=render(<AgentPanel sessionId="source-a"/>);

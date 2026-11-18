@@ -73,6 +73,7 @@ fn observe(payload: &Value, pane: Option<&str>) -> Result<Option<Observation>> {
             // Asked, not confirmed waiting: the request may already be answered or cancelled.
             summary: "Approval requested".into(),
             pane_id: pane.map(str::to_owned),
+            pane_server: None,
             waiting: Some(Waiting::Approval),
         },
         request,

@@ -394,6 +394,7 @@ fn waiting_event(request: &Request, agent: ApprovalAgent) -> Result<Option<crate
         state: crate::SessionState::NeedsAttention,
         summary: request.tool_name.clone(),
         pane_id: board_pane.map(str::to_owned),
+        pane_server: None,
         waiting: Some(crate::Waiting::for_tool(Some(&request.tool_name))),
     }))
 }
@@ -457,7 +458,9 @@ pub fn request(
         ],
     )?;
     transaction.commit()?;
-    if let Some(event) = waiting_event(&request, agent)? {
+    if let Some(mut event) = waiting_event(&request, agent)? {
+        // The pane is the environment's own, so is its server; ingesting none would clear the label an earlier report recorded.
+        event.pane_server = crate::pane_server().filter(|_| event.pane_id.as_deref() == pane);
         Store::open(directory)?.ingest(&event, Utc::now())?;
     }
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout));
