@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.77.1
+
+### Patch Changes
+
+- b377e2e: Let the native multiplexer commands (tmux, Herdr and Zellij discovery, session lists, tmux and Zellij actions and the Zellij tab list) run against a local desktop session as argument lists, with a Rust `PATH` lookup and an owner-checked `~/.local/bin` fallback for Herdr. The interface still hides these views for local sessions, and SSH sessions behave as before.
+- 9254cea: Build the shared terminal runtime for Android arm64 and x86_64 (#2098, part of #1312 and #1302): the Herdr binding's build script maps `aarch64-linux-android` and `x86_64-linux-android` to the Zig targets of libghostty-vt, and CI checks and links the runtime for both ABIs with the pinned NDK. Build and CI only; nothing runs on Android, the app does not use the runtime yet, and xterm.js stays the only engine.
+- @lazysh/account-usage@1.77.1
+  - @lazysh/common@1.77.1
+  - @lazysh/display-idle@1.77.1
+  - @lazysh/et-transport@1.77.1
+  - @lazysh/mosh-transport@1.77.1
+
 ## 1.77.0
 
 ### Minor Changes
