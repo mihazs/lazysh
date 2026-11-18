@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.79.0
+
+### Patch Changes
+
+- 51fd7f4: Compile the app's native terminal bridge with the `native-terminal` feature in CI and run its real-core tests (the local PTY, the 100-session churn, the core's input encoding and the transport cases) in a new `native-terminal-bridge` job, so a change to the terminal core crate that breaks the bridge fails on its pull request instead of reaching `main` unnoticed (#1620). The 100-session churn test now waits for the core to finish parsing a session's last output instead of reading the screen the moment the PTY closes, which failed on a loaded host.
+- 3d71ef8: Refuse to stage or publish a release package that is more than 1.5 times the size measured on v1.62.0, and record the measured sizes of every published package in the release documentation. Release tooling only; installed applications do not change.
+- 20cc3da: Record which tmux or rmux server a hook's pane belongs to. A pane id such as `%7` is unique only inside one server, so a report from `tmux -L work` and one from the default server could carry the same id; the companion now adds `paneServer` (`tmux:work`, `rmux:default`) read from the `TMUX` or `RMUX` socket path, the Agents panel's report details show it, and a socket given with `-S` records none. The field is optional in the snapshot, so an older companion or client works unchanged.
+- @lazysh/account-usage@1.79.0
+  - @lazysh/common@1.79.0
+  - @lazysh/display-idle@1.79.0
+  - @lazysh/et-transport@1.79.0
+  - @lazysh/mosh-transport@1.79.0
+
 ## 1.78.2
 
 ### Patch Changes
