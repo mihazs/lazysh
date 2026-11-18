@@ -3,6 +3,9 @@
 .account-usage-chip svg { flex:none; }
 .account-usage-chip meter { width:28px; height:6px; flex:none; }
 .account-usage-details { padding:16px; overflow-wrap:anywhere; }
+/* The Usage view is one scrolling column: as flex-row siblings in .session-body the recorded-usage panel was squeezed to zero width beside the account panel. */
+.usage-view { flex:1; min-width:0; overflow-y:auto; }
+.usage-view > .tool-panel { flex:none; overflow:visible; }
 .account-usage-details header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .account-usage-details h2 { margin:0; }
 .account-usage-details header button { display:inline-flex; align-items:center; gap:6px; }
@@ -13,6 +16,10 @@
 .account-usage-details dd { margin:4px 0 0; display:grid; gap:4px; }
 .account-usage-details meter { display:block; width:100%; }
 .account-usage-details p > span { display:block; }
+/* Shared with UsagePanel: both panels of the Usage view keep their intro behind one closed disclosure. */
+.usage-help summary { min-height:44px; display:flex; align-items:center; cursor:pointer; color:var(--theme-muted, var(--muted)); font-size:13px; }
+.usage-help p { margin:0 0 8px; color:var(--theme-muted, var(--muted)); font-size:12px; line-height:1.5; }
+.usage-panel > .usage-help { margin:0 18px; flex-shrink:0; }
 .workspace-footer > .account-usage-chip { min-height:0; height:12px; padding:0; line-height:1; }
 .workspace-footer > .account-usage-chip + span { flex:1; }
 @media (pointer:coarse) {

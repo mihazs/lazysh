@@ -126,7 +126,7 @@ export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId
   const latest = data?.samples.at(-1);
   return <section className="tool-panel usage-panel" aria-label={t("usageTitle")}>
     <div className="tool-bar"><h3>{t("usageTitle")}</h3><button disabled={busy || !opened} onClick={() => opened && void read(opened)}>{t("usageRefresh")}</button></div>
-    <p className="agent-note">{t("usageExplanation")}</p>
+    <details className="usage-help"><summary>{t("usageAbout")}</summary><p>{t("usageExplanation")}</p></details>
     <form className="tool-bar" onSubmit={event => { event.preventDefault(); void read({ agent, path: path.trim(), offset: 0, ...(["hermes", "opencode"].includes(agent) ? { transcriptSessionId: transcriptSessionId.trim() } : {}) }); }}>
       <label>{t("usageAgent")}<select value={agent} disabled={busy} onChange={event => { clearSelection(); setAgent(event.target.value); setDiscovered([]); setTranscriptSessionId(""); }}>{Object.entries(agents).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
       <button type="button" disabled={busy} onClick={() => void findTranscripts()}>{t("usageFind")}</button>
