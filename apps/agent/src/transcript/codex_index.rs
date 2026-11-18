@@ -233,7 +233,7 @@ impl Index {
             let id = format!("compacted-{key}");
             return self.put(
                 None,
-                super::super::events::codex_compacted(&id, &value["timestamp"]),
+                super::super::events::compacted(&id, &value["timestamp"]),
                 key,
                 Kind::Compacted,
                 record_hash,
@@ -414,7 +414,7 @@ pub(crate) fn materialize(
     images: bool,
 ) -> Result<Value> {
     let message = match kind {
-        Kind::Compacted => Some(super::super::events::codex_compacted(
+        Kind::Compacted => Some(super::super::events::compacted(
             &format!("compacted-{key}"),
             &value["timestamp"],
         )),
