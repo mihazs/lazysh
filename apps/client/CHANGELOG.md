@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.79.1
+
+### Patch Changes
+
+- 74d15b8: Add the page side of the developer-only Android native terminal surface: a tracker that keeps the surface on a DOM element through layout, scroll, zoom and transitions, with at most one placement command in flight, no work while the page is idle, and the surface taken down when the element has no box, the shell refuses, or tracking stops. Nothing in the app creates a tracker yet and release builds refuse the commands, so xterm.js stays the only engine and the default and nothing changes for users.
+- 0b79706: Settle every open difference between the shared Rust terminal core and xterm.js (#1314, slice 1314b, part of #1302): each entry of the divergence registry now carries a recorded decision and the test that pins it, and tmux, vim, bash, Herdr, Claude Code, Codex and OpenCode run on a pty with the core as their terminal in the core's own tests. The review approves the core's Unicode 11 and later widths (emoji, ZWJ and skin-tone sequences take two cells), the standard Alt+arrow encodings, the Kitty keyboard reports Codex and Herdr ask for, libghostty-vt's device attributes, the OSC 52 selection filter and reflow on resize, and moves Shift+PageUp routing to #1334. The core is not wired into the app and xterm.js stays the only engine and the default, so nothing changes for users; the release notes of the Android default (#2094) must call out the widths, the Alt+arrow form, reflow and the dropped primary-selection writes.
+- @lazysh/account-usage@1.79.1
+  - @lazysh/common@1.79.1
+  - @lazysh/display-idle@1.79.1
+  - @lazysh/et-transport@1.79.1
+  - @lazysh/mosh-transport@1.79.1
+
 ## 1.79.0
 
 ### Patch Changes
