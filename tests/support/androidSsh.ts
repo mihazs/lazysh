@@ -247,7 +247,7 @@ export async function reportInstrumentationFailures(directory:string) {
   } catch {/* The report never replaces the primary failure, and absent results are not an error. */}
 }
 
-type AndroidCleanupStage='reverse'|'control'|'fixture-file'|'Herdr'|'tmux'|'SSH'|'app-package'|'test-package'|'software-keyboard';
+type AndroidCleanupStage='reverse'|'control'|'fixture-file'|'Herdr'|'tmux'|'SSH'|'ET'|'app-package'|'test-package'|'software-keyboard';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
