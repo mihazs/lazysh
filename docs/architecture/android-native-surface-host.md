@@ -1,6 +1,6 @@
 # Android native surface host
 
-Status: **host and lifecycle only, developer builds only**. No renderer draws on it, no input, IME or accessibility reaches it, and nothing in the app calls it yet. It is the first slice of [#1327](https://github.com/mihazs/lazysh/issues/1327) (epic [#1302](https://github.com/mihazs/lazysh/issues/1302)) and follows the strategy the [composition proof of concept](android-surface-composition-poc.md) recommended: a `SurfaceView` stacked below a transparent WebView. Related: [native rendering](native-rendering.md) · [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [migration plan](terminal-migration-plan.md).
+Status: **host and lifecycle only, developer builds only**. No renderer draws on it, no input, IME or accessibility reaches it, and the pane that would place it is mounted only by tests: no backend registration gives a session a native terminal yet. It is the first slice of [#1327](https://github.com/mihazs/lazysh/issues/1327) (epic [#1302](https://github.com/mihazs/lazysh/issues/1302)) and follows the strategy the [composition proof of concept](android-surface-composition-poc.md) recommended: a `SurfaceView` stacked below a transparent WebView. Related: [native rendering](native-rendering.md) · [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [migration plan](terminal-migration-plan.md).
 
 ## What exists
 
@@ -26,7 +26,7 @@ The seam for the renderer is `SurfaceClient`: `onSurfaceReady(surface, generatio
 
 ## The page side
 
-`apps/client/src/terminalSurfaceAnchor.ts` keeps a session's surface on a DOM element and is the only code that sends `place` and `remove` from the page. Nothing in the app creates a tracker yet.
+`apps/client/src/terminalSurfaceAnchor.ts` keeps a session's surface on a DOM element and is the only code that sends `place` and `remove` from the page. `TerminalPane` creates one for a session whose adapter is native (see [the pane](#the-pane)).
 
 - **Hints, then a short look.** Layout, scroll, zoom and CSS transitions change an element's rectangle without telling the page which. A resize or scroll event, a `ResizeObserver` or `MutationObserver` callback, or a transition or animation event starts a frame-by-frame look at `getBoundingClientRect()` that ends after 12 frames with no change, so an idle page runs nothing.
 - **One command in flight.** A rectangle that moved while a `place` was pending is not queued: when the command returns, the latest rectangle goes out as one command. The shell does not order commands, so `stop` waits for the command in flight before it sends `remove`, and a `remove` never overtakes a `place`.
@@ -34,7 +34,18 @@ The seam for the renderer is `SurfaceClient`: `onSurfaceReady(surface, generatio
 - **Refusal.** When the shell refuses or a command fails (a release build answers `native_surface_disabled`), tracking stops, a surface already placed is removed, and `onError` is told. The caller decides what to show; the tracker never retries.
 - **Background.** The pane colour (`rgbOf` turns `#rgb`, `#rrggbb`, `rgb()` and `rgba()` into the `0xRRGGBB` the shell takes) is read on every placement, so a theme change reaches the surface with the next one.
 
-Checked by `terminalSurfaceAnchor.test.ts` (Vitest, jsdom, frames driven by hand, the shell's commands mocked). Not established: the real placement round trip while a WebView scrolls or animates, and a tracker on the real page; both need the transparent pane and a device.
+Checked by `terminalSurfaceAnchor.test.ts` (Vitest, jsdom, frames driven by hand, the shell's commands mocked). Not established: the real placement round trip while a WebView scrolls or animates; it needs a device.
+
+## The pane
+
+`TerminalPane` mounts a session by the engine of its adapter (`adapter.backend`), and nothing else about the pane differs.
+
+- **Native.** The terminal container gets an id (`useId`) and a `data-terminal-surface="native"` marker, the adapter is attached with `{kind: 'native', anchorId}`, and a tracker places the session's surface on the container for as long as the pane is shown (`active`, or `swiping` between the terminal and the Agent view). A pane that is hidden or ended stops the tracker, which sends `remove`; showing it again places the surface again. A refusal (a release build answers `native_surface_disabled`) is reported through the pane's `reportError`, the marker goes, and the page paints again.
+- **Transparent over the surface, and only then.** While the marker is set, every ancestor of the container (`TerminalNativeSurface.css`: `:has(.terminal-canvas[data-terminal-surface="native"])`) paints no background, from the pane up to `html`. The pane's overlays (toolbar, composer, notices, search, selection tools) are not ancestors and keep their backgrounds above the surface. An xterm.js pane has no id and no marker, so no rule matches and its DOM is what it was.
+- **Input stays on the container.** Pointer, touch, wheel and key handlers are still the container's and the pane's. A native adapter has no typed-input editor to observe (`observeInput` is absent without the `ime` capability), so the pane runs without the IME observer and offers no virtual modifiers; the platform's own input view is [#1328](https://github.com/mihazs/lazysh/issues/1328).
+- **The surface colour** is the terminal theme's background, read on every placement.
+
+Checked by `terminal-native-surface.spec.ts` (Playwright, Chromium, desktop and phone projects): the native adapter over the headless stand-in core in the app's own `app-viewport`, `app-shell`, `workspace` and `session-body` chain, with the shell's surface commands recorded. It asserts the placement rectangle and colour, that the surface follows a layout move, `remove` on hide and on unmount and `place` again on show, the computed background of every ancestor (transparent for native, opaque for xterm.js, opaque again when the pane is hidden or the shell refuses) and the alpha read back from a screenshot, the composer sheet painting and taking the hit above the container, and a finger drag on the container still scrolling. Not established: the real `App` chain (the harness repeats its class names, and the real page never mounts a native pane until a backend is registered), the Android WebView's own background (`onWebViewCreate` does not make it transparent yet, so on a device the pane would show the WebView's colour and not the surface), compositing on Waydroid or a device, and the cost of a translucent WebView.
 
 ## Verification and limits
 
@@ -53,5 +64,5 @@ Not established: that the real page can be made transparent over the pane (the s
 ## Next slices
 
 1. Renderer attachment: a JNI client that turns `ready` and `lost` into the Renderer API lifecycle (`create`, `resize`, `destroy`) and calls `Session::attach` and `detach`, once a renderer is selected ([#1323](https://github.com/mihazs/lazysh/issues/1323), [#1324](https://github.com/mihazs/lazysh/issues/1324)) and the core builds for Android ([#1312](https://github.com/mihazs/lazysh/issues/1312)).
-2. Wire the tracker to a pane (it exists, see [the page side](#the-page-side), and nothing creates one yet) and make the pane transparent on the real page, measured on a device.
+2. Make the Android WebView background transparent and measure the real page over a surface on Waydroid (the pane and its transparency exist, see [the pane](#the-pane), and are checked in a browser only).
 3. Input, IME and selection handles on the surface ([#1328](https://github.com/mihazs/lazysh/issues/1328)), accessibility ([#1329](https://github.com/mihazs/lazysh/issues/1329)).
