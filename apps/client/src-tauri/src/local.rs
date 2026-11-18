@@ -2118,13 +2118,20 @@ mod tests {
                 .unwrap();
         (core, connected)
     }
+    /// What a core command answered the current renderer: its value or its error message.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    fn answered<T>(
+        result: Result<crate::app_lock::Guarded<T>, crate::app_lock::GuardedError<String>>,
+    ) -> Result<T, String> {
+        match result {
+            Ok(value) => Ok(value.into_inner().unwrap()),
+            Err(error) => Err(error.into_inner().unwrap()),
+        }
+    }
     /// The real core's screen text, read as the current renderer.
     #[cfg(all(unix, feature = "native-terminal"))]
     async fn real_core_text(id: &str) -> Result<String, String> {
-        match crate::terminal_core::terminal_core_text(access_lease(), id.to_owned()).await {
-            Ok(text) => Ok(text.into_inner().unwrap()),
-            Err(error) => Err(error.into_inner().unwrap()),
-        }
+        answered(crate::terminal_core::terminal_core_text(access_lease(), id.to_owned()).await)
     }
     /// The real core's screen text once it contains `marker`.
     #[cfg(all(unix, feature = "native-terminal"))]
@@ -2215,6 +2222,206 @@ mod tests {
         let row = text.lines().find(|row| row.ends_with('Y')).expect(&text);
         assert_eq!(row.chars().count(), 25, "{text:?}");
         terminal_core::close(&id);
+    }
+    /// A local state and a core opened for a terminal of this size, with the Channel the session starts with.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    async fn open_core(
+        cols: u32,
+        rows: u32,
+    ) -> (
+        LocalState,
+        Channel<SshEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (event, rx) = events();
+        crate::terminal_core::terminal_core_open(access_lease(), event.clone(), cols, rows, None)
+            .await
+            .unwrap();
+        (LocalState::default(), event, rx)
+    }
+    /// The events the core's Channel has delivered so far. The core's output never travels on it.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    fn queued(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            events.iter().all(|event| event["type"] != "data"),
+            "{events:?}"
+        );
+        events
+    }
+    /// The events up to and including the next `changed`. A chunk is announced just after it is parsed, so the
+    /// screen can show it a moment before its ring has gone out.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    async fn until_ring(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        let mut events = queued(rx);
+        while !events.iter().any(|event| event["type"] == "changed") {
+            let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("a ring");
+            events.push(event.unwrap());
+        }
+        events
+    }
+    #[cfg(all(unix, feature = "native-terminal"))]
+    fn kinds(events: &[serde_json::Value]) -> Vec<&str> {
+        events
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect()
+    }
+    /// Needs the `native-terminal` feature (Zig). The control plane over a real PTY: a program the shell runs
+    /// prints, the reader asks for the state, scrolls, resizes and stops looking, and the core's event stream on the
+    /// session's Channel says what the program reported and rings once per read, however much output arrives.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader() {
+        use crate::terminal_core::{self, fake::assert_no_cells};
+        use serde_json::json;
+        let _kept = terminal_core::tests_keeping_cores().read();
+        let (state, event, mut rx) = open_core(40, 6).await;
+        let program = concat!(
+            r"stty -echo; read a; printf '\a\033]0;build\a\033]7;file://host/tmp/a%%20b\a\033]52;c;aGVsbG8=\a'; seq 1 3000; echo first; ",
+            r"read b; seq 1 3000; echo second; read c; seq 1 5000; echo third; sleep 5",
+        );
+        let connected =
+            desktop::start_with_access(&state, access_lease(), shell(program), 40, 6, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        let id = id.as_str();
+        let go = || desktop::write(&state, id, "go\n".into(), access_lease()).unwrap();
+        let snapshot = |window| async move {
+            answered(
+                terminal_core::terminal_core_snapshot(access_lease(), id.to_owned(), window).await,
+            )
+        };
+        let scroll = |action| async move {
+            answered(
+                terminal_core::terminal_core_scroll(access_lease(), id.to_owned(), action, Some(8))
+                    .await,
+            )
+        };
+        let size = |cols, rows| async move {
+            answered(
+                terminal_core::terminal_core_resize(
+                    access_lease(),
+                    id.to_owned(),
+                    cols,
+                    rows,
+                    Some(8),
+                )
+                .await,
+            )
+        };
+        let active = |active| async move {
+            answered(
+                terminal_core::terminal_core_set_active(access_lease(), id.to_owned(), active)
+                    .await,
+            )
+        };
+
+        go();
+        let first = real_core_text_with(id, "first").await;
+        assert!(first.contains("3000"), "{first:?}");
+        // 3,000 lines arrived in many chunks and the reader has not read: one ring.
+        let mut events = until_ring(&mut rx).await;
+        assert_eq!(
+            kinds(&events)
+                .iter()
+                .filter(|kind| **kind == "changed")
+                .count(),
+            1,
+            "{events:?}"
+        );
+        // The reader reads: the state, the last rows, nothing that is a cell.
+        let live = snapshot(Some(8)).await.unwrap();
+        assert_no_cells(&live);
+        assert_eq!(live["state"]["columns"], 40);
+        assert_eq!(live["state"]["rows"], 6);
+        assert_eq!(live["state"]["viewport"]["following"], true);
+        let rows = live["window"]["rows"].as_array().unwrap();
+        assert!(rows.len() <= 8);
+        assert_eq!(
+            &rows[rows.len() - 4..],
+            [json!("2999"), json!("3000"), json!("first"), json!("")]
+        );
+        // What the program reported came out once, decoded, ahead of the ring or with the read.
+        events.extend(queued(&mut rx));
+        let of = |kind: &str| {
+            events
+                .iter()
+                .filter(|event| event["type"] == kind)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (
+                of("title").len(),
+                of("bell").len(),
+                of("cwd").len(),
+                of("clipboard").len()
+            ),
+            (1, 1, 1, 1),
+            "{events:?}"
+        );
+        assert_eq!(of("title")[0]["title"], "build");
+        assert_eq!(of("cwd")[0]["path"], "/tmp/a b");
+        assert_eq!(of("clipboard")[0]["text"], "hello");
+
+        // Scrolling and sizing answer with the new state.
+        let top = scroll(json!({"kind": "toTop"})).await.unwrap();
+        assert_no_cells(&top);
+        assert_eq!(top["state"]["viewport"]["top"], 0);
+        assert_eq!(top["state"]["viewport"]["following"], false);
+        assert_eq!(top["window"]["first"], 0);
+        let bottom = scroll(json!({"kind": "toBottom"})).await.unwrap();
+        assert_eq!(bottom["state"]["viewport"]["following"], true);
+        let resized = size(30, 8).await.unwrap();
+        assert_no_cells(&resized);
+        assert_eq!(
+            (
+                resized["state"]["columns"].as_u64(),
+                resized["state"]["rows"].as_u64()
+            ),
+            (Some(30), Some(8))
+        );
+        assert!(size(0, 8).await.unwrap_err().contains("between 1 and 1000"));
+
+        // A reader that stopped looking is told nothing while the program keeps printing, and is caught up once.
+        queued(&mut rx);
+        active(false).await.unwrap();
+        go();
+        real_core_text_with(id, "second").await;
+        assert_eq!(
+            kinds(&queued(&mut rx)),
+            Vec::<&str>::new(),
+            "an inactive session wakes nobody"
+        );
+        active(true).await.unwrap();
+        assert_eq!(
+            kinds(&queued(&mut rx)),
+            ["changed"],
+            "and rings once when looked at again"
+        );
+        // Reading rearms it: the next burst of 5,000 lines rings once more.
+        let seen = snapshot(None).await.unwrap();
+        assert!(seen["window"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row == "second"));
+        go();
+        real_core_text_with(id, "third").await;
+        assert_eq!(
+            kinds(&until_ring(&mut rx).await),
+            ["changed"],
+            "5,000 lines, one ring"
+        );
+        terminal_core::close(id);
     }
     /// Needs the `native-terminal` feature (Zig). `cat -v` makes the bytes the program receives visible.
     #[cfg(all(unix, feature = "native-terminal"))]

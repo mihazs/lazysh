@@ -14,13 +14,14 @@ rust-version = "1.96"
 # The single Ghostty dependency in the repository: Herdr's vendored binding, unmodified.
 [dependencies]
 ghostty-vt = { path = "../herdr-upstream/crates/ghostty-vt" }
+# The control plane's answers and events are the wire format of the app's commands and of the stdio harness (#1321).
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 # Goldens only: already in the lock through ghostty-vt.
 png = "0.17"
 # Test-only: fixtures are JSON, replayed by tests/vt_fixtures.rs (base64 is already locked via ghostty-vt).
 base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
 # Tests replay fixtures, such as the captured Mosh frames of apps/client/e2e/fixtures/mosh-resize-frames.json.
 serde_json = "1"
 # tests/programs runs real programs (tmux, vim, Herdr, the agent TUIs) on a pty with the core as their terminal.

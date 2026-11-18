@@ -5,10 +5,18 @@ use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::mosh::{self, Action, Display, DisplayFailure};
 use crate::render::Theme;
 use crate::size::{Size, SizeAuthority, SizeOutcome};
+use crate::titles::Titles;
 use ghostty_vt::{ActiveScreen, CellWide, Terminal};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+mod control;
+pub use control::{
+    control_window, ControlCursor, ControlEvent, ControlModes, ControlSnapshot, ControlState,
+    MouseTracking, RowWindow, ScrollAction, CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX,
+};
 
 /// Terminal-generated replies (DSR, DA, ...) waiting for the transport. A peer can spam queries,
 /// so the queue is capped; overflow is counted, not silent.
@@ -137,6 +145,8 @@ pub struct Events {
     pub clipboard_writes: Vec<Vec<u8>>,
     /// OSC 7 directory changes, oldest first; at most 8 wait, the oldest are dropped.
     pub pwd_changes: Vec<Vec<u8>>,
+    /// The latest `OSC 0` or `OSC 2` title; an earlier one nobody took is replaced.
+    pub title: Option<String>,
     /// Clipboard writes and directory changes refused because the host had not taken earlier ones.
     pub dropped: u64,
     /// The latest grid size the runtime applied since the last take (local or transport).
@@ -153,7 +163,7 @@ pub struct Geometry {
 }
 
 /// Where the visible rows sit in the buffer, in absolute rows (the adapter's `TerminalViewport`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Viewport {
     /// The first visible absolute row.
     pub top: usize,
@@ -192,6 +202,7 @@ pub struct TerminalRuntime {
     ingress: IngressHandle,
     replies: Arc<Mutex<Replies>>,
     colors: ColorQueries,
+    titles: Titles,
     events: Events,
     size: Size,
     authority: SizeAuthority,
@@ -225,6 +236,7 @@ impl TerminalRuntime {
             ingress: IngressHandle::new(config.ingress_bytes),
             replies,
             colors: ColorQueries::new(&config.theme),
+            titles: Titles::default(),
             events: Events::default(),
             size,
             authority: if config.canonical_frames {
@@ -271,6 +283,9 @@ impl TerminalRuntime {
     /// the theme right after the byte the VT dispatches it on, behind the replies to the bytes
     /// before it, unless the VT answered it itself.
     fn write_chunk(&mut self, chunk: &[u8]) {
+        if let Some(title) = self.titles.scan(chunk) {
+            self.events.title = Some(title);
+        }
         let mut at = 0;
         while let Some((end, reply)) = self.colors.find(chunk, at) {
             self.write_segment(&chunk[at..end - 1]);
