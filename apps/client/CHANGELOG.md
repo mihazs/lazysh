@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.75.0
+
+### Minor Changes
+
+- 57e0866: Show the last response's context for Claude Code in the Usage view and the recorded context remaining (window minus the last response) where the transcript records a window; unknown stays unknown.
+
+### Patch Changes
+
+- dd08c7c: Add a performance regression gate for the native terminal core to CI (#1341): a separate, non-required job (pushes to `main` only) runs the core's parse, frame, allocation, scrollback and memory metrics against limits and fails when one regresses, and proves on every run that it fails on an injected slowdown and on injected allocations. Nothing in the app changes: xterm.js stays the only terminal engine and the default, and no setting or default changes.
+- 71cad89: Prepare screen-reader access for a native terminal surface: a hidden, bounded mirror of the visible rows with a polite announcement log, and a rule that a session read with a screen reader never gets a terminal engine that cannot reach one. xterm.js stays the only engine and nothing offers another one yet, so terminal behaviour and defaults do not change.
+- @lazysh/account-usage@1.75.0
+  - @lazysh/common@1.75.0
+  - @lazysh/display-idle@1.75.0
+  - @lazysh/et-transport@1.75.0
+  - @lazysh/mosh-transport@1.75.0
+
 ## 1.74.0
 
 ### Minor Changes
