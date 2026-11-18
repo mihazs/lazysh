@@ -582,6 +582,7 @@ fn guarded_input(input: &Input) -> WireOutcome<()> {
     if matches!(
         input,
         Input::SendLong { .. }
+            | Input::Type { .. }
             | Input::Select { .. }
             | Input::Submit { .. }
             | Input::Pick { .. }
