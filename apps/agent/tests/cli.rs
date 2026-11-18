@@ -941,6 +941,8 @@ fn opening_another_store_preserves_an_existing_sqlite_writer_lock() {
 fn simultaneous_initialization_and_ingest_preserve_every_event() {
     let _burst = contention::exclusive_burst();
     for round in 0..4 {
+        // A slow-flush episode can start between rounds, so each round checks its premise.
+        contention::await_quiet_volume();
         let dir = tempfile::tempdir().unwrap();
         let barrier = std::sync::Barrier::new(16);
         let normalized = lazysh_agent::normalize(&event("same", "working"), Agent::Generic, None)
