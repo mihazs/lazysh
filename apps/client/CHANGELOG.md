@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.75.1
+
+### Patch Changes
+
+- 7514d76: Verify through the real Android app that Mosh runs the configured server path on the configured single-port UDP range, with the host confirming the UDP port the owned mosh-server holds.
+- 7514d76: Verify through the real Android app that Auto falls back to the trusted SSH terminal and reports why Mosh and Eternal Terminal were skipped, and that forced Eternal Terminal reaches an owned `etserver`. The official ET 7.0.0 fixture build now lives in one script shared by the Linux runtime and Android SSH parity jobs.
+- @lazysh/account-usage@1.75.1
+  - @lazysh/common@1.75.1
+  - @lazysh/display-idle@1.75.1
+  - @lazysh/et-transport@1.75.1
+  - @lazysh/mosh-transport@1.75.1
+
 ## 1.75.0
 
 ### Minor Changes
