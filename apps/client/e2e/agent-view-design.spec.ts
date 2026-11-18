@@ -255,6 +255,8 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
     await list.evaluate(node=>{node.scrollTop=0;});
     const jump=agent.getByRole('button',{name:'Jump to latest'});
     await expect(jump).toBeVisible();
+    // Its entrance slides it in, and its box is off by a sub-pixel (43.99994) while that transform runs.
+    await jump.evaluate(node=>Promise.all(node.getAnimations().map(animation=>animation.finished)));
     // It takes no room in the flow of the timeline, and it floats over the end of it, centred.
     expect(await list.evaluate(node=>node.scrollHeight)).toBe(height);
     const [button,area]=[await boxOf(jump),await boxOf(list)];
