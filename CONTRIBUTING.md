@@ -79,17 +79,19 @@ companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Her
 auxiliary, ntfy and the terminal performance gate (`terminal-perf`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there; the
 table below lists what a change can affect, and a pull request runs only the required jobs of
 that list.
+The exception is the official Gotify Android lane (`native-android-gotify`): it is not required to merge either, but it also runs on a pull request that changes its owner or the relay, so a change to the lane is qualified before it lands.
 
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
 | Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |
 | Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android tmux, Appium suite |
-| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
+| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API), both ntfy variants and the official Gotify Android lane |
 | Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
 | Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers |
 | Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr only: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
+| Gotify owner (`tests/android-gotify.test.ts`, `tests/support/androidGotify.ts`, `GotifyAndroidTest.kt`, `gotify-provenance.json`) and the ntfy and SSH helpers it reuses | the Gotify lane (`native-android-gotify`), plus the jobs the helper itself selects |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
 
 The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its

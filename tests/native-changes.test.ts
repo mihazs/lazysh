@@ -11,7 +11,7 @@ afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
 const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
-  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf'];
+  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'android_gotify', 'ios', 'terminal_perf'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
@@ -90,7 +90,7 @@ const neverNightly = "github.event_name != 'schedule'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
 const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'native-linux': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1,
-  'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
+  'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
 const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
@@ -188,7 +188,11 @@ test.each([
   ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun }],
   ['the shared companion release crate', ['packages/companion-release/src/lib.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
-    `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2 }] as const),
+    `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1 }] as const),
+  ['the Gotify acceptance owner and its host support', ['tests/android-gotify.test.ts', 'tests/support/androidGotify.ts'], { ...alwaysRun, 'native-android-gotify': 1 }],
+  ['the native Gotify case', ['apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/GotifyAndroidTest.kt'], { ...androidRun, 'native-android-gotify': 1 }],
+  ['the pinned official Gotify artifacts', ['apps/client/src-tauri/fixtures/gotify-provenance.json'], { ...clientRun, 'native-android-gotify': 1 }],
+  ['the owned SSH continuity probes the Gotify owner reuses', ['tests/support/androidSsh.ts'], { ...clientRun, ...androidRun, 'native-android-gotify': 1 }],
   ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts',
     '.github/workflows/main-verdict.yml', 'tests/main-verdict.test.ts', '.github/workflows/conventional-commits.yml', 'tests/regression-check.test.ts', 'apps/transcription-service/src/main.rs', 'fdroid/metadata/app.lazysh.client.yml'], alwaysRun],
 ] as const)('a pull request changing %s runs exactly the jobs it can affect', async (_, paths, expected) => {
