@@ -79,9 +79,10 @@ final class SurfacePocUITests: XCTestCase {
 
     private func safeInsets(_ state: [String: Any]) -> [String: Double] { state["safe"] as? [String: Double] ?? [:] }
 
-    /// The simulator's composited pixels for the app, and how many of them make one point.
+    /// The simulator's composited screen, in the display's native orientation (a landscape app's screenshot is
+    /// the portrait framebuffer, run 44377130533), and how many of its pixels make one point.
     private func capture(_ app: XCUIApplication, _ name: String) throws -> (pixels: PocRaster, scale: CGFloat) {
-        let shot = app.screenshot()
+        let shot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: shot)
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -97,8 +98,7 @@ final class SurfacePocUITests: XCTestCase {
             return true
         }
         XCTAssertTrue(drawn, "The screenshot must be readable as RGBA")
-        let scale = CGFloat(image.width) / app.frame.width
-        XCTAssertEqual(CGFloat(image.height) / app.frame.height, scale, accuracy: 0.05, "The screenshot must share the app's orientation")
+        let scale = CGFloat(max(image.width, image.height)) / max(app.frame.width, app.frame.height)
         return (PocRaster(width: image.width, height: image.height, rgba: bytes), scale)
     }
 
@@ -106,12 +106,21 @@ final class SurfacePocUITests: XCTestCase {
         shot.pixels.color(x: Int(point.x * shot.scale), y: Int(point.y * shot.scale))
     }
 
-    /// The rectangle of surface-coloured pixels near `expected`, in points.
-    private func surfacePixels(_ shot: (pixels: PocRaster, scale: CGFloat), near expected: CGRect) -> CGRect? {
-        let area = expected.insetBy(dx: -12, dy: -12)
-        let scaled = CGRect(x: area.minX * shot.scale, y: area.minY * shot.scale, width: area.width * shot.scale, height: area.height * shot.scale)
-        return shot.pixels.bounds(of: .surface, tolerance: channel, in: scaled)
-            .map { CGRect(x: $0.minX / shot.scale, y: $0.minY / shot.scale, width: $0.width / shot.scale, height: $0.height / shot.scale) }
+    /// The rectangle of surface-coloured pixels near `expected`, in points, with the quarter turns that put the screenshot
+    /// upright. Only the turns that give the app's own size are tried; the first whose rectangle is at `expected` wins.
+    private func surfacePixels(_ shot: (pixels: PocRaster, scale: CGFloat), near expected: CGRect, in app: XCUIApplication) -> (rect: CGRect, turns: Int)? {
+        let area = expected.insetBy(dx: -12, dy: -12), scale = shot.scale
+        let scaled = CGRect(x: area.minX * scale, y: area.minY * scale, width: area.width * scale, height: area.height * scale)
+        var attempt: (rect: CGRect, turns: Int)?
+        for turns in 0..<4 {
+            let upright = shot.pixels.quarterTurned(turns)
+            guard abs(CGFloat(upright.width) - app.frame.width * scale) <= 2, abs(CGFloat(upright.height) - app.frame.height * scale) <= 2,
+                  let found = upright.bounds(of: .surface, tolerance: channel, in: scaled) else { continue }
+            let rect = CGRect(x: found.minX / scale, y: found.minY / scale, width: found.width / scale, height: found.height / scale)
+            if pocRectsAgree(rect, expected, tolerance: edge) { return (rect, turns) }
+            attempt = attempt ?? (rect, turns)
+        }
+        return attempt
     }
 
     private func assertColour(_ found: PocColor?, _ expected: PocColor, _ message: String) {
@@ -124,11 +133,11 @@ final class SurfacePocUITests: XCTestCase {
         let shot = try capture(app, name)
         let reported = try XCTUnwrap(rect(host["surface"]), "The host has no surface to place")
         let visible = anchor.intersection(app.frame)
-        let drawn = try XCTUnwrap(surfacePixels(shot, near: visible), "No surface-coloured pixel near the DOM anchor " + String(describing: anchor))
+        let (drawn, turns) = try XCTUnwrap(surfacePixels(shot, near: visible, in: app), "No surface-coloured pixel near the DOM anchor " + String(describing: anchor))
         XCTAssertTrue(pocRectsAgree(reported, anchor, tolerance: edge), "The host placed the surface at \(reported), the page's anchor is at \(anchor)")
         XCTAssertTrue(pocRectsAgree(drawn, visible, tolerance: edge), "The screen shows the surface at \(drawn), the page's anchor is at \(visible)")
         return ["anchor": anchor.debugDescription, "reported": reported.debugDescription, "drawn": drawn.debugDescription,
-                "reportedError": Double(pocMaxEdgeError(reported, anchor)), "drawnError": Double(pocMaxEdgeError(drawn, visible))]
+                "reportedError": Double(pocMaxEdgeError(reported, anchor)), "drawnError": Double(pocMaxEdgeError(drawn, visible)), "screenshotQuarterTurns": turns]
     }
 
     private func record(_ item: String, _ fields: [String: Any]) {
@@ -200,10 +209,8 @@ final class SurfacePocUITests: XCTestCase {
         defer { finish(app) }
         let start = settled(app)
         let startAnchor = domElement(app, "Surface anchor").frame
-        let web = app.webViews.firstMatch
-        // Over the page beside the anchor, as a finger on the terminal's neighbour would be.
-        web.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.7))
-            .press(forDuration: 0.1, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.55)))
+        // A swipe over the page, which the anchor's surface lies below; the page can scroll only 80 points, so it stops there.
+        app.webViews.firstMatch.swipeUp()
         waitFor(app, "the web view to scroll") { ($0["scrollY"] as? Double ?? 0) > 20 }
         let scrolled = settled(app)
         let moved = domElement(app, "Surface anchor").frame
@@ -228,12 +235,10 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertEqual(sizes(shown).count, initial.count + 1, "Showing the keyboard must resize the surface exactly once, sizes: " + String(describing: sizes(shown)))
         XCTAssertLessThan(sizes(shown).last?[1] ?? .infinity, (initial.last?[1] ?? 0) - 100, "The pane must shrink to the space above the keyboard")
         result["sizesAfterShow"] = sizes(shown)
-        let toolbarDone = app.toolbars.buttons["Done"].firstMatch
-        let done = toolbarDone.exists ? toolbarDone : app.keyboards.buttons["Done"].firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 10), "The native keyboard must offer Done")
-        done.tap()
+        // The page blurs the field on Enter; the keyboard's own Done accessory had no hit point in run 44377130533.
+        domElement(app, "Surface field").typeText("\n")
         let hidden = settled(app, quiet: 2)
-        XCTAssertFalse(app.keyboards.firstMatch.exists, "Done must dismiss the keyboard")
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Enter must dismiss the keyboard")
         XCTAssertEqual(sizes(hidden).count, initial.count + 2, "Hiding the keyboard must resize the surface exactly once, sizes: " + String(describing: sizes(hidden)))
         XCTAssertEqual(sizes(hidden).last, initial.last, "The pane must return to its size from before the keyboard")
         _ = try assertSurfaceAtAnchor(app, hidden, "Surface with the keyboard down")
@@ -282,8 +287,9 @@ final class SurfacePocUITests: XCTestCase {
         defer { finish(app) }
         let before = settled(app)
         XCUIDevice.shared.press(.home)
+        // The run loop must turn for the runner to learn the app's state; a sleeping thread never sees it change.
         let deadline = Date().addingTimeInterval(20)
-        while app.state == .runningForeground && Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+        while app.state == .runningForeground && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
         XCTAssertNotEqual(app.state, .runningForeground, "The home button must background the host")
         app.activate()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "The host must return to the foreground")

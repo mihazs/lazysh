@@ -107,6 +107,14 @@ final class PocViewController: UIViewController, WKScriptMessageHandler {
         web.loadHTMLString(surfacePocPage, baseURL: nil)
     }
 
+    /// `env(safe-area-inset-*)` changes without any DOM event, so the page is asked to measure again (run 44377130533 placed
+    /// the surface 62 points above its anchor after a launch that laid the page out before the insets arrived).
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        web?.evaluateJavaScript("window.pocSchedule && window.pocSchedule()")
+        publish()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         publish()

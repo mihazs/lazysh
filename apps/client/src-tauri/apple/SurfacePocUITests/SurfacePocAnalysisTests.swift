@@ -33,6 +33,22 @@ final class SurfacePocAnalysisTests: XCTestCase {
         XCTAssertNil(pixels.color(x: 60, y: 0))
     }
 
+    func testQuarterTurnsMoveTheSurfaceWhereAnUprightScreenWouldShowIt() {
+        // A 30x20 raster whose surface rectangle hugs the top left corner, as a portrait framebuffer would hold it.
+        let pixels = raster(width: 30, height: 20, painting: [(CGRect(x: 2, y: 3, width: 8, height: 4), .surface)])
+        let everything = CGRect(x: 0, y: 0, width: 30, height: 30)
+        XCTAssertEqual(pixels.quarterTurned(0).bounds(of: .surface, tolerance: 8, in: everything), CGRect(x: 2, y: 3, width: 8, height: 4))
+        let clockwise = pixels.quarterTurned(1)
+        XCTAssertEqual([clockwise.width, clockwise.height], [20, 30])
+        XCTAssertEqual(clockwise.bounds(of: .surface, tolerance: 8, in: everything), CGRect(x: 13, y: 2, width: 4, height: 8))
+        let half = pixels.quarterTurned(2)
+        XCTAssertEqual(half.bounds(of: .surface, tolerance: 8, in: everything), CGRect(x: 20, y: 13, width: 8, height: 4))
+        let counter = pixels.quarterTurned(3)
+        XCTAssertEqual(counter.bounds(of: .surface, tolerance: 8, in: everything), CGRect(x: 3, y: 20, width: 4, height: 8))
+        XCTAssertEqual(pixels.quarterTurned(4).rgba, pixels.rgba, "four quarter turns are the identity")
+        XCTAssertEqual(pixels.quarterTurned(-1).rgba, counter.rgba, "a negative turn is a counter-clockwise one")
+    }
+
     func testRectsAgreeComparesEveryEdgeAgainstTheTolerance() {
         let base = CGRect(x: 40, y: 110, width: 200, height: 434)
         XCTAssertTrue(pocRectsAgree(base, base.offsetBy(dx: 1, dy: -1), tolerance: 1))

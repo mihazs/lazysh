@@ -25,6 +25,24 @@ struct PocRaster {
         return PocColor(red: Int(rgba[at]), green: Int(rgba[at + 1]), blue: Int(rgba[at + 2]))
     }
 
+    /// The raster turned clockwise by `turns` quarter turns, to undo the display's native orientation.
+    func quarterTurned(_ turns: Int) -> PocRaster {
+        let count = ((turns % 4) + 4) % 4
+        guard count > 0 else { return self }
+        let upright = count == 2
+        let (newWidth, newHeight) = upright ? (width, height) : (height, width)
+        var bytes = [UInt8](repeating: 0, count: rgba.count)
+        for y in 0..<height {
+            for x in 0..<width {
+                // Where the clockwise turn puts the pixel that was at (x, y).
+                let target = count == 1 ? (height - 1 - y, x) : upright ? (width - 1 - x, height - 1 - y) : (y, width - 1 - x)
+                let from = (y * width + x) * 4, to = (target.1 * newWidth + target.0) * 4
+                bytes.replaceSubrange(to..<to + 4, with: rgba[from..<from + 4])
+            }
+        }
+        return PocRaster(width: newWidth, height: newHeight, rgba: bytes)
+    }
+
     /// The smallest rectangle, in pixels, holding every pixel of `region` within `tolerance` of `target`; nil when none is.
     func bounds(of target: PocColor, tolerance: Int, in region: CGRect) -> CGRect? {
         // A region partly or wholly outside the raster is clamped to it; an empty range finds nothing.

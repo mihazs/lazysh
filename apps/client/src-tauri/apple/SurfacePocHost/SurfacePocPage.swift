@@ -9,7 +9,7 @@ let surfacePocPage = #"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <style>
   html, body { margin: 0; background: transparent; }
-  body { min-height: 2400px; font: 15px -apple-system, sans-serif; }
+  body { min-height: calc(100vh + 80px); font: 15px -apple-system, sans-serif; }
   #anchor { position: absolute; width: 200px; height: 200px;
     left: calc(env(safe-area-inset-left) + 40px); top: calc(env(safe-area-inset-top) + 48px); }
   #overlap { position: absolute; width: 100px; height: 80px; background: #e02020; }
@@ -42,6 +42,9 @@ let surfacePocPage = #"""
   const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(update); };
   for (const target of [window, window.visualViewport]) for (const name of ['resize', 'scroll']) target.addEventListener(name, schedule);
   window.addEventListener('load', schedule);
+  window.pocSchedule = schedule;
+  const field = document.getElementById('field');
+  field.addEventListener('keydown', event => { if (event.key === 'Enter') field.blur(); });
   anchor.addEventListener('pointerdown', () => post({type: 'tap'}));
   for (const type of ['remove', 'recreate']) document.getElementById(type).addEventListener('click', () => post({type}));
 </script>
