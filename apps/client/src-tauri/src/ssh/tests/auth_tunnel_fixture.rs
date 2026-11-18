@@ -47,6 +47,7 @@ async fn closed(port: u16) {
 fn app_with(state: AppState) -> App {
     let app = tauri::test::mock_app();
     app.manage(state);
+    app.manage(crate::local::LocalState::default());
     app.manage(AuthTunnelState::default());
     app.manage(PreviewState::default());
     app
@@ -402,6 +403,7 @@ async fn a_port_the_device_cannot_give_fails_closed_and_says_who_holds_it() {
 
     let preview = crate::previews::start_preview(
         access_lease(),
+        fixture.app.state(),
         fixture.app.state(),
         fixture.app.state(),
         fixture.session.clone(),

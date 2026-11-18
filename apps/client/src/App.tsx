@@ -313,8 +313,9 @@ type View =
   | "voice"
   | "devices"
   | "apple";
-type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:{files?:boolean;repository?:boolean}}[]};
-const localViewTools:Partial<Record<View,'files'|'repository'>>={files:'files',diff:'repository'};
+type LocalTool='files'|'repository'|'attachments'|'previews';
+type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:Partial<Record<LocalTool,boolean>>}[]};
+const localViewTools:Partial<Record<View,LocalTool>>={files:'files',diff:'repository',attachments:'attachments',preview:'previews'};
 /** A local session offers its terminal tools plus the host tools its default target reports. */
 function localView(capability:LocalCapability,id:View) {
   if(id==='terminal' || id==='voice' || id==='usage')return true;
@@ -1363,7 +1364,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function openTerminalAttachments(session: LiveSession, target?: 'composer') {
     if(!mounted.current || !lease.current() || currentView.current.activeId!==session.id
       || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
-      || session.local || !session.connected || session.disposed || closingSessions.current.has(session.id)
+      || (session.local && !localView(localCapability,'attachments')) || !session.connected || session.disposed || closingSessions.current.has(session.id)
       || !sessionsRef.current.includes(session))return;
     visitView('attachments');
     setComposerAttachment(target==='composer' ? session.id : null);
@@ -2547,7 +2548,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     reportError={setError}
                     onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}
-                    onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
+                    onOpenAttachments={(!session.local || localView(localCapability,'attachments')) && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
                     notice={connectionNotice(session)}
                   />
                 ))}
@@ -2574,10 +2575,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     terminalInput={terminalInputFor(active,muxTools[active.id])}
                   />
                 )}
-                {active.connected && !active.local && view === "preview" && (
+                {active.connected && (!active.local || localView(localCapability,'preview')) && view === "preview" && (
                   <PreviewPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && !active.local && view === "attachments" && (
+                {active.connected && (!active.local || localView(localCapability,'attachments')) && view === "attachments" && (
                   <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} {...composerAttachment===active.id ? {onAttach:addComposerAttachment,attachTarget:'composer' as const} : {}} onRestoreFileTransfer={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{const host=hosts.find(host=>host.id===active.hostId);if(host)setFileRecovery({sessionId:active.id,host,restored});}:undefined} />
                 )}
                 {active.connected && view === "voice" && (

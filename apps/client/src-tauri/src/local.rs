@@ -29,6 +29,8 @@ pub struct Tools {
     repository: bool,
     /// A `lazysh-agent` is bundled, managed or on the PATH: the Agents board and approvals work.
     companion: bool,
+    attachments: bool,
+    previews: bool,
 }
 #[tauri::command]
 pub async fn local_capability() -> Capability {
@@ -48,6 +50,9 @@ pub async fn local_capability() -> Capability {
                     files: true,
                     repository: crate::host::local_program("git").await,
                     companion: crate::companion::local::available().await,
+                    // Uploads write files and previews connect to loopback ports from this device.
+                    attachments: true,
+                    previews: true,
                 },
             }],
         }
