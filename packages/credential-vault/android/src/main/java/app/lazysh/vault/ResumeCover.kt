@@ -98,8 +98,8 @@ internal class ResumeCover(private var activity: Activity) {
         else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         webview?.apply {
             // While the policy is unknown the page shows only its placeholder, so it may render under the opaque cover and keep its
-            // frame current for the reveal. A confirmed lock hides it entirely.
-            visibility = if (covered && !gate.awaitingPolicy) View.INVISIBLE else View.VISIBLE
+            // frame current for the reveal. A confirmed lock or a failed start hides it entirely.
+            visibility = if (covered && (failed || !gate.awaitingPolicy)) View.INVISIBLE else View.VISIBLE
             importantForAccessibility = if (covered) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
             isEnabled = !covered
             if (covered) (activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(windowToken, 0)
