@@ -1958,6 +1958,7 @@ jobs:
           TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS: ${{ runner.temp }}/lazysh-surface-poc.jsonl
         run: |
           : > "$TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS"
+          xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
           bun run test:ios-surface-poc
       - name: Print surface composition records
         if: ${{ !cancelled() && steps.ios-surface-poc.outcome != 'skipped' }}

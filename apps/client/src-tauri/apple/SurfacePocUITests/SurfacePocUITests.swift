@@ -133,9 +133,23 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertTrue(found?.isNear(expected, tolerance: channel) == true, message + "; the pixel is " + String(describing: found))
     }
 
+    /// The anchor's frame and the host's state once the surface has caught up with the page's anchor, or the last pair after
+    /// `timeout`: the page reports after layout, so the surface may trail the DOM for a moment (a slow simulator took seconds).
+    private func converged(_ app: XCUIApplication, timeout: TimeInterval = 20) -> (anchor: CGRect, host: [String: Any]) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var anchor = domElement(app, "Surface anchor").frame, host = state(app)
+        func caughtUp() -> Bool { rect(host["surface"]).map { pocRectsAgree($0, anchor, tolerance: edge) } ?? false }
+        while !caughtUp() && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.5)
+            anchor = domElement(app, "Surface anchor").frame
+            host = state(app)
+        }
+        return (anchor, host)
+    }
+
     /// The anchor as the page, the host and the screen each place it, with the worst disagreement in points.
-    private func assertSurfaceAtAnchor(_ app: XCUIApplication, _ host: [String: Any], _ name: String) throws -> [String: Any] {
-        let anchor = domElement(app, "Surface anchor").frame
+    private func assertSurfaceAtAnchor(_ app: XCUIApplication, _ name: String) throws -> [String: Any] {
+        let (anchor, host) = converged(app)
         let shot = try capture(app, name)
         let reported = try XCTUnwrap(rect(host["surface"]), "The host has no surface to place")
         let visible = anchor.intersection(app.frame)
@@ -177,8 +191,8 @@ final class SurfacePocUITests: XCTestCase {
     func testSurfaceBelowTheWebViewFollowsTheAnchorAndDomOverlaysAndTouchesStayAbove() throws {
         let app = launch()
         defer { finish(app) }
-        let host = settled(app)
-        var result = try assertSurfaceAtAnchor(app, host, "Surface below the web view")
+        _ = settled(app)
+        var result = try assertSurfaceAtAnchor(app, "Surface below the web view")
         let anchor = domElement(app, "Surface anchor").frame, box = domElement(app, "Overlap box").frame
         let shot = try capture(app, "Surface below the web view, overlap")
         let both = anchor.intersection(box)
@@ -199,7 +213,7 @@ final class SurfacePocUITests: XCTestCase {
         let app = launch(order: "above")
         defer { finish(app) }
         _ = settled(app)
-        let anchor = domElement(app, "Surface anchor").frame, box = domElement(app, "Overlap box").frame
+        let anchor = converged(app).anchor, box = domElement(app, "Overlap box").frame
         let shot = try capture(app, "Surface above the web view")
         let both = anchor.intersection(box)
         XCTAssertFalse(both.isNull || both.isEmpty, "The fixture's DOM box must overlap the anchor")
@@ -216,12 +230,17 @@ final class SurfacePocUITests: XCTestCase {
         let start = settled(app)
         let startAnchor = domElement(app, "Surface anchor").frame
         // A swipe over the page, which the anchor's surface lies below; the page can scroll only 80 points, so it stops there.
-        app.webViews.firstMatch.swipeUp()
-        waitFor(app, "the web view to scroll") { ($0["scrollY"] as? Double ?? 0) > 20 }
+        // A swipe the slow simulator drops is repeated, as a user would.
+        for _ in 0..<3 where (state(app)["scrollY"] as? Double ?? 0) <= 20 {
+            app.webViews.firstMatch.swipeUp()
+            let deadline = Date().addingTimeInterval(6)
+            while (state(app)["scrollY"] as? Double ?? 0) <= 20 && Date() < deadline { Thread.sleep(forTimeInterval: 0.5) }
+        }
+        waitFor(app, "the web view to scroll", timeout: 1) { ($0["scrollY"] as? Double ?? 0) > 20 }
         let scrolled = settled(app)
         let moved = domElement(app, "Surface anchor").frame
         XCTAssertLessThan(moved.minY, startAnchor.minY - 20, "The anchor must move with the page")
-        var result = try assertSurfaceAtAnchor(app, scrolled, "Surface after scrolling")
+        var result = try assertSurfaceAtAnchor(app, "Surface after scrolling")
         result["scrollY"] = scrolled["scrollY"] ?? 0
         result["sizeChanges"] = sizes(scrolled).count - sizes(start).count
         record("scroll-follow", result)
@@ -238,7 +257,7 @@ final class SurfacePocUITests: XCTestCase {
         domElement(app, "Surface field").tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20), "The soft keyboard must appear (a connected hardware keyboard would hide it)")
         let shown = settled(app, quiet: 2)
-        var result = try assertSurfaceAtAnchor(app, shown, "Surface with the keyboard up")
+        var result = try assertSurfaceAtAnchor(app, "Surface with the keyboard up")
         XCTAssertEqual(sizes(shown).count, initial.count + 1, "Showing the keyboard must resize the surface exactly once, sizes: " + String(describing: sizes(shown)))
         XCTAssertLessThan(sizes(shown).last?[1] ?? .infinity, (initial.last?[1] ?? 0) - 100, "The pane must shrink to the space above the keyboard")
         result["sizesBefore"] = initial
@@ -250,7 +269,7 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertFalse(app.keyboards.firstMatch.exists, "Enter must dismiss the keyboard")
         XCTAssertEqual(sizes(hidden).count, initial.count + 2, "Hiding the keyboard must resize the surface exactly once, sizes: " + String(describing: sizes(hidden)))
         XCTAssertEqual(sizes(hidden).last, initial.last, "The pane must return to its size from before the keyboard")
-        _ = try assertSurfaceAtAnchor(app, hidden, "Surface with the keyboard down")
+        _ = try assertSurfaceAtAnchor(app, "Surface with the keyboard down")
         result["sizesAfterHide"] = sizes(hidden)
         record("keyboard-resize", result)
     }
@@ -263,7 +282,7 @@ final class SurfacePocUITests: XCTestCase {
         let anchor = domElement(app, "Surface anchor").frame
         XCTAssertGreaterThan(inset["top"] ?? 0, 0, "The iPhone 16 Pro simulator has a top safe area (the Dynamic Island)")
         XCTAssertEqual(anchor.minY, (inset["top"] ?? 0) + 48, accuracy: edge, "CSS env(safe-area-inset-top) must equal the native inset")
-        var result = try assertSurfaceAtAnchor(app, portrait, "Surface in portrait")
+        var result = try assertSurfaceAtAnchor(app, "Surface in portrait")
         let reported = try XCTUnwrap(rect(portrait["surface"]))
         XCTAssertGreaterThanOrEqual(reported.minY, inset["top"] ?? 0, "The surface must not sit under the Dynamic Island")
         XCTAssertLessThanOrEqual(reported.maxY, app.frame.height - (inset["bottom"] ?? 0), "The surface must not sit under the home indicator")
@@ -280,7 +299,7 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertGreaterThan(max(landscapeInset["left"] ?? 0, landscapeInset["right"] ?? 0), 0, "Landscape has a side safe area")
         XCTAssertEqual(domElement(app, "Surface anchor").frame.minX, (landscapeInset["left"] ?? 0) + 40, accuracy: edge,
                        "CSS env(safe-area-inset-left) must equal the native inset after rotation")
-        _ = try assertSurfaceAtAnchor(app, landscape, "Surface in landscape")
+        _ = try assertSurfaceAtAnchor(app, "Surface in landscape")
         result["landscapeInsets"] = landscapeInset
         result["pageLandscapeInsets"] = landscape["pageSafe"] ?? []
         XCTAssertEqual(landscape["pageSafe"] as? [Double], [landscapeInset["top"] ?? 0, landscapeInset["left"] ?? 0], "The page's env() safe area must equal the native one after rotation")
@@ -289,7 +308,7 @@ final class SurfacePocUITests: XCTestCase {
             let size = host["viewport"] as? [Double] ?? []
             return size.count == 2 && size[0] < size[1]
         }
-        _ = try assertSurfaceAtAnchor(app, settled(app), "Surface back in portrait")
+        _ = try assertSurfaceAtAnchor(app, "Surface back in portrait")
         record("safe-area-rotation", result)
     }
 
@@ -308,7 +327,7 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "The host must return to the foreground")
         let after = waitFor(app, "the host to report the background and foreground transitions") { self.count($0, "background") >= 1 && self.count($0, "foreground") >= 1 }
         XCTAssertGreaterThan(count(after, "frames"), count(before, "frames"), "The surface must draw again when the app becomes active")
-        var result = try assertSurfaceAtAnchor(app, settled(app), "Surface after returning to the foreground")
+        var result = try assertSurfaceAtAnchor(app, "Surface after returning to the foreground")
         result["framesBefore"] = count(before, "frames")
         result["framesAfter"] = count(after, "frames")
         result["skippedWhileBackgrounded"] = count(after, "skipped")
@@ -328,7 +347,7 @@ final class SurfacePocUITests: XCTestCase {
         domElement(app, "Recreate surface").tap()
         waitFor(app, "a new surface to be created") { self.count($0, "created") >= 2 }
         let again = settled(app)
-        var result = try assertSurfaceAtAnchor(app, again, "Surface recreated")
+        var result = try assertSurfaceAtAnchor(app, "Surface recreated")
         XCTAssertGreaterThan(count(again, "frames"), count(before, "frames"), "The recreated surface must draw")
         result["created"] = count(again, "created")
         result["destroyed"] = count(again, "destroyed")
@@ -344,7 +363,7 @@ final class SurfacePocUITests: XCTestCase {
         awaitFirstPlacement(app)
         let host = settled(app)
         XCTAssertEqual(count(host, "created"), 1, "A new process starts with one surface")
-        var result = try assertSurfaceAtAnchor(app, host, "Surface after a process restart")
+        var result = try assertSurfaceAtAnchor(app, "Surface after a process restart")
         result["created"] = count(host, "created")
         record("process-restart", result)
     }
