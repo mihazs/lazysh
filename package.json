@@ -46,6 +46,7 @@
     "build:ios": "moon run client:build-ios",
     "test:install-browser": "moon run :test-install-browser",
     "test:ios-workspace": "moon run client:test-ios-workspace",
+    "test:ios-surface-poc": "moon run client:test-ios-surface-poc",
     "test:android-theme-links": "moon run client:test-android-theme-links",
     "test:android-ssh": "moon run client:test-android-ssh",
     "test:android-herdr-navigation": "moon run client:test-android-herdr-navigation",

@@ -77,7 +77,7 @@ so `apps/client/src-tauri/moon.yml` declares `agent`, `mosh-transport`, `portabl
 | `build-native` | `tauri build --no-bundle` | no |
 | `build-android`, `-emulator`, `-fdroid`, `-fdroid-emulator` | `tauri android build` | no |
 | `test-android`, `-theme-links`, `-ssh`, `-ssh-parity`, `-herdr-navigation`, `-tmux`, `-qr`, `-biometric`, `-fdroid`, `-ntfy`, `-ntfy-google`, `-push-artifact` | Gradle or `bun test` acceptance, each depending on the build it needs | no |
-| `init-ios`, `build-ios`, `test-ios-workspace` | Tauri and Xcode, macOS only | no |
+| `init-ios`, `build-ios`, `test-ios-workspace`, `test-ios-surface-poc` | Tauri and Xcode, macOS only | no |
 
 Android `build-*` and `test-android-*` tasks set their constants (`WHISPER_DONT_GENERATE_BINDINGS`,
 `CMAKE_ANDROID_NDK`, `LAZYSH_ANDROID_UI_*`) in `env` with `options.envOverride: true`.
@@ -115,7 +115,7 @@ The root `package.json` keeps every script name; each is a `moon run` call.
 | `lint`, `format:check` | `:lint`, `:format-check` |
 | `test:openssh`, `test:openssh-connections`, `test:multiplexers`, `test:voice`, `test:install-browser` | the task of the same name, `:test-<name>` |
 | `test:et`, `test:mosh` | `:test-et`, `:test-mosh` (the native crate and the transport crate) |
-| `test:e2e`, `test:native-gui`, `build:native`, `build:android*`, `build:ios`, `test:android*`, `test:ios-workspace` | `client:<id>`, with `:` written as `-` |
+| `test:e2e`, `test:native-gui`, `build:native`, `build:android*`, `build:ios`, `test:android*`, `test:ios-workspace`, `test:ios-surface-poc` | `client:<id>`, with `:` written as `-` |
 | `test:storage` | `agent:test-storage` |
 | `test:android-mosh`, `test:ios-mosh` | `mosh-transport:<id>` |
 
