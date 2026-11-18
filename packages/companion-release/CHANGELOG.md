@@ -1,5 +1,11 @@
 # @lazysh/companion-release
 
+## 1.73.0
+
+### Patch Changes
+
+- @lazysh/common@1.73.0
+
 ## 1.72.0
 
 ### Patch Changes
