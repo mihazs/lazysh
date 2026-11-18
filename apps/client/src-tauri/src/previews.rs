@@ -318,10 +318,10 @@ pub async fn stop_preview(
 
 #[derive(Serialize)]
 pub struct Listener {
-    port: u16,
-    address: String,
-    process: Option<String>,
-    pid: Option<u32>,
+    pub(crate) port: u16,
+    pub(crate) address: String,
+    pub(crate) process: Option<String>,
+    pub(crate) pid: Option<u32>,
     http: Option<bool>,
     framework: Option<Framework>,
 }
@@ -337,7 +337,7 @@ struct HttpProbe {
     framework: Option<Framework>,
 }
 
-fn parse_listeners(text: &str) -> Vec<Listener> {
+pub(crate) fn parse_listeners(text: &str) -> Vec<Listener> {
     let mut listeners = Vec::new();
     let mut process = None;
     let mut pid = None;
@@ -408,6 +408,15 @@ fn safe_process(value: &str) -> Option<String> {
         .then(|| value.to_owned())
 }
 
+/// Every loopback-reachable TCP listener the host shows this user, from `ss` or else `lsof`.
+pub(crate) async fn host_listeners(
+    session: &crate::ssh::Session,
+    access: &AccessLease,
+) -> Result<Vec<Listener>> {
+    let text = crate::ssh::exec_for_access(session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into(), access).await?;
+    Ok(parse_listeners(&text))
+}
+
 #[tauri::command]
 pub async fn discover_preview_ports(
     access: AccessLease,
@@ -431,8 +440,8 @@ pub async fn discover_preview_ports(
         return Ok(Vec::new());
     }
     access.check()?;
-    let text = crate::ssh::exec_for_access(&session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into(), &access).await?;
-    let listeners: Vec<_> = parse_listeners(&text)
+    let listeners: Vec<_> = host_listeners(&session, &access)
+        .await?
         .into_iter()
         .filter(|listener| {
             allow_ports

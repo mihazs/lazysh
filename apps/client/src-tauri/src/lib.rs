@@ -7,6 +7,7 @@ mod approvals;
 mod attachment_upload;
 mod auth_browser;
 mod auth_hints;
+mod auth_listeners;
 mod auth_tunnel;
 mod bindings;
 mod clipboard;
@@ -314,6 +315,7 @@ pub fn run() {
                 previews::stop_preview,
                 previews::list_previews,
                 previews::discover_preview_ports,
+                auth_listeners::check_auth_listener,
                 auth_tunnel::start_auth_tunnel,
                 auth_tunnel::stop_auth_tunnel,
                 auth_tunnel::list_auth_tunnels,
