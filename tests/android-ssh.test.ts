@@ -121,6 +121,33 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
   }
 },5000);
 
+test('teardown deadline captures only bounded state at the deadline without changing the failure',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
+  const originalDone=child.done;
+  await originalDone;
+  Object.defineProperty(child,'done',{value:new Promise<number>(()=>{}),configurable:true});
+  const lines:string[]=[];
+  const warning=spyOn(console,'error').mockImplementation(value=>{lines.push(String(value));});
+  try {
+    await expect(child.stop()).rejects.toThrow('Owned fixture process teardown deadline');
+    expect(lines).toHaveLength(1);
+    const observation=JSON.parse(lines[0].slice('Owned teardown deadline observation '.length));
+    expect(observation.scope).toBe('at-deadline');
+    expect(observation.leaderExitObserved).toBe(true);
+    expect(observation.closeObserved).toBe(true);
+    expect(Object.keys(observation).sort()).toEqual(['closeObserved','leaderExitObserved','scope','streams']);
+    for(const stream of Object.values(observation.streams) as Array<Record<string,unknown>>) {
+      expect(Object.keys(stream).sort()).toEqual(['closed','destroyed']);
+      for(const value of Object.values(stream))expect([true,false,null]).toContain(value);
+    }
+    warning.mockImplementation(()=>{throw new Error('diagnostic failed');});
+    await expect(child.stop()).rejects.toThrow('Owned fixture process teardown deadline');
+  } finally {
+    warning.mockRestore();Object.defineProperty(child,'done',{value:originalDone});
+    await child.stop();
+  }
+},8000);
+
 test('teardown reporter whitelists closed fields and cannot throw over a primary failure',async()=>{
   const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
   await child.finish('owned observation fixture',1000);
