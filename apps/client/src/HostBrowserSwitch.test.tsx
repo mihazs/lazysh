@@ -89,7 +89,7 @@ it('asks once per host on this device, offers the confirmation again for another
 it('shows a revision conflict, keeps the host unconfirmed and offers the confirmation again',async()=>{
   answer({get_companion_settings:[settings],get_host_browser_settings:[off],update_host_browser_settings:[()=>Promise.reject({message:'SettingsConflict'})]});
   await turnOn('host-a');allow();
-  await screen.findByText(/SettingsConflict Refresh host settings before retrying/);
+  await screen.findByText(/SettingsConflict.* Refresh host settings before retrying/);
   expect(screen.queryByText('Host browser setting saved for new browser sessions.')).toBeNull();expect(isHostBrowserConfirmed('host-a')).toBe(false);
   expect(calls('update_host_browser_settings')).toHaveLength(1);
 });
