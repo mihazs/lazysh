@@ -5,7 +5,7 @@ mod support;
 
 use lazysh_terminal_runtime::{
     ffi, ActiveScreen, CellWide, Config, CursorVisualStyle, KeyInput, MouseInput, Offer,
-    RenderCursor, RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime,
+    RenderCursor, RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime, Theme,
 };
 use support::*;
 
@@ -816,4 +816,104 @@ fn a_runtime_moves_to_another_thread_and_keeps_running() {
         worker.join().unwrap(),
         ("ab".to_string(), b"\x1b[<0;1;1M".to_vec())
     );
+}
+
+/// A runtime whose theme has a distinct colour for every default and for palette entry 5.
+fn themed() -> TerminalRuntime {
+    let mut theme = Theme {
+        foreground: rgb(0x112233),
+        background: rgb(0x445566),
+        cursor: rgb(0x778899),
+        ..Theme::default()
+    };
+    theme.palette[5] = rgb(0xaabbcc);
+    TerminalRuntime::new(Config {
+        theme,
+        ..Config::default()
+    })
+    .unwrap()
+}
+
+/// Feed `stream` in pieces of each size and return what the terminal sent back.
+fn replies_to(stream: &[u8], sizes: &[usize]) -> Vec<(usize, Vec<u8>)> {
+    sizes
+        .iter()
+        .map(|&size| {
+            let mut rt = themed();
+            stream
+                .chunks(size)
+                .for_each(|piece| feed_chunk(&mut rt, piece));
+            (size, rt.take_replies().0)
+        })
+        .collect()
+}
+
+#[test]
+fn colour_queries_are_answered_from_the_theme_in_order_whatever_the_chunking() {
+    let stream =
+        b"\x1b[6n\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x1b\\\x1b]4;5;?\x07\x1b[6n\x1b]11;?;?\x1b\\";
+    let expected = b"\x1b[1;1R\x1b]10;rgb:1111/2222/3333\x07\x1b]11;rgb:4444/5555/6666\x1b\\\
+        \x1b]12;rgb:7777/8888/9999\x1b\\\x1b]4;5;rgb:aaaa/bbbb/cccc\x07\x1b[1;1R\
+        \x1b]11;rgb:4444/5555/6666\x1b\\\x1b]12;rgb:7777/8888/9999\x1b\\";
+    for (size, sent) in replies_to(stream, &[stream.len(), 1, 2, 3, 7]) {
+        assert_eq!(
+            String::from_utf8_lossy(&sent),
+            String::from_utf8_lossy(expected),
+            "pieces of {size} bytes"
+        );
+    }
+}
+
+#[test]
+fn the_theme_palette_colours_the_cells() {
+    let mut rt = themed();
+    feed(&mut rt, b"\x1b[35mx");
+    assert_eq!(
+        rt.snapshot().unwrap().dirty[0].cells[0].fg,
+        Some(rgb(0xaabbcc))
+    );
+}
+
+#[test]
+fn a_colour_the_program_set_is_reported_once_wherever_the_query_is_split() {
+    let stream = b"\x1b]11;rgb:ff/00/00\x1b\\\x1b]11;?\x1b\\\x1b]111\x07\x1b]11;?\x07";
+    let expected = "\x1b]11;rgb:ffff/0000/0000\x1b\\\x1b]11;rgb:4444/5555/6666\x07";
+    for split in 0..=stream.len() {
+        let mut rt = themed();
+        feed_chunk(&mut rt, &stream[..split]);
+        feed_chunk(&mut rt, &stream[split..]);
+        assert_eq!(
+            String::from_utf8_lossy(&rt.take_replies().0),
+            expected,
+            "split at {split}"
+        );
+    }
+}
+
+#[test]
+fn only_a_complete_default_colour_query_is_answered_from_the_theme() {
+    for stream in [
+        &b"\x1b]11;?"[..],
+        b"\x1b]11;?\x18",
+        b"\x1b]11;?\x1a\x07",
+        b"]11;?\x07",
+        b"\x1b[11;?\x07",
+        b"\x1b]0;?\x07",
+        b"\x1b]13;?\x07",
+        b"\x1b]1;?\x07",
+        b"\x1b]110\x07",
+        b"\x1b]11;\x07",
+        b"\x1b]11;rgb:1/2/3\x07",
+        b"\x1b]11;?;rgb:1/2/3\x07",
+        b"\x1b]10;?;?;?;?;?;?;?;?;?;?;?;?;?;?;?\x07",
+    ] {
+        let mut rt = themed();
+        feed(&mut rt, stream);
+        assert_eq!(
+            rt.take_replies(),
+            (Vec::new(), 0),
+            "{}",
+            stream.escape_ascii()
+        );
+    }
 }

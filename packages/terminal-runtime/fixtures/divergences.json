@@ -89,11 +89,6 @@
     "rationale": "The core encodes keys by the flags the program set, so on the native path Codex and Herdr receive CSI u key sequences instead of legacy ones. They ask for them and parse them, but nothing here has run the native path against them; the key fixtures cover the legacy encodings only.",
     "status": "open: golden encodings and a Codex/Herdr key test on the native path under #1316 before the Android default stage"
   },
-  "color-queries-theme": {
-    "summary": "OSC 10 and OSC 11 (default foreground and background) queries are answered by xterm.js from its theme and not at all by the core; OSC 4 palette queries are answered by both, with different colours (the core has ghostty's default palette, xterm.js the theme's; this harness uses xterm.js's default theme, lazysh's own theme changes the colours but not the shape of the reply).",
-    "rationale": "The runtime never configures a theme. Programs that probe OSC 10/11 to pick a light or dark scheme (Codex, Zellij, OpenCode) wait for a reply that never comes on the native path and fall back to their defaults; programs that read the palette see colours the renderer does not draw. libghostty-vt has options for foreground, background, cursor and palette, but the vendored binding only wraps the palette.",
-    "status": "open: the native adapter needs a theme in the runtime config (palette via Terminal::set_default_palette; foreground, background and cursor need a binding setter or a local modification of the vendored crate, which #384 forbids silently); decide in #1321 and #1322"
-  },
   "private-mode-queries-known": {
     "summary": "DECRQM for mode 2027 (grapheme clustering) answers set (1) and for 2031 (colour-scheme reports) set (1) in the core, not recognised (0) in xterm.js.",
     "rationale": "The core implements both and enables grapheme clustering by default, which is the behaviour behind the Unicode width differences. A program that probes 2027 (OpenCode, Zellij) learns that the terminal clusters graphemes and aligns its output to that; xterm.js 5.5.0 without the Unicode 11 addon cannot honour it.",
@@ -138,5 +133,10 @@
     "summary": "Shift+Enter sends CR in xterm.js and CSI 13;2u in the core.",
     "rationale": "A plain CR submits an agent TUI's prompt instead of inserting a newline (#805). lazysh has always sent CSI 13;2u for Shift+Enter, which Codex, OpenCode and Claude Code read, and the core's legacy encoding keeps that on purpose (#1471). Ctrl+Enter and Ctrl+Tab now send CR and HT like xterm.js.",
     "status": "accepted: by design for #805, the encoding lazysh already ships for Shift+Enter"
+  },
+  "color-query-terminator-echoed": {
+    "summary": "A colour query ended with BEL (OSC 4, 10, 11 or 12, as vim and OpenCode send them) is answered by the core with BEL; xterm.js 5.5.0 answers every one with ST (ESC \\).",
+    "rationale": "The core answers with the terminator of the query, as xterm's documentation says it does and as libghostty-vt already does for OSC 4; the theme's OSC 10, 11 and 12 replies (the runtime's, since the binding cannot configure those colours) do the same so one session never mixes the two. The colours themselves equal xterm.js's when the runtime is given xterm.js's theme.",
+    "status": "open: run vim and OpenCode on the native path to confirm they take a BEL-terminated reply to their BEL-terminated query (neither has been run there); until then the xterm.js form (ST) would be the safe one"
   }
 }

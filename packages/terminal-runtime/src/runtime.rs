@@ -1,12 +1,14 @@
+use crate::colors::ColorQueries;
 use crate::frame::{Frame, Renderer};
 use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::mosh::{self, Action, Display, DisplayFailure};
+use crate::render::Theme;
 use crate::size::{Size, SizeAuthority, SizeOutcome};
 use ghostty_vt::{ActiveScreen, CellWide, Terminal};
 use std::fmt;
 use std::ops::Range;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// Terminal-generated replies (DSR, DA, ...) waiting for the transport. A peer can spam queries,
 /// so the queue is capped; overflow is counted, not silent.
@@ -99,6 +101,11 @@ pub struct Config {
     /// [`crate::mosh`]) and UI sizes are only intent from the first byte, as with the xterm
     /// backend's `enableCanonicalResize`.
     pub canonical_frames: bool,
+    /// The colours the terminal reports to programs that ask: the default foreground, background and
+    /// cursor (`OSC 10`, `11`, `12`) and the 256-colour palette (`OSC 4`). Pass the theme the
+    /// renderer draws with, so a program that probes it to pick a light or dark scheme sees what is
+    /// on screen. Fixed when the session opens.
+    pub theme: Theme,
 }
 
 impl Default for Config {
@@ -108,6 +115,7 @@ impl Default for Config {
             scrollback_bytes: DEFAULT_SCROLLBACK_BYTES,
             ingress_bytes: DEFAULT_INGRESS_BYTES,
             canonical_frames: false,
+            theme: Theme::default(),
         }
     }
 }
@@ -162,12 +170,28 @@ struct Replies {
     dropped: u64,
 }
 
+impl Replies {
+    fn push(&mut self, bytes: &[u8]) {
+        if self.bytes.len() + bytes.len() > MAX_REPLY_BYTES {
+            self.dropped += bytes.len() as u64;
+        } else {
+            self.bytes.extend_from_slice(bytes);
+        }
+    }
+
+    /// Bytes queued or dropped so far: it moves whenever the VT answers something.
+    fn seen(&self) -> u64 {
+        self.bytes.len() as u64 + self.dropped
+    }
+}
+
 pub struct TerminalRuntime {
     terminal: Terminal,
     renderer: Renderer,
     encoders: Encoders,
     ingress: IngressHandle,
     replies: Arc<Mutex<Replies>>,
+    colors: ColorQueries,
     events: Events,
     size: Size,
     authority: SizeAuthority,
@@ -189,19 +213,18 @@ impl TerminalRuntime {
         let replies = Arc::new(Mutex::new(Replies::default()));
         let sink = Arc::clone(&replies);
         terminal.set_write_pty_callback(move |bytes| {
-            let mut replies = sink.lock().unwrap_or_else(PoisonError::into_inner);
-            if replies.bytes.len() + bytes.len() > MAX_REPLY_BYTES {
-                replies.dropped += bytes.len() as u64;
-            } else {
-                replies.bytes.extend_from_slice(bytes);
-            }
+            sink.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(bytes);
         })?;
+        terminal.set_default_palette(&config.theme.palette)?;
         Ok(Self {
             terminal,
             renderer: Renderer::new()?,
             encoders: Encoders::new()?,
             ingress: IngressHandle::new(config.ingress_bytes),
             replies,
+            colors: ColorQueries::new(&config.theme),
             events: Events::default(),
             size,
             authority: if config.canonical_frames {
@@ -240,9 +263,30 @@ impl TerminalRuntime {
         bytes
     }
 
-    /// Feed one chunk to the VT. On a Mosh session the chunk is cut after each envelope so its
-    /// geometry is applied between the bytes before it and the bytes after it.
+    fn replies(&self) -> MutexGuard<'_, Replies> {
+        self.replies.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Feed one chunk to the VT. A default colour query (see [`crate::colors`]) is answered from
+    /// the theme right after the byte the VT dispatches it on, behind the replies to the bytes
+    /// before it, unless the VT answered it itself.
     fn write_chunk(&mut self, chunk: &[u8]) {
+        let mut at = 0;
+        while let Some((end, reply)) = self.colors.find(chunk, at) {
+            self.write_segment(&chunk[at..end - 1]);
+            let before = self.replies().seen();
+            self.write_segment(&chunk[end - 1..end]);
+            if self.replies().seen() == before {
+                self.replies().push(reply.as_bytes());
+            }
+            at = end;
+        }
+        self.write_segment(&chunk[at..]);
+    }
+
+    /// Feed bytes to the VT. On a Mosh session they are cut after each envelope so its geometry
+    /// is applied between the bytes before it and the bytes after it.
+    fn write_segment(&mut self, chunk: &[u8]) {
         let mut at = 0;
         while let Some((end, signal)) = self
             .display
@@ -466,7 +510,7 @@ impl TerminalRuntime {
 
     /// Bytes the terminal wants written back to the peer, in order, and the count dropped to the cap.
     pub fn take_replies(&mut self) -> (Vec<u8>, u64) {
-        let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut replies = self.replies();
         (
             std::mem::take(&mut replies.bytes),
             std::mem::take(&mut replies.dropped),
