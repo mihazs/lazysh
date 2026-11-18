@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.78.1
+
+### Patch Changes
+
+- e163639: Let the native terminal bridge receive the text a soft keyboard or an IME committed (#1791, part of #1328): a `text` event reaches the terminal verbatim, whatever keyboard protocol or bracketed paste the program enabled. The core is not wired into the app, so nothing changes for users: xterm.js stays the only engine and no setting or default changes.
+- 2355d62: Extend the Android shared Herdr navigation case: it now drives the Sessions panel's Herdr browser to create a workspace, rename it, split its pane down and zoom it, and the host reads the workspace back from Herdr (label, directory, two panes and the zoom flag) while the navigation receivers stay at zero bytes. Test-only; no behaviour changes.
+- 08ac1dd: Teach the shared Rust terminal core to answer the colour queries programs send to pick a light or dark scheme (default foreground, background and cursor with `OSC 10`, `11` and `12`, and the palette with `OSC 4`) from a theme in its configuration, with the replies xterm.js gives (#1314). The core is not wired into the app and xterm.js stays the only engine and the default, so nothing changes for users; this removes one recorded difference before a native engine can be offered as an opt-in.
+- @lazysh/account-usage@1.78.1
+  - @lazysh/common@1.78.1
+  - @lazysh/display-idle@1.78.1
+  - @lazysh/et-transport@1.78.1
+  - @lazysh/mosh-transport@1.78.1
+
 ## 1.78.0
 
 ### Minor Changes
