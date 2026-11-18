@@ -1,4 +1,5 @@
-import {expect,test,type Page} from '@playwright/test';
+import {expect,type Page} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import {openHistoryWorkspace} from './fixtures/terminalHistory';
 import {onAdapter,terminalCell,terminalDrawn,terminalSize} from './fixtures/terminalState';
 import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';

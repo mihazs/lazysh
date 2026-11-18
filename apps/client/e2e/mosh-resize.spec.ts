@@ -1,4 +1,5 @@
-import {expect,test} from '@playwright/test';
+import {expect} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {openMoshApp} from './fixtures/moshApp';
 import {onAdapter,screenText,terminalBounds,terminalDrawn,terminalRows,terminalSize} from './fixtures/terminalState';

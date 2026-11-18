@@ -1,4 +1,5 @@
-import {expect,test,type Page,type TestInfo} from '@playwright/test';
+import {expect,type Page,type TestInfo} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import {openClipboardTerminal} from './fixtures/localTerminal';
 import {pressMore} from './fixtures/toolbarMore';
 import {onAdapter,screenText,terminalCell,terminalSize,terminalViewport} from './fixtures/terminalState';

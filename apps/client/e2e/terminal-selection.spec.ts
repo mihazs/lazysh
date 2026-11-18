@@ -1,4 +1,5 @@
-import {expect,test,type CDPSession,type Page} from '@playwright/test';
+import {expect,type CDPSession,type Page} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import {cell,historyLines,longPress,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
 import {onAdapter,terminalBounds,terminalRows,terminalViewport} from './fixtures/terminalState';
 import {controlContrast} from './fixtures/controlContrast';

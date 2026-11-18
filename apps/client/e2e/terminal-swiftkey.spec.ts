@@ -1,4 +1,5 @@
-import {expect,test,type Page} from '@playwright/test';
+import {expect,type Page} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import {fingerDrag,rowHeight} from './fixtures/terminalHistory';
 import {onAdapter,terminalBounds} from './fixtures/terminalState';
 import {esc,keyboard,line,open,state,typeWord,type Ime} from './fixtures/swiftkeyKeyboard';
