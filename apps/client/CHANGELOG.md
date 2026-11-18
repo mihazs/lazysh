@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.79.3
+
+### Patch Changes
+
+- ec4ad0f: Add the iOS native surface composition proof of concept: a standalone simulator host stacks an `MTKView` below a transparent `WKWebView` and an XCUITest in the iOS simulator job reads placement, DOM overlap, touch routing, scrolling, keyboard resize, safe areas, rotation and lifecycle from the composited pixels. Test-only; the app, its web view and its capabilities are unchanged.
+- @lazysh/account-usage@1.79.3
+  - @lazysh/common@1.79.3
+  - @lazysh/display-idle@1.79.3
+  - @lazysh/et-transport@1.79.3
+  - @lazysh/mosh-transport@1.79.3
+
 ## 1.79.2
 
 ### Patch Changes
