@@ -180,5 +180,5 @@ test('every Linux x64 job that compiles the Parakeet runtime reads the verified 
     }
   }
   // The inventory is pinned so a detector regression cannot make this pass vacuously.
-  expect(builders.sort()).toEqual(['checks.yml#native-linux', 'checks.yml#native-linux-runtimes', 'release-artifacts.yml#desktop[linux-x64]']);
+  expect(builders.sort()).toEqual(['checks.yml#native-linux', 'checks.yml#native-linux-runtimes', 'checks.yml#native-terminal-bridge', 'release-artifacts.yml#desktop[linux-x64]']);
 });
