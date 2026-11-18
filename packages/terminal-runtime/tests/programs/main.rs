@@ -95,11 +95,15 @@ fn tmux_starts_on_the_cores_identity_reads_alt_arrow_and_writes_the_clipboard() 
         return;
     };
     tmux.program.wait_for_text("[probe]");
-    assert!(contains(&tmux.program.replies, DA1), "tmux asked DA1");
-    // Only newer tmux versions ask for DA2.
-    if contains(&tmux.program.printed, b"\x1b[>c") {
-        assert!(contains(&tmux.program.replies, DA2), "tmux asked DA2");
+    // tmux 3.2 asks DA2 and the terminal version, 3.3 and later DA1 as well: it gets the core's answer to each.
+    let mut asked = 0;
+    for (query, answer) in [(&b"\x1b[c"[..], DA1), (&b"\x1b[>c"[..], DA2)] {
+        if contains(&tmux.program.printed, query) {
+            assert!(contains(&tmux.program.replies, answer), "{query:?}");
+            asked += 1;
+        }
     }
+    assert!(asked > 0, "tmux asked for neither DA1 nor DA2");
 
     assert_eq!(
         tmux.program.press("ArrowLeft", "ArrowLeft", ALT),
@@ -290,7 +294,7 @@ fn herdr_takes_its_keys_as_kitty_reports_from_the_core() {
     program.wait_for_text("agent integrations");
     assert_eq!(program.press("Escape", "Escape", 0), b"\x1b[27u");
     program.wait_for("the settings dialog to close", |s| {
-        !s.contains("agent integrations") && s.contains("sh-")
+        !s.contains("agent integrations") && s.contains('$')
     });
     assert_eq!(program.press("KeyB", "b", CTRL), b"\x1b[98;5u");
     program.press("Slash", "?", SHIFT);
