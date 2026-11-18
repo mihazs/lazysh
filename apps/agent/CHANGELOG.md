@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.71.0
+
+### Minor Changes
+
+- cdb8721: Show an OpenCode compaction as an event line in the Agent view.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.71.0
+  - @lazysh/common@1.71.0
+  - @lazysh/companion-release@1.71.0
+  - @lazysh/notification-client@1.71.0
+
 ## 1.70.0
 
 ### Minor Changes
