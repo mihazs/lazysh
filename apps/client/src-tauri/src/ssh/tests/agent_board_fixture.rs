@@ -183,7 +183,17 @@ async fn hook_decision(hook: WaitingHook) -> Value {
     serde_json::from_str::<Value>(&output).unwrap()["hookSpecificOutput"]["decision"].clone()
 }
 
-pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
+// Boxed like `openssh_interoperability`: a debug build sizes this state machine in the caller's
+// poll frame, and `openssh_check` shares that frame (and a 2 MiB test thread) with every check.
+pub(super) fn verify<'a>(
+    app: &'a App,
+    id: &'a str,
+    directory: &'a Path,
+) -> impl std::future::Future<Output = ()> + 'a {
+    Box::pin(check(app, id, directory))
+}
+
+async fn check(app: &App, id: &str, directory: &Path) {
     let binary = super::companion_fixture::owned_agent_binary();
     let session = app.state::<AppState>().session(id).await.unwrap();
     let lease = access_lease();
