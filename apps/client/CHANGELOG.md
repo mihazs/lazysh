@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.78.2
+
+### Patch Changes
+
+- 2005943: Extend the Android tmux acceptance case: it now splits a window's pane top/bottom and zooms and unzooms the new pane from the Sessions panel (the tmux client's display is the witness, also after a detach and reattach), and the host checks that the original pane process is untouched. Test-only; no behaviour changes.
+- @lazysh/account-usage@1.78.2
+  - @lazysh/common@1.78.2
+  - @lazysh/display-idle@1.78.2
+  - @lazysh/et-transport@1.78.2
+  - @lazysh/mosh-transport@1.78.2
+
 ## 1.78.1
 
 ### Patch Changes
