@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.73.0
+
+### Minor Changes
+
+- abd2014: Answer a Claude Code agent's permission requests and questions from the Agent view under Herdr, as on tmux. For the agent of the focused Herdr pane the approval dock decides the hook request (matched by session id, because a Herdr hook has no tmux pane) and the open question is answered with the keys a person presses, through Herdr's own `agent send-keys`, on a stock or a guarded host.
+- abd2014: Answer the list dialogs of Claude Code and Codex from the Agent view under Herdr, as on tmux: the `/model` and `/resume` pickers, the trust prompt, the plan decision and Codex's approval prompt. The Agent view reads the followed agent's pane through Herdr (`agent read`), shows the dialog as a card, and answers with the arrows and Enter a person presses through Herdr's own `agent send-keys`, reading the highlight back before Enter. The agent's report names what it waits for, so a permission request or a question keeps its own card. The header of a blocked Herdr agent now says what it waits for and since when. A typed free-text answer to a question under Herdr now picks the free-text row and goes to the pane as one literal line and its Enter.
+- abd2014: Answer the questions and dialogs of the agent followed in a Zellij pane from the Agent view, as on tmux and Herdr. The host reads the agent's own pane (`zellij action dump-screen --pane-id`, new read-only command `zellij_agent_screen`) because the terminal shows Zellij's composite screen, the dialog card shows the list dialog that is open (`/model`, `/resume`, the trust prompt, the plan decision, Codex's approval prompt), and a tap sends the arrows and Enter a person presses with Zellij's own `send-keys`, which writes an arrow for the cursor-key mode of that pane, after reading the highlight back. A Claude Code question is answered with its option's digit, or a typed line and its Enter, through the same input. The host proves the pane runs the agent before every key.
+
+### Patch Changes
+
+- d6b93c0: Split the 2,500-line `App.test.tsx` client suite into ten per-area files that share one harness, so vitest runs them in parallel and no single file holds the client check's critical path. Test-only: no application behaviour changes.
+- @lazysh/account-usage@1.73.0
+  - @lazysh/common@1.73.0
+  - @lazysh/display-idle@1.73.0
+  - @lazysh/et-transport@1.73.0
+  - @lazysh/mosh-transport@1.73.0
+
 ## 1.72.0
 
 ### Patch Changes
