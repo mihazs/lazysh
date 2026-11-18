@@ -47,6 +47,70 @@
     }
   },
   {
+    "id": "osc52-selection-sets",
+    "about": "OSC 52 with no selection, c, cp, pc, s and ps: the core keeps the writes that name no selection or only the clipboard",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]52;;ZW1wdHk=\u0007"
+      },
+      {
+        "write": "\u001b]52;c;Y2xpcA==\u0007"
+      },
+      {
+        "write": "\u001b]52;cp;Y2xpcC1hbmQtcHJpbWFyeQ==\u0007"
+      },
+      {
+        "write": "\u001b]52;pc;cHJpbWFyeS1hbmQtY2xpcA==\u0007"
+      },
+      {
+        "write": "\u001b]52;s;c2Vjb25kYXJ5\u0007"
+      },
+      {
+        "write": "\u001b]52;ps;cHJpbWFyeS1hbmQtc2Vjb25kYXJ5\u0007"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "events": {
+        "osc52": [
+          ";ZW1wdHk=",
+          "c;Y2xpcA==",
+          "cp;Y2xpcC1hbmQtcHJpbWFyeQ==",
+          "pc;cHJpbWFyeS1hbmQtY2xpcA==",
+          "s;c2Vjb25kYXJ5",
+          "ps;cHJpbWFyeS1hbmQtc2Vjb25kYXJ5"
+        ]
+      }
+    },
+    "core": {
+      "divergence": [
+        "osc52-payload-decoded",
+        "osc52-selection-filter"
+      ],
+      "expect": {
+        "events": {
+          "bell": 0,
+          "osc52": [
+            "empty",
+            "clip"
+          ]
+        }
+      }
+    }
+  },
+  {
     "id": "osc52-clipboard-query",
     "about": "OSC 52 with ? asks for the clipboard",
     "cols": 20,

@@ -23,6 +23,8 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 # Tests replay fixtures, such as the captured Mosh frames of apps/client/e2e/fixtures/mosh-resize-frames.json.
 serde_json = "1"
+# tests/programs runs real programs (tmux, vim, Herdr, the agent TUIs) on a pty with the core as their terminal.
+libc = "0.2"
 
 [profile.release]
 debug = false
