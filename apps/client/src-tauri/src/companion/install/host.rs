@@ -17,22 +17,57 @@ struct Line {
     total: Option<u64>,
     outcome: Option<String>,
     exit_code: Option<u32>,
+    action: Option<String>,
     error: Option<Reported>,
+    current: Option<Versioned>,
+    previous: Option<Versioned>,
 }
 #[derive(Deserialize)]
 struct Reported {
+    kind: Option<String>,
     detail: Option<String>,
+}
+#[derive(Deserialize)]
+struct Versioned {
+    version: Option<String>,
+    managed: Option<bool>,
+}
+impl Line {
+    fn current(&self) -> Option<&str> {
+        self.current
+            .as_ref()?
+            .version
+            .as_deref()
+            .filter(|v| release::version(v).is_some())
+    }
+    fn previous(&self) -> Option<&str> {
+        self.previous
+            .as_ref()?
+            .version
+            .as_deref()
+            .filter(|v| release::version(v).is_some())
+    }
 }
 fn parse(line: &str) -> Option<Line> {
     serde_json::from_str::<Line>(line.trim())
         .ok()
         .filter(|line| line.schema_version == 1)
 }
-fn last_result(stdout: &[u8]) -> Option<Line> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .filter_map(parse)
-        .rfind(|line| line.event == "result")
+/// A mutating operation is settled only by one unambiguous, complete result stream.
+fn strict_result(stdout: &[u8]) -> Option<Line> {
+    if !stdout.ends_with(b"\n") {
+        return None;
+    }
+    let mut result = None;
+    for text in std::str::from_utf8(stdout).ok()?.lines() {
+        let line = parse(text)?;
+        match line.event.as_str() {
+            "stage" if result.is_none() => (),
+            "result" if result.is_none() => result = Some(line),
+            _ => return None,
+        }
+    }
+    result
 }
 /// Complete stdout lines, however the transport chunks them; a line past the cap is cut and then fails to parse.
 #[derive(Default)]
@@ -82,6 +117,29 @@ fn detail_of(detail: &str) -> Option<&'static str> {
     ];
     DETAILS.into_iter().find(|known| *known == detail)
 }
+/// Only a matching final report from a documented refusal settles the outcome.
+fn definite_failure(code: u32, line: Option<&Line>, action: &str, target: &str) -> bool {
+    let kind = match code {
+        20 => "networkUnavailable",
+        21 => "releaseUnavailable",
+        22 => "verificationFailed",
+        23 => "downgradeRefused",
+        24 => "selfTestFailed",
+        25 => "rolledBack",
+        26 => "busy",
+        27 => "unsafeInstallLocation",
+        28 => "noPreviousVersion",
+        30 => "hostToolMissing",
+        _ => return false,
+    };
+    line.is_some_and(|line| {
+        line.exit_code == Some(code)
+            && line.action.as_deref() == Some(action)
+            && line.outcome.as_deref() == Some("failed")
+            && line.error.as_ref().and_then(|error| error.kind.as_deref()) == Some(kind)
+            && line.current() != Some(target)
+    })
+}
 /// The update contract's exit codes as the failures the panel knows; the text is fixed, never the host's.
 fn failure(code: u32) -> SshError {
     let (kind, message) = match code {
@@ -117,6 +175,10 @@ fn failure(code: u32) -> SshError {
             "companion_unsafe_location",
             "The managed companion location on this host is not safe to use",
         ),
+        28 => (
+            "companion_no_previous",
+            "The host has no previous companion to restore",
+        ),
         30 => (
             "companion_host_tool_missing",
             "The host has no curl or GNU wget, or no SHA-256 tool",
@@ -150,7 +212,170 @@ pub(super) fn bootstrap_command(
         ssh::quote(&directory)
     ))
 }
+/// `lazysh-agent update --json --yes --version V --expect-sha256 H --expect-bytes N` through the managed-executable
+/// resolver: the host re-resolves the release itself and refuses (exit 22) anything that differs from the pin.
+fn update_command(unix: &resolve::Unix, selection: &release::Selection) -> Result<String> {
+    if release::version(&selection.version).is_none()
+        || !lazysh_common::valid_sha256(&selection.digest)
+        || selection.bytes == 0
+        || selection.bytes > release::MAX_BINARY
+    {
+        return Err(invalid());
+    }
+    unix.command(&format!(
+        "lazysh-agent update --json --yes --version {} --expect-sha256 {} --expect-bytes {}",
+        selection.version, selection.digest, selection.bytes
+    ))
+}
+/// A complete recognizable command list is required before treating the updater as absent.
+fn legacy_help(text: &str) -> bool {
+    if !text
+        .lines()
+        .any(|line| line.trim() == "Usage: lazysh-agent <COMMAND>")
+    {
+        return false;
+    }
+    let mut lines = text.lines().skip_while(|line| line.trim() != "Commands:");
+    if lines.next().is_none() {
+        return false;
+    }
+    let mut names = Vec::new();
+    let mut complete = false;
+    for line in lines.by_ref() {
+        if line.trim().is_empty() {
+            complete = true;
+            break;
+        }
+        if !line.starts_with("  ") {
+            return false;
+        }
+        let Some(name) = line.split_whitespace().next() else {
+            return false;
+        };
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+            || names.contains(&name)
+        {
+            return false;
+        }
+        names.push(name);
+        if names.len() > 128 {
+            return false;
+        }
+    }
+    let options = lines.collect::<Vec<_>>();
+    complete
+        && options.first().map(|line| line.trim()) == Some("Options:")
+        && options
+            .iter()
+            .any(|line| line.trim_start().starts_with("-h, --help"))
+        && options
+            .iter()
+            .any(|line| line.trim_start().starts_with("-V, --version"))
+        && ["ingest", "snapshot", "help"]
+            .iter()
+            .all(|name| names.contains(name))
+        && !names.contains(&"update")
+        && !names.contains(&"auto-update")
+}
+/// The result of **Check for updates**: only versions and a closed state, nothing from the host's own text.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checked {
+    schema_version: u8,
+    via: &'static str,
+    installed: Option<String>,
+    previous: Option<String>,
+    latest: String,
+    state: &'static str,
+}
+/// What the host's `update --status --json` reported; absent when the companion has no `update` command.
+pub(super) struct Capability {
+    /// The managed companion's version, when the host reports one.
+    pub managed: Option<String>,
+    pub previous: Option<String>,
+}
 impl Operation {
+    /// Classify only a valid status, a complete legacy help response, or a positively absent executable.
+    pub(super) async fn probe(&self, unix: &resolve::Unix) -> Result<Option<Capability>> {
+        let output = self
+            .probe_command(unix.command("lazysh-agent update --status --json")?)
+            .await?;
+        if output.status == Some(0) {
+            let line = strict_result(&output.stdout)
+                .filter(|line| {
+                    line.exit_code == Some(0)
+                        && line.action.as_deref() == Some("status")
+                        && line.outcome.as_deref() == Some("status")
+                        && line.current().is_some()
+                        && line
+                            .current
+                            .as_ref()
+                            .and_then(|current| current.managed)
+                            .is_some()
+                })
+                .ok_or_else(invalid)?;
+            return Ok(Some(Capability {
+                managed: line
+                    .current
+                    .as_ref()
+                    .filter(|current| current.managed == Some(true))
+                    .and(line.current())
+                    .map(str::to_owned),
+                previous: line.previous().map(str::to_owned),
+            }));
+        }
+        if output.status == Some(73) {
+            return Err(failure(27));
+        }
+        if output.status == Some(2) {
+            let version = self
+                .probe_command(unix.command("lazysh-agent --version")?)
+                .await?;
+            let valid_version = version.status == Some(0)
+                && std::str::from_utf8(&version.stdout)
+                    .ok()
+                    .and_then(|text| text.trim().strip_prefix("lazysh-agent "))
+                    .and_then(release::version)
+                    .is_some();
+            if !valid_version {
+                return Err(invalid());
+            }
+            let help = self
+                .probe_command(unix.command("lazysh-agent --help")?)
+                .await?;
+            if help.status == Some(0)
+                && std::str::from_utf8(&help.stdout)
+                    .ok()
+                    .is_some_and(legacy_help)
+            {
+                return Ok(None);
+            }
+        }
+        if output.status == Some(127) {
+            let script = format!("p={}; if [ ! -e \"$p\" ] && [ ! -L \"$p\" ] && ! command -v lazysh-agent >/dev/null 2>&1; then printf 'lazysh-companion-absent-v1\\n'; else exit 1; fi", ssh::quote(&unix.managed()));
+            let absent = self
+                .probe_command(format!("sh -c {}", ssh::quote(&script)))
+                .await?;
+            if absent.status == Some(0) && absent.stdout == b"lazysh-companion-absent-v1\n" {
+                return Ok(None);
+            }
+        }
+        Err(invalid())
+    }
+    async fn probe_command(&self, command: String) -> Result<ssh::ExecOutput> {
+        ssh::exec_status(
+            &self.session,
+            command,
+            &self.lease,
+            Duration::from_secs(15),
+            16_384,
+            Some(self.flight.clone()),
+            &mut |_| {},
+        )
+        .await
+    }
     fn host_stage(&self, phase: &mut Option<Stage>, stage: Stage, counted: Option<(u64, u64)>) {
         *phase = Some(stage);
         if self.lease.check().is_ok() && !*self.session.cancel.borrow() {
@@ -169,19 +394,18 @@ impl Operation {
             Err(error) => Err(error),
         }
     }
-    pub(super) async fn perform_host(
+    /// Runs `script` on the host and streams its progress. `committing` is what the host may now have installed:
+    /// once dispatched the answer can be lost. `Ok(None)` is an uncertain commit (exit 29); only a
+    /// documented failure accompanied by a matching result settles a definite refusal.
+    async fn dispatch(
         &self,
         work: &mut Work,
-        publisher: &release::Publisher,
-    ) -> Result<Installed> {
-        let (unix, selection) = self.resolve(work, publisher).await?;
-        reject_newer(&self.installed_version(&unix).await?, &selection.version)?;
-        self.work_stage(&mut work.phase, Stage::Verifying);
-        publisher.recheck(&selection).await?;
-        let script = bootstrap_command(&unix, &selection)?;
-        let destination = unix.managed();
-        // Dispatch may reach the host even if its answer is lost; the exit status below settles it.
-        work.possible_commit = Some((selection.version.clone(), destination.clone()));
+        script: String,
+        total: Option<u64>,
+        committing: (String, String),
+        action: &str,
+    ) -> Result<Option<Line>> {
+        work.possible_commit = Some(committing);
         let mut lines = Lines::default();
         let phase = &mut work.phase;
         let output = ssh::exec_status(
@@ -202,7 +426,7 @@ impl Operation {
                     let counted = line
                         .bytes
                         .zip(line.total)
-                        .filter(|(bytes, total)| *total == selection.bytes && bytes <= total);
+                        .filter(|(bytes, declared)| Some(*declared) == total && bytes <= declared);
                     self.host_stage(phase, stage, counted);
                 });
             },
@@ -214,45 +438,88 @@ impl Operation {
                 "The host ended the update without an exit status",
             )
         })?;
-        let reported = last_result(&output.stdout);
-        if code != 0 {
-            // Every non-zero exit but 29 is a definite answer: nothing was committed.
-            work.possible_commit = None;
-            if code == 29 {
-                return Ok(result(
-                    "uncertain",
-                    &selection.version,
-                    &destination,
-                    Some("committedDurabilityUnknown"),
-                ));
+        let reported = strict_result(&output.stdout);
+        match code {
+            0 => {}
+            29 => return Ok(None),
+            code => {
+                if !definite_failure(
+                    code,
+                    reported.as_ref(),
+                    action,
+                    &work.possible_commit.as_ref().unwrap().0,
+                ) {
+                    return Err(invalid());
+                }
+                work.possible_commit = None;
+                work.detail = reported
+                    .and_then(|line| line.error)
+                    .and_then(|reported| reported.detail)
+                    .and_then(|detail| detail_of(&detail));
+                return Err(failure(code));
             }
-            work.detail = reported
-                .and_then(|line| line.error)
-                .and_then(|reported| reported.detail)
-                .and_then(|detail| detail_of(&detail));
-            return Err(failure(code));
         }
-        // A success that does not say what it did may still have installed: that stays uncertain.
-        let reused = match reported {
-            Some(line) if line.exit_code == Some(0) => match line.outcome.as_deref() {
-                Some("updated") => false,
-                Some("upToDate") => true,
-                _ => return Err(invalid()),
-            },
+        // A success that does not say what it did may still have changed the host: that stays uncertain.
+        match reported {
+            Some(line) if line.exit_code == Some(0) => Ok(Some(line)),
+            _ => Err(invalid()),
+        }
+    }
+    /// The app does not trust the host's JSON alone: it asks for the version again through the resolver.
+    async fn confirm(&self, work: &mut Work, unix: &resolve::Unix, expected: &str) -> Result<()> {
+        work.checking_installed = true;
+        self.work_stage(&mut work.phase, Stage::CheckingInstalled);
+        let version = self
+            .command(unix.managed_command("lazysh-agent --version")?)
+            .await?;
+        if version.trim() != format!("lazysh-agent {expected}") {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    pub(super) async fn perform_host(
+        &self,
+        work: &mut Work,
+        publisher: &release::Publisher,
+    ) -> Result<Installed> {
+        let (unix, selection) = self.resolve(work, publisher).await?;
+        reject_newer(&self.installed_version(&unix).await?, &selection.version)?;
+        self.work_stage(&mut work.phase, Stage::Verifying);
+        publisher.recheck(&selection).await?;
+        let destination = unix.managed();
+        // A companion with `update` re-resolves the release itself against the pin; older ones get the script.
+        let script = match self.probe(&unix).await? {
+            // Already the pinned version in the managed location: nothing to fetch, and the host is not asked to.
+            Some(capability)
+                if capability.managed.as_deref() == Some(selection.version.as_str()) =>
+            {
+                self.confirm(work, &unix, &selection.version).await?;
+                return Ok(result("reused", &selection.version, &destination, None));
+            }
+            Some(_) => update_command(&unix, &selection)?,
+            None => bootstrap_command(&unix, &selection)?,
+        };
+        let committing = (selection.version.clone(), destination.clone());
+        let Some(line) = self
+            .dispatch(work, script, Some(selection.bytes), committing, "update")
+            .await?
+        else {
+            return Ok(result(
+                "uncertain",
+                &selection.version,
+                &destination,
+                Some("committedDurabilityUnknown"),
+            ));
+        };
+        let reused = match line.outcome.as_deref() {
+            Some("updated") => false,
+            Some("upToDate") => true,
             _ => return Err(invalid()),
         };
         if reused {
             work.possible_commit = None;
-        } else {
-            work.checking_installed = true;
         }
-        self.work_stage(&mut work.phase, Stage::CheckingInstalled);
-        let version = self
-            .command(unix.command("lazysh-agent --version")?)
-            .await?;
-        if version.trim() != format!("lazysh-agent {}", selection.version) {
-            return Err(invalid());
-        }
+        self.confirm(work, &unix, &selection.version).await?;
         Ok(result(
             if reused { "reused" } else { "installed" },
             &selection.version,
@@ -260,10 +527,72 @@ impl Operation {
             None,
         ))
     }
+    /// What is installed, whether it can update itself, and how it compares with the latest release.
+    pub(super) async fn check(&self, publisher: &release::Publisher) -> Result<Checked> {
+        let mut work = Work::default();
+        let (unix, latest) = self.resolve(&mut work, publisher).await?;
+        let installed = self.installed_version(&unix).await?;
+        let capability = self.probe(&unix).await?;
+        let current = installed
+            .trim()
+            .strip_prefix("lazysh-agent ")
+            .filter(|version| release::version(version).is_some())
+            .map(str::to_owned);
+        let state = match current.as_deref().and_then(release::version) {
+            None => "notInstalled",
+            Some(have) if Some(have) > release::version(&latest.version) => "newer",
+            Some(have) if Some(have) == release::version(&latest.version) => "upToDate",
+            Some(_) => "available",
+        };
+        Ok(Checked {
+            schema_version: 1,
+            via: if capability.is_some() {
+                "update"
+            } else {
+                "bootstrap"
+            },
+            installed: current,
+            previous: capability.and_then(|capability| capability.previous),
+            latest: latest.version,
+            state,
+        })
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mutating_result_stream_must_be_complete_and_unambiguous() {
+        let good = b"{\"schemaVersion\":1,\"event\":\"result\"}\n";
+        assert!(strict_result(good).is_some());
+        assert!(strict_result(&[good.as_slice(), good.as_slice()].concat()).is_none());
+        assert!(strict_result(
+            &[
+                good.as_slice(),
+                b"{\"schemaVersion\":1,\"event\":\"stage\"}\n"
+            ]
+            .concat()
+        )
+        .is_none());
+        assert!(strict_result(&[good.as_slice(), b"{broken\n"].concat()).is_none());
+        assert!(strict_result(b"\xff").is_none());
+    }
+    #[test]
+    fn only_matching_documented_failures_are_definite() {
+        let line = parse(r#"{"schemaVersion":1,"event":"result","action":"update","outcome":"failed","exitCode":22,"error":{"kind":"verificationFailed"}}"#).unwrap();
+        assert!(definite_failure(22, Some(&line), "update", "1.2.3"));
+        assert!(!definite_failure(22, None, "update", "1.2.3"));
+        assert!(!definite_failure(23, Some(&line), "update", "1.2.3"));
+        assert!(!definite_failure(22, Some(&line), "rollback", "1.2.3"));
+        assert!(!definite_failure(137, Some(&line), "update", "1.2.3"));
+        let contradictory = parse(r#"{"schemaVersion":1,"event":"result","action":"update","outcome":"updated","exitCode":22}"#).unwrap();
+        assert!(!definite_failure(
+            22,
+            Some(&contradictory),
+            "update",
+            "1.2.3"
+        ));
+    }
     fn unix(data: &str) -> resolve::Unix {
         resolve::Unix {
             os: if cfg!(target_os = "macos") {
@@ -354,7 +683,7 @@ mod tests {
         ] {
             assert_eq!(failure(code).kind(), kind, "exit {code}");
         }
-        let result = last_result(
+        let result = strict_result(
             b"{\"schemaVersion\":1,\"event\":\"result\",\"exitCode\":22,\"outcome\":\"failed\",\"error\":{\"kind\":\"verificationFailed\",\"detail\":\"digestMismatch\"}}\n",
         )
         .unwrap();
@@ -363,10 +692,75 @@ mod tests {
             result.error.unwrap().detail.as_deref(),
             Some("digestMismatch")
         );
-        assert!(last_result(
+        assert!(strict_result(
             b"{\"schemaVersion\":1,\"event\":\"stage\",\"stage\":\"verifying\"}\n"
         )
         .is_none());
+    }
+    #[test]
+    fn legacy_classification_requires_complete_help_without_update_commands() {
+        let help = "Usage: lazysh-agent <COMMAND>\n\nCommands:\n  ingest  report\n  snapshot  state\n  help  help\n\nOptions:\n  -h, --help  help\n  -V, --version  version\n";
+        assert!(legacy_help(help));
+        assert!(!legacy_help(
+            &help.replace("  help  help", "  update  update\n  help  help")
+        ));
+        assert!(!legacy_help(
+            &help.replace("  help  help", "  auto-update  policy\n  help  help")
+        ));
+        assert!(!legacy_help(help.split("Options:").next().unwrap()));
+        assert!(!legacy_help(
+            &help.replace("  -V, --version  version\n", "")
+        ));
+    }
+    #[tokio::test]
+    async fn only_a_status_result_with_exit_zero_selects_the_update_command() {
+        let access = ssh::test_support::unlocked_access();
+        let lease = ssh::test_support::ready_lease(&access);
+        let fixture = ssh::guard_admission_fixture(lease.clone()).await;
+        let operation = Operation::start(
+            Route::Host,
+            fixture.session.clone(),
+            &lease,
+            Channel::new(|_| Ok(())),
+            5,
+        )
+        .unwrap();
+        let host = unix("/home/owned/.local/share");
+        let status = |code: u32, action: &str, previous: &str| {
+            format!("{{\"schemaVersion\":1,\"event\":\"result\",\"action\":\"{action}\",\"outcome\":\"status\",\"exitCode\":{code},\"current\":{{\"version\":\"1.55.0\",\"managed\":true}},\"previous\":{previous},\"later\":true}}\n")
+        };
+        let kept = r#"{"version":"1.54.1"}"#;
+        for (stdout, exit, expected) in [
+            (status(0, "status", kept), 0, Some("1.54.1")),
+            (status(0, "status", "null"), 0, None),
+        ] {
+            fixture.script_exec(&stdout, exit);
+            assert_eq!(
+                operation
+                    .probe(&host)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .previous
+                    .as_deref(),
+                expected
+            );
+        }
+        for (stdout, exit) in [
+            (String::new(), 2),
+            (String::new(), 127),
+            (String::new(), 126),
+            ("welcome\n".into(), 0),
+            (status(0, "check", kept), 0),
+            (status(1, "status", kept), 0),
+            (status(0, "status", kept), 1),
+        ] {
+            fixture.script_exec(&stdout, exit);
+            assert!(
+                operation.probe(&host).await.is_err(),
+                "{stdout:?} exit {exit}"
+            );
+        }
     }
     /// Runs the embedded script exactly as the login shell would receive it, with `curl` replaced by a copy
     /// from the owned directory, so the quoting of the script and the output contract are the real ones.
@@ -406,7 +800,7 @@ mod tests {
                 .collect::<Vec<_>>();
             (
                 output.status.code().unwrap(),
-                last_result(stdout.as_bytes()),
+                strict_result(stdout.as_bytes()),
                 stages,
                 stdout,
             )

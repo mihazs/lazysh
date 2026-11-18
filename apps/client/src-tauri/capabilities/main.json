@@ -163,6 +163,7 @@
     "allow-agent-reported-history",
     "allow-install-companion",
     "allow-install-companion-from-device",
+    "allow-check-companion-update",
     "allow-companion-hooks",
     "allow-companion-hook-discovery",
     "allow-get-companion-settings",

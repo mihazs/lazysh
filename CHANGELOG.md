@@ -570,6 +570,7 @@
 - Add separate, default-off native consent for generic private FOSS Android UnifiedPush event notifications. Bound-v2 events require the original confirmed device enrollment, OS permission/channel, absolute freshness and Keystore-protected replay admission; taps only open lazysh. Existing registration/enrollment does not turn display on. Actual distributor event/display acceptance remains pending.
 
 - Add explicit `push-config-generate --event-format bound-v2` for encrypted Web Push events with a frozen device generation and absolute expiry. Legacy Web Push remains the default; webhook and enrollment formats are unchanged. Switching the private target requires deliberate reconfiguration and fresh enrollment. Native event display remains incomplete.
+- Add **Check for updates** to the Host companion installation panel and run the host's own `lazysh-agent update` with the verified version, size and SHA-256 pin when supported. Older companions use the existing host-side script (#1445, epic #1441).
 
 - Add explicit Zellij tab 1–20 quick-access buttons using the existing typed native action, without timing-sensitive digit chords or automatic tab discovery. Preserve manual drafts, original session/access ownership and raw host errors; the row does not infer existing or current tabs.
 

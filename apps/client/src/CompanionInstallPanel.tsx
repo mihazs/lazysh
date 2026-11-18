@@ -63,20 +63,34 @@ export function parseCompanionInstall(value:unknown):Result {
   return result;
 }
 
+const checkStates=['notInstalled','available','upToDate','newer'] as const;
+const checkMessages={notInstalled:'companionCheckNotInstalled',available:'companionCheckAvailable',upToDate:'companionCheckUpToDate',newer:'companionCheckNewer'} as const;
+const resultMessages={installed:'companionInstallDone',reused:'companionInstallReused'} as const;
+type Check={via:'update'|'bootstrap';installed:string|null;previous:string|null;latest:string;state:typeof checkStates[number]};
+const plainVersion=(value:unknown)=>typeof value==='string' && value.length<=64 && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
+/** The result of Check for updates: versions and a closed state, nothing else, so host text can never reach the panel. */
+export function parseCompanionCheck(value:unknown):Check {
+  const check=value as Partial<Check>&{schemaVersion?:unknown};
+  if(!value || typeof value!=='object' || Object.keys(check).sort().join(',')!=='installed,latest,previous,schemaVersion,state,via'
+    || check.schemaVersion!==1 || !['update','bootstrap'].includes(check.via as string) || !plainVersion(check.latest)
+    || (check.installed!==null && !plainVersion(check.installed)) || (check.previous!==null && !plainVersion(check.previous))
+    || !(checkStates as readonly unknown[]).includes(check.state))throw new LocalUiError('companionInstallInvalid');
+  return check as Check;
+}
 export default function CompanionInstallPanel({sessionId,visible=true,ready=false,onInstalled}:{sessionId:string;visible?:boolean;ready?:boolean;onInstalled:()=>void}) {
   useUi();const api=useProtectedApi(nativeApi);const {access,mounted}=useMountedAccess();
-  const [stage,setStage]=useState<Stage>();const [counted,setCounted]=useState<{bytes:number;total:number}>();const [fallback,setFallback]=useState(false);const [result,setResult]=useState<Result>();const [error,setError]=useState<UiErrorCause>('');
+  const [stage,setStage]=useState<Stage>();const [counted,setCounted]=useState<{bytes:number;total:number}>();const [fallback,setFallback]=useState(false);const [checked,setChecked]=useState<Check>();const [checking,setChecking]=useState(false);const [result,setResult]=useState<Result>();const [error,setError]=useState<UiErrorCause>('');
   const [observation,setObservation]=useState<Observation>(initialObservation);
   const revision=useRef(0),pending=useRef<number|null>(null);
   const scope=useRef({sessionId,visible});scope.current={sessionId,visible};
-  useEffect(()=>{setStage(undefined);setCounted(undefined);setFallback(false);setResult(undefined);setError('');setObservation(initialObservation);return()=>{revision.current++;pending.current=null;};},[sessionId,visible]);
+  useEffect(()=>{setStage(undefined);setCounted(undefined);setFallback(false);setChecked(undefined);setChecking(false);setResult(undefined);setError('');setObservation(initialObservation);return()=>{revision.current++;pending.current=null;};},[sessionId,visible]);
   async function install(route:Route) {
     if(!visible || !access.current() || pending.current!==null)return;
     const current=++revision.current;pending.current=current;
     const owns=()=>mounted.current && access.current() && scope.current.visible && scope.current.sessionId===sessionId && revision.current===current && pending.current===current;
-    setStage('detecting');setCounted(undefined);setFallback(false);setResult(undefined);setError('');setObservation({...initialObservation,route,outcome:'pending'});
+    setStage('detecting');setCounted(undefined);setFallback(false);setChecked(undefined);setResult(undefined);setError('');setObservation({...initialObservation,route,outcome:'pending'});
     try {
-      const value=parseCompanionInstall(await (route==='host'?api.installCompanion:api.installCompanionFromDevice)(sessionId,event=>{
+      const value=parseCompanionInstall(await ({host:api.installCompanion,device:api.installCompanionFromDevice}[route])(sessionId,event=>{
         const next=companionInstallProgress(event);if(owns() && next){
           setStage(next.stage);setCounted(next.bytes===undefined?undefined:{bytes:next.bytes,total:next.total!});
           if(next.stage!=='cleaningUp')setObservation(previous=>({...previous,phase:next.stage}));
@@ -97,9 +111,28 @@ export default function CompanionInstallPanel({sessionId,visible=true,ready=fals
     }
     finally {if(owns()){setStage(undefined);setCounted(undefined);}if(pending.current===current)pending.current=null;}
   }
+  async function check() {
+    if(!visible || !access.current() || pending.current!==null)return;
+    const current=++revision.current;pending.current=current;
+    const owns=()=>mounted.current && access.current() && scope.current.visible && scope.current.sessionId===sessionId && revision.current===current && pending.current===current;
+    setChecking(true);setChecked(undefined);setResult(undefined);setError('');setFallback(false);
+    try {
+      const value=parseCompanionCheck(await api.checkCompanionUpdate(sessionId));
+      if(owns())setChecked(value);
+    } catch(error){
+      const kind=error && typeof error==='object' && 'kind' in error?error.kind:undefined;
+      if(owns())setError(typeof kind==='string' && Object.hasOwn(failures,kind)?new LocalUiError(failures[kind as keyof typeof failures]):captureUiError(error));
+    }
+    finally {if(owns())setChecking(false);if(pending.current===current)pending.current=null;}
+  }
+  const busy=!!stage || checking;
   return <details data-install-recheck={observation.recheck} data-install-phase={observation.phase} data-install-failure={observation.failure} data-install-route={observation.route} data-install-detail={observation.detail} data-install-outcome={observation.outcome} data-install-reason={observation.reason} data-install-cleanup-stage={result?.cleanupFailure?.stage??'none'} data-install-cleanup-reason={result?.cleanupFailure?.reason??'none'} className="companion-install" hidden={!visible} open={!ready || !!stage || !!result || !!error} aria-label={t('companionInstallTitle')}>
     <summary>{t('companionInstallTitle')}</summary>
-    <div className="tool-bar"><button className="subtle-button" disabled={!visible || !!stage || !access.current()} onClick={()=>void install('host')}>{stage?t('companionInstallBusy'):t(ready?'companionInstallUpdate':'companionInstallButton')}</button></div>
+    <div className="tool-bar"><button className="subtle-button" disabled={!visible || busy || !access.current()} onClick={()=>void install('host')}>{stage?t('companionInstallBusy'):t(ready?'companionInstallUpdate':'companionInstallButton')}</button></div>
+    <div className="companion-actions">
+      <button className="subtle-button" disabled={!visible || busy || !access.current()} onClick={()=>void check()}>{t(checking?'companionCheckBusy':'companionCheckButton')}</button>
+    </div>
+    {checked && <p className="agent-note" role="status">{t(checkMessages[checked.state],{installed:checked.installed??'',latest:checked.latest})}</p>}
     {stage && <p className="agent-note" role="status">{counted?t('companionInstallDownloadingBytes',{done:formatNumber(counted.bytes/1_048_576,{maximumFractionDigits:1}),total:formatNumber(counted.total/1_048_576,{maximumFractionDigits:1})}):t(stages[stage])}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
     {fallback && !stage && <div className="companion-fallback">
@@ -107,7 +140,7 @@ export default function CompanionInstallPanel({sessionId,visible=true,ready=fals
       <button className="subtle-button" disabled={!visible || !access.current()} onClick={()=>void install('device')}>{t('companionInstallFallbackButton')}</button>
     </div>}
     {result && <div className="agent-note" role={result.status==='uncertain'?'alert':'status'}>
-      <p>{result.status==='uncertain'?t('companionInstallUncertain'):t(result.status==='reused'?'companionInstallReused':'companionInstallDone',{version:result.version})}</p>
+      <p>{result.status==='uncertain'?t('companionInstallUncertain'):t(resultMessages[result.status],{version:result.version})}</p>
       <code>{result.path}</code>
       {result.cleanup==='residue' && <p>{t('companionInstallResidue')}</p>}
     </div>}
