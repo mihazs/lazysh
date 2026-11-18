@@ -151,6 +151,50 @@
     }
   },
   {
+    "id": "osc52-clipboard-targets",
+    "about": "OSC 52 to the selection ('s') and to several targets ('cs'): lazysh offers both, libghostty-vt drops them",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]52;s;aGVsbG8=\u001b\\"
+      },
+      {
+        "write": "\u001b]52;cs;aGVsbG8=\u001b\\"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "events": {
+        "osc52": [
+          "s;aGVsbG8=",
+          "cs;aGVsbG8="
+        ]
+      }
+    },
+    "core": {
+      "divergence": [
+        "osc52-target-letters"
+      ],
+      "expect": {
+        "events": {
+          "bell": 0,
+          "osc52": []
+        }
+      }
+    }
+  },
+  {
     "id": "bell",
     "about": "BEL rings, inside an OSC it only terminates",
     "cols": 20,

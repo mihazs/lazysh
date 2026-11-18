@@ -15,6 +15,11 @@
     "status": "accepted (2026-11-18, #1314 slice 1314b): writes that name only the primary (p) or secondary (s) selection are dropped, and so are sets that mix them with the clipboard (cp, pc, cs, ps), because libghostty-vt reads the selection as one letter; an empty selection and c reach the host",
     "evidence": "fixture osc52-selection-sets; tmux_starts_on_the_cores_identity_reads_alt_arrow_and_writes_the_clipboard (tmux writes an empty selection and the core hands it to the host)"
   },
+  "osc52-target-letters": {
+    "summary": "libghostty-vt decides on the target letters before lazysh's consent policy runs and delivers only a write whose single target is the standard clipboard: a write to 's', 'cs' or 'ccc' (offered by lazysh today) is dropped by the core, an unknown letter such as 'x' (rejected today) is offered, and an empty write (which opens the consent panel with an empty text today) is not queued.",
+    "rationale": "Only what is offered to the user differs: nothing is applied without the consent flow and a clipboard query is still never answered. The 's' and 'cs' writes are the ones the review of #1314 (slice 1314b) already accepted as dropped (`osc52-selection-filter`); what is left open is that 'ccc' is dropped, an unknown letter such as 'x' (rejected today) is offered, and an empty write (which opens the consent panel with an empty text today) is not queued. Seeing the target needs a change to the vendored binding, whose `capture_clipboard_write` drops every location but the standard one and which this repository does not patch, or a byte-stream scan like the one that answers colour queries.",
+    "status": "open: decide before the native adapter ships whether to accept these three or widen the binding (#1321); `fixtures/osc52.json` records each request with the offer of both engines"
+  },
   "osc52-query-not-surfaced": {
     "summary": "OSC 52 with '?' (read the clipboard) reaches xterm.js's handler as 'c;?'; the core surfaces nothing and sends no reply.",
     "rationale": "lazysh never answers clipboard reads (a remote program must not read the local clipboard silently), so dropping the query is the same outcome with less surface.",
