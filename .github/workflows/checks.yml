@@ -484,6 +484,28 @@ jobs:
           export HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture"
           cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input acceptance::
 
+      # The terminal runtime for Android, with the same admitted Zig, archives and caches as above. Last, because
+      # nothing sealed above depends on it. Compiling and linking only: nothing runs on Android here.
+      - name: Provision the pinned Android NDK
+        if: needs.changes.outputs.terminal_runtime == 'true'
+        uses: ./.github/actions/android-toolchains
+      - name: Check and link the terminal runtime for Android arm64 and x86_64 with the pinned NDK
+        id: terminal-android-target
+        if: needs.changes.outputs.terminal_runtime == 'true'
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          rustup target add --toolchain 1.96.1 aarch64-linux-android x86_64-linux-android
+          # The runner image presets ANDROID_NDK_HOME to its own NDK, which libghostty-vt's Zig build reads first.
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          ndk_bin="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for abi in aarch64 x86_64; do
+            triple="$abi-linux-android"
+            # API 24 is the app's minSdkVersion: a libc symbol newer than that fails to link here as it would in the app.
+            export "CARGO_TARGET_${abi^^}_LINUX_ANDROID_LINKER=$ndk_bin/${triple}24-clang"
+            cargo +1.96.1 check --locked --target "$triple"
+            cargo +1.96.1 test --locked --no-run --target "$triple"
+          done
+
   # The regression gate of the native terminal core (#1341). It is a job of its own, not a step of
   # herdr-native, so a regression (or a flaky host) can never skip the jobs that consume herdr-native's
   # binaries, and the gate runs alone on its runner: nothing else competes for the CPU while it measures.
