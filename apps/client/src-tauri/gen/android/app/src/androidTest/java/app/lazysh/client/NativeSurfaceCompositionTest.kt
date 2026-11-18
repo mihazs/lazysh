@@ -108,7 +108,7 @@ class NativeSurfaceCompositionTest {
         Rect(left, top, left + (anchor.width * anchor.dpr).roundToInt(), top + (anchor.height * anchor.dpr).roundToInt())
     }
 
-    private fun near(a: Rect, b: Rect) = abs(a.left - b.left) <= 1 && abs(a.top - b.top) <= 1 && abs(a.right - b.right) <= 1 && abs(a.bottom - b.bottom) <= 1
+    private fun near(a: Rect, b: Rect) = PageDriver.near(a, b)
 
     private fun validSurface(host: NativeSurfaceHost) = ui { (host.view as? android.view.SurfaceView)?.holder?.surface?.isValid ?: true }
 

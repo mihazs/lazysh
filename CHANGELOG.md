@@ -953,6 +953,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   defaults off; record/export views remain manual. Scrolling up preserves reader
   position until Jump to latest. No new agent, provider or prompt is launched.
 
+- Add a developer-only native terminal surface host to the Android app (#1327, part of the terminal engine epic #1302): a `SurfaceView` stacked below the page that a native terminal engine will draw on, placed from a DOM element through three app commands and kept across the window stopping and starting and across Activity recreation (the surface is told when it is ready, resized or lost, in order, and a recreated surface is drawn again from state the process holds). Release builds refuse every command and nothing in the app calls it yet, so xterm.js stays the only engine and the default, terminal behaviour does not change and no defaults change. See `docs/architecture/android-native-surface-host.md`.
+
 - Opt-in native biometric resume protection for supported Android, iOS and macOS
   devices, with native privacy covers, generation-bound command/result access,
   paused terminal delivery and cancellation of pending protected work. Windows

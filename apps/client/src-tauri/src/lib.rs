@@ -30,6 +30,7 @@ mod links;
 mod local;
 mod mosh;
 mod multiplexer;
+mod native_terminal_surface;
 mod notifications;
 mod previews;
 mod private_keyboard;
@@ -105,6 +106,7 @@ pub fn run() {
         .plugin(auth_browser::init())
         .plugin(app_icons::init())
         .plugin(edge_gestures::init())
+        .plugin(native_terminal_surface::init())
         .plugin(private_keyboard::init())
         .plugin(file_transfer::init())
         .plugin(soft_keyboard::init())
@@ -243,6 +245,9 @@ pub fn run() {
                 notifications::notification_test,
                 edge_gestures::edge_gesture_exclusion,
                 edge_gestures::edge_gesture_insets,
+                native_terminal_surface::native_terminal_surface_place,
+                native_terminal_surface::native_terminal_surface_remove,
+                native_terminal_surface::native_terminal_surface_state,
                 session_background::open_notification_settings,
                 session_background::request_notification_permission,
                 voice::voice_models,
