@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.71.0
+
+### Minor Changes
+
+- 9e0b1c3: Redesign the work rows of the Agent view: tool calls, thinking, folded activity and sub-agents as quiet tonal rows with a status mark and a chevron, the plan as a checklist whose chip fills as steps finish, and borderless question and failure cards.
+- 9e0b1c3: Redesign the Agent view message box: a rounded field that grows with the text, round 44 px controls, a Send button that shows when a message is being delivered, and Commands and Files chips that insert / and @ for touch keyboards.
+- 9e0b1c3: Redesign the frame of the Agent view: a two-line header with state and chips, a floating Jump to latest button, a typing-dots working line, an empty state, tinted errors and a compact layout for short windows.
+- 9e0b1c3: Redesign how the Agent view reads a conversation: a compact prompt bubble, the answer as plain text in a centred column, code blocks with a language label, Copy code and syntax colours, GitHub-flavoured Markdown tables, restyled quotes, and the time a message was sent on a tap.
+
+### Patch Changes
+
+- 366455d: Check the native terminal core's data path against real servers in CI: a real OpenSSH server, the official mosh-server and the official Eternal Terminal server. A deterministic workload through a real PTY reaches a core byte-exact and in order (Mosh: its final screen arrives) with at most one credit window queued and no output message on the WebView channel. No user-visible change: the native terminal engine is not exposed in settings yet and xterm.js stays the only terminal.
+- fcca240: Fix the toolbar paste key on the Linux desktop app: the window now has page clipboard access, so WebKitGTK allows the clipboard read instead of showing "Clipboard access was unavailable".
+- @lazysh/account-usage@1.71.0
+  - @lazysh/common@1.71.0
+  - @lazysh/display-idle@1.71.0
+  - @lazysh/et-transport@1.71.0
+  - @lazysh/mosh-transport@1.71.0
+
 ## 1.70.0
 
 ### Minor Changes
