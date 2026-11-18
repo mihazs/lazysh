@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {fingerDrag,rowHeight} from './fixtures/terminalHistory';
+import {onAdapter,terminalBounds} from './fixtures/terminalState';
 import {esc,keyboard,line,open,state,typeWord,type Ime} from './fixtures/swiftkeyKeyboard';
 import {recordedTraces,type RecordedEvent} from './fixtures/swiftkeyTraces';
 
@@ -76,8 +77,8 @@ test('web profile: Backspace inside a word and after the separator is one DEL ea
   for(const letter of 'helo')await ime.commit(letter);
   await ime.backspace();await ime.commit('l');await ime.commit('o');
   await ime.compose('hello',[0,5]);await ime.commit('hello');await ime.commit(' ');
-  const box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!;
-  await fingerDrag(page,{x:box.x+box.width/2,y:box.y+box.height/4},await rowHeight(page),3);
+  const box=(await terminalBounds(page))!;
+  await fingerDrag(page,{x:box.left+box.width/2,y:box.top+box.height/4},await rowHeight(page),3);
   await ime.backspace();
   await ime.done();
   await expect.poll(async()=>line((await state(page)).writes)).toBe('hello');
@@ -121,7 +122,7 @@ async function typedWithMouseTracking(page:Page) {
   await open(page,true);
   const ime=await keyboard(page);
   await typeWord(ime,'wrold');
-  return {ime,box:(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!};
+  return {ime,box:(await terminalBounds(page))!};
 }
 /** SwiftKey removes the separator, reopens the misspelled word and replaces it with the suggestion. */
 async function correctToWorld(ime:Ime) {
@@ -133,7 +134,7 @@ async function correctToWorld(ime:Ime) {
 
 test('correcting the previous word still works after the app was scrolled with the wheel',async({page})=>{
   const {ime,box}=await typedWithMouseTracking(page);
-  await fingerDrag(page,{x:box.x+box.width/2,y:box.y+box.height/4},await rowHeight(page),4);
+  await fingerDrag(page,{x:box.left+box.width/2,y:box.top+box.height/4},await rowHeight(page),4);
   await expect.poll(()=>page.evaluate(()=>window.ownedHistory.writes.filter(data=>data.startsWith('\x1b[<64;')).length)).toBeGreaterThan(0);
   await correctToWorld(ime);
   await expect.poll(async()=>line((await state(page)).writes)).toBe('world ');
@@ -143,7 +144,7 @@ test('correcting the previous word still works after the app was scrolled with t
 
 test('a tap that moves the app cursor still fences the previous word from a stale correction',async({page})=>{
   const {ime,box}=await typedWithMouseTracking(page);
-  await page.touchscreen.tap(box.x+box.width/2,box.y+box.height/3);
+  await page.touchscreen.tap(box.left+box.width/2,box.top+box.height/3);
   await expect.poll(()=>page.evaluate(()=>window.ownedHistory.writes.some(data=>data.startsWith('\x1b[<0;')))).toBe(true);
   await correctToWorld(ime);
   // The click may have moved the cursor in the app: a replacement is reviewed, not guessed.
@@ -212,8 +213,8 @@ test('web profile: a dot after a word, with the autospace rewrite, arrives once 
 
 /** Replays DOM events recorded on a real Android WebView, with the textarea values they were recorded with. */
 async function replay(page:Page,events:readonly RecordedEvent[]) {
-  await page.evaluate(async (recorded:RecordedEvent[])=>{
-    const area=window.ownedHistory.terminal.textarea!,pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+  await onAdapter(page,async (adapter,recorded:RecordedEvent[])=>{
+    const area=adapter.inputElement()!,pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
     for(const [type,inputType,data,isComposing,value,start,end,gap] of recorded){
       await pause(gap?30:0);
       if(type==='keydown'||type==='keyup')area.dispatchEvent(new KeyboardEvent(type,{key:'Unidentified',keyCode:229,isComposing,bubbles:true,composed:true,cancelable:true}));

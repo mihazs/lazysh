@@ -1,5 +1,6 @@
 import {expect,test,type CDPSession,type Page} from '@playwright/test';
-import {cell,historyLines,historyView,longPress,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
+import {cell,historyLines,longPress,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
+import {onAdapter,terminalBounds,terminalRows,terminalViewport} from './fixtures/terminalState';
 import {controlContrast} from './fixtures/controlContrast';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
@@ -14,13 +15,14 @@ async function open(page:Page,mosh:boolean) {
   await page.evaluate(()=>navigator.clipboard.writeText('BEFORE'));
   await output(page,historyLines(300));await settle(page);
 }
-const screenEdges=(page:Page)=>page.evaluate(()=>{const r=window.ownedHistory.terminal.element!.querySelector('.xterm-screen')!.getBoundingClientRect();return {top:r.top,bottom:r.bottom};});
-/** The selection read independently from buffer cells, joined as the terminal holds its rows. */
+const screenEdges=async(page:Page)=>{const screen=(await terminalBounds(page))!;return {top:screen.top,bottom:screen.top+screen.height};};
+const scrollToRow=(page:Page,row:number)=>onAdapter(page,(adapter,row)=>adapter.scroll({kind:'toRow',row}),row);
+/** The selection's cells, and the text the terminal's rows hold under them, read independently of the selection's own text. */
 function selected(page:Page) {
-  return page.evaluate(()=>{
-    const t=window.ownedHistory.terminal,p=t.getSelectionPosition()!,b=t.buffer.active,rows:string[]=[];
-    for(let y=p.start.y;y<=p.end.y;y++)rows.push(b.getLine(y)!.translateToString(true,y===p.start.y?p.start.x:0,y===p.end.y?p.end.x:t.cols));
-    return {start:p.start,end:p.end,text:rows.join('\n'),viewportY:b.viewportY,rows:t.rows};
+  return onAdapter(page,adapter=>{
+    const {start,end}=adapter.getSelection()!.range,{columns}=adapter.size(),{top,rows}=adapter.viewport();
+    const held=Array.from({length:end.y-start.y+1},(_,i)=>adapter.readRows!(start.y+i,1,{start:i===0?start.x:0,end:start.y+i===end.y?end.x+1:columns})[0]);
+    return {start,end,text:held.join('\n'),viewportY:top,rows};
   });
 }
 async function touch(page:Page) {return page.context().newCDPSession(page);}
@@ -49,7 +51,7 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
   test('touch handles extend a selection through scrolled history past either edge',async({page},testInfo)=>{
     test.skip(testInfo.project.name!=='phone','Touch handles.');
     await open(page,mosh);
-    await page.evaluate(()=>window.ownedHistory.terminal.scrollToLine(100));await settle(page);
+    await scrollToRow(page,100);await settle(page);
     await longPress(page,await cell(page,2,3));
     await expect(handle(page,'end')).toBeVisible();await expect(actions(page)).toBeVisible();
     const first=await selected(page);
@@ -75,7 +77,7 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
   test('a selection survives streaming output and finger or wheel scrolling',async({page},testInfo)=>{
     const phone=testInfo.project.name==='phone';
     await open(page,mosh);
-    await page.evaluate(()=>window.ownedHistory.terminal.scrollToLine(120));await settle(page);
+    await scrollToRow(page,120);await settle(page);
     if(phone)await longPress(page,await cell(page,3,2));
     else {const at=await cell(page,3,2);await page.mouse.dblclick(at.x,at.y);}
     await expect(actions(page)).toBeVisible();
@@ -92,16 +94,16 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
   test('mouse drag selection scrolls past the bottom edge and copies every selected row',async({page},testInfo)=>{
     test.skip(testInfo.project.name!=='desktop','Mouse selection.');
     await open(page,mosh);
-    await page.evaluate(()=>window.ownedHistory.terminal.scrollToLine(100));await settle(page);
-    const begin=await historyView(page),from=await cell(page,1,4),edges=await screenEdges(page);
+    await scrollToRow(page,100);await settle(page);
+    const begin=await terminalViewport(page),from=await cell(page,1,4),edges=await screenEdges(page);
     await page.mouse.move(from.x,from.y);await page.mouse.down();
     await page.mouse.move(from.x+30,edges.bottom+30,{steps:4});
-    await expect.poll(async()=>(await historyView(page)).viewportY,{timeout:15000}).toBeGreaterThan(begin.viewportY+begin.rows+5);
+    await expect.poll(async()=>(await terminalViewport(page)).top,{timeout:15000}).toBeGreaterThan(begin.top+begin.rows+5);
     await page.mouse.up();
     await expect(actions(page)).toBeVisible();
     const copied=await copyMatches(page);
     expect(copied.end.y-copied.start.y).toBeGreaterThan(copied.rows);
-    expect(copied.start).toEqual({x:4,y:begin.viewportY+1});
+    expect(copied.start).toEqual({x:4,y:begin.top+1});
   });
 });
 
@@ -119,8 +121,8 @@ test('alternate screen mouse reporting keeps Shift-drag selection, Select all an
   expect(await readClipboard(page)).toBe('ALT_ROW_1 text\nALT_ROW_2 text\nALT_');
   await shiftDrag(page,from,to,2);
   await actions(page).getByRole('button',{name:'Select all',exact:true}).click();
-  expect((await selected(page)).text).toBe(await page.evaluate(()=>{const b=window.ownedHistory.terminal.buffer.active;return Array.from({length:b.length},(_,y)=>b.getLine(y)!.translateToString(true)).join('\n');}));
-  const screen=await page.evaluate(()=>{const t=window.ownedHistory.terminal,b=t.buffer.active;return Array.from({length:t.rows},(_,row)=>b.getLine(b.viewportY+row)!.translateToString(true)).join('\n');});
+  expect((await selected(page)).text).toBe(await onAdapter(page,adapter=>adapter.readRows!(0,adapter.viewport().length).join('\n')));
+  const screen=(await terminalRows(page)).join('\n');
   await actions(page).getByRole('button',{name:'Copy screen',exact:true}).click();
   await expect.poll(()=>readClipboard(page)).toBe(screen);
   await expect(actions(page)).toHaveCount(0);
