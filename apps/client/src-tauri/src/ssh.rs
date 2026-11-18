@@ -6033,13 +6033,14 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.message(), "Remote command exited with status Some(1)");
-        let commands = fixture.server.commands.lock().unwrap();
-        assert_eq!(
-            commands.len(),
-            before + 2,
-            "unrelated failure must not retry"
-        );
-        drop(commands);
+        {
+            let commands = fixture.server.commands.lock().unwrap();
+            assert_eq!(
+                commands.len(),
+                before + 2,
+                "unrelated failure must not retry"
+            );
+        }
         let error = crate::herdr::conversation_read(
             &fixture.session,
             format!("{original} --owned-too-large"),
@@ -7430,10 +7431,22 @@ mod tests {
         )
     }
 
-    /// Boxed: the whole check is too large for a debug test thread's stack otherwise.
+    /// Runs the check on a thread with a roomy stack: the debug poll frames of the check and its
+    /// fixture alone (about 1.0 and 0.6 MiB for the agent board) fill the 2 MiB of a test thread.
     #[cfg(unix)]
-    fn openssh_interoperability(check: OpenSshCheck) -> impl std::future::Future<Output = ()> {
-        Box::pin(openssh_check(check))
+    async fn openssh_interoperability(check: OpenSshCheck) {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(openssh_check(check))
+            })
+            .unwrap()
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
 
     #[cfg(unix)]

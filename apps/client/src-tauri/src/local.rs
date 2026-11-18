@@ -2235,6 +2235,33 @@ mod tests {
         }
         terminal_core::close(&id);
     }
+    /// Needs the `native-terminal` feature (Zig). It reads the process-wide hub, so it takes the cores
+    /// exclusively: no other test's core is alive while it counts.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' cores away
+    async fn history_lines_set_the_scrollback_the_real_core_reserves_for_a_session() {
+        use crate::terminal_core;
+        use lazysh_terminal_runtime::scrollback_bytes_for_lines;
+        let _exclusive = terminal_core::tests_keeping_cores().write();
+        let state = LocalState::default();
+        let (event, _rx) = events();
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, Some(5_000))
+            .await
+            .unwrap();
+        let connected =
+            desktop::start_with_access(&state, access_lease(), shell("echo done"), 120, 24, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        real_core_text_with(&id, "done").await;
+        assert_eq!(
+            terminal_core::hub_usage(),
+            (1, scrollback_bytes_for_lines(5_000, 120))
+        );
+        terminal_core::close(&id);
+        assert_eq!(terminal_core::hub_usage(), (0, 0));
+    }
     /// Needs the `native-terminal` feature (Zig) and a Linux `/proc`; run alone (`--test-threads=1`)
     /// with `--nocapture` to see the measured resident set.
     #[cfg(all(target_os = "linux", feature = "native-terminal"))]
@@ -2260,7 +2287,7 @@ mod tests {
                 baseline = resident_kib(); // after warm-up: allocator pools and thread stacks exist
             }
             let (event, mut rx) = events();
-            terminal_core::terminal_core_open(access_lease(), event.clone(), 80, 24, Some(1 << 20))
+            terminal_core::terminal_core_open(access_lease(), event.clone(), 80, 24, Some(1_000))
                 .await
                 .unwrap();
             let connected = desktop::start_with_access(
@@ -2288,7 +2315,7 @@ mod tests {
         );
         assert!(
             grown < 32 * 1024,
-            "{grown} KiB growth over 100 sessions of 1 MiB scrollback"
+            "{grown} KiB growth over 100 sessions of 1000 lines of scrollback"
         );
     }
     #[cfg(unix)]
