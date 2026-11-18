@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.77.2
+
+### Patch Changes
+
+- 7fd3f2a: Add the host browser's input as client components, driven in the developer-only prototype viewer and covered by a real-Chromium test: a Control switch that is off at every start and sends nothing while off, tap, double tap, long press, drag, Select, pinch with Zoom page, and the phone keyboard with composition, accents, emoji and key chords. Not in the app until the host browser view ships; no default changes.
+- @lazysh/account-usage@1.77.2
+  - @lazysh/common@1.77.2
+  - @lazysh/display-idle@1.77.2
+  - @lazysh/et-transport@1.77.2
+  - @lazysh/mosh-transport@1.77.2
+
 ## 1.77.1
 
 ### Patch Changes
