@@ -776,9 +776,18 @@ jobs:
       # Zig finds the Visual Studio C++ tools and the Windows SDK on this host and writes their directories
       # (`include_dir`, `sys_include_dir`, `crt_dir`, `msvc_lib_dir`, `kernel32_lib_dir`) in the file build.rs
       # forwards to `zig build --libc`; reading it back fails on a directory that does not exist.
+      # Zig 0.16.0 bundles Clang 21 and the runner's newest MSVC STL (14.52) stops any Clang older than 22 with
+      # STL1000, which fails the C++ half of libghostty-vt (simdutf, highway); the previous toolset (14.51) accepted it.
+      # Microsoft's switch for this is _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH. The Zig build takes no flags from
+      # here, so the libc file names a copy of the MSVC headers that defines it instead of the runner's own.
       - name: Describe the runner's MSVC and Windows SDK headers for the Zig build
         run: |
           "$ZIG" libc > "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          msvc_include="$(sed -n 's/^sys_include_dir=//p' "$LIBGHOSTTY_VT_WINDOWS_LIBC" | tr -d '\r')"
+          cp -a "$(cygpath -u "$msvc_include")" "$HERDR_CI_ROOT/msvc-include"
+          chmod -R u+w "$HERDR_CI_ROOT/msvc-include"
+          sed -i '1i #define _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH' "$HERDR_CI_ROOT/msvc-include/yvals_core.h"
+          sed -i "s|^sys_include_dir=.*|sys_include_dir=$HERDR_CI_ROOT/msvc-include|" "$LIBGHOSTTY_VT_WINDOWS_LIBC"
           cat "$LIBGHOSTTY_VT_WINDOWS_LIBC"
           "$ZIG" libc "$LIBGHOSTTY_VT_WINDOWS_LIBC"
       - name: Build libghostty-vt for Windows and the runtime's tests
