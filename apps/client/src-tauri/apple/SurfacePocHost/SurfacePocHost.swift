@@ -102,10 +102,19 @@ final class PocViewController: UIViewController, WKScriptMessageHandler {
         view.addSubview(probe)
         makeSurface()
         let center = NotificationCenter.default
-        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.count("background") }
-        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.count("foreground") }
+        for (name, key) in [(UIApplication.didEnterBackgroundNotification, "background"), (UIApplication.willEnterForegroundNotification, "foreground")] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                // The frames drawn so far, so the test can tell whether any was drawn between the two transitions.
+                self?.counters["framesAt" + key] = self?.renderer?.frames
+                self?.count(key)
+            }
+        }
         // The app is still in the background state during willEnterForeground, where drawing is refused.
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.redraw() }
+        // Output that reaches the session while the app is in the background asks for a frame, which has to be refused.
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            if UIApplication.shared.applicationState == .background { self?.redraw() }
+        }
         web.loadHTMLString(surfacePocPage, baseURL: nil)
     }
 

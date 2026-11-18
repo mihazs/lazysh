@@ -32,7 +32,7 @@ let surfacePocPage = #"""
   let frame = 0;
   function update() {
     const viewport = window.visualViewport;
-    anchor.style.height = Math.max(60, Math.round(viewport.height - anchor.offsetTop - 330)) + 'px';
+    anchor.style.height = Math.max(60, Math.round(viewport.height - anchor.offsetTop - 130)) + 'px';
     overlap.style.left = anchor.offsetLeft + anchor.offsetWidth - 60 + 'px';
     overlap.style.top = anchor.offsetTop + anchor.offsetHeight - 40 + 'px';
     const box = anchor.getBoundingClientRect(), inset = getComputedStyle(document.getElementById('inset'));

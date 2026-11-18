@@ -299,7 +299,7 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertGreaterThan(max(landscapeInset["left"] ?? 0, landscapeInset["right"] ?? 0), 0, "Landscape has a side safe area")
         XCTAssertEqual(domElement(app, "Surface anchor").frame.minX, (landscapeInset["left"] ?? 0) + 40, accuracy: edge,
                        "CSS env(safe-area-inset-left) must equal the native inset after rotation")
-        _ = try assertSurfaceAtAnchor(app, "Surface in landscape")
+        result["landscapeScreenshotQuarterTurns"] = try assertSurfaceAtAnchor(app, "Surface in landscape")["screenshotQuarterTurns"] ?? -1
         result["landscapeInsets"] = landscapeInset
         result["pageLandscapeInsets"] = landscape["pageSafe"] ?? []
         XCTAssertEqual(landscape["pageSafe"] as? [Double], [landscapeInset["top"] ?? 0, landscapeInset["left"] ?? 0], "The page's env() safe area must equal the native one after rotation")
@@ -323,14 +323,19 @@ final class SurfacePocUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(20)
         while app.state == .runningForeground && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
         XCTAssertNotEqual(app.state, .runningForeground, "The home button must background the host")
+        // Time for the host's simulated output to ask for frames it must refuse.
+        RunLoop.current.run(until: Date().addingTimeInterval(3))
         app.activate()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "The host must return to the foreground")
         let after = waitFor(app, "the host to report the background and foreground transitions") { self.count($0, "background") >= 1 && self.count($0, "foreground") >= 1 }
-        XCTAssertGreaterThan(count(after, "frames"), count(before, "frames"), "The surface must draw again when the app becomes active")
+        XCTAssertEqual(count(after, "framesAtbackground"), count(after, "framesAtforeground"), "No frame may be drawn while the app is in the background")
+        XCTAssertGreaterThan(count(after, "skipped"), 0, "Output that arrived in the background must have asked for a frame and been refused")
+        XCTAssertGreaterThan(count(after, "frames"), count(after, "framesAtforeground"), "The surface must draw again once the app is active")
         var result = try assertSurfaceAtAnchor(app, "Surface after returning to the foreground")
         result["framesBefore"] = count(before, "frames")
         result["framesAfter"] = count(after, "frames")
-        result["skippedWhileBackgrounded"] = count(after, "skipped")
+        result["framesWhileBackgrounded"] = count(after, "framesAtforeground") - count(after, "framesAtbackground")
+        result["refusedWhileBackgrounded"] = count(after, "skipped")
         record("background-foreground", result)
     }
 
