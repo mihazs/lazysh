@@ -194,3 +194,8 @@ tasks:
     script: |-
       xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO
     options: *macLocal
+  test-ios-surface-poc:
+    type: test
+    script: |-
+      xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshSurfacePocUITests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/surface-poc-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO
+    options: *macLocal

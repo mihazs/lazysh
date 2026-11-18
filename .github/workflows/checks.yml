@@ -1949,6 +1949,23 @@ jobs:
             printf 'device=unavailable\n' >> "$diagnostic_dir/status.txt"
           fi
           exit 0
+      # The composition proof of concept (#1311) builds and runs its own host app, so it needs only the generated project and the simulator.
+      - name: Run native surface composition proof of concept
+        id: ios-surface-poc
+        timeout-minutes: 15
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' && steps.ios-simulator.outcome == 'success' }}
+        env:
+          TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS: ${{ runner.temp }}/lazysh-surface-poc.jsonl
+        run: |
+          : > "$TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS"
+          xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
+          bun run test:ios-surface-poc
+      - name: Print surface composition records
+        if: ${{ !cancelled() && steps.ios-surface-poc.outcome != 'skipped' }}
+        run: |
+          printf '### iOS surface composition proof of concept\n\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/lazysh-surface-poc.jsonl"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify tests preserve the prebuilt iOS host binary
         timeout-minutes: 1
         if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
@@ -1961,6 +1978,8 @@ jobs:
           path: |
             apps/client/src-tauri/gen/apple/workspace-ui.xcresult
             apps/client/src-tauri/gen/apple/mosh-app.xcresult
+            apps/client/src-tauri/gen/apple/surface-poc-ui.xcresult
+            ${{ runner.temp }}/lazysh-surface-poc.jsonl
             ${{ runner.temp }}/lazysh-ios-signing
             ${{ runner.temp }}/lazysh-ios-workspace-metadata
           if-no-files-found: warn

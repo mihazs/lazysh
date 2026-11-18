@@ -366,9 +366,9 @@ test('canonical Apple and Android sources inherit product versions without chang
   const apple = await Bun.file(join(source, platformSources[0])).text();
   const short = [...apple.matchAll(/^\s*CFBundleShortVersionString: (.+)$/gm)].map(match => match[1]);
   const build = [...apple.matchAll(/^\s*CFBundleVersion: (.+)$/gm)].map(match => match[1]);
-  expect(short).toEqual(Array(6).fill('{{apple.bundle-version-short}}'));
-  expect(build).toEqual(Array(6).fill('"{{apple.bundle-version}}"'));
-  for (const target of ['LazyshLiveActivity', 'LazyshWatch', 'LazyshWatchWidget']) expect(apple).toContain(target);
+  expect(short).toEqual(Array(7).fill('{{apple.bundle-version-short}}'));
+  expect(build).toEqual(Array(7).fill('"{{apple.bundle-version}}"'));
+  for (const target of ['LazyshLiveActivity', 'LazyshWatch', 'LazyshWatchWidget', 'LazyshSurfacePoc']) expect(apple).toContain(target);
   expect(apple).toContain('PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}');
   const gradle = await Bun.file(join(source, platformSources[2])).text();
   expect(gradle).toContain('versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")');

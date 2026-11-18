@@ -57,6 +57,7 @@ const legacy: Record<string, string> = {
   'test:android-ssh-parity': 'client:test-android-ssh-parity', 'test:android-herdr-navigation': 'client:test-android-herdr-navigation',
   'test:android-tmux': 'client:test-android-tmux', 'test:android-qr': 'client:test-android-qr', 'test:android-biometric': 'client:test-android-biometric',
   'init:ios': 'client:init-ios', 'build:ios': 'client:build-ios', 'test:ios-workspace': 'client:test-ios-workspace',
+  'test:ios-surface-poc': 'client:test-ios-surface-poc',
   'check:rust': 'client-native:check-rust', 'test:rust': 'client-native:test-rust', lint: 'client-native:lint', 'format:check': 'client-native:format-check',
   'test:resume-policy': 'client-native:test-resume-policy', 'test:openssh': 'client-native:test-openssh',
   'test:openssh-connections': 'client-native:test-openssh-connections', 'test:openssh-auth-tunnel': 'client-native:test-openssh-auth-tunnel', 'test:host-clipboard': 'client-native:test-host-clipboard',
