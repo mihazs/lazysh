@@ -55,7 +55,7 @@ What this implies, none of it verified against the real app:
 
 ## Reproducing
 
-On macOS with Xcode, after `bun run build:ios` and an isolated simulator as in [iOS testing](../ios-testing.md):
+On macOS with Xcode, after the Xcode project exists (`bun run build:ios`, or `bunx moon run client:init-ios` alone, which is all the proof needs) and an isolated simulator is booted as in [iOS testing](../ios-testing.md):
 
 ```sh
 export TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS=/tmp/surface-poc.jsonl; : > "$TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS"
