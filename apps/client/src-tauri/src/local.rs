@@ -2155,7 +2155,7 @@ mod tests {
         desktop::disconnect(&state, &id);
         terminal_core::close(&id);
     }
-    /// Needs the `native-terminal` feature (Zig); the CI jobs that build the app do not enable it.
+    /// Needs the `native-terminal` feature (Zig); only the `native-terminal-bridge` CI job enables it.
     #[cfg(all(unix, feature = "native-terminal"))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
@@ -2330,8 +2330,8 @@ mod tests {
             .unwrap();
             let id = connected.session_id;
             closed(&mut rx).await;
-            let text = real_core_text(&id).await.unwrap();
-            assert!(text.contains("30000"), "round {round}: {text:?}");
+            // The session ends when the PTY does; the core's worker may still be parsing what it was fed.
+            real_core_text_with(&id, "30000").await;
             terminal_core::terminal_core_close(id).unwrap();
         }
         let grown = resident_kib().saturating_sub(baseline);

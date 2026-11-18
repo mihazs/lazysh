@@ -10,7 +10,7 @@ const roots = gitFixtureRoots('lazysh-native-changes-test-');
 afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
-const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
+const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
   'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
@@ -88,11 +88,11 @@ async function runningJobs(outputs: Outputs, event = 'push') {
 
 const neverNightly = "github.event_name != 'schedule'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
-const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'native-linux': 1, 'native-desktop': 2,
+const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
-const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-desktop': 2,
+const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const agentRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
   'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-appium': 1 };
@@ -177,9 +177,11 @@ test.each([
   ['iOS project', ['apps/client/src-tauri/apple/project.yml.hbs'], iosRun],
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
   ['Herdr', ['packages/herdr-guard/client.rs'], herdrRun],
-  ['the vendored Herdr binding the terminal runtime builds on', ['packages/herdr-upstream/crates/ghostty-vt/build.rs'], herdrRun],
-  ...(['packages/terminal-runtime/src/lib.rs', 'packages/terminal-renderer-wgpu/src/lib.rs'] as const).map(path => [
-    `the terminal runtime and renderer (${path})`, [path], { ...alwaysRun, 'herdr-native': 1 }] as const),
+  // The app bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt with the native-terminal feature.
+  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'native-terminal-bridge': 1 }],
+  ['the terminal renderer, which the app does not link', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1 }],
+  ...(['packages/herdr-upstream/crates/ghostty-vt/src/lib.rs', 'packages/herdr-upstream/vendor/libghostty-vt/build.zig'] as const).map(path => [
+    `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'native-terminal-bridge': 1 }] as const),
   ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1 }],
   ['the platform key fixtures the terminal runtime is held to', ['apps/client/e2e/fixtures/platform-keys/mac.json'], { ...clientRun, 'herdr-native': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
