@@ -197,7 +197,9 @@ Herdr **Spaces** offers **New workspace** above the workspace tree, and a
   the sibling `<repo>-worktrees/<branch>` with `/` replaced by `-`. All three are
   editable. The new workspace is labelled with the branch name.
 
-Both dialogs ask **Start an agent in it?** and default to not starting one.
+Both dialogs ask **Start an agent in it?** and default to not starting one; the Agent
+view's empty state opens the worktree dialog with the answer already yes (**Start in a
+new worktree**).
 Choosing yes requires selecting an agent from the supported Herdr agent kinds
 whose executable `command -v` finds on the host; nothing is offered when none is
 found. Codex and Claude Code accept an optional single-line initial prompt as
