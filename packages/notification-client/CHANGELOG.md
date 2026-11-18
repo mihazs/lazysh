@@ -1,5 +1,11 @@
 # @lazysh/notification-client
 
+## 1.74.0
+
+### Patch Changes
+
+- @lazysh/common@1.74.0
+
 ## 1.73.1
 
 ### Patch Changes

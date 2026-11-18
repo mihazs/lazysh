@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.74.0
+
+### Minor Changes
+
+- f2eaf0d: Add the sign-in tunnel engine: a loopback listener on the host CLI's callback port that forwards one checked browser request per connection to the host over the session's SSH connection, with a request guard, per-host consent policy, caps and a one-shot lifetime. Groundwork for automatic SSO sign-in from the device (#1504); nothing in the app starts a tunnel yet.
+
+### Patch Changes
+
+- 2fdde45: Record the cold start of the WebAssembly build of the terminal core against xterm.js in Node, as measured evidence for the terminal engine decision (#1323). Benchmark script and raw results only: the terminal engine is unchanged, xterm.js with its DOM renderer stays the only engine and the default, and no setting or default changes.
+- @lazysh/account-usage@1.74.0
+  - @lazysh/common@1.74.0
+  - @lazysh/display-idle@1.74.0
+  - @lazysh/et-transport@1.74.0
+  - @lazysh/mosh-transport@1.74.0
+
 ## 1.73.1
 
 ### Patch Changes
