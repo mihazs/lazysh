@@ -8,11 +8,12 @@
 #[path = "../tests/support/mod.rs"]
 mod support;
 
-use lazysh_terminal_runtime::{
-    Appearance, Image, ReferenceRenderer, Screen, Size, TerminalRenderer, Theme,
-};
+use lazysh_terminal_runtime::{Screen, Size, TerminalRenderer};
 use std::time::Instant;
-use support::{feed_chunk, load_average, median, runtime, workloads, CHUNK, WINDOW};
+use support::{
+    draw_frame, feed_chunk, load_average, median, reference_renderer, runtime, workloads, CHUNK,
+    WINDOW,
+};
 
 const RUNS: usize = 5;
 
@@ -40,12 +41,7 @@ struct Sample {
 /// The reference stage ends by checking that incremental drawing equals a full repaint.
 fn run(data: &[u8], size: Size, every: usize, stage: Stage) -> Sample {
     let mut rt = runtime(size.cols, size.rows);
-    let new_renderer = || {
-        let (w, h) = (u32::from(size.cols) * 8, u32::from(size.rows) * 16);
-        let surface = Image::new(w, h, Theme::default().background).unwrap();
-        ReferenceRenderer::create(surface, Appearance::default()).unwrap()
-    };
-    let (mut renderer, mut screen) = (new_renderer(), Screen::new());
+    let (mut renderer, mut screen) = (reference_renderer(size), Screen::new());
     let (mut frames, mut taken) = (0u64, 0usize);
     let start = Instant::now();
     for chunk in data.chunks(CHUNK) {
@@ -67,26 +63,16 @@ fn run(data: &[u8], size: Size, every: usize, stage: Stage) -> Sample {
                 screen.apply(&frame).expect("apply");
                 std::hint::black_box(screen.take_dirty());
             }
-            Stage::Reference => {
-                renderer.apply(&frame).expect("apply");
-                renderer.draw().expect("draw");
-                renderer.present().expect("present");
-            }
+            Stage::Reference => draw_frame(&mut renderer, &frame),
         }
     }
     let mib_per_s = data.len() as f64 / (1024.0 * 1024.0) / start.elapsed().as_secs_f64();
     if stage == Stage::Reference {
         if let Some(frame) = rt.take_frame().expect("frame") {
-            renderer.apply(&frame).expect("apply");
-            renderer.draw().expect("draw");
-            renderer.present().expect("present");
+            draw_frame(&mut renderer, &frame);
         }
-        let mut fresh = new_renderer();
-        fresh
-            .apply(&rt.snapshot().expect("snapshot"))
-            .expect("apply");
-        fresh.draw().expect("draw");
-        fresh.present().expect("present");
+        let mut fresh = reference_renderer(size);
+        draw_frame(&mut fresh, &rt.snapshot().expect("snapshot"));
         assert!(
             renderer.surface() == fresh.surface(),
             "incremental drawing diverged from a full repaint"
