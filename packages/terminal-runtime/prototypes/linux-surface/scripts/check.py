@@ -1,8 +1,8 @@
 #!/usr/bin/python3 -I
-"""Drives the probe and checks what the compositor shows. Run it inside `virtual-kwin.sh` (see the architecture document).
+"""Drives the probe and checks what the compositor shows. Run it inside `virtual-kwin.sh` or `headless-sway.sh` (see the architecture document).
 usage: [POC_RENDER=vulkan] check.py wayland|x11 below|above OUTDIR [--probe PATH]   (POC_RENDER=vulkan: Wayland only, a wgpu Vulkan swapchain instead of wl_shm buffers)
 Exit status 0 only when every check passed; OUTDIR gets the screenshots of each step and report.json."""
-import json, os, subprocess, sys, time
+import atexit, json, os, subprocess, sys, time
 import numpy as np
 from PIL import Image
 
@@ -10,9 +10,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 mode, order, out = sys.argv[1:4]
 probe = sys.argv[sys.argv.index("--probe") + 1] if "--probe" in sys.argv else os.path.join(HERE, "..", "target", "debug", "surface-poc")
 os.makedirs(out, exist_ok=True)
-env = dict(os.environ, POC_MODE=mode, POC_ORDER=order, WAYLAND_DISPLAY="kwin-poc")
+env = dict(os.environ, POC_MODE=mode, POC_ORDER=order, WAYLAND_DISPLAY=os.environ.get("POC_SOCKET", "kwin-poc"))
 scale = int(os.environ.get("POC_SCALE", "1"))
-xserver = niri = None
+xserver = niri = app = None
+atexit.register(lambda: [p.kill() for p in (app, xserver, niri) if p and p.poll() is None])  # a crashed run must not leave a compositor or X server holding the caller's pipes
 if os.environ.get("POC_COMPOSITOR") == "niri":  # a second compositor, nested in KWin: niri draws into one KWin window that the screenshot sees
     config = os.path.join(os.environ["XDG_RUNTIME_DIR"], "niri.kdl")
     open(config, "w").write(f'xwayland-satellite {{ off; }}\nhotkey-overlay {{ skip-at-startup; }}\nlayout {{\n  gaps 0\n  default-column-width {{ proportion 1.0; }}\n}}\noutput "winit" {{ scale {scale}; }}\n')
@@ -24,7 +25,7 @@ if os.environ.get("POC_COMPOSITOR") == "niri":  # a second compositor, nested in
     env["WAYLAND_DISPLAY"] = "wayland-1"
     time.sleep(2.0)
 if mode == "x11":  # a real X server on the same compositor: an X11 client sees it exactly as on Xvfb
-    xserver = subprocess.Popen(["Xwayland", ":9", "-geometry", "1280x800", "-noreset"], env=env, stderr=subprocess.DEVNULL)
+    xserver = subprocess.Popen(["Xvfb", ":9", "-screen", "0", "1280x800x24"] if os.environ.get("POC_XSERVER") == "xvfb" else ["Xwayland", ":9", "-geometry", "1280x800", "-noreset"], env=env, stderr=subprocess.DEVNULL)
     for _ in range(50):
         if os.path.exists("/tmp/.X11-unix/X9"):
             break
@@ -42,7 +43,7 @@ def lines(seconds):
     end = time.time() + seconds
     while time.time() < end:
         try:
-            chunk = app.stdout.read()
+            chunk = os.read(app.stdout.fileno(), 65536).decode()  # not .read(): a non-blocking text stream raises TypeError on Python 3.12
         except BlockingIOError:
             chunk = None
         if chunk:
@@ -66,6 +67,8 @@ def shot(name):
     path = f"{out}/{name}.png"
     if mode == "x11":
         subprocess.check_call(["import", "-display", ":9", "-window", "root", path])
+    elif os.environ.get("POC_CAPTURE") == "grim":
+        subprocess.check_call(["grim", path], env=env)  # wlr-screencopy: every output at its own scale, so device pixels
     else:
         subprocess.check_call([os.path.join(HERE, "kwin_shot.py"), path])
     return np.array(Image.open(path).convert("RGB")).astype(int)
@@ -106,7 +109,11 @@ def measure(step, color):
 
 
 time.sleep(5)  # the page loads and reports its anchor
-command("create")
+for _ in range(30):  # a slow runner may need longer: `create` echoes the anchor it has, which is the page's once it has reported
+    if "anchor=[60.0, 40.0, 240.0, 160.0]" in command("create"):
+        break
+    command("destroy")
+    time.sleep(2)
 time.sleep(1.2)
 img, surface, dom, (ox, oy), rel = measure("1-placed", GREEN)
 check("placement matches the DOM anchor (240x160 at 60,40)", rel == want(60, 40, 240, 160), rel)
@@ -124,6 +131,9 @@ command("resize 1100 650")
 time.sleep(1.5)
 _, _, _, _, rel = measure("3-resized", GREEN)
 check("a window resize keeps the surface at its anchor", rel == want(110, 70, 150, 100), rel)
+if os.environ.get("POC_CAPTURE") == "grim":  # headless-sway.sh floats the window, so the compositor must grant the size: the check above is not vacuous
+    info = command("info")
+    check("the compositor granted the resize (toplevel 1100x650)", "toplevel=1100x650 " in info, info)
 command("destroy")
 time.sleep(1.0)
 _, surface, dom, _, _ = measure("4-destroyed", GREEN)

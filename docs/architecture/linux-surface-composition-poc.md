@@ -4,7 +4,7 @@ Status: **proof of concept, not shipped**. Answers the composition gate in [nati
 
 ## What was built
 
-`packages/terminal-runtime/prototypes/linux-surface` is a standalone crate (its own lock file, like the other prototypes; no CI job builds it). It opens a window with **tao 0.37.2 and wry 0.57.1**, the versions in the root `Cargo.lock`, and builds the web view into the window's default box the way Tauri does, so the GTK widget tree is the app's. The page is a fixture: a transparent body, an anchor `div`, a red box that overlaps the anchor's lower right corner, an input field, and a script that reports the anchor's `getBoundingClientRect()` to Rust (the DOM-to-native hop the [Android proof of concept](android-surface-composition-poc.md) describes). On a request from `scripts/check.py` the probe creates, moves, recreates or removes a **native surface at the anchor**:
+`packages/terminal-runtime/prototypes/linux-surface` is a standalone crate (its own lock file, like the other prototypes; only the `native-linux-surface` CI job builds it, [below](#ci-lane)). It opens a window with **tao 0.37.2 and wry 0.57.1**, the versions in the root `Cargo.lock`, and builds the web view into the window's default box the way Tauri does, so the GTK widget tree is the app's. The page is a fixture: a transparent body, an anchor `div`, a red box that overlaps the anchor's lower right corner, an input field, and a script that reports the anchor's `getBoundingClientRect()` to Rust (the DOM-to-native hop the [Android proof of concept](android-surface-composition-poc.md) describes). On a request from `scripts/check.py` the probe creates, moves, recreates or removes a **native surface at the anchor**:
 
 | Display server | Surface | How it is made |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ Status: **proof of concept, not shipped**. Answers the composition gate in [nati
 
 The anchor is in the web view's coordinates, so the probe adds the web view's offset inside the toplevel (`translate_coordinates`) before it positions the surface, and positions it again whenever the web view's allocation changes (`size-allocate`).
 
-`scripts/check.py` drives the probe through a line protocol, captures what the **compositor** shows (not what the app believes) and asserts on the pixels. Wayland captures come from a headless KWin through `org.kde.KWin.ScreenShot2` (`scripts/virtual-kwin.sh`, `scripts/kwin_shot.py`). A second Wayland compositor, **niri 26.04**, can run nested in that KWin as a window (`POC_COMPOSITOR=niri`; its output scale is set from `POC_SCALE`), and the probe runs inside it. X11 runs on a real X server (a rootful Xwayland on the same KWin, captured with ImageMagick `import -window root`, driven with `xdotool`), which is what Xvfb offers too. The page origin is derived from the right and bottom edge of the red box, which no surface ever covers, so the compositor's window placement does not matter, and every comparison is exact in device pixels.
+`scripts/check.py` drives the probe through a line protocol, captures what the **compositor** shows (not what the app believes) and asserts on the pixels. Wayland captures come from a headless KWin through `org.kde.KWin.ScreenShot2` (`scripts/virtual-kwin.sh`, `scripts/kwin_shot.py`). A second Wayland compositor, **niri 26.04**, can run nested in that KWin as a window (`POC_COMPOSITOR=niri`; its output scale is set from `POC_SCALE`), and the probe runs inside it. X11 runs on a real X server (a rootful Xwayland on the same KWin, or Xvfb with `POC_XSERVER=xvfb`, captured with ImageMagick `import -window root`, driven with `xdotool`). The page origin is derived from the right and bottom edge of the red box, which no surface ever covers, so the compositor's window placement does not matter, and every comparison is exact in device pixels.
 
 ## Results
 
@@ -89,4 +89,19 @@ POC_COMPOSITOR=niri run wayland below  # niri nested in KWin
 POC_WIDTH=2560 POC_HEIGHT=1600 POC_SCALE=2 POC_COMPOSITOR=niri POC_RENDER=vulkan run wayland below
 ```
 
-Each run prints one `PASS` or `FAIL` line per check and leaves a PNG of every step in the output directory. The "above" and X11 scenarios are expected to pass with the DOM box drawn under the surface; they document what must not be used. This has been run on one host only, not in CI: the repository's CI has no Wayland compositor with a screenshot interface, and its Linux runners have no GPU.
+Each run prints one `PASS` or `FAIL` line per check and leaves a PNG of every step in the output directory. The "above" and X11 scenarios are expected to pass with the DOM box drawn under the surface; they document what must not be used.
+
+## CI lane
+
+The `native-linux-surface` job of `checks.yml` builds the probe on `ubuntu-24.04` and runs `scripts/ci.sh`, which runs `check.py` for six scenarios and fails when any check of any of them fails. The compositor is a headless **sway** (wlroots, pixman renderer, one `HEADLESS-1` output, windows floating so that the resize step is granted; `scripts/headless-sway.sh`) and the pixels are read back with **grim** (wlr-screencopy), at the output's own scale, so every comparison stays exact in device pixels. It runs on a pull request that changes the probe or the CI configuration, and on every push to `main`; the screenshots of every step are kept as the `lazysh-linux-surface` artifact.
+
+| Scenario | Surface | Scale | Expected |
+| --- | --- | --- | --- |
+| `wayland-shm-scale1`, `wayland-shm-scale2` | `wl_subsurface` below the parent, `wl_shm` buffers | 1, 2 | every check passes, the DOM box is drawn over the surface |
+| `wayland-vulkan-scale1`, `wayland-vulkan-scale2` | the same, a wgpu Vulkan swapchain on Mesa's software driver (lavapipe, `llvmpipe` as the adapter) | 1, 2 | the same, plus the surface is presented by the Vulkan swapchain |
+| `wayland-above` | `wl_subsurface` above the parent | 1 | the overlap check reports the DOM box hidden: it can fail |
+| `x11` | child X window on Xvfb | 1 | the DOM box is hidden by the child window (the overlap item fails, which keeps xterm.js on X11), and click and key routing reach the page |
+
+The same checks as above apply to placement (240x160 at the anchor with 0 px error), following an anchor change, a window resize (the job also asserts that sway granted the size, so the check is not vacuous), destroy (nothing left on screen) and recreate with another colour. Run it locally with `scripts/ci.sh /tmp/surface-poc-out` on a host that has `sway`, `grim`, `Xvfb`, `xdotool`, ImageMagick, `python3-numpy`, `python3-pil`, `dbus-run-session` and a Vulkan driver.
+
+What the lane adds to the table above: a third Wayland compositor (wlroots through sway, not nested), Mesa software Vulkan (lavapipe) instead of one AMD GPU, and a re-run on every change, so a regression of the probe or of its helpers shows up in CI and not on one desktop. What it does not add: no GPU driver, no Mutter (GNOME), no real pointer, touch or keyboard on Wayland, no fractional scale, no frame time or energy, and the X server is Xvfb without a window manager. Those stay "accepted risk, not measured" for gate G19 and are not met by this lane.

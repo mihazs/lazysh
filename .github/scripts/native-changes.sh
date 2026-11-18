@@ -31,6 +31,7 @@ package() {
     herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
     herdr-upstream/*) add herdr terminal_runtime ;;
     herdr-guard/*) add herdr ;;
+    terminal-runtime/prototypes) add linux_surface ;; # a standalone prototype crate with its own lock file: only its own job builds it.
     terminal-runtime/*) add terminal_runtime terminal_bridge ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
     terminal-renderer-wgpu/*) add terminal_runtime ;;
     */ios) add ios ;;
@@ -139,7 +140,8 @@ for output in \
   "android_ntfy=$(flag any android push)" \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
-  "terminal_macos=$(flag has terminal_runtime)"; do
+  "terminal_macos=$(flag has terminal_runtime)" \
+  "linux_surface=$(flag any linux_surface)"; do
   # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
   name=${output%%=*}
