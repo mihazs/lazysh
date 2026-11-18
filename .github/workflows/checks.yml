@@ -520,8 +520,8 @@ jobs:
   # The regression gate of the native terminal core (#1341). It is a job of its own, not a step of
   # herdr-native, so a regression (or a flaky host) can never skip the jobs that consume herdr-native's
   # binaries, and the gate runs alone on its runner: nothing else competes for the CPU while it measures.
-  # It repeats herdr-native's checksum-verified Zig provisioning by reusing those steps. Not a required check,
-  # so it runs on pushes to main only (native-changes.sh).
+  # It repeats herdr-native's checksum-verified Zig provisioning by reusing those steps. Not a required check:
+  # it runs on pushes to main and on a pull request that selects the terminal runtime area (native-changes.sh).
   terminal-perf:
     needs: changes
     if: needs.changes.outputs.terminal_perf == 'true'

@@ -74,11 +74,13 @@ hook and CI structure tests, client type check); every native job waits for it, 
 PR that fails the gate never queues emulator, macOS or Windows work. Pushes to `main`
 skip the gate and run every job with the full matrix, which is the parity evidence.
 
-Jobs that are not required to merge never run on a pull request, whatever its paths:
+Most jobs that are not required to merge never run on a pull request, whatever its paths:
 companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Herdr navigation,
-auxiliary, ntfy and the terminal performance gate (`terminal-perf`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there; the
+auxiliary and ntfy. They run on pushes to `main`, and `main-verdict.yml` reports them there. The
+terminal performance gate (`terminal-perf`, report-only) is the exception: it also runs on a pull request that selects the
+terminal runtime area, so a regression shows on the pull request that causes it. The
 table below lists what a change can affect, and a pull request runs only the required jobs of
-that list.
+that list plus `terminal-perf`.
 
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
@@ -88,10 +90,10 @@ that list.
 | Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
 | Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers |
-| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan); the runtime also runs the native terminal bridge job |
+| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan); `terminal-perf` (report-only); the runtime also runs the native terminal bridge job |
 | Native terminal bridge: `apps/client/src-tauri/**` (except `gen/android`, `apple` and `src/apple_*`), `packages/terminal-runtime/**`, `packages/herdr-upstream/{crates,vendor}/**` | native terminal bridge: the app library built with the `native-terminal` feature and its real-core tests (Zig 0.16.0, about 15 to 25 minutes on a cold cache) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
-| Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
+| Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | every required job and `terminal-perf`, with both ntfy variants |
 
 The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its
 `journeys` tier) and in a nightly `checks` run that starts only that job, and it is not a required check until it has passed 20
