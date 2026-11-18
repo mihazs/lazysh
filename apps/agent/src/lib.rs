@@ -1193,6 +1193,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(|| {
                         barrier.wait();
+                        let started = Instant::now();
                         let mut store = Store::open_with_storage_checks(
                             directory.path(),
                             storage_filesystem::require_local,
@@ -1200,8 +1201,12 @@ mod tests {
                                 std::thread::sleep(Duration::from_millis(100));
                                 validate_sidecar(sidecar)
                             },
-                        )?;
-                        store.ingest(&event, Utc::now())
+                        )
+                        .map_err(|error| ("open", started.elapsed(), error))?;
+                        let opened = Instant::now();
+                        store
+                            .ingest(&event, Utc::now())
+                            .map_err(|error| ("ingest", opened.elapsed(), error))
                     })
                 })
                 .collect::<Vec<_>>();
