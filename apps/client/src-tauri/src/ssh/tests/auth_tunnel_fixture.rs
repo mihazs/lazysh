@@ -47,6 +47,7 @@ async fn closed(port: u16) {
 fn app_with(state: AppState) -> App {
     let app = tauri::test::mock_app();
     app.manage(state);
+    app.manage(crate::local::LocalState::default());
     app.manage(AuthTunnelState::default());
     app.manage(PreviewState::default());
     app
