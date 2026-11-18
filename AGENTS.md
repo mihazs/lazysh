@@ -3,7 +3,8 @@
 Use trunk-based development.
 
 - Fetch the latest `main` before starting work. Create every work branch and worktree from `main` or `origin/main`.
-- Never branch from another feature, fix, or documentation branch. Do not create stacked pull requests.
+- Never create a branch from another branch. Every work branch starts at the current `origin/main`, with `git fetch origin` first and then `git worktree add -b <type>/<short-name> ~/dev/.worktrees/<name> origin/main`. Never run `git checkout -b` or `git switch -c` while a feature, fix, docs, release or backup branch is checked out, and never use another branch, a tag or a detached commit as the start point. Do not create stacked pull requests: a pull request's base is always `main`.
+- Before the first push of a branch, check that `git merge-base --is-ancestor origin/main HEAD` succeeds and that `git log --oneline origin/main..HEAD` lists only your own commits. If it carries someone else's commits, recreate the branch from `origin/main` and cherry-pick only yours. Sync with `main` by rebasing onto `origin/main`, never onto another feature branch.
 - Target `main` for every pull request and merge completed work into `main`.
 - If a change depends on another change, merge that prerequisite into `main` first, then start the dependent branch from updated `main`.
 - Keep branches short-lived. Track work with GitHub issues, the project board, and pull requests.
