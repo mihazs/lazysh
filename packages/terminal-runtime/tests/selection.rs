@@ -2,8 +2,10 @@
 //! the same bytes (`fixtures/selection.json`; `apps/client/src/xterm/selectionFixture.test.ts` replays the
 //! bytes through xterm.js 5.5.0 and the code lazysh uses today, and fails if the answers drift).
 
+mod replay;
 mod support;
 
+use replay::*;
 use lazysh_terminal_runtime::{CellPos, CellRange, Direction, SearchHit};
 use serde_json::Value;
 use support::*;
