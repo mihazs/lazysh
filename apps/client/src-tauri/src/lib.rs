@@ -6,6 +6,7 @@ mod apple_status;
 mod approvals;
 mod attachment_upload;
 mod auth_browser;
+mod auth_hints;
 mod bindings;
 mod clipboard;
 mod companion;

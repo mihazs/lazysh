@@ -1,5 +1,6 @@
 import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
+import type { AuthHint } from './authHints';
 import { registerSessionOutput } from './pendingSessions';
 
 export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
@@ -35,7 +36,8 @@ export type Host = {
 };
 export type SshEvent =
   | { type: "data"; data: number[] }
-  | { type: "closed"; message?: string; lost?: boolean };
+  | { type: "closed"; message?: string; lost?: boolean }
+  | { type: "authHint"; hint: AuthHint };
 export type SshError = { kind: string; message: string; fingerprint?: string; hostId?: string };
 export type FileEntry = { name: string; isDir: boolean; size: number };
 export type MuxSession = {
