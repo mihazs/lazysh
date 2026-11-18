@@ -169,15 +169,19 @@ impl TerminalRuntime {
     pub fn line_at(&self, row: usize) -> Result<CellRange, Error> {
         let total = self.vt().total_rows()?;
         let row = row.min(total.saturating_sub(1));
+        // Walk out from the row one row at a time: a chain is a few rows, so a query reads those
+        // rather than the window around it, and holds the session lock for that long.
+        let wrap = |y: usize| -> Result<(bool, bool), Error> {
+            let rows = self.vt().screen_text_rows_range(y, y + 1)?;
+            Ok(rows
+                .first()
+                .map_or((false, false), |r| (r.soft_wrapped, r.wrap_continuation)))
+        };
         let (mut first, mut last) = (row, row);
-        let window = self
-            .vt()
-            .screen_text_rows_range(row.saturating_sub(MAX_LINE_ROWS), row + MAX_LINE_ROWS + 1)?;
-        let base = row.saturating_sub(MAX_LINE_ROWS);
-        while first > base && window[first - base].wrap_continuation {
+        while first > row.saturating_sub(MAX_LINE_ROWS) && wrap(first)?.1 {
             first -= 1;
         }
-        while last + 1 < base + window.len() && window[last - base].soft_wrapped {
+        while last + 1 < total && last < row + MAX_LINE_ROWS && wrap(last)?.0 {
             last += 1;
         }
         Ok(CellRange {

@@ -116,3 +116,14 @@ fn a_logical_line_is_the_whole_soft_wrapped_chain_and_nothing_else() {
         "a row past the end is the last one"
     );
 }
+
+#[test]
+fn a_chain_longer_than_the_bound_is_cut_at_it_on_each_side() {
+    let mut rt = runtime(10, 5);
+    feed(&mut rt, "a".repeat(10 * 9000).as_bytes());
+    let total = rt.buffer_range().unwrap().unwrap().end.y + 1;
+    assert!(total > 8200, "the scrollback keeps the rows: {total}");
+    let middle = total / 2;
+    let line = rt.line_at(middle).unwrap();
+    assert_eq!((line.start.y, line.end.y), (middle - 4096, middle + 4096));
+}
