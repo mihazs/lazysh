@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.78.0
+
+### Minor Changes
+
+- 3911078: Attach files and open previews of development servers from a local desktop session.
+- 0eb9271: Add Check for updates to the Host companion installation panel and run the host's own `lazysh-agent update` command when available.
+
+### Patch Changes
+
+- f64ec4c: Verify the Agent board in the Linux desktop app with real companion hook events: one row per session in Needs you, Working and Done, grouped by project and host, a pending approval listed above the board and answered from it. Test and documentation only. No user-visible behaviour changes.
+- 7da1e6b: Read terminal state through the TerminalAdapter in the terminal end-to-end specs (#1703): a new Playwright fixture (`e2e/fixtures/terminalState.ts`) takes rows, viewport, selection, geometry and the input element from the adapter of the terminal on screen, and `terminal-ime`, `terminal-swiftkey`, `terminal-selection`, `terminal-clipboard`, `herdr-switch-tap` and `mosh-resize` use it instead of xterm's `.xterm-*` DOM. Test code only; no product behaviour changes, and the specs keep every assertion and pass unchanged on xterm.js at the desktop and phone viewports.
+- @lazysh/account-usage@1.78.0
+  - @lazysh/common@1.78.0
+  - @lazysh/display-idle@1.78.0
+  - @lazysh/et-transport@1.78.0
+  - @lazysh/mosh-transport@1.78.0
+
 ## 1.77.2
 
 ### Patch Changes
