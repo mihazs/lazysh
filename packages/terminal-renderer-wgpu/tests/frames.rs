@@ -250,6 +250,7 @@ fn windows_draws_on_direct3d_12_even_where_the_only_adapter_is_warp() {
     // A hosted runner has no GPU; WARP, the CPU adapter that ships with Windows, is a Direct3D 12 adapter.
     let r = gpu(10, 2);
     let info = r.adapter().unwrap();
+    eprintln!("Direct3D 12 adapter: {info:?}");
     assert_eq!(info.backend, Backend::Dx12, "{info:?}");
 }
 

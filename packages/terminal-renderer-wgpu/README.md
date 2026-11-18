@@ -45,6 +45,7 @@ The report-only `terminal-macos` job runs the same tests on `macos-latest` on Me
 policy. The hosted runner's adapter is `Apple Paravirtual device`, a virtual machine's GPU (`IntegratedGpu`, backend
 Metal, as the log of `on_apple_the_renderer_runs_on_metal` prints it), so a pass there is not a measurement of a real
 Mac's GPU or drivers.
+The `terminal-windows` job runs the same tests on `windows-latest`, which has no GPU either, on Direct3D 12 with the WARP software adapter (`windows_draws_on_direct3d_12_even_where_the_only_adapter_is_warp` asserts the backend and the job prints the adapter).
 
 ```sh
 cargo +1.96.1 test --locked
