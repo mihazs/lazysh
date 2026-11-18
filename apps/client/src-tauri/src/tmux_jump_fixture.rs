@@ -272,29 +272,12 @@ impl Fixture {
         })
         .await
         .unwrap();
-        let host = Host {
-            default_multiplexer: None,
-            default_multiplexer_next: None,
-            transport: None,
-            mosh: None,
-            et: None,
-            id: "tmux-probe".into(),
-            name: "Owned tmux fixture".into(),
-            hostname: "127.0.0.1".into(),
+        let host = crate::ssh::test_support::owned_host(
+            "tmux-probe",
+            "Owned tmux fixture",
             port,
-            username: std::env::var("USER").unwrap(),
-            fingerprint: Some(
-                host_key
-                    .public_key()
-                    .fingerprint(HashAlg::Sha256)
-                    .to_string(),
-            ),
-            jump_host_id: None,
-            credentials_stored: false,
-            client_environment: false,
-            biometric_unlock: false,
-            forward_agent: false,
-        };
+            &host_key,
+        );
         let handle = Arc::new(
             authenticate(
                 &state,
