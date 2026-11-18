@@ -1,0 +1,16 @@
+/* The look of the Agent view: one set of tokens derived from the theme, so every bundled and imported theme, dark or light, gets the
+ * same calm reading surface. Nothing here is a fixed colour. Defined on the root because the conversation can also render
+ * on its own (the Chat panel and the browser harnesses). */
+:root {
+  --av-fs: 15px; --av-lh: 1.62; --av-measure: 40rem;
+  --av-bubble: color-mix(in srgb, var(--theme-text, #e4e9df) 11%, var(--theme-panel, var(--surface)));
+  --av-code: color-mix(in srgb, var(--theme-text, #e4e9df) 7%, var(--theme-bg, #101311));
+  --av-code-head: color-mix(in srgb, var(--theme-text, #e4e9df) 12%, var(--theme-bg, #101311));
+  --av-row: color-mix(in srgb, var(--theme-text, #e4e9df) 7%, var(--theme-bg, #101311));
+  --av-row-hover: color-mix(in srgb, var(--theme-text, #e4e9df) 12%, var(--theme-bg, #101311));
+  --av-rule: color-mix(in srgb, var(--theme-text, #e4e9df) 18%, transparent);
+  --av-add: color-mix(in srgb, #4ade80 55%, var(--theme-text, #e4e9df));
+  --av-quiet: color-mix(in srgb, var(--theme-text, #e4e9df) 84%, var(--theme-bg, #101311));
+}
+/* Added lines are green on any theme: a lighter green on dark themes, a deeper one on light themes, so the sign keeps 4.5:1. */
+:root[data-theme-mode="light"] { --av-add: color-mix(in srgb, #15803d 72%, var(--theme-text, #202b1a)); }

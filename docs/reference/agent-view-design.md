@@ -1,0 +1,160 @@
+# Agent view design
+
+Status: all four slices shipped (conversation, work rows, composer, header and states). Tracked by
+[#1452](https://github.com/mihazs/lazysh/issues/1452) under the Agent view epic
+[#1277](https://github.com/mihazs/lazysh/issues/1277). Behaviour lives in [Agent view](../agent-view.md); the feature
+gaps against other clients live in [Agent view parity](agent-view-parity.md). This page is the visual and interaction
+design the Agent view follows, so a new card, state or setting looks like it belongs.
+
+## Brief
+
+The Agent view is where a person reads what a coding agent did and answers it, mostly on a phone, often in short
+bursts. It had every function but looked like a debugging panel: bordered boxes, a heavy header, content that was
+cropped or squeezed, and every kind of record drawn with its own chrome.
+
+The redesign takes its cues from how the Claude and ChatGPT mobile apps read. Only the general, public interaction
+patterns are used (the apps' own screens, copy, icons, fonts and brand are not copied):
+
+| Pattern | What lazysh takes from it |
+| --- | --- |
+| The answer is the page | An assistant message has no box, border or avatar. It is text on the page, full width, with a comfortable measure and line height. |
+| The prompt is a bubble | Your message is a compact rounded bubble on the trailing edge, with a smaller corner where it points. |
+| Work is quiet | Thinking, tool calls, sub-agents and plans are one-line rows that open on a tap, with a status mark. They never compete with the answer. |
+| Code is a block with tools | A fenced block names its language, copies in one tap and scrolls sideways instead of wrapping. |
+| One input, one primary action | The composer is one rounded field that grows. Its single round action is Send, then Stop while the agent works. |
+| Jump back to the present | A floating button appears only while you read earlier text. |
+| Calm motion | Short fades and one spinner. Nothing moves when the user asked for reduced motion, and nothing shifts the text that is being read. |
+
+lazysh adds what a general chat app has no need for: the terminal is one tap away, the agent's state and model are
+always visible, and every card has a plain text fallback.
+
+## Rules
+
+1. **Phone first.** Design at 415 x 900 (also 390 x 844). A wider window gets the same column, centred at
+   40 rem, never a second layout.
+2. **Tokens, not colours.** Every colour derives from the theme tokens (`--theme-*`, `--accent`, `--muted`), so bundled
+   and imported themes, dark and light, work without a rule of their own. Text must reach 4.5:1 against what it sits
+   on; `agent-view-design.spec.ts` measures this in the three bundled themes.
+3. **No box without a reason.** A border or fill marks something you can act on or something that is not prose
+   (code, a table, a card). Prose is never boxed.
+4. **Taps are 44 px.** A control may look smaller, but its tap area is at least 44 px; it overlaps empty space only.
+5. **Nothing moves under the thumb.** Streaming text, a running mark or a late result must not shift content above the
+   reading position. Rows have a fixed height; a spinner replaces an icon in place.
+6. **Text stays text.** Everything drawn is also text: a screen reader reads a message, a code block (with its language),
+   a table and a time without any gesture. Colour is never the only signal.
+7. **Motion is optional.** Every animation sits behind `prefers-reduced-motion: no-preference`.
+
+## Conversation (slice 1)
+
+The scale below is set on `.agent-view` in `AgentView.css`.
+
+| Part | Value |
+| --- | --- |
+| Column | `max-width: 40rem`, centred, 16 px gutters |
+| Turn gap | 14 px between the parts of a turn, 28 px between turns |
+| Assistant text | 15 px / 1.62, `--theme-text`, block gap 0.75 em, 1.4 em above a heading |
+| Headings | `h1` 1.35 em, `h2` 1.2 em, `h3` 1.08 em, weight 650, no capitals |
+| Prompt bubble | trailing edge, at most 88% of the column or 34 rem, radius 20 px with a 6 px point, 15 px / 1.5 |
+| Inline code | 0.88 em, a tint of the text colour on the page, radius 6 px |
+| Code block | radius 12 px, a 36 px bar with the language (left) and **Copy code** (right), 13 px / 1.55, scrolls sideways, syntax colours from the theme (`--theme-accent`, `-warning`, `-blue`, `-purple`) |
+| Quote | a 3 px accent bar, text one step quieter |
+| Table | rounded frame, header row tinted, 0.9 em, scrolls inside the message (focusable region) |
+| Time | under the message after a tap, always present for a screen reader |
+
+Behaviour:
+
+- Markdown follows GitHub's flavour (`remark-gfm`): tables, strikethrough, task lists and bare links work in addition
+  to CommonMark. The HTML an agent writes still goes through the sanitized allow-list described in
+  [HTML in messages](../agent-view.md#html-in-messages).
+- A fenced block with a known language (`ts`, `js`, `py`, `rs`, `go`, `sh`, `json`, `css`, `html`, `yaml`, `sql`,
+  `diff`, `toml` and a few more) is coloured by `lowlight`, loaded on the first block that needs it. Without a language,
+  or past 100,000 characters, it stays plain. The colours only wrap the text in spans, so **Copy code** copies exactly
+  the source and nothing in a block can become markup.
+- Tapping a message shows when it was sent (`Sent Nov 13, 10:30 AM`) and **Copy message** (a 44 px button under the message, instead of one over its text); tapping again hides them. The button is always in the page for a screen reader and the keyboard. A tap that ends a text
+  selection, or lands on a link, button, summary or code block, does not toggle it. On a pointer device, hovering shows
+  it.
+
+## Work rows (slice 2)
+
+Everything the agent does besides talking is one row, in the same shape, so a long turn is a quiet list that opens where
+you tap. The tokens (`--av-row`, `--av-row-hover`, `--av-code`, `--av-rule`, `--av-quiet`, `--av-add`) live in
+`AgentTokens.css`; the rows in `AgentRows.css`.
+
+| Part | Value |
+| --- | --- |
+| Row | tonal bar (`--av-row`), radius 12 px, no border, 44 px tall, 13.5 px text, a chevron at the end that turns when it is open |
+| Tool call | tool icon, name (600), one line of what it did (monospace, ellipsis), then its outcome |
+| Outcome | a call that went well is one check mark (its word, *Done*, stays for a screen reader); *Running* has a spinner in the accent colour; *Failed* (with the exit code) is danger red; *Declined* is the warning colour |
+| Folded activity | the row that opens a turn's work (`Ran 2 commands · Made 1 edit · 1 failed`); open, it is a list of rows 6 px apart |
+| Open tool row | the input and the last 20 lines of output on a darker fill, **Show earlier lines** and **Copy output** as quiet text buttons; an edit shows its lines with green and red tints |
+| Thinking | the same row; its text sits under a 2 px rule instead of in a box |
+| Plan, question, failure | a tonal card with a small title; a plan is a checklist (a mark per step: empty, dotted for the current one, filled with a tick when done; the step's state is still read aloud); a failure is tinted with the danger colour |
+| Chips above the composer | one tonal pill each for running work (**2 running**, **1 shell**, **1 monitor**) and the plan (**1 of 3** with the pill filling from the start as steps finish) |
+
+The result of a plan call (*Todos have been modified successfully*) is not a row of its own: the plan chip already shows it.
+
+## Composer (slice 3)
+
+The message box is one rounded field (radius 24 px), tonal like the rows above it, with an inset hairline that becomes the focus
+ring. It is the only place a person types, so its states are explicit.
+
+| Part | Value |
+| --- | --- |
+| Field | 16 px text in the app font (the old 12 px monospace made a phone zoom on focus), 1.4 line height, 44 px minimum, grows with what is typed, soft wraps included, up to 40% of the screen or 14 rem, then scrolls |
+| One line | attach and the mode switch, the field, then Stop and Send, all 44 px circles in one row |
+| Tall | once a draft needs a second line, the field takes the full width and the controls drop to a row under it; the layout is decided once per draft and returns to one line when the draft is empty, so it cannot flip back and forth |
+| Send | the one filled control: the accent when it can send, a quiet disc when it cannot, a spinner while the guarded input is busy |
+| Stop | a solid square in a quiet circle; it asks twice, and the second tap turns it danger red (unchanged behaviour) |
+| `/` and `@` | while the field has the focus, **Commands** (an empty box) and **Files** (a folder is known) chips put the character in the field and open the palette a typed one opens, for keyboards that hide `/` and `@` on a second page; the chips keep the keyboard up |
+| Palette | a tonal sheet of 44 px rows above the field; the active row is tinted with the accent |
+| Notices | the send receipt, the refusal notice and notes are tinted lines inside the box, never bordered boxes |
+
+Nothing about sending changed: the same guarded input, receipts, drafts, history, mentions and attachments.
+
+## Header and states (slice 4)
+
+| Part | Value |
+| --- | --- |
+| Header | 44 px: the state ring, the agent and folder in 15 px semibold on the first line, then what it is doing (*Working*, *Waiting for you*, *Done*, in the state's colour) and the model, mode and context chips on the second, then two 44 px round buttons (options, terminal). A hairline, not a border, separates it |
+| Chips | tonal pills, 12 px; the model and branch drop out below 520 px of header width, the mode (*Plan mode*, *Accept edits*) and the context left (*58% left*, amber under 20%, red under 10%) stay |
+| Jump to latest | a 44 px round button with a down arrow, floating over the end of the timeline, centred. It lives in a row with no height, so it appears and goes without moving a line; **Jump to start** joins it only while earlier messages are not loaded. Its name is still *Jump to latest* |
+| Working line | three dots that rise in turn, then *Working · 0:42 · 3.1k tokens · Bash*. A wait for you is one steady dot in the accent colour; under reduced motion all dots are still |
+| Empty | a conversation with no message yet says **No messages yet** and what will happen, centred, instead of a blank page; the screens before a conversation (no agent found, a partial agent) use the same icon-over-text layout |
+| Error | a tinted card with the cause, not a red box |
+| Compact | a window under 620 px tall (a landscape phone, or a portrait phone with the keyboard up) keeps the conversation and the field: the header is 36 px and shows only the name, the facts line, the `/` and `@` chips and the extra padding go, controls are 40 px, rows 40 px |
+
+## Motion
+
+Every animation is behind `prefers-reduced-motion: no-preference` and is under 0.2 s except the repeating ones, which have a still
+form: the working dots (static), the spinner of a running call and of a sending message (a still arc), the chevron (turns
+instantly). Nothing animates layout; only opacity and transform change, so a running turn never moves the text being read.
+
+## Accessibility
+
+- A message is an article named by its role; a code block is a figure named *Code: ts* whose code is a focusable scroll region; a
+  table is a focusable *Table* region; the time of a message is in the page before it is tapped.
+- Every state has a word: a tool call's outcome (*Done*, *Failed · exit code 1*), a plan step (*Done*, *In progress*, *Pending*),
+  the working line (a status region). Colour and marks only repeat it.
+- Controls are 44 px (40 px in the compact layout); the focus ring of the composer is a 2 px accent ring and every other control
+  keeps the app's focus outline.
+- Contrast: `agent-view-design.spec.ts` measures text in the bundled Forest, Midnight and Paper themes (4.5:1) for the
+  conversation, code, rows, diff lines, composer, palette, header, chips, the jump button and the empty state, and asserts that no
+  control paints a border and nothing is cyan.
+
+## Review screenshots
+
+`docs/reference/agent-view-design/` holds the images the slices were reviewed with: the same synthetic conversation at
+415 x 900 in the Forest (dark) and Paper (light) themes, *before* and *after* each slice. They come from the same spec that checks
+the layout:
+
+```sh
+LAZYSH_AGENT_VIEW_SHOTS=/tmp/shots LAZYSH_AGENT_VIEW_SHOT_TAG=after \
+  bunx playwright test e2e/agent-view-design.spec.ts --project=desktop -g screenshots
+```
+
+| | Forest (dark) | Paper (light) |
+| --- | --- | --- |
+| Conversation | ![](agent-view-design/conversation-after-forest-code.png) | ![](agent-view-design/conversation-after-paper-code.png) |
+| Work rows | ![](agent-view-design/work-after-forest-plan.png) | ![](agent-view-design/work-after-paper-plan.png) |
+| Composer | ![](agent-view-design/composer-after-forest-typing.png) | ![](agent-view-design/composer-after-paper-typing.png) |
+| Header | ![](agent-view-design/frame-after-forest-header.png) | ![](agent-view-design/frame-after-paper-header.png) |

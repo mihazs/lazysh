@@ -37,7 +37,8 @@
     "react-i18next": "17.1.9",
     "react-markdown": "^10.1.0",
     "rehype-raw": "7.0.0",
-    "rehype-sanitize": "6.0.0"
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@lazysh/apple-speech": "workspace:*",
