@@ -1,22 +1,12 @@
 import {expect,test,type Page,type TestInfo} from '@playwright/test';
 import {openClipboardTerminal} from './fixtures/localTerminal';
 import {pressMore} from './fixtures/toolbarMore';
+import {onAdapter,screenText,terminalCell,terminalSize,terminalViewport} from './fixtures/terminalState';
 
-const screen=(page:Page)=>page.locator('.terminal-canvas:visible .xterm-screen');
 const output=(page:Page,text:string)=>page.evaluate(text=>window.simpleShortcutOutput(text),text);
 const readClipboard=(page:Page)=>page.evaluate(()=>navigator.clipboard.readText());
 const encode=(text:string)=>Buffer.from(text,'utf8').toString('base64');
 
-
-/** Viewport coordinates of a visible cell, measured from xterm's own character probe. */
-async function cellPoint(page:Page,row:number,column:number) {
-  const box=(await screen(page).boundingBox())!;
-  const {rows,width}=await screen(page).evaluate(node=>{
-    const probe=node.closest('.xterm')!.querySelector('.xterm-char-measure-element')!;
-    return {rows:node.querySelectorAll('.xterm-rows > div').length,width:probe.getBoundingClientRect().width/Math.max(1,(probe.textContent??'').length)};
-  });
-  return {x:box.x+(column+.5)*width,y:box.y+(row+.5)*box.height/rows};
-}
 
 test.describe('remote clipboard (OSC 52)',()=>{
   const requests:[string,(text:string)=>string][]=[
@@ -34,7 +24,7 @@ test.describe('remote clipboard (OSC 52)',()=>{
     await output(page,'VISIBLE_AFTER');
     const region=page.getByRole('region',{name:'Remote clipboard request',exact:true});
     await expect(region).toContainText(text);
-    await expect(screen(page)).toContainText('VISIBLE_AFTER');
+    await expect.poll(()=>screenText(page)).toContain('VISIBLE_AFTER');
     expect(await readClipboard(page)).toBe('BEFORE');
     await region.getByRole('button',{name:'Allow this copy',exact:true}).click();
     await expect(region).toHaveCount(0);
@@ -50,7 +40,7 @@ test.describe('remote clipboard (OSC 52)',()=>{
     await output(page,'\x1b]52;c;?\x07');
     await output(page,`\x1b]52;c;${Buffer.alloc(65537,'a').toString('base64')}\x07`);
     await output(page,'SETTLED');
-    await expect(screen(page)).toContainText('SETTLED');
+    await expect.poll(()=>screenText(page)).toContain('SETTLED');
     await expect(region).toHaveCount(0);
     expect(await readClipboard(page)).toBe('BEFORE');
     expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
@@ -59,7 +49,7 @@ test.describe('remote clipboard (OSC 52)',()=>{
 
 /** Presses a cell until the link region opens: xterm only offers a link after the pointer reached it. */
 async function tapLink(page:Page,projectName:string,row:number,column:number) {
-  const target=await cellPoint(page,row,column);
+  const target=await terminalCell(page,row,column);
   const region=page.getByRole('region',{name:'Terminal link',exact:true});
   await expect(async()=>{
     if(projectName==='phone')await page.touchscreen.tap(target.x,target.y);
@@ -68,18 +58,12 @@ async function tapLink(page:Page,projectName:string,row:number,column:number) {
   }).toPass();
   return region;
 }
-async function terminalColumns(page:Page) {
-  return screen(page).evaluate(node=>{
-    const probe=node.closest('.xterm')!.querySelector('.xterm-char-measure-element')!;
-    return Math.floor(node.getBoundingClientRect().width/(probe.getBoundingClientRect().width/Math.max(1,(probe.textContent??'').length)));
-  });
-}
 
 test('a terminal link offers Open in browser and Copy URL',async({page},testInfo)=>{
   await openClipboardTerminal(page);
   const url='https://example.invalid/owned/path?q=1';
   await output(page,`\x1b[2J\x1b[Hsee ${url} here\r\n`);
-  await expect(screen(page)).toContainText(url);
+  await expect.poll(()=>screenText(page)).toContain(url);
   const region=await tapLink(page,testInfo.project.name,0,10);
   await expect(region).toContainText(url);
   await region.getByRole('button',{name:'Copy URL',exact:true}).click();
@@ -96,7 +80,7 @@ test.describe('URLs that fill more than one row',()=>{
     ['broken at the last column by a program or multiplexer',(url:string,columns:number)=>url.match(new RegExp(`.{1,${columns}}`,'g'))!.join('\r\n')],
   ] as const)test(`tapping the second row of a URL ${name} opens the whole URL`,async({page},testInfo)=>{
     await openClipboardTerminal(page);
-    const columns=await terminalColumns(page);
+    const {columns}=await terminalSize(page);
     const url=`https://example.invalid/${'long-path-segment/'.repeat(Math.ceil(columns/18)+1)}end?q=1&r=two`;
     await output(page,`\x1b[2J\x1b[H${wrap(url,columns)}\r\nnext line\r\n`);
     const region=await tapLink(page,testInfo.project.name,1,2);
@@ -136,22 +120,22 @@ test.describe('touch selection',()=>{
     await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
     await input.detach();
   }
-  const selection=(page:Page)=>page.locator('.terminal-canvas .xterm-selection > div').count();
+  const selected=(page:Page)=>onAdapter(page,adapter=>adapter.hasSelection());
 
   test('long-press selects the word, Copy writes it and a second long-press extends raw rows',async({page})=>{
     await openClipboardTerminal(page);
     await output(page,`\x1b[2J\x1b[H${rows.join('\r\n')}`);
-    await expect(screen(page)).toContainText('LAST_WORD');
+    await expect.poll(()=>screenText(page)).toContain('LAST_WORD');
     const copy={click:()=>pressMore(page,'Copy')};
-    await hold(page,await cellPoint(page,0,9));
-    await expect.poll(()=>selection(page)).toBeGreaterThan(0);
+    await hold(page,await terminalCell(page,0,9));
+    await expect.poll(()=>selected(page)).toBe(true);
     await copy.click();
     await expect.poll(()=>readClipboard(page)).toBe('OWNED_WORD');
-    await hold(page,await cellPoint(page,6,9));
+    await hold(page,await terminalCell(page,6,9));
     await copy.click();
     await expect.poll(()=>readClipboard(page)).toBe('OWNED_WORD tail\nsecond line\n\n\n\n\nthird LAST_WORD');
     // A long-press inside the selection starts a new one at that word.
-    await hold(page,await cellPoint(page,1,2));
+    await hold(page,await terminalCell(page,1,2));
     await copy.click();
     await expect.poll(()=>readClipboard(page)).toBe('second');
     expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
@@ -160,10 +144,10 @@ test.describe('touch selection',()=>{
   for(const order of ['move then hold','hold then move'])test(`a finger that moves (${order}) scrolls history and selects nothing`,async({page})=>{
     await openClipboardTerminal(page);
     await output(page,Array.from({length:200},(_,i)=>`history ${i}`).join('\r\n'));
-    const viewport=page.locator('.terminal-canvas:visible .xterm-viewport');
-    await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(500);
-    const before=await viewport.evaluate(node=>node.scrollTop);
-    const start=await cellPoint(page,4,4);
+    // The reader follows the 200 lines to the end of the history.
+    await expect.poll(async()=>{const {following,length}=await terminalViewport(page);return following&&length>=200;}).toBe(true);
+    const before=(await terminalViewport(page)).top;
+    const start=await terminalCell(page,4,4);
     const input=await page.context().newCDPSession(page);
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
     if(order==='hold then move')await page.waitForTimeout(650);
@@ -171,15 +155,15 @@ test.describe('touch selection',()=>{
     if(order==='move then hold')await page.waitForTimeout(650);
     await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
     await input.detach();
-    await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(before);
-    expect(await selection(page)).toBe(0);
+    await expect.poll(async()=>(await terminalViewport(page)).top).toBeLessThan(before);
+    expect(await selected(page)).toBe(false);
   });
 });
 
 test.describe('host file paths in the output',()=>{
   const log='/var/log/build.log',home='/home/fixture/notes/todo.md';
   async function tap(page:Page,testInfo:TestInfo,row:number,column:number) {
-    const target=await cellPoint(page,row,column);
+    const target=await terminalCell(page,row,column);
     if(testInfo.project.name==='phone')await page.touchscreen.tap(target.x,target.y);
     else {await page.mouse.move(target.x,target.y);await page.mouse.move(target.x+1,target.y);await page.mouse.click(target.x+1,target.y);}
   }
@@ -187,7 +171,7 @@ test.describe('host file paths in the output',()=>{
     await page.addInitScript(([log,home])=>{window.simpleShortcutFiles={[log]:'first line\nsecond line',[home]:'# todo'};},[log,home]);
     await openClipboardTerminal(page);
     await output(page,`\x1b[2J\x1b[Hwrote ${log}:2 now\r\nsee ~/notes/todo.md\r\nmissing /no/such/file.txt\r\n`);
-    await expect(screen(page)).toContainText('missing /no/such/file.txt');
+    await expect.poll(()=>screenText(page)).toContain('missing /no/such/file.txt');
     const region=page.getByRole('region',{name:'Host file',exact:true});
     // The host is asked about each candidate before it becomes a link: the missing file never opens a sheet.
     await tap(page,testInfo,2,12);

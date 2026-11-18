@@ -249,7 +249,7 @@ test('a skipped edit keeps the focused editor typing without dismissal',async({p
   });
   expect(skipped).toEqual({proposal:{text:'èy',truncated:false},readOnly:false,focused:true,value:''});
   const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'new'});await cdp.detach();
-  await page.evaluate(()=>window.ownedIme.terminal.input('protocol-reply',false));
+  await page.evaluate(()=>window.ownedIme.adapter.sendInput('protocol-reply','terminal-reply'));
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['éx','new','protocol-reply']);
   await page.evaluate(()=>window.ownedIme.observation.dismiss());
   expect(await page.evaluate(()=>({proposal:window.ownedIme.proposal,readOnly:window.ownedIme.textarea.readOnly,focused:document.activeElement===window.ownedIme.textarea})))
@@ -267,11 +267,11 @@ test('unapplied context is bounded without splitting a supplementary character',
 
 test('protocol output between compositionend and commit does not consume the input owner',async({page})=>{
   const writes=await page.evaluate(async()=>{
-    const {textarea:area,terminal}=window.ownedIme;
+    const {textarea:area,adapter}=window.ownedIme;
     area.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
     area.value='owned';area.dispatchEvent(new CompositionEvent('compositionupdate',{data:'owned',bubbles:true}));
     area.dispatchEvent(new CompositionEvent('compositionend',{data:'owned',bubbles:true}));
-    terminal.input('synthetic-protocol-reply',false);
+    adapter.sendInput('synthetic-protocol-reply','terminal-reply');
     await new Promise(resolve=>setTimeout(resolve,10));
     return window.ownedIme.writes;
   });
@@ -295,10 +295,10 @@ for(const boundary of ['reset','dispose','flush'] as const)test(`pending Enter i
 
 test('a non-user protocol reply does not surrender the editable ASCII suffix',async({page})=>{
   const writes=await page.evaluate(async()=>{
-    const {textarea:area,terminal}=window.ownedIme;
+    const {textarea:area,adapter}=window.ownedIme;
     for(const value of ['teh','the']){
       await window.ownedIme.replace(value);
-      if(value==='teh')terminal.input('synthetic-protocol-reply',false);
+      if(value==='teh')adapter.sendInput('synthetic-protocol-reply','terminal-reply');
     }
     return window.ownedIme.writes;
   });
@@ -355,7 +355,7 @@ for(const boundary of ['reset','another focused control'] as const)test(`native 
   await cdp.send('Input.insertText',{text:'owned'});
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual([]);
   expect(await page.evaluate(()=>window.ownedIme.textarea.readOnly)).toBe(true);
-  await page.evaluate(()=>window.ownedIme.terminal.input('synthetic-protocol-reply',false));
+  await page.evaluate(()=>window.ownedIme.adapter.sendInput('synthetic-protocol-reply','terminal-reply'));
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['synthetic-protocol-reply']);
   await cdp.detach();
 });
@@ -363,7 +363,7 @@ for(const boundary of ['reset','another focused control'] as const)test(`native 
 test('a newly focused editor preserves explicit key229-absent native input after revocation',async({page,context})=>{
   const cdp=await context.newCDPSession(page);
   await cdp.send('Input.imeSetComposition',{text:'old',selectionStart:3,selectionEnd:3});
-  await page.evaluate(()=>{window.ownedIme.observation.reset();window.ownedIme.observation.resume();window.ownedIme.terminal.focus();});
+  await page.evaluate(()=>{window.ownedIme.observation.reset();window.ownedIme.observation.resume();window.ownedIme.adapter.focus();});
   // CDP targets the newly focused editor; it cannot represent an old Android InputConnection.
   await cdp.send('Input.insertText',{text:'new 👩🏽‍💻'});
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['new 👩🏽‍💻']);
@@ -379,7 +379,8 @@ test('foreground eligibility returning alone does not revive a revoked native co
   await cdp.send('Input.insertText',{text:'old'});
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual([]);
   expect(await page.evaluate(()=>window.ownedIme.textarea.readOnly)).toBe(true);
-  await page.locator('.xterm-screen').click({position:{x:12,y:12}});
+  const screen=(await page.evaluate(()=>window.ownedIme.adapter.screenBounds()))!;
+  await page.mouse.click(screen.left+12,screen.top+12);
   expect(await page.evaluate(()=>window.ownedIme.textarea.readOnly)).toBe(false);
   await cdp.send('Input.insertText',{text:'old'});
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['old']);
@@ -388,16 +389,15 @@ test('foreground eligibility returning alone does not revive a revoked native co
 
 test('observer disposal restores original readonly state and a rebound editor accepts new native input',async({page,context})=>{
   const states=await page.evaluate(async()=>{
-    const {terminal,textarea:area,observation,writes}=window.ownedIme;
+    const {adapter,textarea:area,observation,writes}=window.ownedIme;
     observation.reset();observation.dispose();
     const restored=area.readOnly,completionRestored=area.getAttribute('autocomplete');
-    const {observeTerminalInput}=await import('/src/xterm/terminal.ts');
     area.readOnly=true;area.setAttribute('autocomplete','on');
-    const readonly=observeTerminalInput(terminal,data=>writes.push(data));
+    const readonly=adapter.observeInput!(data=>writes.push(data));
     readonly.reset();readonly.resume();const retained=area.readOnly,completionActive=area.getAttribute('autocomplete');readonly.dispose();const disposed=area.readOnly,completionDisposed=area.getAttribute('autocomplete');
     area.readOnly=false;area.removeAttribute('autocomplete');
-    window.ownedIme.observation=observeTerminalInput(terminal,data=>writes.push(data));
-    window.ownedIme.observation.resume();terminal.focus();
+    window.ownedIme.observation=adapter.observeInput!(data=>writes.push(data));
+    window.ownedIme.observation.resume();adapter.focus();
     return {restored,retained,disposed,completionRestored,completionActive,completionDisposed};
   });
   expect(states).toEqual({restored:false,retained:true,disposed:true,completionRestored:null,completionActive:'off',completionDisposed:'on'});
@@ -410,11 +410,11 @@ test('observer disposal restores original readonly state and a rebound editor ac
 test('revoked unsupported-edit fallback cannot emit after the editor is explicitly resumed',async({page})=>{
   const writes=await page.evaluate(async()=>{
     await window.ownedIme.replace('éx');
-    const {textarea:area,observation,terminal}=window.ownedIme;
+    const {textarea:area,observation,adapter}=window.ownedIme;
     area.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:229,bubbles:true,composed:true}));
     area.value='èy';area.setSelectionRange(area.value.length,area.value.length);
     area.dispatchEvent(new InputEvent('input',{data:'èy',inputType:'insertReplacementText',bubbles:true,composed:true}));
-    observation.reset();observation.resume();terminal.focus();
+    observation.reset();observation.resume();adapter.focus();
     await new Promise(resolve=>setTimeout(resolve,10));
     return window.ownedIme.writes;
   });
@@ -521,9 +521,9 @@ for(const barrier of ['blur','reset','access','replacement'] as const)test(`pend
     else if(barrier==='access')o.setAcceptsInput(false);
     else if(barrier==='reset')o.observation.reset();else area.blur();
     await new Promise(resolve=>setTimeout(resolve,10));const afterRetirement=[...staleWrites];
-    if(barrier!=='replacement'){if(barrier==='access')o.setAcceptsInput(true);o.observation.resume();o.terminal.focus();}
+    if(barrier!=='replacement'){if(barrier==='access')o.setAcceptsInput(true);o.observation.resume();o.adapter.focus();}
     await window.ownedIme.replace('fresh');
-    return {afterRetirement,oldWrites:[...staleWrites],freshWrites:[...window.ownedIme.writes],replaced:window.ownedIme.terminal!==o.terminal};
+    return {afterRetirement,oldWrites:[...staleWrites],freshWrites:[...window.ownedIme.writes],replaced:window.ownedIme.adapter!==o.adapter};
   },barrier);
   expect(result.afterRetirement).toEqual(['old']);expect(result.replaced).toBe(barrier==='replacement');
   expect(result.oldWrites).toEqual(barrier==='replacement'?['old']:['old','fresh']);
@@ -628,7 +628,7 @@ test('a finished keypress cannot classify later terminal output as hardware inpu
     const o=window.ownedIme,area=o.textarea;
     area.dispatchEvent(new KeyboardEvent('keypress',{key:'x',charCode:120,keyCode:120,which:120,bubbles:true,composed:true,cancelable:true}));
     area.dispatchEvent(new KeyboardEvent('keyup',{key:'x',bubbles:true,composed:true}));
-    o.terminal.input('!',true);
+    o.adapter.sendInput('!','keyboard');
     area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertText',data:'y',bubbles:true,composed:true}));
     area.value+='y';area.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:'y',bubbles:true,composed:true}));
     return o.writes;

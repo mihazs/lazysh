@@ -1,4 +1,5 @@
 import {expect,type Page,type TestInfo} from '@playwright/test';
+import {terminalDrawn} from './terminalState';
 
 declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[];simpleShortcutKeyboard?:(action:string)=>boolean|null;simpleShortcutFiles?:Record<string,string>;simpleShortcutHostCalls:string[]}}
 
@@ -82,7 +83,7 @@ export async function connectLocalTerminal(page:Page) {
   const hosts=page.getByRole('button',{name:'Open hosts',exact:true});
   if(await hosts.isVisible())await hosts.click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  await terminalDrawn(page);
   await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
 }
 

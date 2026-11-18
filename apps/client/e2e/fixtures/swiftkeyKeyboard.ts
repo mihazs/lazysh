@@ -1,5 +1,6 @@
 import {type Page,type CDPSession} from '@playwright/test';
 import {historyLines,mountHistory,settle} from './terminalHistory';
+import {onAdapter} from './terminalState';
 
 /** SwiftKey-shaped keyboard driven through Chromium's input-method controller: CDP is not SwiftKey, but it is Blink. */
 export type Ime = {compose(text:string,region?:[number,number]):Promise<void>;commit(text:string):Promise<void>;backspace():Promise<void>;
@@ -21,7 +22,7 @@ export async function keyboard(page:Page,pause=8):Promise<Ime> {
     async backspace(){await page.waitForTimeout(30);await bracket('rawKeyDown');await page.evaluate(()=>{document.execCommand('delete');});await bracket('keyUp');await settle();},
     async erase(length){
       await bracket('rawKeyDown');
-      await page.evaluate(count=>{const area=window.ownedHistory.terminal.textarea!;area.setSelectionRange(area.value.length-count,area.value.length);document.execCommand('delete');},length);
+      await onAdapter(page,(adapter,count)=>{const area=adapter.inputElement()!;area.setSelectionRange(area.value.length-count,area.value.length);document.execCommand('delete');},length);
       await bracket('keyUp');await settle();
     },
     async done(){await cdp.detach();},
@@ -40,16 +41,16 @@ export function line(writes:readonly string[]) {
   }
   return text;
 }
-export const state=(page:Page)=>page.evaluate(()=>({
+export const state=(page:Page)=>onAdapter(page,adapter=>({
   writes:window.ownedHistory.writes,
-  editor:window.ownedHistory.terminal.textarea!.value,
+  editor:adapter.inputElement()!.value,
   skipped:document.querySelectorAll('.terminal-edit-review').length,
 }));
 export async function open(page:Page,mouse=false) {
   await mountHistory(page,false);
   await page.evaluate(lines=>window.ownedHistory.output(lines),historyLines(30));await settle(page);
   if(mouse){await page.evaluate(()=>window.ownedHistory.raw('\x1b[?1000h\x1b[?1006h'));await settle(page);}
-  await page.evaluate(()=>window.ownedHistory.terminal.focus());
+  await onAdapter(page,adapter=>adapter.focus());
 }
 export const esc=(page:Page)=>page.locator('.terminal-keys button',{hasText:/^esc$/}).click();
 
