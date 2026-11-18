@@ -63,7 +63,7 @@ pub(crate) trait Core: Send + Sync {
     fn close(&self);
 }
 
-/// Most text one paste may carry, the limit `write_stdin` puts on a paste.
+/// Most text one paste (or one committed text) may carry, the limit `write_stdin` puts on a paste.
 const MAX_PASTE: usize = 64 * 1024;
 
 /// One input event of the renderer for the core to encode, in the shape of the DOM event it came
@@ -102,6 +102,9 @@ pub(crate) enum CoreInput {
     },
     /// Bracketed only when the program enabled it.
     Paste { text: String },
+    /// What a soft keyboard or an IME committed (a word, DEL for an erase, CR for Enter): sent verbatim, as it
+    /// names no key and no protocol may rewrite it. A pre-edit still being composed is not committed text.
+    Text { text: String },
     /// Reported only while the program enabled focus events.
     Focus { focused: bool },
 }
@@ -439,8 +442,9 @@ pub async fn terminal_core_input(
 ) -> AccessResult<usize> {
     lease
         .run(async {
-            if matches!(&input, CoreInput::Paste { text } if text.len() > MAX_PASTE) {
-                return Err("Paste at most 64 KiB at once".to_owned());
+            if matches!(&input, CoreInput::Paste { text } | CoreInput::Text { text } if text.len() > MAX_PASTE)
+            {
+                return Err("Send at most 64 KiB of text at once".to_owned());
             }
             live(&session_id)?.input(&lease, input)
         })
@@ -571,6 +575,14 @@ mod native {
                     mods: dom_mods(mods.shift, mods.ctrl, mods.alt, mods.meta),
                     x,
                     y,
+                }),
+                CoreInput::Text { text } => self.0.send_key(&KeyInput {
+                    key: ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED,
+                    mods: 0,
+                    text: Some(text),
+                    composing: false,
+                    repeat: false,
+                    release: false,
                 }),
                 CoreInput::Paste { text } => self.0.send_paste(&text),
                 CoreInput::Focus { focused } => self.0.send_focus(focused),
@@ -755,6 +767,21 @@ mod native {
             );
             fixture.program_prints(b"\x1b[?2004l");
             assert_eq!(fixture.encode(paste("c")), b"c");
+            fixture.core.close();
+        }
+
+        #[test]
+        fn committed_text_is_sent_verbatim_whatever_the_program_asked_for() {
+            let fixture = fixture();
+            let text = |text: &str| CoreInput::Text { text: text.into() };
+            assert_eq!(fixture.encode(text("ação")), "ação".as_bytes());
+            // An erase unit (DEL) and an Enter (CR) are bytes of the text, not keys the protocols may rename.
+            assert_eq!(fixture.encode(text("\x7f")), b"\x7f");
+            // Every Kitty flag and bracketed paste on: the encoder turned a committed CR into CSI 13u (#1043).
+            fixture.program_prints(b"\x1b[>31u\x1b[?2004h");
+            assert_eq!(fixture.encode(text("\r")), b"\r");
+            assert_eq!(fixture.encode(text("a\x1b[201~")), b"a\x1b[201~");
+            assert!(fixture.encode(text("")).is_empty());
             fixture.core.close();
         }
 
@@ -1236,6 +1263,11 @@ mod tests {
             CoreInput::Paste { text } if text == "a\nb"
         ));
         assert!(matches!(
+            parse(r#"{"type":"text","text":"a\u007f\r"}"#).unwrap(),
+            CoreInput::Text { text } if text == "a\x7f\r"
+        ));
+        assert!(parse(r#"{"type":"text"}"#).is_err());
+        assert!(matches!(
             parse(r#"{"type":"focus","focused":false}"#).unwrap(),
             CoreInput::Focus { focused: false }
         ));
@@ -1245,7 +1277,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
-    async fn only_the_current_renderer_can_send_input_and_a_paste_is_bounded() {
+    async fn only_the_current_renderer_can_send_input_and_pastes_and_texts_are_bounded() {
         let _kept = tests_keeping_cores().read();
         let access = crate::app_lock::AccessState::disabled();
         let renderer = lease_of(&access);
@@ -1273,14 +1305,31 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(core.inputs.lock().unwrap().len(), 1, "only the first paste");
-        access.replace_renderer().unwrap();
-        assert!(
-            terminal_core_input(renderer, "input-gated".into(), paste("ok".into()))
-                .await
-                .is_err()
+        let text = |text: String| CoreInput::Text { text };
+        terminal_core_input(renderer.clone(), "input-gated".into(), text("ok".into()))
+            .await
+            .unwrap();
+        assert!(terminal_core_input(
+            renderer.clone(),
+            "input-gated".into(),
+            text("x".repeat(MAX_PASTE + 1))
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            core.inputs.lock().unwrap().len(),
+            2,
+            "only the first paste and the first text"
         );
-        assert_eq!(core.inputs.lock().unwrap().len(), 1);
+        access.replace_renderer().unwrap();
+        for input in [paste("ok".into()), text("ok".into())] {
+            assert!(
+                terminal_core_input(renderer.clone(), "input-gated".into(), input)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(core.inputs.lock().unwrap().len(), 2);
         close("input-gated");
     }
 }
