@@ -127,6 +127,37 @@ export function shellSession(interactions: number, { cols, rows }: Geometry, see
   return { bursts, screen: screenOf(text, rows) };
 }
 
+const REGION_ROWS = 5;
+/** W8, streaming: an agent CLI answering. Words arrive a few at a time; after every arrival the live region (the unfinished answer line, a spinner line and a bordered prompt box) is erased by moving up and rewritten, and a finished answer line is committed above it. One write per arrival. Needs at least REGION_ROWS + 1 rows. */
+export function agentStream({ tokens, cols, rows, seed }: Geometry & { tokens: number; seed: number }): { steps: Uint8Array[]; screen: Screen; cursor: [x: number, y: number]; description: string } {
+  const next = rng(seed), width = cols - 1, committed: string[] = [], steps: Uint8Array[] = [];
+  const spinner = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏', blue = '\x1b[38;2;120;120;255m', end = '\x1b[0m';
+  const box = [`╭${'─'.repeat(width - 2)}╮`, `│ > ${' '.repeat(width - 5)}│`, `╰${'─'.repeat(width - 2)}╯`];
+  let partial = '', arrived = 0, region: string[] = [];
+  for (let token = 0; token < tokens; token++) {
+    let commit = '';
+    for (let words = 1 + Math.floor(next() * 3); words > 0; words--) {
+      const word = WORDS[Math.floor(next() * WORDS.length)];
+      if (partial && partial.length + word.length + 1 > width) { committed.push(partial); commit += `\x1b[2K${partial}\r\n`; partial = ''; }
+      partial += (partial ? ' ' : '') + word; arrived++;
+    }
+    const status = `${spinner[token % spinner.length]} Working… (${Math.floor(token / 10)}s · ${arrived} words)`;
+    region = [partial, status, ...box];
+    const painted = [partial, `\x1b[2m${status}${end}`, ...box.map(row => blue + row + end)].map(row => `\x1b[2K${row}\r\n`).join('');
+    steps.push(encoder.encode((token === 0 ? '' : `\x1b[${REGION_ROWS}A`) + commit + painted + '\x1b[2K'));
+  }
+  const all = [...committed, ...region, ''];
+  return { steps, screen: screenOf(all.join('\r\n'), rows), cursor: [0, Math.min(all.length, rows) - 1], description: `${tokens} writes of one to three words, each followed by an in-place redraw of a ${REGION_ROWS}-row live region` };
+}
+
+/** A Mosh display update as the transport wraps it (apps/client/e2e/fixtures/mosh-resize-frames.json): the begin envelope names the frame and its size, the end envelope closes it. */
+export function moshEnvelope(id: number, { cols, rows }: Geometry, body: Uint8Array) {
+  const begin = encoder.encode(`\x1b]7777;lazysh-mosh;1;begin;${id};${cols};${rows}\x1b\\`), end = encoder.encode(`\x1b]7777;lazysh-mosh;1;end;${id}\x1b\\`);
+  const out = new Uint8Array(begin.length + body.length + end.length);
+  out.set(begin); out.set(body, begin.length); out.set(end, begin.length + body.length);
+  return out;
+}
+
 /** The 16 KiB chunking the Rust session workers use (ssh.rs, local.rs). */
 export const CHUNK = 16 * 1024;
 export function chunks(data: Uint8Array, size = CHUNK) {

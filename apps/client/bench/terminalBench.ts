@@ -9,7 +9,8 @@ import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/re
 import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { XtermTerminalAdapter } from '../src/xtermTerminalAdapter';
 import type { TerminalAdapter } from '../src/terminalAdapter';
-import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, styledText, summarize, type StyleFamily, type Workload } from './workloads';
+import { ansiColor, chunks, CHUNK, fullScreenRedraw, moshEnvelope, plainText, shellSession, styledText, summarize, type StyleFamily, type Workload } from './workloads';
+import type { Check, Replay } from './programWorkloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
 const WINDOW = 256 * 1024;
@@ -108,8 +109,8 @@ async function prepare(workload: Workload) {
   prepared = { chunks: parts, json: parts.map(part => JSON.stringify(Array.from(part))), screen: workload.screen, bytes: workload.data.length, sha256: await digest(workload.data), description: workload.description };
 }
 
-function screenText() {
-  const buffer = harness!.terminal.buffer.active, rows = harness!.terminal.rows;
+function screenText(terminal: Term = harness!.terminal) {
+  const buffer = terminal.buffer.active, rows = terminal.rows;
   return Array.from({ length: rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true).trimEnd() ?? '');
 }
 let lastMismatch: { expected: string[]; actual: string[] } | undefined;
@@ -147,6 +148,31 @@ function webglContext() {
 }
 /** The extension object is kept: getExtension() returns null once the context is lost. */
 let loser: WEBGL_lose_context | null = null;
+
+const fromBase64 = (text: string) => Uint8Array.from(atob(text), char => char.charCodeAt(0));
+/** One replayed session: the app's createTerminal() and XtermTerminalAdapter in a visible element, resized to the geometry the program was recorded at. It is not mounted in the TerminalPane, whose fit to its container would undo that geometry (a phone viewport cannot hold 100 columns); it has no toolbar, input layer or React tree. */
+async function mountSession({ cols, rows, kind }: Pick<Replay, 'cols' | 'rows' | 'kind'>) {
+  const terminal = createTerminal(), adapter = new XtermTerminalAdapter(terminal), pane = document.createElement('div'), mount = document.createElement('div');
+  pane.style.cssText = 'position:fixed;top:0;left:0;z-index:100;background:#101010';
+  pane.append(mount); document.body.append(pane);
+  await adapter.attach({ kind: 'dom', element: mount });
+  attach(terminal);
+  terminal.resize(cols, rows);
+  // As App.tsx does for a Mosh transport, before its first output.
+  if (kind === 'mosh') adapter.enableCanonicalResize!();
+  adapters.set(terminal, adapter);
+  await settleTerminal(terminal);
+  return { terminal, adapter, pane, mount, dispose() { void adapter.dispose(); pane.remove(); } };
+}
+async function settleTerminal(terminal: Term) { await putAndWait(terminal, ''); await frame(); await frame(); }
+/** What a step is delivered as: the bytes of a stream, or a Mosh body inside the envelope naming its size. */
+const delivery = (replay: Replay, step: string, index: number) => replay.kind === 'mosh' ? moshEnvelope(index + 1, { cols: replay.checks[index]!.size![0], rows: replay.checks[index]!.size![1] }, fromBase64(step)) : fromBase64(step);
+function holds(terminal: Term, check: Check | null) {
+  if (!check) return true;
+  const { cursorX, cursorY } = terminal.buffer.active, rows = screenText(terminal);
+  return cursorX === check.cursor[0] && cursorY === check.cursor[1] && (!check.lines || (rows.length === check.lines.length && rows.every((row, i) => row === check.lines![i])))
+    && (!check.size || (terminal.cols === check.size[0] && terminal.rows === check.size[1])) && (check.row1 === undefined || rows[1] === check.row1);
+}
 
 const api = {
   open() {
@@ -305,6 +331,70 @@ const api = {
     }
   },
   async stopBackground() { background!.stop = true; await Promise.all(background!.done); background = undefined; },
+  /** W5 to W8: `reps` fresh sessions each take the recorded steps one at a time, as the remote delivered them; write to apply, and write to the render that shows it. */
+  async replay(replay: Replay, reps: number) {
+    const applyMs: number[] = [], renderMs: number[] = [], repMs: number[] = [], steps = replay.steps.map((step, i) => delivery(replay, step, i));
+    let correct = true;
+    const meter = meterFrames();
+    for (let rep = 0; rep < reps; rep++) {
+      const session = await mountSession(replay), started = performance.now();
+      for (const [i, data] of steps.entries()) {
+        const written = performance.now();
+        const render = new Promise<void>(resolve => put(session.terminal, data, () => {
+          applyMs.push(performance.now() - written);
+          const d = session.terminal.onRender(() => { d.dispose(); renderMs.push(performance.now() - written); resolve(); });
+        }));
+        await Promise.race([render, sleep(100)]);
+        correct = holds(session.terminal, replay.checks[i]) && correct;
+      }
+      repMs.push(performance.now() - started);
+      session.dispose();
+    }
+    const frames = meter.stop();
+    return { reps, steps: steps.length, bytes: replay.bytes, applyMs: summarize(applyMs), renderMs: summarize(renderMs), repMs: summarize(repMs), applyMiBs: (reps * replay.bytes) / 1048576 / (applyMs.reduce((a, b) => a + b, 0) / 1000), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct };
+  },
+  /**
+   * W11: `reps` fresh sessions take `copies` deliveries of a stream while their pane is hidden (display:none, as App.tsx keeps an inactive session), then the pane is shown
+   * (resume: show to the next render) and the adapter is detached and attached again (a recreated surface: attach to the first animation frame, and whether xterm drew again). The screen must be the recorded one after each.
+   */
+  async background(replay: Replay, reps: number, copies: number) {
+    const applyMs: number[] = [], resumeMs: number[] = [], recreateMs: number[] = [], steps = replay.steps.map(fromBase64), last = replay.checks.at(-1)!;
+    let correct = true, recreatedWithRender = 0;
+    /** Time from now to the next render, or null when nothing was drawn within the wait. */
+    const nextRender = (terminal: Term, within = 1000) => { const started = performance.now(); return new Promise<number | null>(resolve => { const d = terminal.onRender(() => { d.dispose(); resolve(performance.now() - started); }); setTimeout(() => { d.dispose(); resolve(null); }, within); }); };
+    for (let rep = 0; rep < reps; rep++) {
+      const session = await mountSession(replay), { terminal } = session;
+      session.pane.style.display = 'none';
+      await sleep(100); // the visibility observer reports the pane gone
+      const started = performance.now();
+      let inflight = 0, waiter: (() => void) | undefined;
+      for (let copy = 0; copy < copies; copy++) for (const data of steps) {
+        while (inflight + data.length > WINDOW) await new Promise<void>(resolve => { waiter = resolve; });
+        inflight += data.length;
+        put(terminal, data, () => { inflight -= data.length; waiter?.(); waiter = undefined; });
+        await yieldTask();
+      }
+      while (inflight > 0) await new Promise<void>(resolve => { waiter = resolve; });
+      applyMs.push(performance.now() - started);
+      const resumed = nextRender(terminal);
+      session.pane.style.display = 'block';
+      resumeMs.push((await resumed) ?? NaN);
+      await settleTerminal(terminal);
+      correct = holds(terminal, last) && correct;
+      await session.adapter.detach(); await frame();
+      let redrawn = false;
+      const drawing = terminal.onRender(() => { redrawn = true; }), reinserted = performance.now();
+      await session.adapter.attach({ kind: 'dom', element: session.mount });
+      await frame();
+      recreateMs.push(performance.now() - reinserted); drawing.dispose();
+      if (redrawn) recreatedWithRender++;
+      await settleTerminal(terminal);
+      correct = holds(terminal, last) && correct;
+      session.dispose();
+    }
+    const bytes = copies * replay.bytes;
+    return { reps, copies, bytes, applyMs: summarize(applyMs), applyMiBs: (reps * bytes) / 1048576 / (applyMs.reduce((a, b) => a + b, 0) / 1000), resumeMs: summarize(resumeMs.filter(Number.isFinite)), resumeWithoutRender: resumeMs.filter(ms => !Number.isFinite(ms)).length, recreateMs: summarize(recreateMs), recreatedWithRender, correct };
+  },
   disposeSessions() { sessions.forEach(terminal => terminal.dispose()); sessions.length = 0; panes.forEach(pane => pane.remove()); panes.length = 0; },
 };
 const sessions: ReturnType<typeof createTerminal>[] = [], panes: HTMLElement[] = [];

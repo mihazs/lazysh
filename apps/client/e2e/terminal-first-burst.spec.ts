@@ -1,8 +1,6 @@
 import { expect } from '@playwright/test';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
-import { androidDevice, androidFocused, androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
+import { androidDevice, androidFocused, androidSerial, benchUrl, cost, git, read, require, setUpBenchSpec, snapshot, test, writeBenchResult } from './fixtures/benchEnvironment';
 import { summarize, type StyleFamily } from '../bench/workloads';
 
 // What the first appearance of a glyph in a style costs, with the xterm.js DOM renderer and the WebGL addon (#1323,
@@ -19,15 +17,9 @@ const scale: { bytes: number; passes: number; rows: Row[] } = full
   ? { bytes: 1 << 20, passes: 3, rows: [['truecolor', 1], ['truecolor', 32], ['truecolor', 256], ['truecolor', 2048], ['indexed', 256], ['background', 256], ['background', 2048], ['attributes', 8], ['attributes', 256], ['palette16', 8], ['brightOnBackground', 64], ['truecolorOnBackground', 256], ['boldUnderline', 8],
     ['w3', 0.5], ['w3', 1], ['w3', 2], ['w3', 4], ['truecolor', 1, true], ['truecolor', 256, true], ['truecolor', 2048, true], ['w3', 1, true], ['w3', 2, true]] }
   : { bytes: 64 << 10, passes: 2, rows: [['truecolor', 1], ['attributes', 8], ['w3', 1 / 32], ['truecolor', 32, true]] };
-const launchArgs = (process.env.LAZYSH_BENCH_CHROMIUM_ARGS ?? '').split(/\s+/).filter(Boolean);
-test.use({ launchOptions: { args: launchArgs } });
-test.describe.configure({ mode: 'serial' });
-test.skip(({ isMobile }) => !full && isMobile, 'The smoke run needs one viewport.');
+const launchArgs = setUpBenchSpec(full);
 
 const results: Array<Record<string, unknown>> = [];
-test.beforeEach(async ({ page }) => {
-  await installBenchBridge(page);
-});
 
 for (const renderer of renderers)
   for (const [family, styles, paced = false] of scale.rows)
@@ -64,14 +56,12 @@ for (const renderer of renderers)
 
 test.afterAll(async ({ browser }, info) => {
   if (results.length === 0) return;
-  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/terminal-first-burst-${full ? 'full' : 'smoke'}-${androidSerial ? 'android' : info.project.name}.json`);
-  mkdirSync(path.dirname(out), { recursive: true });
-  writeFileSync(out, JSON.stringify({
+  writeBenchResult('terminal-first-burst', full, info.project.name, {
     schema: 1, run: 'first burst', mode: full ? 'full' : 'smoke',
     host: { loadAverageAtEnd: os.loadavg(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, os: `${os.type()} ${os.release()}`, cpuGovernor: read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor') },
     toolchain: { node: process.versions.node, chromium: androidSerial ? null : browser.version(), androidSerial, device: androidDevice(), xterm: JSON.parse(read(require.resolve('@xterm/xterm/package.json')) ?? '{}').version, webglAddon: JSON.parse(read(require.resolve('@xterm/addon-webgl/package.json')) ?? '{}').version },
     source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
     launchArgs, results,
     limits: `${androidSerial ? 'The Android System WebView of the device with that adb serial, in a fresh process per row; no per-process CPU (the WebView has no process list).' : 'Headless Chromium on a desktop host: not an Android WebView.'} A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached.`,
-  }, null, 2) + '\n');
+  });
 });

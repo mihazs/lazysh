@@ -133,7 +133,7 @@ Fixtures are seeded (`bench/workloads.ts`) and sized to the terminal's geometry,
 
 Seeded jitter is used because an early probe without it phase-locked every keystroke to the 60 Hz frame clock (idle p50 of about 15 ms in that probe, which was discarded and is not part of the tables).
 
-**Not implemented in this baseline:** W5 (vim/Neovim), W6 (tmux, Zellij), W7 (Mosh resize and reconnect; the frame fixture `apps/client/e2e/fixtures/mosh-resize-frames.json` exists but is not replayed here), W8 (agent streams), W11 (background, resume, surface recreation) and W13 (thermal). They need a real remote or a device and remain open on [#1303](https://github.com/mihazs/lazysh/issues/1303). **No Rust-side parse benchmark was added:** the baseline's VT parse runs in xterm.js, and the Rust workers only chunk bytes; a parse benchmark of the shared core belongs to [#1313](https://github.com/mihazs/lazysh/issues/1313) and [#1341](https://github.com/mihazs/lazysh/issues/1341).
+**Not in this baseline:** W5 to W8 and W11, which are now implemented as [program workloads](#program-workloads-w5-to-w8-and-w11) in their own spec, and W13 (thermal), which needs a device and remains open on [#1303](https://github.com/mihazs/lazysh/issues/1303). **No Rust-side parse benchmark was added here:** the baseline's VT parse runs in xterm.js, and the Rust workers only chunk bytes; the shared core's parse benchmarks are [on the baseline's own workloads](#parse-stage-on-the-baselines-own-workloads-native-core-versus-xtermjs-host-microbenchmark-not-a-device-baseline) ([#1313](https://github.com/mihazs/lazysh/issues/1313), [#1341](https://github.com/mihazs/lazysh/issues/1341)).
 
 ### Counters
 
@@ -515,6 +515,94 @@ The first-burst and context-loss specs run unchanged inside a real Android Syste
 
 Not shown: anything about Android, an Android WebView (which is Chromium, but its GPU, driver, memory pressure and context-loss behaviour are exactly what is unknown), the Linux desktop WebView (WebKitGTK, not Chromium), macOS or iOS (WKWebView), Windows (WebView2), energy, thermal behaviour, context loss caused by the platform in an Android WebView (the scripted loss above, in desktop Chromium and in the Waydroid WebView, is the only one run), background and resume (W11), accessibility with a canvas renderer, a phone GPU (the phone viewport above is emulated on the desktop one, and the Waydroid WebView sits on the same desktop GPU), W5 to W8 and W13. WebGL numbers here come from a discrete desktop GPU shared with other work; they do not transfer to a phone GPU.
 
+### Program workloads (W5 to W8 and W11)
+
+Recorded sessions of real programs, replayed a step at a time through the two engines ([#1303](https://github.com/mihazs/lazysh/issues/1303)). The workload definitions are renderer-neutral: `apps/client/bench/programWorkloads.ts` builds them from the conformance captures in `packages/terminal-runtime/fixtures` (their bytes, chunked as the Rust session workers chunk a pty, and the screen xterm.js 5.5.0 shows after them, which the core also shows: its divergences from xterm.js are terminal replies), from the captured Mosh display updates of `apps/client/e2e/fixtures/mosh-resize-frames.json`, and from a seeded agent stream (`agentStream` in `bench/workloads.ts`). Each workload carries its source, geometry, steps, the screen and cursor it must end on (after every step, for Mosh), its byte count and the SHA-256 of its bytes. A run that ends on any other screen fails.
+
+```sh
+cd apps/client
+bun run bench:terminal -- --project desktop e2e/terminal-programs.spec.ts   # xterm.js in Chromium, about 2 minutes; LAZYSH_BENCH_OUT=<file> names the result
+bun bench/programWorkloads.ts /tmp/programs.json                            # the same workloads as JSON, for the core
+cd ../../packages/terminal-runtime                                          # built as in its README
+cargo run --release --example program_workloads -- /tmp/programs.json 100   # the core, 100 fresh sessions per workload
+```
+
+The spec also runs in smoke mode inside the normal Playwright suite (two repetitions per workload, correctness only, no timing thresholds), and `bench/programWorkloads.test.ts` replays every stream workload through xterm.js headless (three times for a repeatable one) and checks its screen, rebuilds each captured Mosh update from its body and envelope, and checks the agent stream generator against xterm.js at several geometries (the canonical Mosh resize needs xterm.js's internals in a mounted terminal, so the page run and the core's example are what replay those). With `LAZYSH_BENCH_ANDROID` the spec drives the Android System WebView of that device, as the first-burst spec does; the [Waydroid lane runbook](waydroid-lane.md#the-program-workloads-on-the-lane) has the command. The core's example is a host binary: nothing runs it inside a guest.
+
+| Id | Workload | Source | Geometry | Steps | Bytes | What a step is |
+| --- | --- | --- | --- | --- | --- | --- |
+| W5 | vim 9 on a three-line file: insert, `:set number`, `gg`, `:q!` | `captures.json#capture-vim-edit` | 60x12 | 1 | 1600 | the whole recorded stream |
+| W6 | tmux 3: two splits and a coloured `printf` | `capture-tmux-splits` | 60x14 | 1 | 2100 | the whole recorded stream |
+| W6 | Zellij 0.46: a command, a new pane and a command in it | `capture-zellij-panes` | 100x16 | 2 | 18537 | a 16 KiB chunk |
+| W7 | Mosh resize: six captured display updates, five of which change the size | `mosh-resize-frames.json` | 40x12 at the start | 6 | 1966 | one update's body, inside its begin and end envelope (which names the size) |
+| W7 | Mosh reconnect: the first captured update on a fresh session | the same, first frame | 40x12 | 1 | 364 | as above |
+| W8 | Claude Code 2.1 first run: theme picker to login method | `capture-claude-onboarding` | 100x30 | 1 | 8291 | the whole recorded stream |
+| W8 | Codex 0.167 first run: sign-in menu | `capture-codex-login` | 100x30 | 1 | 1995 | the whole recorded stream |
+| W8 | OpenCode 2.2 home screen, text typed and cleared | `capture-opencode-home` | 100x30 | 1 | 14553 | the whole recorded stream |
+| W8 | Agent streaming, seeded: one to three words per write, a five-row live region (answer line, spinner, prompt box) erased and redrawn after each | `agentStream(300 tokens, seed 80)` | 100x30 | 300 | 272397 | one write |
+| W11 | Herdr 0.9 session redrawn 40 times while hidden, then resumed and its surface recreated | `capture-herdr-session` | 100x30 | 4 | 52508 (2.0 MiB delivered) | a 16 KiB chunk |
+
+#### What is simulated and what is real
+
+| Stage | Real | Simulated or missing |
+| --- | --- | --- |
+| Bytes | Real program output (vim, tmux, Zellij, Herdr, Claude Code, Codex, OpenCode) and real Mosh frames, replayed as recorded; the agent stream is generated | No transport: no remote, no timing between writes, no bridge (the JSON `number[]` decode of the baseline is not exercised). A capture's write boundaries are the harness's 16 KiB chunking, not the program's own |
+| xterm.js | The app's `createTerminal()` and `XtermTerminalAdapter` (and, for Mosh, `enableCanonicalResize()`, as `App.tsx` does) on the DOM renderer, resized to the recorded geometry; a fresh session per repetition | Not the `TerminalPane`: it fits to its container and would undo the geometry (a phone viewport cannot hold 100 columns), so there is no toolbar, input layer or React tree. Session creation is not timed. The phone project (390 by 844 at 3x, run once, raw file not kept) gave the same p50 of every workload within 0.2 ms: the sessions do not depend on the viewport |
+| The core | `TerminalRuntime` (with `canonical_frames` for Mosh), a fresh one per repetition, the bytes offered and pumped as the transport does | No renderer: a "frame" is the dirty-row frame a renderer would draw, not a draw. No bridge or surface |
+| Resume and surface | W11: the pane hidden with `display:none` while 40 deliveries are applied, then shown; then `detach` and `attach` of the adapter. Core: the same output with no frame taken, then `take_frame()` (rows changed), then `snapshot()` (every row, for a new surface) | A native surface lost and recreated by Android is not exercised on either engine. For the DOM renderer a detached and re-attached terminal keeps its rows, so nothing is redrawn (`recreatedWithRender` is 0 of 100): that is the baseline's cost of a "recreated surface", not a statement about the native one |
+
+#### Measured on the development host
+
+Same host and toolchain as the tables above: AMD Ryzen 9 5900X, Linux 7.3.3, node 26.6.0 and Bun 1.3.14, headless Chromium 156.0.8078.4, xterm.js 5.5.0 DOM renderer, release (minified) page, rustc 1.96.1 release for the core, the xterm.js run at commit `02c6e90d` and the core at `ec4ad0f5` (two unrelated commits apart: a docs rule and an iOS test), both with these changes uncommitted (`dirty: true`). The 1-minute load average was 3.3 at the end of the xterm.js run and 5.68 at the start of the core's: the host is shared, and an invocation of the core at another load gave the same order of every figure. Raw results: [`terminal-programs-xterm-dom-desktop.json`](benchmarks/terminal-programs-xterm-dom-desktop.json) (xterm.js; schema 1, with the fixtures' SHA-256 and the CDP counters per workload) and [`terminal-programs-core-host.txt`](benchmarks/terminal-programs-core-host.txt) (the core's output). Every repetition of every workload ended on the recorded screen, on both engines (the core panics otherwise; checked by corrupting a check in the workload file). Timestamps in the page have 0.1 ms resolution, so values near 0.1 ms are coarse. p50 / p95 / p99 in milliseconds.
+
+xterm.js, 100 fresh sessions per workload (5 for the 300-step agent stream, which gives 1500 step samples):
+
+| Workload | Variant | Geometry | Steps | Bytes | Write to applied | Write to the render that shows it | Session wall (p50) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W5 vim | insert, `:set number`, `gg`, `:q!` | 60x12 | 1 | 1600 | 0.5 / 0.9 / 1.3 | 16.7 / 16.9 / 17.0 | 16.7 |
+| W6 tmux | two splits | 60x14 | 1 | 2100 | 0.6 / 1.0 / 1.8 | 18.1 / 18.9 / 19.8 | 18.1 |
+| W6 Zellij | a new pane | 100x16 | 2 | 18537 | 1.0 / 1.5 / 2.3 | 17.7 / 19.7 / 21.0 | 34.7 |
+| W7 Mosh resize | six updates | 40x12 | 6 | 1966 | 0.7 / 1.3 / 1.6 | 16.6 / 17.9 / 18.3 | 100.1 |
+| W7 Mosh reconnect | first update | 40x12 | 1 | 364 | 0.3 / 0.5 / 0.7 | 17.9 / 18.8 / 21.2 | 17.9 |
+| W8 Claude Code | first run | 100x30 | 1 | 8291 | 0.3 / 0.7 / 1.2 | 20.1 / 21.3 / 27.8 | 20.1 |
+| W8 Codex | sign-in menu | 100x30 | 1 | 1995 | 0.3 / 0.7 / 1.1 | 18.3 / 19.5 / 20.2 | 18.4 |
+| W8 OpenCode | home screen | 100x30 | 1 | 14553 | 1.2 / 2.0 / 3.1 | 19.4 / 21.0 / 22.3 | 19.5 |
+| W8 agent streaming | 300 writes | 100x30 | 300 | 272397 | 0.5 / 0.9 / 1.2 | 16.7 / 16.9 / 17.2 | 5000.1 |
+
+Each step is written, then waited on until xterm renders it (at most 100 ms), so a session's wall time is its steps times a frame; no frame was dropped and no long task ran in any of them. The render column is the frame clock (16.7 ms at 60 Hz) plus the work, and the heavier screens (Claude Code, OpenCode) sit a few milliseconds above the rest; which part of xterm accounts for it was not isolated.
+
+The core, 100 fresh sessions per workload, from `program_workloads`:
+
+| Workload | Variant | Geometry | Steps | Bytes | Parse a step | Parse and take the frame | The same stream delivered back to back |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W5 vim | insert, `:set number`, `gg`, `:q!` | 60x12 | 1 | 1600 | 0.030 / 0.053 / 0.059 | 0.069 / 0.107 / 0.124 | 156.2 MiB/s (1311 deliveries) |
+| W6 tmux | two splits | 60x14 | 1 | 2100 | 0.033 / 0.039 / 0.047 | 0.088 / 0.098 / 0.111 | 107.1 MiB/s (999 deliveries) |
+| W6 Zellij | a new pane | 100x16 | 2 | 18537 | 0.097 / 0.119 / 0.138 | 0.236 / 0.280 / 0.331 | 196.2 MiB/s (114 deliveries) |
+| W7 Mosh resize | six updates | 40x12 | 6 | 1966 | 0.005 / 0.016 / 0.018 | 0.038 / 0.052 / 0.057 | not repeatable |
+| W7 Mosh reconnect | first update | 40x12 | 1 | 364 | 0.008 / 0.014 / 0.017 | 0.044 / 0.050 / 0.061 | not repeatable |
+| W8 Claude Code | first run | 100x30 | 1 | 8291 | 0.078 / 0.101 / 0.117 | 0.270 / 0.356 / 0.395 | 148.2 MiB/s (253 deliveries) |
+| W8 Codex | sign-in menu | 100x30 | 1 | 1995 | 0.029 / 0.036 / 0.041 | 0.203 / 0.217 / 0.232 | 163.4 MiB/s (1052 deliveries) |
+| W8 OpenCode | home screen | 100x30 | 1 | 14553 | 0.084 / 0.095 / 0.102 | 0.363 / 0.381 / 0.396 | 221.0 MiB/s (145 deliveries) |
+| W8 agent streaming | 300 writes | 100x30 | 300 | 272397 | 0.003 / 0.006 / 0.010 | 0.052 / 0.122 / 0.269 | not repeatable |
+
+The two tables measure different things and **no ratio between them is valid**: xterm.js's number is a page-clock interval from `write` to its write callback or to the next render, which includes the turn xterm schedules a write on and is bounded by a 0.1 ms clock and a 60 Hz frame; the core's is the parse, and the parse plus the dirty-row frame, on a nanosecond clock with no scheduling, no renderer and no frame clock. What they do say together: the same recorded bytes end on the same screens on both engines, including the five Mosh canonical resizes and the multiplexer and agent redraws, and the core's share of one step is a fraction of a millisecond on every workload here. Neither says what a phone costs.
+
+W11, 100 fresh sessions per engine, 40 deliveries (2.0 MiB) of the Herdr session while nothing is drawn, then resume, then a recreated surface:
+
+| Engine | Output applied while hidden | Resume | Recreated surface | Screen after each |
+| --- | --- | --- | --- | --- |
+| xterm.js, pane `display:none` | 32.7 / 38.1 / 41.0 ms for the 2.0 MiB (59 MiB/s over the run, with one macrotask yield per chunk) | 19.2 / 34.4 / 35.7 ms from showing the pane to the next render (a render followed in 100 of 100 sessions) | 16.7 / 16.8 / 16.9 ms from `attach` to the next frame; xterm did not redraw (0 of 100) | the recorded one, 100 of 100 |
+| The core, no frame taken | 111.0 MiB/s median (94.4 to 113.5) | `take_frame()` 0.345 / 0.405 / 0.485 ms | `snapshot()` 0.295 / 0.329 / 0.360 ms | the recorded one, 100 of 100 |
+
+State was preserved in every run: the hidden terminal parsed everything and showed the recorded screen on resume. The xterm.js resume time (19 ms at the median, a frame plus the repaint of the shown pane) is consistent with xterm parsing the output while the pane is hidden and drawing when it is shown; the split between the two was not isolated. The core's resume and recreate times are the cost of producing a frame, not of drawing it.
+
+#### What this does not show
+
+- **No Android number.** `waydroid session start` fails on the maintainer's machine (the container's network script needs root), so neither engine was run on the Waydroid lane; the spec is written to run in the guest's WebView and the command is in the [runbook](waydroid-lane.md#the-program-workloads-on-the-lane), but it has not been run there. No gate row moves. The core has no Android run of this example at all.
+- **Short recorded sessions.** The captures are scripted first-run and a few keystrokes, 0.4 to 52 KiB: they test a real program's escape sequences, not a long editing or multiplexer session, and the W5 vim session is 1.6 KiB. Neovim was not recorded (`nvim` is not installed here). The W8 captures stop at login screens: a signed-in Claude Code, Codex or OpenCode turn needs an account and a network, and a capture would hold a prompt and a reply. The streaming half of W8 is a seeded generator shaped like their live-region redraws, not a capture.
+- **No timing between writes and no remote.** Steps are delivered back to back (xterm.js: one per frame), not at the pace the program produced them, and there is no input: keystrokes are W12.
+- **No energy, no thermal behaviour (W13), no phone GPU, no native surface.**
+
 ### Android procedure (manual gate, not run)
 
 The harness cannot run on Android in this form: it drives desktop Chromium over CDP. Until an Android runner exists ([#1303](https://github.com/mihazs/lazysh/issues/1303), [#1340](https://github.com/mihazs/lazysh/issues/1340)), the Android measurement is a manual gate with this procedure. **None of it has been executed;** the tools named are standard Android tooling and the steps have not been validated on a device for this app.
@@ -531,7 +619,8 @@ The harness cannot run on Android in this form: it drives desktop Chromium over 
 | Workload | xterm DOM (desktop Chromium) | xterm optimized: WebGL addon, hardware GL | xterm canvas addon; WebGL software GL | Native candidate(s) | Winner (per device) |
 | --- | --- | --- | --- | --- | --- |
 | W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | measured, [shootout](#renderer-shootout-xtermjs-renderers-1323): on par or better except W3 frame pacing, W4 CPU and fixed memory | measured: much slower | host and Waydroid microbenchmarks only: [parse stage on these very workloads](#parse-stage-on-the-baselines-own-workloads-native-core-versus-xtermjs-host-microbenchmark-not-a-device-baseline), [wgpu prototype](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device), [Android Canvas replay](#android-canvas-drawing-of-the-shared-layout-waydroid-not-a-device), [WebAssembly parse](#webassembly-vt-versus-xtermjs-parse-only-host-microbenchmark-not-a-candidate); no text, no device | undecided; see [ADR 0001, amendments 1 and 2](adr-0001-terminal-runtime.md#amendment-1-2026-11-12-first-renderer-shootout-results) |
-| W5, W6, W7, W8, W11, W13 | not implemented | not measured | not measured | not measured | undecided |
+| W5, W6, W7, W8, W11 | measured on desktop Chromium, [program workloads](#program-workloads-w5-to-w8-and-w11); not on Android (the Waydroid lane could not start) | not measured | not measured | the core on the same bytes and screens, host microbenchmark, same section; no renderer, no device | undecided |
+| W13 | not implemented | not measured | not measured | not measured | undecided |
 | All workloads on Android | not measured | not measured | not measured | not measured (the Canvas replay ran on Waydroid, which is not a device) | undecided |
 
 ### Core parse throughput (host microbenchmark, not a device baseline)
