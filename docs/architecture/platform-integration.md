@@ -26,7 +26,7 @@ From `packages/herdr-upstream/crates/ghostty-vt/build.rs`:
 | macOS x86_64 and aarch64 | yes | no |
 | iOS device and simulator (aarch64) | yes | no |
 | Windows x86_64 and aarch64 (MSVC) | yes, optional `--libc` file | no |
-| Android | **no; the build script panics for an unmapped target** | no |
+| Android arm64 and x86_64 | yes ([#2098](https://github.com/mihazs/lazysh/issues/2098)) | checked and linked with the pinned NDK in `herdr-native`; not run |
 
 Closing these gaps, without relaxing source integrity checks, is [#1312](https://github.com/mihazs/lazysh/issues/1312) (and #384 for acquisition reliability).
 
@@ -68,7 +68,7 @@ Surface destroy and recreate; pause and resume; Activity recreation; keyboard sh
 
 ## Validation gaps (authoring environment)
 
-The session that wrote these documents had no physical Android device, no Android emulator, no iOS device, no Windows or macOS host, and no Zig toolchain. Therefore: no device claim, no device or native-candidate benchmark (the only measurements are the desktop xterm.js baseline in [benchmarks](terminal-benchmarks.md#measured-baseline)), no build of libghostty-vt on any target and no composition PoC result is asserted anywhere in this directory. Every such item is an open acceptance criterion on its issue.
+The session that wrote these documents had no physical Android device, no Android emulator, no iOS device, no Windows or macOS host, and no Zig toolchain. Therefore: no device claim, no device or native-candidate benchmark (the only measurements are the desktop xterm.js baseline in [benchmarks](terminal-benchmarks.md#measured-baseline)), no build of libghostty-vt on any target (except the Android arm64 and x86_64 compile and link check of [#2098](https://github.com/mihazs/lazysh/issues/2098), which runs nothing) and no composition PoC result is asserted anywhere in this directory. Every such item is an open acceptance criterion on its issue.
 
 ## Risks
 

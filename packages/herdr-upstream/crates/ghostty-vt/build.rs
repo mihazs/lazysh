@@ -1,3 +1,6 @@
+// Modified by lazysh: maps the two Android triples to Zig targets (the vendored
+// libghostty-vt build already supports the Android NDK) and reruns when the NDK
+// location changes; upstream license retained. See ../../PROVENANCE.md.
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -5,6 +8,8 @@ use std::process::Command;
 
 fn zig_target(target: &str) -> &str {
     match target {
+        "aarch64-linux-android" => "aarch64-linux-android",
+        "x86_64-linux-android" => "x86_64-linux-android",
         "x86_64-unknown-linux-gnu" => "x86_64-linux-gnu",
         "aarch64-unknown-linux-gnu" => "aarch64-linux-gnu",
         "x86_64-unknown-linux-musl" => "x86_64-linux-musl",
@@ -54,6 +59,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
     println!("cargo:rerun-if-env-changed=ZIG");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_WINDOWS_LIBC");
+    // Where the vendored build finds the NDK for Android targets.
+    for name in ["ANDROID_NDK_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
 
     let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
     let simd = env_bool("LIBGHOSTTY_VT_SIMD").unwrap_or(true);

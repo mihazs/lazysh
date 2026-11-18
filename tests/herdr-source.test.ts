@@ -357,3 +357,40 @@ test.skipIf(!zigCacheFixtures)('restored Zig package tarballs unpack offline, a 
     expect(downloaded.stderr).toContain('unable to connect to server');
   } finally { await rm(fixture, { recursive: true, force: true }); }
 }, 100_000);
+
+/** Run the Android build step with fake `rustup` and `cargo`; each call records its arguments, the NDK and the linkers it saw. */
+async function runAndroidStep(failOn = '') {
+  const fixture = await mkdtemp(join(tmpdir(), 'lazysh-android-target-')), bin = join(fixture, 'bin'), calls = join(fixture, 'calls');
+  try {
+    await mkdir(bin);
+    const fake = '#!/bin/sh\nprintf "%s %s|ndk=%s|arm64=%s|x86_64=%s\\n" "${0##*/}" "$*" "$ANDROID_NDK_HOME" "$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" "$CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER" >> "$CALLS"\ncase "$*" in *"$FAIL_ON"*) [ -z "$FAIL_ON" ] || exit 1 ;; esac\n';
+    for (const name of ['rustup', 'cargo']) await writeFile(join(bin, name), fake, { mode: 0o700 });
+    const step = await herdrStep(value => value.id === 'terminal-android-target');
+    const result = await execute(['bash', '-e', '-c', step.run], fixture, {
+      CALLS: calls, FAIL_ON: failOn, NDK_HOME: '/pinned/ndk', ANDROID_NDK_HOME: '/runner/preset/ndk', PATH: `${bin}:${process.env.PATH}`,
+    });
+    return { ...result, calls: (await Bun.file(calls).text()).trim().split('\n') };
+  } finally { await rm(fixture, { recursive: true, force: true }); }
+}
+
+test('the Android step checks and links the runtime for both ABIs with the pinned NDK, not the runner image NDK', async () => {
+  const { exit, calls } = await runAndroidStep();
+  const linker = (triple: string) => `/pinned/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/${triple}24-clang`;
+  const arm64 = 'aarch64-linux-android', x86_64 = 'x86_64-linux-android';
+  expect(exit).toBe(0);
+  expect(calls.map(call => call.split('|')[0])).toEqual([
+    `rustup target add --toolchain 1.96.1 ${arm64} ${x86_64}`,
+    `cargo +1.96.1 check --locked --target ${arm64}`, `cargo +1.96.1 test --locked --no-run --target ${arm64}`,
+    `cargo +1.96.1 check --locked --target ${x86_64}`, `cargo +1.96.1 test --locked --no-run --target ${x86_64}`,
+  ]);
+  // Each build sees the pinned NDK and the linker of the ABI it builds.
+  for (const [triple, name, from, to] of [[arm64, 'arm64', 1, 3], [x86_64, 'x86_64', 3, 5]] as const) {
+    for (const call of calls.slice(from, to)) expect(call).toContain(`|ndk=/pinned/ndk|`), expect(call).toContain(`|${name}=${linker(triple)}`);
+  }
+});
+
+test('a failing Android check stops the step before the other ABI is built', async () => {
+  const { exit, calls } = await runAndroidStep('check --locked --target aarch64');
+  expect(exit).not.toBe(0);
+  expect(calls.some(call => call.includes('x86_64-linux-android '))).toBe(false);
+});

@@ -66,8 +66,8 @@ Checked with `cargo check --target` from a Linux x86_64 host, Zig 0.16.0:
 | `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl`, `aarch64-apple-darwin` | build script and crates compile |
 | `aarch64-apple-ios` | fails: libghostty-vt's Apple SDK package needs a macOS SDK (`pkg/apple-sdk/build.zig`), unavailable on this host |
 | `x86_64-pc-windows-msvc` | fails: Zig has no MSVC libc headers here; Herdr's build accepts `LIBGHOSTTY_VT_WINDOWS_LIBC`, not provided |
-| `aarch64-linux-android` | fails before Zig: the binding's `build.rs` has no mapping for Android triples and panics (`unsupported target for libghostty-vt build`). Probe, not in the repo: with NDK r29 in `ANDROID_NDK_HOME`, the vendored `zig build -Demit-lib-vt -Dtarget=aarch64-linux-android` produced an aarch64 ELF with 16 KiB segment alignment, and `cargo check --target aarch64-linux-android` of this crate passed once a one-line triple mapping was added to a private copy of `build.rs`. Nothing was linked or run on Android |
+| `aarch64-linux-android`, `x86_64-linux-android` | `cargo check` and a link of the library and every test executable pass, with Zig 0.16.0 and NDK r29.0.14206865 (`ANDROID_NDK_HOME`; the Rust linker is the NDK's `<triple>24-clang`, API 24 being the app's `minSdkVersion`). The binding's `build.rs` maps both triples ([#2098](https://github.com/mihazs/lazysh/issues/2098), a documented local modification in `herdr-upstream/PROVENANCE.md`), the `herdr-native` job runs them, and the vendored `libghostty-vt` build already selects the NDK with 16 KiB page alignment. The static archive is about 18 MiB per ABI in the debug profile. Linked, not run: no test has executed on Android, Waydroid or an emulator |
 
-Android and iOS builds belong to [#1312](https://github.com/mihazs/lazysh/issues/1312), blocked by
+The iOS build belongs to [#1312](https://github.com/mihazs/lazysh/issues/1312), blocked by
 [#384](https://github.com/mihazs/lazysh/issues/384); none of those checks may be relaxed to pass.
 Compiling is not running: no target other than the Linux host has executed a test.

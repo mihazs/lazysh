@@ -26,7 +26,8 @@ any() {
 package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
-    herdr-upstream/* | herdr-guard/*) add herdr ;;
+    herdr-upstream/*) add herdr terminal_runtime ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
+    herdr-guard/*) add herdr ;;
     terminal-runtime/* | terminal-renderer-wgpu/*) add terminal_runtime ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
     */ios) add ios ;;
     */android | */android-*) add android ;;
