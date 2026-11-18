@@ -332,12 +332,10 @@ fn hook_request(
         })
         .unwrap_or_default();
     let pane_id = pane.map(str::to_owned);
-    if pane_id.as_ref().is_some_and(|pane| {
-        !pane.starts_with('%')
-            || pane.len() < 2
-            || pane.len() > 32
-            || !pane[1..].bytes().all(|c| c.is_ascii_digit())
-    }) {
+    if pane_id
+        .as_deref()
+        .is_some_and(|pane| !lazysh_common::valid_pane_identity(pane))
+    {
         return Err(Error::InvalidEvent);
     }
     let now = Utc::now();
@@ -380,9 +378,14 @@ impl Drop for Pending {
 /// purpose (it fires before Copilot's own rules, so it proves no prompt), but this hook does hold the tool call until
 /// someone answers or the deadline passes, so the session really is waiting.
 fn waiting_event(request: &Request, agent: ApprovalAgent) -> Result<Option<crate::Event>> {
+    // The board names the panes its lifecycle hooks name (tmux, Zellij), so a Herdr pane stays out of its rows.
+    let board_pane = request
+        .pane_id
+        .as_deref()
+        .filter(|pane| !pane.starts_with("herdr:"));
     if agent != ApprovalAgent::Copilot {
         let payload = json!({"session_id":request.session_id,"cwd":request.project,"hook_event_name":"PermissionRequest","tool_name":request.tool_name});
-        return crate::normalize(&payload, agent.lifecycle(), request.pane_id.as_deref());
+        return crate::normalize(&payload, agent.lifecycle(), board_pane);
     }
     Ok(Some(crate::Event {
         session_id: request.session_id.clone(),
@@ -390,7 +393,7 @@ fn waiting_event(request: &Request, agent: ApprovalAgent) -> Result<Option<crate
         project: request.project.clone(),
         state: crate::SessionState::NeedsAttention,
         summary: request.tool_name.clone(),
-        pane_id: request.pane_id.clone(),
+        pane_id: board_pane.map(str::to_owned),
         waiting: Some(crate::Waiting::for_tool(Some(&request.tool_name))),
     }))
 }
@@ -572,6 +575,9 @@ pub fn resolve(
         return Err(Error::InvalidArgument);
     }
     crate::text(session_id, 256)?;
+    if pane_id.is_some_and(|pane| !lazysh_common::valid_pane_identity(pane)) {
+        return Err(Error::InvalidArgument);
+    }
     // An option belongs to an allow and a message to a deny; neither is ever both.
     let allow = matches!(answer.decision, Decision::Allow);
     if (answer.option.is_some() && !allow) || (answer.message.is_some() && allow) {

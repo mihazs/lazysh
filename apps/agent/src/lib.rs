@@ -456,6 +456,12 @@ pub fn pane_identity() -> Option<String> {
         var("LAZYSH_TERMINAL").as_deref(),
     )
 }
+/// The multiplexer pane an approval is bound to, or the exact Herdr pane.
+pub fn approval_pane_identity() -> Option<String> {
+    pane_identity()
+        .filter(|pane| !pane.starts_with("lazysh:"))
+        .or_else(herdr::pane_identity)
+}
 fn identity(
     tmux: Option<String>,
     session: Option<&str>,
