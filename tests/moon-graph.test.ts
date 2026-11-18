@@ -52,7 +52,7 @@ const legacy: Record<string, string> = {
   'test:native-gui': 'client:test-native-gui', 'build:native': 'client:build-native', 'build:android': 'client:build-android',
   'build:android:emulator': 'client:build-android-emulator', 'build:android:fdroid': 'client:build-android-fdroid',
   'build:android:fdroid:emulator': 'client:build-android-fdroid-emulator', 'test:android-push-artifact': 'client:test-android-push-artifact',
-  'test:android-fdroid': 'client:test-android-fdroid', 'test:android-ntfy': 'client:test-android-ntfy', 'test:android': 'client:test-android',
+  'test:android-fdroid': 'client:test-android-fdroid', 'test:android-ntfy': 'client:test-android-ntfy', 'test:android-gotify': 'client:test-android-gotify', 'test:android': 'client:test-android',
   'test:android-theme-links': 'client:test-android-theme-links', 'test:android-ssh': 'client:test-android-ssh',
   'test:android-ssh-parity': 'client:test-android-ssh-parity', 'test:android-herdr-navigation': 'client:test-android-herdr-navigation',
   'test:android-tmux': 'client:test-android-tmux', 'test:android-zellij': 'client:test-android-zellij', 'test:android-qr': 'client:test-android-qr', 'test:android-voice': 'client:test-android-voice', 'test:android-biometric': 'client:test-android-biometric',

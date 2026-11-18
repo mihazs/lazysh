@@ -60,6 +60,7 @@ jobs:
       android_appium_quarantine: ${{ steps.paths.outputs.android_appium_quarantine }}
       android_auxiliary: ${{ steps.paths.outputs.android_auxiliary }}
       android_ntfy: ${{ steps.paths.outputs.android_ntfy }}
+      android_gotify: ${{ steps.paths.outputs.android_gotify }}
       ios: ${{ steps.paths.outputs.ios }}
       ntfy_variants: ${{ steps.paths.outputs.ntfy_variants }}
       native: ${{ steps.paths.outputs.native }}
@@ -1632,15 +1633,15 @@ jobs:
         with:
           # NativeActivityFixture owns screen/keyguard readiness; avoid early MENU input.
           unlock-screen: false
-          api-level: 36
-          target: default
-          arch: x86_64
-          profile: pixel_2
-          avd-name: lazysh-runtime-api36
-          emulator-port: 5580
-          ram-size: 3072M
-          emulator-boot-timeout: 300
-          disable-linux-hw-accel: false
+          api-level: &android-owned-api 36
+          target: &android-owned-image default
+          arch: &android-owned-arch x86_64
+          profile: &android-owned-profile pixel_2
+          avd-name: &android-owned-avd lazysh-runtime-api36
+          emulator-port: &android-owned-port 5580
+          ram-size: &android-owned-ram 3072M
+          emulator-boot-timeout: &android-owned-boot 300
+          disable-linux-hw-accel: &android-owned-acceleration false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-qr-emulator.pid
           pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
           # The action runs each newline in a separate shell; fold this into one
@@ -2454,6 +2455,58 @@ jobs:
         with:
           name: lazysh-ntfy-acceptance-${{ matrix.push-variant }}
           path: apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/ntfy/*.json
+          if-no-files-found: warn
+
+  # The official, unchanged Gotify Android client against a real Gotify server fed by the actual relay worker. It runs only for
+  # the Gotify owner, the notification relay and the helpers it reuses, plus every push to main (native-changes.sh).
+  native-android-gotify:
+    needs: changes
+    if: needs.changes.outputs.android_gotify == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '2'
+      ANDROID_SERIAL: emulator-5580
+    steps:
+      - *source-checkout
+      - *source-bun
+      - run: bun install --frozen-lockfile
+      - *android-toolchains
+      - *android-owned-rust
+      - *android-cache-identity
+      - *android-owned-cache
+      - name: Install owned Gotify fixture prerequisites
+        run: sudo sh .github/scripts/apt-install.sh iproute2 openssl unzip
+      - name: Build the current Google APK for the owned Gotify case
+        run: bun run build:android:emulator
+      - *android-owned-kvm
+      - name: Official Gotify Android background delivery
+        uses: mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b
+        with:
+          # NativeActivityFixture owns screen/keyguard readiness; avoid early MENU input.
+          unlock-screen: false
+          api-level: *android-owned-api
+          target: *android-owned-image
+          arch: *android-owned-arch
+          profile: *android-owned-profile
+          avd-name: *android-owned-avd
+          emulator-port: *android-owned-port
+          ram-size: *android-owned-ram
+          # The default userdata partition can exceed hosted runner free space.
+          disk-size: 4G
+          emulator-boot-timeout: *android-owned-boot
+          disable-linux-hw-accel: *android-owned-acceleration
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-gotify-emulator.pid
+          pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
+          # The owner refuses to run with a proxy in its environment; clear it for this child only.
+          script: >-
+            env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-gotify-emulator.pid" bun run test:android-gotify
+      - name: Retain finite Gotify acceptance receipts only
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-gotify-acceptance
+          path: apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/gotify/*.json
           if-no-files-found: warn
 
   native-ios-simulator:
