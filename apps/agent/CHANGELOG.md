@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.75.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.75.1
+  - @lazysh/common@1.75.1
+  - @lazysh/companion-release@1.75.1
+  - @lazysh/notification-client@1.75.1
+
 ## 1.75.0
 
 ### Patch Changes
