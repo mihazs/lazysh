@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/agent",
-  "version": "1.78.2",
+  "version": "1.79.0",
   "private": true,
   "license": "GPL-3.0-or-later",
   "dependencies": {

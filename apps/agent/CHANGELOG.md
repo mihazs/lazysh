@@ -1,5 +1,19 @@
 # @lazysh/agent
 
+## 1.79.0
+
+### Minor Changes
+
+- 20cc3da: Record which tmux or rmux server a hook's pane belongs to. A pane id such as `%7` is unique only inside one server, so a report from `tmux -L work` and one from the default server could carry the same id; the companion now adds `paneServer` (`tmux:work`, `rmux:default`) read from the `TMUX` or `RMUX` socket path, the Agents panel's report details show it, and a socket given with `-S` records none. The field is optional in the snapshot, so an older companion or client works unchanged.
+
+### Patch Changes
+
+- 6bf377a: Stop the sixteen-writer storage burst cases from failing the Windows release build on a runner whose disk flushes are momentarily slow (#2114, same family as #36): each burst now waits for the temporary volume to commit fast enough for sixteen serialized durable writes, or fails explicitly after two minutes. Companion storage, `synchronous=FULL` durability and the three-second wait budget are unchanged, so nothing changes for users.
+- @lazysh/account-usage@1.79.0
+  - @lazysh/common@1.79.0
+  - @lazysh/companion-release@1.79.0
+  - @lazysh/notification-client@1.79.0
+
 ## 1.78.2
 
 ### Patch Changes
