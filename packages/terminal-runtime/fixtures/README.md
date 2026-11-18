@@ -44,12 +44,22 @@ entry in `divergences.json` with a reason.
 
 ## Divergences
 
-`divergences.json` has 28 entries (15 accepted, 13 open). Open ones are questions for the migration
-gates, not approvals: the fixtures keep failing loudly if the core's behaviour moves, but nobody has
-signed off the user-visible ones (Unicode widths and the grapheme and colour-scheme modes that go with them, explicit zero counts and parameterless tab clears (libghostty-vt deviates from the standard),
-Alt+arrow encodings, the Kitty keyboard
-protocol, the terminator of colour replies, DA identity, the OSC 52 selection filter, DECXCPR, scrollback units, resize reflow). They are
-tracked on #1314, #1316 and #1305.
+`divergences.json` has 28 entries (27 accepted, 1 open). Every entry was reviewed on 2026-11-18 (#1314, slice
+1314b); the ones that decide something a user or a program could notice carry a `status` that says what was decided
+and an `evidence` field that names the test or fixture that pins it. The user-visible approvals are the Unicode 11
+and later widths and the grapheme and colour-scheme modes that go with them, the standard Alt+arrow encodings, reflow
+on resize, the OSC 52 selection filter, the Kitty keyboard protocol for Codex and Herdr, libghostty-vt's device
+attributes and the terminator of colour replies; the release notes of the Android default (#2094) must call out the
+widths, the Alt+arrow form, reflow and the dropped primary-selection writes. One entry stays open and has an owner:
+`shift-pageup-handled-by-host` moves to #1334 (slice 1334a). Explicit zero counts, parameterless tab clears and
+DECXCPR are accepted because no program lazysh targets sends them (`tests/programs` scans every capture and every
+live run); they should be reported to Ghostty with the fixtures as the reproduction, which this repository does not do.
+
+`tests/programs/main.rs` is the real-program half of the review: tmux, vim, bash, Herdr, Claude Code, Codex and
+OpenCode run on a pty with the core as their terminal, the core's replies go back to them and the keys it encodes
+reach them, and each test asserts what the program then did. tmux, vim, bash and Herdr are required in CI (set
+`LAZYSH_TEST_<NAME>` to a path, for example `LAZYSH_TEST_HERDR`, when the program is not on the `PATH`); an agent TUI
+that is not installed skips its test. Linux only; the macOS, Windows, iOS and Android hosts have no such run.
 
 Mouse reports match xterm.js event for event except for the 1005 and 1015 encodings, which only the core
 implements (`mouse-extended-encodings-honoured`). Finding that comparison also fixed a core defect: the core

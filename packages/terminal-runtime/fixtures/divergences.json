@@ -11,8 +11,9 @@
   },
   "osc52-selection-filter": {
     "summary": "An OSC 52 write that names only the primary selection ('p') reached lazysh's xterm handler but is dropped by the core; only clipboard ('c') writes are surfaced.",
-    "rationale": "lazysh has a single clipboard and ignores the selection letter; the core filters earlier. A program that only writes 'p' would no longer reach the consent prompt.",
-    "status": "open: confirm in #1320 that dropping primary-selection writes is acceptable, or widen the binding"
+    "rationale": "lazysh has a single clipboard and ignores the selection letter; the core filters earlier. A program that only writes 'p' would no longer reach the consent prompt. Decision: Android, iOS, Windows and macOS have no primary selection, and a write aimed at another selection should not reach the one clipboard behind the consent prompt. The mixed sets are the cost of the binding reading one letter: no program lazysh targets writes them (tmux writes an empty selection; the Codex and Herdr binaries contain only the c form). If one is found, widen the binding under #1320 (vendored crate, #384).",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): writes that name only the primary (p) or secondary (s) selection are dropped, and so are sets that mix them with the clipboard (cp, pc, cs, ps), because libghostty-vt reads the selection as one letter; an empty selection and c reach the host",
+    "evidence": "fixture osc52-selection-sets; tmux_starts_on_the_cores_identity_reads_alt_arrow_and_writes_the_clipboard (tmux writes an empty selection and the core hands it to the host)"
   },
   "osc52-query-not-surfaced": {
     "summary": "OSC 52 with '?' (read the clipboard) reaches xterm.js's handler as 'c;?'; the core surfaces nothing and sends no reply.",
@@ -26,13 +27,15 @@
   },
   "device-attributes-identity": {
     "summary": "DA1 answers '?1;2c' in xterm.js and '?62;22c' in the core; DA2 answers '>0;276;0c' versus '>1;0;0c'.",
-    "rationale": "Different terminal identity. Programs that sniff DA2 for an xterm version (vim, tmux, shells) may enable or skip features. Not exercised against tmux or vim on the native path yet.",
-    "status": "open: verify tmux, vim, Herdr and the agent TUIs on the native path before the Android default stage (#1305, #1318)"
+    "rationale": "Different terminal identity. Programs that sniff DA2 for an xterm version (vim, tmux, shells) may enable or skip features. Not exercised against tmux or vim on the native path yet. Decision: tmux, vim, Herdr, Claude Code, Codex and OpenCode each ran on a pty with the core as their terminal, asked for DA1 or DA2 and got these answers, and started, drew their screens and took keys; vim keeps the DA2 answer in v:termresponse (^[[>1;0;0c). These are libghostty-vt's own answers. Not covered: programs that gate features on an xterm version number in DA2 and that lazysh does not target.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): the core keeps libghostty-vt's identity (DA1 ?62;22c, DA2 >1;0;0c, XTVERSION libghostty); no program lazysh targets needs the xterm.js answer",
+    "evidence": "tmux_starts_on_the_cores_identity_reads_alt_arrow_and_writes_the_clipboard, vim_starts_on_the_cores_identity_and_reads_alt_arrow, herdr_takes_its_keys_as_kitty_reports_from_the_core, claude_code_starts_and_moves_its_theme_selection_on_legacy_keys, codex_moves_its_menu_selection_on_the_core_s_kitty_key_reports, opencode_starts_and_learns_that_the_core_clusters_graphemes (Zellij is covered by its capture fixture)"
   },
   "decxcpr-unanswered": {
     "summary": "DECXCPR (CSI ? 6 n) is answered '?row;colR' by xterm.js and ignored by the core.",
-    "rationale": "Rarely used; a program that sends it and waits would stall on the native path.",
-    "status": "open: report upstream or answer it in the host if a real program needs it"
+    "rationale": "Rarely used; a program that sends it and waits would stall on the native path. Decision: none of the captured or live programs (vim, less, tmux, Zellij, Herdr, Claude Code, Codex, OpenCode) sends CSI ? 6 n, so nothing waits on a reply. Not reported upstream by this PR: filing on the Ghostty tracker is a public surface outside this repository's authorization; fixture extended-queries is the reproduction.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): no program lazysh targets sends DECXCPR; the core answers the ordinary cursor position report (CSI 6 n); report upstream if one appears",
+    "evidence": "no_captured_program_sends_a_sequence_the_core_ignores (all 15 captures) and the live tmux, vim, bash, Herdr and agent runs, which assert none was sent"
   },
   "extra-replies": {
     "summary": "The core answers XTVERSION (DCS > | libghostty ST), DA3, XTGETTCAP (DCS 1 + r ...), and the window-size reports CSI 14 t, 16 t and 18 t; xterm.js (windowOptions off, no DA3, XTVERSION or XTGETTCAP) stays silent.",
@@ -46,8 +49,9 @@
   },
   "unicode-widths-and-graphemes": {
     "summary": "xterm.js 5.5.0 without the Unicode 11 addon uses Unicode 6 widths: emoji take one cell and ZWJ, VS16 and skin-tone sequences split into separate cells. The core clusters graphemes and gives emoji two cells.",
-    "rationale": "The core matches current wcwidth and what TUIs assume, so alignment improves; but rows containing emoji change layout versus today. lazysh loads no Unicode addon.",
-    "status": "open: approve as an intended behaviour change and call it out in the release notes when native becomes the default"
+    "rationale": "The core matches current wcwidth and what TUIs assume, so alignment improves; but rows containing emoji change layout versus today. lazysh loads no Unicode addon. Decision: the core measures emoji, ZWJ and skin-tone sequences and VS16 as two cells (Unicode 11 and later widths with grapheme clustering), which is what tmux, Herdr, Zellij and the agent TUIs assume: tmux keeps its pane border in one column on a row of emoji and CJK with the core. xterm.js 5.5.0 without the Unicode 11 addon (lazysh loads none) draws them in one cell, so rows that contain emoji look different and better aligned on the native engine. Release notes must say so.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): approved as an intended behaviour change; the release notes of the Android default (#2094) must call it out",
+    "evidence": "tmux_lays_out_a_row_of_emoji_and_cjk_the_way_the_core_measures_it, opencode_starts_and_learns_that_the_core_clusters_graphemes; fixtures emoji-presentation and zwj-and-skin-tone-sequences"
   },
   "invalid-utf8-replacement": {
     "summary": "A stray continuation byte is dropped by xterm.js and shown as U+FFFD by the core.",
@@ -56,18 +60,20 @@
   },
   "scrollback-budget-in-bytes": {
     "summary": "xterm.js honours a line limit (20 here); the core budgets scrollback in bytes, so the same output keeps far more rows.",
-    "rationale": "libghostty-vt has no line limit. Visible rows are identical; only history depth differs.",
-    "status": "open: lines-to-bytes mapping is part of #1338"
+    "rationale": "libghostty-vt has no line limit. Visible rows are identical; only history depth differs. Decision: not a behavioural divergence beyond depth. What remains is the memory measured against xterm.js on the Waydroid lane (#1338, gate G15), which this review does not close.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): visible rows are identical and only history depth differs; the History lines setting maps to bytes and the memory cost is gate G15, tracked in #1338",
+    "evidence": "tests/scrollback.rs (the_lines_budget_keeps_the_requested_rows_of_ordinary_output_and_bounds_the_history); fixture history-limit"
   },
   "shift-pageup-handled-by-host": {
     "summary": "xterm.js sends nothing for Shift+PageUp (it scrolls the viewport itself); the core encodes CSI 5;2~.",
     "rationale": "Scrolling belongs to the adapter/host (lazysh scrolls on these keys today). The native adapter must consume the scroll chords before calling the core, otherwise history scrolling would send keys to the program.",
-    "status": "open: encode as a requirement of the native adapter's key routing (#1321, #1328)"
+    "status": "open (reviewed 2026-11-18, #1314 slice 1314b): moves to #1334 (slice 1334a, key routing of the native input path); the adapter must consume the scroll chords before the core encodes them"
   },
   "alt-cursor-key-encoding": {
     "summary": "xterm.js rewrites Alt+Up to the Ctrl form (CSI 1;5A) and drops Alt on PageUp (CSI 5~); the core sends the standard CSI 1;3A and CSI 5;3~.",
-    "rationale": "xterm.js carries a word-motion hack for Alt+Left/Right and a few siblings. The core follows the standard modifier encoding; programs that decode Alt+arrow see a different sequence than today.",
-    "status": "open: check shells, vim, tmux and the agent TUIs (Alt+arrow word motion) before the Android default stage"
+    "rationale": "xterm.js carries a word-motion hack for Alt+Left/Right and a few siblings. The core follows the standard modifier encoding; programs that decode Alt+arrow see a different sequence than today. Decision: tmux binds Alt+Left as M-Left, vim maps it as <M-Left> and bash moves back a word, all from CSI 1;3 D; Ctrl+arrow is unchanged. What changes is a user binding written for the Ctrl form xterm.js sent for Alt+arrow (for example a zsh bindkey on ^[[1;5D): it no longer fires on Alt+arrow, only on Ctrl+arrow; the release notes of the Android default must say so.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): approved; the standard Alt encoding is read by tmux, vim and readline",
+    "evidence": "tmux_starts_on_the_cores_identity_reads_alt_arrow_and_writes_the_clipboard (M-Left), vim_starts_on_the_cores_identity_and_reads_alt_arrow (<M-Left>), bash_moves_back_a_word_on_the_standard_alt_arrow (backward-word)"
   },
   "ctrl-chords-xterm-ignores": {
     "summary": "xterm.js sends nothing for Ctrl+/ and Ctrl+2; the core sends 0x1f and NUL.",
@@ -86,13 +92,15 @@
   },
   "kitty-keyboard-protocol-honoured": {
     "summary": "A program that pushes Kitty keyboard flags (CSI > 7 u, as Codex and Herdr do) and queries them (CSI ? u) gets an answer from the core (?7u, or ?0u when none are set); xterm.js 5.5.0 does not implement the protocol, ignores both and keeps sending legacy key encodings.",
-    "rationale": "The core encodes keys by the flags the program set, so on the native path Codex and Herdr receive CSI u key sequences instead of legacy ones. They ask for them and parse them, but nothing here has run the native path against them; the key fixtures cover the legacy encodings only.",
-    "status": "open: golden encodings and a Codex/Herdr key test on the native path under #1316 before the Android default stage"
+    "rationale": "The core encodes keys by the flags the program set, so on the native path Codex and Herdr receive CSI u key sequences instead of legacy ones. They ask for them and parse them, but nothing here has run the native path against them; the key fixtures cover the legacy encodings only. Decision: Codex (CSI > 7 u) reads the Down arrow as CSI 1;1:1 B and moves its menu; Herdr (CSI > 7 u, CSI > 31 u) closes its dialog on CSI 27 u and opens its keybinds overlay from CSI 98;5 u and the report of ?. Claude Code asks for the flags, gets ?0u and keeps its legacy keys.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): approved; Codex and Herdr get the Kitty key reports they ask for, pinned by a golden and by both programs running on them",
+    "evidence": "codex_and_herdr_get_the_kitty_key_reports_they_ask_for (tests/keys.rs), codex_moves_its_menu_selection_on_the_core_s_kitty_key_reports, herdr_takes_its_keys_as_kitty_reports_from_the_core"
   },
   "private-mode-queries-known": {
     "summary": "DECRQM for mode 2027 (grapheme clustering) answers set (1) and for 2031 (colour-scheme reports) set (1) in the core, not recognised (0) in xterm.js.",
-    "rationale": "The core implements both and enables grapheme clustering by default, which is the behaviour behind the Unicode width differences. A program that probes 2027 (OpenCode, Zellij) learns that the terminal clusters graphemes and aligns its output to that; xterm.js 5.5.0 without the Unicode 11 addon cannot honour it.",
-    "status": "open: moves with unicode-widths-and-graphemes, approve both together"
+    "rationale": "The core implements both and enables grapheme clustering by default, which is the behaviour behind the Unicode width differences. A program that probes 2027 (OpenCode, Zellij) learns that the terminal clusters graphemes and aligns its output to that; xterm.js 5.5.0 without the Unicode 11 addon cannot honour it. Decision: a program that asks gets the truth: the core clusters graphemes (2027) and reports colour scheme changes (2031), so OpenCode and Zellij align on the same widths the core draws.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): approved with unicode-widths-and-graphemes",
+    "evidence": "opencode_starts_and_learns_that_the_core_clusters_graphemes (modes 2027 and 2031 answer set); fixtures capture-opencode-home and capture-zellij-panes"
   },
   "semantic-prompt-fresh-line": {
     "summary": "OSC 133 shell-integration marks: the core starts a prompt (133;A) on a fresh line when the cursor is not in column 0, so output that ended without a newline is followed by the prompt on the next row; xterm.js ignores OSC 133 and prints the prompt right after the output.",
@@ -101,8 +109,9 @@
   },
   "explicit-zero-count-ignored": {
     "summary": "CSI 0 P (DCH), 0 L (IL), 0 M (DL), 0 S (SU), 0 T (SD), 0 I (CHT) and 0 Z (CBT) do nothing in the core; the standard and xterm.js treat an explicit 0 as the default 1 (CSI 0 @, X, A to G and the rest already agree).",
-    "rationale": "A libghostty-vt inconsistency: the same library takes 0 as 1 for ICH and ECH. Programs normally omit the count or send at least 1, so no program lazysh targets is known to send these, but a hand-written or generated sequence would stall. The vendored library cannot be patched here (#384), and the runtime has no hook between the byte stream and the parser.",
-    "status": "open: report upstream to Ghostty; check tmux, vim, Herdr and the agent TUIs on the native path"
+    "rationale": "A libghostty-vt inconsistency: the same library takes 0 as 1 for ICH and ECH. Programs normally omit the count or send at least 1, so no program lazysh targets is known to send these, but a hand-written or generated sequence would stall. The vendored library cannot be patched here (#384), and the runtime has no hook between the byte stream and the parser. Decision: no captured or live program sends these (they omit the count or send at least 1), so nothing stalls on the native path; the fixture keeps failing loudly if the vendored library changes. Not reported upstream by this PR (a public surface outside this repository's authorization): the fixture is the reproduction for whoever files it.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): programs do not send an explicit zero count, so the core is kept as is; report to Ghostty with the fixture as the reproduction",
+    "evidence": "no_captured_program_sends_a_sequence_the_core_ignores and the live program tests, which assert no CSI 0 P, L, M, S, T, I or Z was sent; fixture explicit-zero-counts-ignored-by-the-core"
   },
   "repeat-last-printed-character": {
     "summary": "REP (CSI n b) repeats the last printed character wherever the cursor is now (after a cursor move, CR, SGR or another REP) and only its base codepoint; xterm.js repeats only a character printed immediately before, as the whole cluster including combining marks.",
@@ -116,8 +125,9 @@
   },
   "tab-clear-without-parameter": {
     "summary": "CSI g (TBC without a parameter, which means 0: clear the stop at the cursor) is ignored by the core and clears the stop in xterm.js; CSI 0 g works in both.",
-    "rationale": "The same family as explicit-zero-count-ignored: libghostty-vt mishandles an omitted or an explicit zero parameter on some commands, in opposite directions. The only visible effect is that a program which clears one tab stop and then tabs across it lands one stop early; nothing lazysh targets is known to clear single stops.",
-    "status": "open: report upstream to Ghostty with the fixture as the reproduction; the vendored library cannot be patched here (#384)"
+    "rationale": "The same family as explicit-zero-count-ignored: libghostty-vt mishandles an omitted or an explicit zero parameter on some commands, in opposite directions. The only visible effect is that a program which clears one tab stop and then tabs across it lands one stop early; nothing lazysh targets is known to clear single stops. Decision: as for explicit-zero-count-ignored; not reported upstream by this PR.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): programs send CSI 0 g or a tab stop reset, not a bare CSI g, so the core is kept as is; report to Ghostty with the fixture as the reproduction",
+    "evidence": "no_captured_program_sends_a_sequence_the_core_ignores and the live program tests, which assert no bare CSI g was sent; fixture tab-clear-parameter"
   },
   "origin-mode-cursor-movement": {
     "summary": "With origin mode (DECOM) on and a top margin below the first row, xterm.js moves the cursor one margin too far on every relative move (CUU, CUD, CUF, CUB: it adds the top margin to an absolute row again), and DECRC with nothing saved keeps origin mode on and homes to the top margin; the core does the arithmetic and resets to the defaults.",
@@ -126,8 +136,9 @@
   },
   "resize-reflow": {
     "summary": "Narrowing the screen: xterm.js cuts a line that is longer than the new width unless it autowrapped, clamps a cursor past the new width to the last column, and keeps a continuation row apart when the screen widens again; the core reflows every line (the overflow lands on a new row, the cursor wraps with its text, a continuation row is joined back).",
-    "rationale": "libghostty-vt reflows by default (ADR 0001); the shipped behaviour loses the text beyond the new width. Visible whenever a window narrows or widens with a long prompt or unwrapped output on screen. Mosh sessions are unaffected by either, since #1317 gives the host the framebuffer and the size.",
-    "status": "open: approve the core as the intended behaviour, or have the adapter ask the runtime not to reflow; decide in #1317 and #1319"
+    "rationale": "libghostty-vt reflows by default (ADR 0001); the shipped behaviour loses the text beyond the new width. Visible whenever a window narrows or widens with a long prompt or unwrapped output on screen. Mosh sessions are unaffected by either, since #1317 gives the host the framebuffer and the size. Decision: libghostty-vt reflows as Ghostty, iTerm2, kitty and VTE do, so text beyond the new width is no longer cut and a widened window joins an autowrapped line again. Full-screen programs (tmux, vim, Herdr) redraw on SIGWINCH and are not affected. #1317 settled Mosh and #1319 the lifecycle, so no runtime option to turn reflow off is added.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): approved; the core reflows on SSH, local and ET sessions, Mosh keeps its own top-anchored resize without reflow",
+    "evidence": "tmux_lays_out_a_row_of_emoji_and_cjk_the_way_the_core_measures_it (a resize redraws cleanly), tests/mosh.rs (canonical resize, #1453), fixtures narrower-with-the-cursor-past-the-new-width, narrower-with-an-unwrapped-long-line, wider-after-an-autowrap"
   },
   "shift-enter-csi-u": {
     "summary": "Shift+Enter sends CR in xterm.js and CSI 13;2u in the core.",
@@ -136,7 +147,8 @@
   },
   "color-query-terminator-echoed": {
     "summary": "A colour query ended with BEL (OSC 4, 10, 11 or 12, as vim and OpenCode send them) is answered by the core with BEL; xterm.js 5.5.0 answers every one with ST (ESC \\).",
-    "rationale": "The core answers with the terminator of the query, as xterm's documentation says it does and as libghostty-vt already does for OSC 4; the theme's OSC 10, 11 and 12 replies (the runtime's, since the binding cannot configure those colours) do the same so one session never mixes the two. The colours themselves equal xterm.js's when the runtime is given xterm.js's theme.",
-    "status": "open: run vim and OpenCode on the native path to confirm they take a BEL-terminated reply to their BEL-terminated query (neither has been run there); until then the xterm.js form (ST) would be the safe one"
+    "rationale": "The core answers with the terminator of the query, as xterm's documentation says it does and as libghostty-vt already does for OSC 4; the theme's OSC 10, 11 and 12 replies (the runtime's, since the binding cannot configure those colours) do the same so one session never mixes the two. The colours themselves equal xterm.js's when the runtime is given xterm.js's theme. Decision: vim (OSC 10 and 11, BEL-terminated) and OpenCode (OSC 10, 11, 12 and 4, BEL-terminated) ran on a pty with the core as their terminal and acted on the replies, so the terminator of the query is kept; the ST form was never needed.",
+    "status": "accepted (2026-11-18, #1314 slice 1314b): vim and OpenCode send BEL-terminated queries on the native path and take the BEL-terminated replies; the core keeps the terminator of the query",
+    "evidence": "vim_takes_its_background_from_the_cores_bel_terminated_reply (vim's background option follows the reply), opencode_paints_the_scheme_the_cores_bel_terminated_replies_name (OpenCode paints a white or a black screen as told)"
   }
 }

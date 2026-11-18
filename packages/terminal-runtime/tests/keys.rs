@@ -14,6 +14,10 @@ const CTRL: u16 = ffi::GHOSTTY_MODS_CTRL as u16;
 const ALT: u16 = ffi::GHOSTTY_MODS_ALT as u16;
 const SUPER: u16 = ffi::GHOSTTY_MODS_SUPER as u16;
 
+/// What Codex and Herdr write to enable the protocol (`CSI > 7 u`; `CSI > 31 u` after it).
+const CODEX: &[u8] = b"\x1b[>7u";
+const HERDR: &[u8] = b"\x1b[>7u\x1b[>31u";
+
 type Same = (
     &'static str,
     &'static str,
@@ -283,6 +287,60 @@ fn dom_modifier_flags_become_the_encoders_bits() {
         lazysh_terminal_runtime::dom_mods(false, true, false, true),
         CTRL | SUPER
     );
+}
+
+/// `(flags the program pushed, code, key, modifiers, what the core sends)`.
+type Reported = (
+    &'static [u8],
+    &'static str,
+    &'static str,
+    u16,
+    &'static [u8],
+);
+
+#[rustfmt::skip]
+const KITTY: &[Reported] = &[
+        (CODEX, "Enter", "Enter", 0, b"\r"),
+        (CODEX, "Escape", "Escape", 0, b"\x1b[27u"),
+        (CODEX, "Tab", "Tab", 0, b"\t"),
+        (CODEX, "Tab", "Tab", SHIFT, b"\x1b[9;2u"),
+        (CODEX, "Backspace", "Backspace", 0, b"\x7f"),
+        (CODEX, "ArrowUp", "ArrowUp", 0, b"\x1b[1;1:1A"),
+        (CODEX, "ArrowLeft", "ArrowLeft", ALT, b"\x1b[1;3:1D"),
+        (CODEX, "ArrowLeft", "ArrowLeft", CTRL, b"\x1b[1;5:1D"),
+        (CODEX, "KeyC", "c", CTRL, b"\x1b[99;5u"),
+        (CODEX, "KeyB", "b", ALT, b"\x1b[98;3u"),
+        (CODEX, "KeyA", "a", 0, b"a"),
+        (CODEX, "KeyA", "A", SHIFT, b"A"),
+        (CODEX, "Enter", "Enter", SHIFT, b"\x1b[13;2u"),
+        (CODEX, "Space", " ", CTRL, b"\x1b[32;5u"),
+        (CODEX, "Delete", "Delete", 0, b"\x1b[3~"),
+        (CODEX, "F1", "F1", 0, b"\x1b[1;1:1P"),
+        (HERDR, "Enter", "Enter", 0, b"\x1b[13u"),
+        (HERDR, "Escape", "Escape", 0, b"\x1b[27u"),
+        (HERDR, "Tab", "Tab", 0, b"\x1b[9u"),
+        (HERDR, "Backspace", "Backspace", 0, b"\x1b[127u"),
+        (HERDR, "KeyB", "b", CTRL, b"\x1b[98;5u"),
+        (HERDR, "KeyA", "a", 0, b"\x1b[97;;97u"),
+        (HERDR, "KeyA", "A", SHIFT, b"\x1b[97:65;2;65u"),
+        (HERDR, "Slash", "?", SHIFT, b"\x1b[47:63;2;63u"),
+        (HERDR, "Space", " ", 0, b"\x1b[32;;32u"),
+        (HERDR, "ArrowLeft", "ArrowLeft", ALT, b"\x1b[1;3:1D"),
+];
+
+/// Codex pushes `CSI > 7 u` (disambiguate, event types, alternate keys) and Herdr `CSI > 31 u` (every key as a
+/// report, with its text). The core gives each the encodings the Kitty keyboard protocol defines for those flags,
+/// where xterm.js, which ignores the protocol, keeps sending the legacy ones (`kitty-keyboard-protocol-honoured`).
+/// `tests/programs` runs both programs on these reports.
+#[test]
+fn codex_and_herdr_get_the_kitty_key_reports_they_ask_for() {
+    for &(flags, code, key, mods, expected) in KITTY {
+        assert_eq!(
+            core_sends(code, key, mods, flags),
+            expected,
+            "{code} {key:?} mods {mods} after {flags:?}"
+        );
+    }
 }
 
 /// A held key is a press for a program that never asked about event types, and a repeat (`:2`) for one that
