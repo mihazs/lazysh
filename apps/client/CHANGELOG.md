@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.72.0
+
+### Patch Changes
+
+- 17ebbc2: Keep the Usage view's intro text behind a disclosure and show its recorded-usage panel again.
+- 2320cc2: Bind a remote approval to the exact Zellij or Herdr pane its hook runs in: the request carries `zellij:<session>:<pane>` or `herdr:<session>:<pane id>` in its hash and decision, and any other pane, session or multiplexer is refused.
+- 5962a51: Add a developer-only native terminal surface host to the Android app: a `SurfaceView` stacked below the page that a native terminal engine will draw on, placed from a DOM element and kept across stop and start and Activity recreation. Release builds refuse every command and nothing in the app calls it yet, so xterm.js stays the only engine and the default and nothing changes for users; this is groundwork for the Android native-engine opt-in.
+- 9dddd58: Map the History lines setting to the byte budget of the native terminal core, so the core keeps at least that many rows of plain, coloured and syntax-highlighted output at any width instead of a fixed number of bytes that held 5,300 rows at 80 columns and 2,200 at 200. `terminal_core_open` now takes the setting in lines. The native core is not reachable from the app yet and xterm.js stays the only engine, so terminal behaviour does not change and no defaults change.
+- @lazysh/account-usage@1.72.0
+  - @lazysh/common@1.72.0
+  - @lazysh/display-idle@1.72.0
+  - @lazysh/et-transport@1.72.0
+  - @lazysh/mosh-transport@1.72.0
+
 ## 1.71.0
 
 ### Minor Changes
