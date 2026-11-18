@@ -73,6 +73,8 @@ final class PocViewController: UIViewController, WKScriptMessageHandler {
     private var sizes: [[Double]] = []
     private var scrollY = 0.0
     private var viewport = [0.0, 0.0]
+    /// What the page's `env(safe-area-inset-top)` and `env(safe-area-inset-left)` were at its last report.
+    private var pageSafe = [0.0, 0.0]
 
     init() {
         let device = MTLCreateSystemDefaultDevice()
@@ -129,6 +131,7 @@ final class PocViewController: UIViewController, WKScriptMessageHandler {
             anchor = CGRect(x: x, y: y, width: width, height: height)
             scrollY = numbers["scrollY"] ?? 0
             viewport = [numbers["viewportWidth"] ?? 0, numbers["viewportHeight"] ?? 0]
+            pageSafe = [numbers["safeTop"] ?? 0, numbers["safeLeft"] ?? 0]
             counters["places", default: 0] += 1
             place()
         case "tap": count("domTaps")
@@ -197,6 +200,7 @@ final class PocViewController: UIViewController, WKScriptMessageHandler {
         state["sizes"] = sizes
         state["scrollY"] = scrollY
         state["viewport"] = viewport
+        state["pageSafe"] = pageSafe
         state["safe"] = ["top": Double(insets.top), "left": Double(insets.left), "bottom": Double(insets.bottom), "right": Double(insets.right)]
         if JSONSerialization.isValidJSONObject(state), let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) {
             probe.accessibilityLabel = String(data: data, encoding: .utf8)

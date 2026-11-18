@@ -22,6 +22,7 @@ let surfacePocPage = #"""
 </style>
 <div id="anchor" role="img" aria-label="Surface anchor"></div>
 <div id="overlap" role="img" aria-label="Overlap box"></div>
+<div id="inset" style="position: fixed; visibility: hidden; padding: env(safe-area-inset-top) 0 0 env(safe-area-inset-left)"></div>
 <input id="field" aria-label="Surface field" autocapitalize="off" autocorrect="off" spellcheck="false">
 <button id="remove" class="command">Remove surface</button>
 <button id="recreate" class="command">Recreate surface</button>
@@ -34,10 +35,10 @@ let surfacePocPage = #"""
     anchor.style.height = Math.max(60, Math.round(viewport.height - anchor.offsetTop - 330)) + 'px';
     overlap.style.left = anchor.offsetLeft + anchor.offsetWidth - 60 + 'px';
     overlap.style.top = anchor.offsetTop + anchor.offsetHeight - 40 + 'px';
-    const box = anchor.getBoundingClientRect();
+    const box = anchor.getBoundingClientRect(), inset = getComputedStyle(document.getElementById('inset'));
     post({type: 'anchor', x: box.left - viewport.offsetLeft, y: box.top - viewport.offsetTop,
       width: box.width, height: box.height, viewportWidth: window.innerWidth, viewportHeight: viewport.height,
-      scrollY: window.scrollY});
+      scrollY: window.scrollY, safeTop: parseFloat(inset.paddingTop), safeLeft: parseFloat(inset.paddingLeft)});
   }
   const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(update); };
   for (const target of [window, window.visualViewport]) for (const name of ['resize', 'scroll']) target.addEventListener(name, schedule);

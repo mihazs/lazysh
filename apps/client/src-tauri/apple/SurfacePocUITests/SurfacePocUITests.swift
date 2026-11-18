@@ -21,8 +21,14 @@ final class SurfacePocUITests: XCTestCase {
         app.launchEnvironment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] = "1"
         app.launchEnvironment["LAZYSH_SURFACE_POC_ORDER"] = order
         app.launch()
-        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 30), "The host's WKWebView must launch")
+        awaitFirstPlacement(app)
         return app
+    }
+
+    /// The page loads after the host does, so a state with no placement yet is not a settled one.
+    private func awaitFirstPlacement(_ app: XCUIApplication) {
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 30), "The host's WKWebView must launch")
+        waitFor(app, "the page to report its first placement") { self.count($0, "places") >= 1 }
     }
 
     /// Leaves the shared simulator upright for the next test class.
@@ -227,14 +233,17 @@ final class SurfacePocUITests: XCTestCase {
     func testKeyboardResizesTheSurfaceOnce() throws {
         let app = launch()
         defer { finish(app) }
-        let initial = sizes(settled(app))
+        let before = settled(app)
+        let initial = sizes(before)
         domElement(app, "Surface field").tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20), "The soft keyboard must appear (a connected hardware keyboard would hide it)")
         let shown = settled(app, quiet: 2)
         var result = try assertSurfaceAtAnchor(app, shown, "Surface with the keyboard up")
         XCTAssertEqual(sizes(shown).count, initial.count + 1, "Showing the keyboard must resize the surface exactly once, sizes: " + String(describing: sizes(shown)))
         XCTAssertLessThan(sizes(shown).last?[1] ?? .infinity, (initial.last?[1] ?? 0) - 100, "The pane must shrink to the space above the keyboard")
+        result["sizesBefore"] = initial
         result["sizesAfterShow"] = sizes(shown)
+        result["insetsBefore"] = safeInsets(before)
         // The page blurs the field on Enter; the keyboard's own Done accessory had no hit point in run 44377130533.
         domElement(app, "Surface field").typeText("\n")
         let hidden = settled(app, quiet: 2)
@@ -259,6 +268,8 @@ final class SurfacePocUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(reported.minY, inset["top"] ?? 0, "The surface must not sit under the Dynamic Island")
         XCTAssertLessThanOrEqual(reported.maxY, app.frame.height - (inset["bottom"] ?? 0), "The surface must not sit under the home indicator")
         result["portraitInsets"] = inset
+        result["pagePortraitInsets"] = portrait["pageSafe"] ?? []
+        XCTAssertEqual(portrait["pageSafe"] as? [Double], [inset["top"] ?? 0, inset["left"] ?? 0], "The page's env() safe area must equal the native one")
         XCUIDevice.shared.orientation = .landscapeLeft
         waitFor(app, "the page to lay out in landscape") { host in
             let size = host["viewport"] as? [Double] ?? []
@@ -271,6 +282,8 @@ final class SurfacePocUITests: XCTestCase {
                        "CSS env(safe-area-inset-left) must equal the native inset after rotation")
         _ = try assertSurfaceAtAnchor(app, landscape, "Surface in landscape")
         result["landscapeInsets"] = landscapeInset
+        result["pageLandscapeInsets"] = landscape["pageSafe"] ?? []
+        XCTAssertEqual(landscape["pageSafe"] as? [Double], [landscapeInset["top"] ?? 0, landscapeInset["left"] ?? 0], "The page's env() safe area must equal the native one after rotation")
         XCUIDevice.shared.orientation = .portrait
         waitFor(app, "the page to lay out in portrait again") { host in
             let size = host["viewport"] as? [Double] ?? []
@@ -328,7 +341,7 @@ final class SurfacePocUITests: XCTestCase {
         _ = settled(app)
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 30), "The host's WKWebView must launch again")
+        awaitFirstPlacement(app)
         let host = settled(app)
         XCTAssertEqual(count(host, "created"), 1, "A new process starts with one surface")
         var result = try assertSurfaceAtAnchor(app, host, "Surface after a process restart")
