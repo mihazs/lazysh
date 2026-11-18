@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.76.0
+
+### Minor Changes
+
+- 0f9abbf: Check a sign-in hint against the host's listeners. A new native command asks the host which process listens on the port a sign-in command printed (the host companion's `lazysh-agent listeners`, or `ss` and `lsof` for a companion that predates it) and tells whether the listener started within two minutes before or half a minute after the hint, is older, is another user's, or is not there; `confirmHint` turns a series of answers into one confirmation, counting a listener that appeared after the port was empty. Nothing is tunnelled and no screen uses it yet.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.76.0
+  - @lazysh/common@1.76.0
+  - @lazysh/display-idle@1.76.0
+  - @lazysh/et-transport@1.76.0
+  - @lazysh/mosh-transport@1.76.0
+
 ## 1.75.1
 
 ### Patch Changes
