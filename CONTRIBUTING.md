@@ -88,7 +88,8 @@ that list.
 | Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
 | Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers |
-| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr only: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan) |
+| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan); the runtime also runs the native terminal bridge job |
+| Native terminal bridge: `apps/client/src-tauri/**` (except `gen/android`, `apple` and `src/apple_*`), `packages/terminal-runtime/**`, `packages/herdr-upstream/{crates,vendor}/**` | native terminal bridge: the app library built with the `native-terminal` feature and its real-core tests (Zig 0.16.0, about 15 to 25 minutes on a cold cache) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
 

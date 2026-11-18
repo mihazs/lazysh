@@ -154,7 +154,7 @@ Not done by this slice: the TypeScript consumers. `herdrNavigationCells.ts` stil
 | Workspace | excluded from the root Cargo workspace; own `Cargo.lock`; no Bun package |
 | Build mapping | `build.rs` maps Linux gnu/musl (x86_64, aarch64), macOS (x86_64, aarch64), iOS device and simulator (aarch64), Windows MSVC (x86_64, aarch64); **any other target, including Android, panics** |
 | Upstream Android support | the vendored `src/build/GhosttyLibVt.zig` contains Android NDK and 16 KiB page-size handling, but nothing in lazysh selects it |
-| CI | only the `herdr-native` job (ubuntu-22.04, x86_64) builds it; source archives (uucode, Highway, pixels) are admitted by Zig package hash |
+| CI | the `herdr-native` job (ubuntu-22.04, x86_64) builds and tests the crate itself, and `native-terminal-bridge` builds the app bridge against it with the `native-terminal` feature and runs the real-core bridge tests; both admit the source archives (uucode, Highway, pixels) by Zig package hash |
 | Open issue | #384: Ghostty source acquisition failures; no integrity check may be relaxed |
 
 API surface relevant to a core (from `crates/ghostty-vt/src/lib.rs`): `Terminal::new(cols, rows, max_scrollback)`, `write`, `resize`, `scroll_viewport_*`, `mode_get`, `active_screen`, `scrollbar`, `read_text_*`/`read_ansi_*`, `set_write_pty_callback`, `take_clipboard_writes`, `take_bell_count`; `RenderState` with `dirty`, row and cell iterators; `KeyEncoder`, `MouseEncoder`; `unicode_grapheme_width`. Scrollback is configured through `SCROLLBACK_MAX_BYTES` (bytes), while lazysh preferences count lines.

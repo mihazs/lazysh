@@ -38,6 +38,7 @@ jobs:
       companion: ${{ steps.paths.outputs.companion }}
       herdr: ${{ steps.paths.outputs.herdr }}
       terminal_runtime: ${{ steps.paths.outputs.terminal_runtime }}
+      terminal_bridge: ${{ steps.paths.outputs.terminal_bridge }}
       linux: ${{ steps.paths.outputs.linux }}
       linux_runtimes: ${{ steps.paths.outputs.linux_runtimes }}
       desktop: ${{ steps.paths.outputs.desktop }}
@@ -788,6 +789,74 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact
+
+  # The app bridge (terminal_core.rs, local.rs, ssh.rs) links the shared terminal core only with the optional
+  # `native-terminal` feature, which no other job enables, so a change to the core crate's API could break the
+  # bridge unnoticed (#1620). This job compiles the app library and its tests with the feature and runs the
+  # real-core cases. It provisions Zig 0.16.0 and the admitted Ghostty archives with the steps of herdr-native
+  # (aliases), in the checkout's own libghostty-vt directory, and leaves herdr-native's checks as they are.
+  native-terminal-bridge:
+    needs: changes
+    if: needs.changes.outputs.terminal_bridge == 'true'
+    # Match the glibc floor of herdr-native and native-linux.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # The admission steps below run in $HERDR_CI_ROOT/herdr-upstream/vendor/libghostty-vt; the link puts that
+      # directory in the checkout, where the app's build script runs `zig build` and finds the admitted packages.
+      - name: Set task-owned Zig paths and point the admission path at the checkout's Herdr source
+        run: |
+          root="$RUNNER_TEMP/lazysh-herdr-native"
+          mkdir -p "$root"
+          ln -s "$GITHUB_WORKSPACE/packages/herdr-upstream" "$root/herdr-upstream"
+          echo "HERDR_CI_ROOT=$root" >> "$GITHUB_ENV"
+          echo "ZIG=$root/zig-x86_64-linux-0.16.0/zig" >> "$GITHUB_ENV"
+          echo "ZIG_LOCAL_CACHE_DIR=$root/zig-local" >> "$GITHUB_ENV"
+          echo "ZIG_GLOBAL_CACHE_DIR=$root/zig-global" >> "$GITHUB_ENV"
+      - *pinned-download-cache
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev openssh-server
+      - uses: ./.github/actions/parakeet-onnxruntime
+      - *herdr-zig-packages
+      - *herdr-zig-scrub
+      - *herdr-zig-provision
+      - *uucode-download
+      - *uucode-admission
+      - *highway-download
+      - *highway-admission
+      - *pixels-download
+      - *pixels-admission
+      # Pull requests restore main's entry and never save their own, like the other Rust caches.
+      - uses: Swatinem/rust-cache@v2
+        with: *rust-cache-main
+      - name: Build the app library and its tests with the native terminal core
+        run: sh .github/scripts/retry-zig-fetch.sh cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib --no-run
+      # The real-core cases exist only with the feature, so each guard case must be listed before the run: a rename
+      # or a missing feature must not turn this step into a partial pass. The filters select every bridge case that
+      # names a core, and the churn case by name. They read the process-wide hub, so they run one at a time.
+      - name: Run the real-core bridge tests one at a time
+        run: |
+          filters=(core a_hundred_terminals)
+          guards=(
+            local::tests::history_lines_set_the_scrollback_the_real_core_reserves_for_a_session
+            local::tests::local_pty_output_is_parsed_by_the_real_core_and_readable_as_text
+            local::tests::a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget
+            terminal_core::native::tests::paste_is_bracketed_only_after_the_program_enabled_it
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --test-threads=1 "${filters[@]}"
+      # Real OpenSSH and the official Mosh server (#1564), built with the feature on. The fixture's core is a stand-in.
+      - *official-mosh-fixture
+      - name: Deliver real OpenSSH and Mosh output to a core with the feature on
+        env:
+          CASE_NAME: ssh::tests::openssh_and_mosh_deliver_checksummed_output_to_a_core
+        run: |
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --ignored --exact "$CASE_NAME" | grep -Fx -- "$CASE_NAME: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --ignored --exact --test-threads=1 "$CASE_NAME"
 
   native-desktop:
     needs: changes
