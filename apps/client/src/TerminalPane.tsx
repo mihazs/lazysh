@@ -2,7 +2,7 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type {PathLink} from "./terminalLinks";
 import {resolveTerminalPath} from "./hostPath";
@@ -19,7 +19,7 @@ import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComp
 import TerminalSelectionTools from './TerminalSelectionTools';
 import {endTextComposition, isTextEditingActive, markTyping, registerTextInteraction} from './textInteraction';
 import { api as nativeApi } from "./bridge";
-import { bodyGestureSlots, terminalPreferences, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
+import { bodyGestureSlots, getPreferences, terminalPreferences, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
 import type {UnappliedTerminalEdit} from "./terminalAdapter";
 import { modifiedTerminalText, type LiveSession } from "./terminal";
@@ -33,6 +33,8 @@ import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
 import "./ToolbarRows.css";
 import "./TerminalGestures.css";
 import {webUrl as terminalWebUrl} from "./webPage";
+import {rgbOf, trackSurfaceAnchor} from "./terminalSurfaceAnchor";
+import "./TerminalNativeSurface.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
@@ -72,6 +74,12 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const noGuardedHistory = useRef<string | undefined>(undefined);
   const { access, mounted } = useMountedAccess();
   const container = useRef<HTMLDivElement>(null);
+  /** A native terminal draws on a platform surface below the page, placed at this container, so the container has an id to be found by. */
+  const native = session.adapter.backend === 'native';
+  const anchorId = useId();
+  const [surfaceFailed, setSurfaceFailed] = useState(false);
+  /** The page is see-through over the container only while a surface is shown there: not for an inactive pane, nor after the shell refused one. */
+  const surface = native && !surfaceFailed && (active || swiping);
   const pane = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -749,7 +757,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       }
       return true;
     });
-    void adapter.attach({kind: "dom", element}).catch(error => reportError(String(error)));
+    void adapter.attach(native ? {kind: "native", anchorId: element.id} : {kind: "dom", element}).catch(error => reportError(String(error)));
     try {adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
     const keyboardLane = (event: Event) => {if (event.target === adapter.inputElement()) {inputLane.current = "keyboard"; keyboardInputEvent.current = event;}};
     const literalLane = () => {inputLane.current = "literal";};
@@ -763,12 +771,13 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       && pasteView.current.id === session.id && pasteView.current.adapter === adapter;
     const owner: InputOwner = {session, disposed: false};
     inputOwner.current = owner;
-    const output = adapter.observeInput!((data, userInput) => {
+    // A native terminal has no DOM editor to observe: its keyboard is the platform's own input view (#1328).
+    const output = adapter.observeInput?.((data, userInput) => {
       let value = data;
       const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
       if (userInput && (!acceptsInput() || document.hidden || !document.hasFocus()
         || ((document.activeElement !== adapter.inputElement() || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
-        output.reset(); return;
+        output?.reset(); return;
       }
       if (userInput) {
         // DOM dispatch can checkpoint microtasks between capture and xterm's
@@ -779,7 +788,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
           value = state.shift && !state.ctrl && !state.meta && (data === "\r" || data === "\n")
             ? parseChord("Shift+Enter")
             : modifiedTerminalText(data, state.ctrl, state.meta);
-          if (value !== data) output.clear();
+          if (value !== data) output?.clear();
           consumeModifiers();
         }
         if (!pointerInput) inputLane.current = null;
@@ -787,8 +796,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       if (literalPaste.current && literalCapture.current) {literalCapture.current.push(value); return;}
       if (session.connected) void writeInput(userInput ? 'terminal-user' : 'terminal-nonuser', value, owner).catch(error => reportError(captureUiError(error)));
     }, acceptsInput, setUnappliedEdit);
-    imeInput.current = output;
-    setModifierInput(output.available);
+    imeInput.current = output ?? null;
+    setModifierInput(output?.available ?? false);
     const resizeRemote = ({cols, rows}: {cols: number; rows: number}) => {
       if (session.connected && !owner.disposed && inputOwner.current === owner && mounted.current && access.current())
         void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
@@ -830,11 +839,23 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
-      resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
+      resize.disconnect(); imeInput.current = null; output?.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
       void adapter.detach();
       fit.current = null;
     };
   }, [session.id]);
+
+  // The surface follows the container for as long as one is shown; stopping the tracker takes it down.
+  useEffect(() => {
+    const element = container.current;
+    if (!surface || !element) return;
+    const tracker = trackSurfaceAnchor({
+      session: session.id, element,
+      background: () => rgbOf(terminalPreferences(getPreferences()).theme.background ?? "") ?? 0,
+      onError: error => {reportError(String(error)); setSurfaceFailed(true);},
+    });
+    return () => void tracker.stop();
+  }, [surface, session.id]);
 
   useEffect(() => {
     try {session.adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
@@ -1227,7 +1248,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     </form>}
     <div className="terminal-stage">
     {pull && pullAction !== "none" && <div className="terminal-pull" role="status" data-depth={pull}>{t("terminalPullRelease", {action: pullAction === "custom" ? preferences.gestureChords[pull] ?? "" : t(gestureLabelKeys[pullAction])})}</div>}
-    <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
+    <div ref={container} id={native ? anchorId : undefined} data-terminal-surface={surface ? "native" : undefined} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {active && selectionTools && createPortal(<TerminalSelectionTools adapter={session.adapter} handles={selectionTools.handles}
       onCopy={text => void copy(text)} onDone={() => setSelectionTools(null)} />, document.body)}
     {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput} attachments={liveAttachments}
