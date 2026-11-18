@@ -597,9 +597,6 @@ mod native {
             }),
             // The transport windows are 256 KiB: a producer holding credit always fits.
             ingress_bytes: crate::ssh::OUTPUT_WINDOW as usize,
-            // A field the crate adds later keeps its default instead of breaking this build, as
-            // `canonical_frames` did while no CI job compiled the `native-terminal` feature.
-            ..defaults
         };
         Ok(Box::new(move || {
             let (core, link) = create(config, &lease)?;
