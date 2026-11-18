@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.72.0
+
+### Minor Changes
+
+- 2320cc2: Bind a remote approval to the exact Zellij or Herdr pane its hook runs in: the request carries `zellij:<session>:<pane>` or `herdr:<session>:<pane id>` in its hash and decision, and any other pane, session or multiplexer is refused.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.72.0
+  - @lazysh/common@1.72.0
+  - @lazysh/companion-release@1.72.0
+  - @lazysh/notification-client@1.72.0
+
 ## 1.71.0
 
 ### Minor Changes
