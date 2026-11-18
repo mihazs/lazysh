@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.77.0
+
+### Minor Changes
+
+- b4b60b0: Start an agent in a new Git worktree, or in a chosen folder, from the Agent view's empty state.
+
+### Patch Changes
+
+- 8fb356d: Add the tmux and Zellij launch primitive (#1141): a confirmed plan that checks the agent, optionally creates a Git worktree and starts the agent's literal argv in a new tmux window or Zellij pane of the attached session, returning the new pane's ID. Backend only: nothing in the app calls it yet, and no defaults change.
+- cb119e8: Add the keyboard side of an Android native terminal surface for developer builds: an app-owned `InputConnection` that holds composing text on the device, turns autocorrect and prediction edits into the shortest edit on the host and never replays an edit it cannot follow, and forwards hardware keys as key identities for the shared core to encode. Nothing in the app creates it yet, so xterm.js stays the only engine and the default and nothing changes for users; this is groundwork for the Android native-engine opt-in.
+- @lazysh/account-usage@1.77.0
+  - @lazysh/common@1.77.0
+  - @lazysh/display-idle@1.77.0
+  - @lazysh/et-transport@1.77.0
+  - @lazysh/mosh-transport@1.77.0
+
 ## 1.76.0
 
 ### Minor Changes
