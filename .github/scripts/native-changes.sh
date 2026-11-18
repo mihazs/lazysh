@@ -26,9 +26,12 @@ any() {
 package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
-    herdr-upstream/*) add herdr terminal_runtime ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
+    # The app's native-terminal bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt (native-terminal-bridge).
+    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
+    herdr-upstream/*) add herdr terminal_runtime ;;
     herdr-guard/*) add herdr ;;
-    terminal-runtime/* | terminal-renderer-wgpu/*) add terminal_runtime ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
+    terminal-runtime/*) add terminal_runtime terminal_bridge ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
+    terminal-renderer-wgpu/*) add terminal_runtime ;;
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
@@ -118,6 +121,7 @@ for output in \
   "companion=$(flag has agent)" \
   "herdr=$herdr" \
   "terminal_runtime=$(flag any terminal_runtime)" \
+  "terminal_bridge=$(flag any client terminal_bridge)" \
   "linux=$linux" \
   "linux_runtimes=$linux_runtimes" \
   "desktop=$(flag any client agent)" \
