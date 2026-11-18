@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.70.0
+
+### Minor Changes
+
+- d64fc31: Stream an OpenCode session into the Agent view instead of polling it. `lazysh-agent transcript-watch` now takes `--agent opencode --path DATABASE --database-session ID` and watches the database together with its write-ahead log, where OpenCode's newest rows sit until a checkpoint, so a reply that grows or a tool result that lands reaches the view within a second. The view opens the same live channel for an OpenCode pane as for Claude Code and Codex, and falls back to polling when the host companion is older.
+- a7c46e9: Detect sign-in callbacks in terminal output. When a command on the host (`aws sso login`, `codex login`, `gcloud auth login`, `wrangler login`, `terraform login`, `vault login -method=oidc` and similar) prints an authorize URL whose `redirect_uri` is `http://localhost:PORT`, the native output path now notices it, also while the WebView is suspended, and announces a sign-in hint (port, callback path, identity provider host, whether the URL carries a PKCE challenge) to the app. Colours, hyperlinks, a URL the program wrapped and any chunking of the output are handled; dev-server addresses, redirects to public hosts, ports below 1024 and URLs over 4096 bytes are ignored, and no query value (`code`, `state`) is ever kept. Nothing is tunnelled or opened yet: the hint is only reported.
+
+### Patch Changes
+
+- 31a2337: Require a regression test or a stated reason on every `fix(...)` pull request: an AGENTS.md rule, a "Regression test" section in the pull request template and the bug template, and a `regression-test` check that also lists the Appium regression specs by issue. Workflow only; no product change.
+- fb49d1a: Compare the native terminal engine with xterm.js: 91 replayable screens (colours, cursor, editing, Unicode, alternate screen, modes, paste, resize, captures of vim, less, tmux, Claude Code, Codex, OpenCode, Zellij and Herdr, and the six captured Mosh frames), 75 key presses and 130 mouse reports run through xterm.js 5.5.0 and through the Rust core, with 28 differences recorded and explained. The comparison also fixed a defect in the core's mouse reporting: under any-event tracking a resting pointer sent a report for every pointer event in one cell, where xterm.js sends one. The core is not wired in as an engine you can choose yet, so nothing changes in the app; xterm.js stays the terminal engine.
+- @lazysh/account-usage@1.70.0
+  - @lazysh/common@1.70.0
+  - @lazysh/display-idle@1.70.0
+  - @lazysh/et-transport@1.70.0
+  - @lazysh/mosh-transport@1.70.0
+
 ## 1.69.0
 
 ### Minor Changes

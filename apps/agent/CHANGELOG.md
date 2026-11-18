@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.70.0
+
+### Minor Changes
+
+- d64fc31: Stream an OpenCode session into the Agent view instead of polling it. `lazysh-agent transcript-watch` now takes `--agent opencode --path DATABASE --database-session ID` and watches the database together with its write-ahead log, where OpenCode's newest rows sit until a checkpoint, so a reply that grows or a tool result that lands reaches the view within a second. The view opens the same live channel for an OpenCode pane as for Claude Code and Codex, and falls back to polling when the host companion is older.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.70.0
+  - @lazysh/common@1.70.0
+  - @lazysh/companion-release@1.70.0
+  - @lazysh/notification-client@1.70.0
+
 ## 1.69.0
 
 ### Patch Changes
