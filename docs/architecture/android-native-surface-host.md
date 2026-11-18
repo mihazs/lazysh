@@ -24,6 +24,18 @@ The seam for the renderer is `SurfaceClient`: `onSurfaceReady(surface, generatio
 - **Developer-only.** `TerminalSurfaces.enabled` defaults to `BuildConfig.DEBUG`: a release build refuses every command with `native_surface_disabled` before creating a view. The rollout stage that opens the native backend to users (S2) replaces this with a preference.
 - **Not owned here.** Touch, focus, IME and the soft keyboard (#1328), accessibility (#1329), and GPU device loss and thermal handling belong to the renderer and the later slices. The host view is not focusable and is hidden from accessibility until those exist.
 
+## The page side
+
+`apps/client/src/terminalSurfaceAnchor.ts` keeps a session's surface on a DOM element and is the only code that sends `place` and `remove` from the page. Nothing in the app creates a tracker yet.
+
+- **Hints, then a short look.** Layout, scroll, zoom and CSS transitions change an element's rectangle without telling the page which. A resize or scroll event, a `ResizeObserver` or `MutationObserver` callback, or a transition or animation event starts a frame-by-frame look at `getBoundingClientRect()` that ends after 12 frames with no change, so an idle page runs nothing.
+- **One command in flight.** A rectangle that moved while a `place` was pending is not queued: when the command returns, the latest rectangle goes out as one command. The shell does not order commands, so `stop` waits for the command in flight before it sends `remove`, and a `remove` never overtakes a `place`.
+- **No box, no surface.** An element that is hidden, zero-sized or detached ends the surface with `remove`; the next time it has a box it is placed again.
+- **Refusal.** When the shell refuses or a command fails (a release build answers `native_surface_disabled`), tracking stops, a surface already placed is removed, and `onError` is told. The caller decides what to show; the tracker never retries.
+- **Background.** The pane colour (`rgbOf` turns `#rgb`, `#rrggbb`, `rgb()` and `rgba()` into the `0xRRGGBB` the shell takes) is read on every placement, so a theme change reaches the surface with the next one.
+
+Checked by `terminalSurfaceAnchor.test.ts` (Vitest, jsdom, frames driven by hand, the shell's commands mocked). Not established: the real placement round trip while a WebView scrolls or animates, and a tracker on the real page; both need the transparent pane and a device.
+
 ## Verification and limits
 
 See the pull request for the run that produced the figures below; this section is only what the code can and cannot show.
@@ -41,5 +53,5 @@ Not established: that the real page can be made transparent over the pane (the s
 ## Next slices
 
 1. Renderer attachment: a JNI client that turns `ready` and `lost` into the Renderer API lifecycle (`create`, `resize`, `destroy`) and calls `Session::attach` and `detach`, once a renderer is selected ([#1323](https://github.com/mihazs/lazysh/issues/1323), [#1324](https://github.com/mihazs/lazysh/issues/1324)) and the core builds for Android ([#1312](https://github.com/mihazs/lazysh/issues/1312)).
-2. The page side: an anchor tracker that follows scroll, layout and transitions and sends `place`, and the transparent pane on the real page, measured on a device.
+2. Wire the tracker to a pane (it exists, see [the page side](#the-page-side), and nothing creates one yet) and make the pane transparent on the real page, measured on a device.
 3. Input, IME and selection handles on the surface ([#1328](https://github.com/mihazs/lazysh/issues/1328)), accessibility ([#1329](https://github.com/mihazs/lazysh/issues/1329)).
