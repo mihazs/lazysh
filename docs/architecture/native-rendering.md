@@ -109,7 +109,7 @@ Capability must be detected on real hardware (driver blocklists, surface creatio
 
 ## Input and IME
 
-The highest-risk area. Today input depends on xterm's hidden textarea and the pinned IME layer (`terminalIme.ts`). A native surface needs either a hidden DOM editor kept alongside the surface or a native input connection. The decision is made in the Android PoC and validated against SwiftKey and Gboard behaviour (#1215), the `terminal-ime` and `terminal-swiftkey` scenarios, and the owned IME test service in the Android instrumentation sources. Required: no duplicate or corrupt commits, hardware keyboards, Shift+Enter (#805), toolbar Enter (#1043), touch scrolling (#938) and selection handles. Tracked in [#1328](https://github.com/mihazs/lazysh/issues/1328).
+The highest-risk area. Today input depends on xterm's hidden textarea and the pinned IME layer (`terminalIme.ts`). A native surface needs either a hidden DOM editor kept alongside the surface or a native input connection. The decision is made in the Android PoC and validated against SwiftKey and Gboard behaviour (#1215), the `terminal-ime` and `terminal-swiftkey` scenarios, and the owned IME test service in the Android instrumentation sources. Required: no duplicate or corrupt commits, hardware keyboards, Shift+Enter (#805), toolbar Enter (#1043), touch scrolling (#938) and selection handles. Tracked in [#1328](https://github.com/mihazs/lazysh/issues/1328). For Android, a native input connection (the keyboard's editor owned by the app, with composition, commit and hardware-key handling) is implemented and tested in developer builds but not connected to a surface or the core: [Android native input](android-native-input.md).
 
 ## Accessibility
 

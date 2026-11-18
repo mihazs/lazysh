@@ -1,0 +1,124 @@
+package app.lazysh.client
+
+import android.content.Context
+import android.os.Build
+import android.text.InputType
+import android.view.KeyEvent
+import android.view.View
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.SurroundingText
+import androidx.annotation.RequiresApi
+import androidx.core.view.inputmethod.EditorInfoCompat
+
+/**
+ * The keyboard's editor for a native terminal surface: a focusable view that is the soft keyboard's `InputConnection`
+ * and receives hardware keys, with no pixels of its own. It replaces xterm's hidden textarea and the `terminalIme.ts`
+ * layer over it for a surface the WebView does not draw; the DOM path is untouched. Developer builds only until a
+ * renderer exists: nothing creates one yet.
+ *
+ * Editor setup follows the page's terminal editor: plain text without autocorrect or capitalisation, and while
+ * [PrivateKeyboard] is on a visible-password field with no suggestions and no personalised learning. Enter is an
+ * ordinary editor action (no action key), so a keyboard sends it as a key event or a line break, never as Go or Send.
+ */
+class TerminalInputView(
+    context: Context,
+    sink: TerminalInputSink,
+    acceptsInput: () -> Boolean = { true },
+) : View(context) {
+    private val imm = context.getSystemService(InputMethodManager::class.java)
+    val editor = TerminalImeEditor(sink, acceptsInput, resync = { imm?.restartInput(this) })
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun onCheckIsTextEditor() = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        val private = PrivateKeyboard.active
+        outAttrs.inputType = if (private) PrivateKeyboard.INPUT_TYPE else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_ENTER_ACTION or EditorInfo.IME_FLAG_NO_FULLSCREEN or
+            EditorInfo.IME_FLAG_NO_EXTRACT_UI or (if (private) EditorInfoCompat.IME_FLAG_NO_PERSONALIZED_LEARNING else 0)
+        editor.connectionOpened()
+        outAttrs.initialSelStart = editor.selectionStart
+        outAttrs.initialSelEnd = editor.selectionEnd
+        return Connection()
+    }
+
+    // Hardware keys the terminal owns; Back, volume and the rest stay with the system.
+    override fun onKeyDown(keyCode: Int, event: KeyEvent) = forward(event, release = false) || super.onKeyDown(keyCode, event)
+    override fun onKeyUp(keyCode: Int, event: KeyEvent) = forward(event, release = true) || super.onKeyUp(keyCode, event)
+
+    private fun forward(event: KeyEvent, release: Boolean): Boolean {
+        val unicode = event.getUnicodeChar(event.metaState and TerminalKeys.NON_TEXT_META.inv())
+        val key = TerminalKeys.key(event.keyCode, event.metaState, unicode, event.repeatCount > 0, release) ?: return false
+        editor.key(key)
+        publish()
+        return true
+    }
+
+    // The WebView-side terminal drops its editor when it is blurred; so does this one, including text still composing.
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        if (!gainFocus) editor.revoke()
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) editor.revoke()
+    }
+
+    override fun onDetachedFromWindow() {
+        editor.revoke()
+        super.onDetachedFromWindow()
+    }
+
+    /** Tell the keyboard where the cursor and the composing text now are, as an editing view does after every change. */
+    private fun publish() {
+        imm?.updateSelection(this, editor.selectionStart, editor.selectionEnd, editor.composingStart, editor.composingEnd)
+    }
+
+    private inner class Connection : BaseInputConnection(this@TerminalInputView, false) {
+        // The editor is the only text state; the base class's own editable stays empty and unused.
+        private fun <T> edit(result: T): T { publish(); return result }
+
+        override fun beginBatchEdit() = editor.beginBatchEdit()
+        override fun endBatchEdit() = edit(editor.endBatchEdit())
+        override fun commitText(text: CharSequence?, newCursorPosition: Int) = edit(editor.commitText(text ?: "", newCursorPosition))
+        override fun setComposingText(text: CharSequence?, newCursorPosition: Int) = edit(editor.setComposingText(text ?: "", newCursorPosition))
+        override fun setComposingRegion(start: Int, end: Int) = edit(editor.setComposingRegion(start, end))
+        override fun finishComposingText() = edit(editor.finishComposingText())
+        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int) = edit(editor.deleteSurroundingText(beforeLength, afterLength))
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int) = edit(editor.deleteSurroundingTextInCodePoints(beforeLength, afterLength))
+        override fun setSelection(start: Int, end: Int) = edit(editor.setSelection(start, end))
+        override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence = editor.textBeforeCursor(n)
+        override fun getTextAfterCursor(n: Int, flags: Int): CharSequence = editor.textAfterCursor(n)
+        override fun getSelectedText(flags: Int): CharSequence? = editor.selectedText()
+        override fun getCursorCapsMode(reqModes: Int) = 0
+
+        @RequiresApi(Build.VERSION_CODES.S)
+        override fun getSurroundingText(beforeLength: Int, afterLength: Int, flags: Int): SurroundingText {
+            val before = editor.textBeforeCursor(beforeLength)
+            val selected = editor.selectedText() ?: ""
+            return SurroundingText(before + selected + editor.textAfterCursor(afterLength), before.length, before.length + selected.length, editor.selectionStart - before.length)
+        }
+
+        /** Enter, Backspace, arrows and the like arrive here from the keyboard; they are keys, not text. */
+        override fun sendKeyEvent(event: KeyEvent): Boolean {
+            if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
+            val unicode = event.getUnicodeChar(event.metaState and TerminalKeys.NON_TEXT_META.inv())
+            val key = TerminalKeys.key(event.keyCode, event.metaState, unicode, event.repeatCount > 0, event.action == KeyEvent.ACTION_UP) ?: return false
+            return edit(editor.key(key))
+        }
+
+        // A closed connection commits what it was composing, as an editor does, unless focus already left.
+        override fun closeConnection() {
+            editor.connectionClosed()
+            super.closeConnection()
+        }
+    }
+}
