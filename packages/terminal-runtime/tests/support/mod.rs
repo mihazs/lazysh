@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 use lazysh_terminal_runtime::{
     ffi, Appearance, CellWide, Config, Frame, Hooks, Hub, Image, KeyInput, Offer, Origin,
-    PtyWriter, ReferenceRenderer, Refused, Session, Size, TerminalRenderer, TerminalRuntime, Theme,
+    PtyWriter, ReferenceRenderer, Refused, RgbColor, Session, Size, TerminalRenderer,
+    TerminalRuntime, Theme,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex};
@@ -9,6 +10,31 @@ use std::time::{Duration, Instant};
 
 pub const CELL_W: u32 = 10;
 pub const CELL_H: u32 = 20;
+
+/// xterm.js 5.5.0's default theme, the one its colour-query replies in `fixtures/` were recorded
+/// with: white on black, a white cursor, the Tango ANSI colours, and (like libghostty-vt) the
+/// xterm 6x6x6 cube and grey ramp above them.
+pub fn xterm_theme() -> Theme {
+    let tango = [
+        0x2e3436, 0xcc0000, 0x4e9a06, 0xc4a000, 0x3465a4, 0x75507b, 0x06989a, 0xd3d7cf, 0x555753,
+        0xef2929, 0x8ae234, 0xfce94f, 0x729fcf, 0xad7fa8, 0x34e2e2, 0xeeeeec,
+    ];
+    let mut theme = Theme::default();
+    for (entry, hex) in theme.palette.iter_mut().zip(tango) {
+        *entry = rgb(hex);
+    }
+    theme.cursor = theme.foreground;
+    theme
+}
+
+/// `0xRRGGBB` as a colour.
+pub fn rgb(hex: u32) -> RgbColor {
+    RgbColor {
+        r: (hex >> 16) as u8,
+        g: (hex >> 8) as u8,
+        b: hex as u8,
+    }
+}
 
 pub fn runtime(cols: u16, rows: u16) -> TerminalRuntime {
     TerminalRuntime::new(Config {

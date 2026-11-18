@@ -5,7 +5,8 @@ Replayable byte streams with the screen, cursor, modes, terminal replies and eve
 
 - **xterm.js 5.5.0** (the behaviour lazysh ships today): `apps/client/src/xterm/vtConformance.test.ts`, in the
   normal `client` vitest run, on a terminal mounted in jsdom as the app mounts it (only a mounted terminal has a
-  theme to answer colour queries with). `expect` is what xterm produced; the test fails if xterm changes.
+  theme to answer colour queries with). `expect` is what xterm produced; the test fails if xterm changes. The core is
+  given xterm.js's default theme (`xterm_theme()` in `tests/support/mod.rs`) so its colour replies can match.
 - **The core** (`lazysh-terminal-runtime` on libghostty-vt): `tests/vt_fixtures.rs`, in the
   `herdr-native` job. The core must produce `expect`, or the fixture carries a `core` block naming
   why it does not.
@@ -47,7 +48,7 @@ entry in `divergences.json` with a reason.
 gates, not approvals: the fixtures keep failing loudly if the core's behaviour moves, but nobody has
 signed off the user-visible ones (Unicode widths and the grapheme and colour-scheme modes that go with them, explicit zero counts and parameterless tab clears (libghostty-vt deviates from the standard),
 Alt+arrow encodings, the Kitty keyboard
-protocol, theme colour queries, DA identity, the OSC 52 selection filter, DECXCPR, scrollback units, resize reflow). They are
+protocol, the terminator of colour replies, DA identity, the OSC 52 selection filter, DECXCPR, scrollback units, resize reflow). They are
 tracked on #1314, #1316 and #1305.
 
 Mouse reports match xterm.js event for event except for the 1005 and 1015 encodings, which only the core

@@ -175,7 +175,7 @@
   },
   {
     "id": "color-queries",
-    "about": "OSC 10 and 11 default colour queries and the cursor colour",
+    "about": "OSC 10 and OSC 11 default foreground and background queries",
     "cols": 12,
     "rows": 3,
     "scrollback": 100,
@@ -196,14 +196,114 @@
         "y": 0
       },
       "data": "\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\"
+    }
+  },
+  {
+    "id": "color-queries-cursor-and-palette",
+    "about": "OSC 12 cursor colour and OSC 4 palette queries, the second palette query after the program changed the entry",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]12;?\u001b\\\u001b]4;1;?\u001b\\\u001b]4;1;rgb:12/34/56\u001b\\\u001b]4;1;?;16;?;231;?;255;?\u001b\\"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b]12;rgb:ffff/ffff/ffff\u001b\\\u001b]4;1;rgb:cccc/0000/0000\u001b\\\u001b]4;1;rgb:1212/3434/5656\u001b\\\u001b]4;16;rgb:0000/0000/0000\u001b\\\u001b]4;231;rgb:ffff/ffff/ffff\u001b\\\u001b]4;255;rgb:eeee/eeee/eeee\u001b\\"
+    }
+  },
+  {
+    "id": "color-queries-in-one-sequence",
+    "about": "OSC 10 with one query for each of the foreground, background and cursor",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]10;?;?;?\u001b\\"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\\u001b]12;rgb:ffff/ffff/ffff\u001b\\"
+    }
+  },
+  {
+    "id": "color-queries-bel-terminated",
+    "about": "The four colour queries ended with BEL instead of ST",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]10;?\u0007\u001b]11;?\u0007\u001b]12;?\u0007\u001b]4;2;?\u0007"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b]10;rgb:ffff/ffff/ffff\u001b\\\u001b]11;rgb:0000/0000/0000\u001b\\\u001b]12;rgb:ffff/ffff/ffff\u001b\\\u001b]4;2;rgb:4e4e/9a9a/0606\u001b\\"
     },
     "core": {
       "divergence": [
-        "color-queries-theme"
+        "color-query-terminator-echoed"
       ],
       "expect": {
-        "data": ""
+        "data": "\u001b]10;rgb:ffff/ffff/ffff\u0007\u001b]11;rgb:0000/0000/0000\u0007\u001b]12;rgb:ffff/ffff/ffff\u0007\u001b]4;2;rgb:4e4e/9a9a/0606\u0007"
       }
+    }
+  },
+  {
+    "id": "color-queries-after-set",
+    "about": "OSC 11 sets the background and a query follows",
+    "cols": 12,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b]11;rgb:ff/00/00\u001b\\\u001b]11;?\u001b\\"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 0
+      },
+      "data": "\u001b]11;rgb:ffff/0000/0000\u001b\\"
     }
   },
   {

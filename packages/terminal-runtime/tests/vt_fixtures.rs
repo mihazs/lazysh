@@ -7,8 +7,8 @@ mod support;
 
 use base64::Engine;
 use lazysh_terminal_runtime::{
-    default_palette, dom_mods, ffi, CellColor, CellWide, Config, DomKey, KeyInput, MouseInput,
-    RgbColor, Size, TerminalRuntime,
+    dom_mods, ffi, CellColor, CellWide, Config, DomKey, KeyInput, MouseInput, RgbColor, Size,
+    TerminalRuntime,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -139,11 +139,15 @@ struct Events {
 
 /// A style colour, or for a blank cell erased with a colour the resolved background, which
 /// libghostty-vt keeps in the cell rather than the style: named by its palette index when it is
-/// one of the default palette's colours.
+/// one of the theme's colours.
 fn color(color: Option<CellColor>, resolved: Option<RgbColor>) -> String {
     let color = color.or_else(|| {
         let rgb = resolved?;
-        match default_palette().iter().position(|entry| *entry == rgb) {
+        match support::xterm_theme()
+            .palette
+            .iter()
+            .position(|entry| *entry == rgb)
+        {
             Some(index) => Some(CellColor::Palette(index as u8)),
             None => Some(CellColor::Rgb(rgb)),
         }
@@ -177,6 +181,8 @@ fn dense(sparse: &Value) -> Value {
 fn observe(fixture: &Fixture) -> Value {
     let mut runtime = TerminalRuntime::new(Config {
         size: Size::new(fixture.cols, fixture.rows),
+        // The theme xterm.js answered colour queries with when the fixtures were recorded.
+        theme: support::xterm_theme(),
         ..Config::default()
     })
     .expect("runtime");

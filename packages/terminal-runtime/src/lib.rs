@@ -9,6 +9,7 @@
 //! Rendering is behind [`TerminalRenderer`] (#1322): [`Frame`]s in, pixels on an opaque surface out,
 //! with a deterministic CPU [`ReferenceRenderer`] for golden-image tests.
 
+mod colors;
 mod frame;
 mod hub;
 mod ingress;

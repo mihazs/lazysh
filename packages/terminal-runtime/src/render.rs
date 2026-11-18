@@ -91,7 +91,8 @@ impl CellMetrics {
 
 /// Colors the host owns. `foreground` and `background` paint cells whose own color is the
 /// default (`None`); the core resolves every other color to RGB before a frame is built.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// [`crate::Config::theme`] answers a program's colour queries with the same colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     pub foreground: RgbColor,
     pub background: RgbColor,
