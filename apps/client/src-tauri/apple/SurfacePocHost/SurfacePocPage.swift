@@ -43,7 +43,8 @@ let surfacePocPage = #"""
   const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(update); };
   for (const target of [window, window.visualViewport]) for (const name of ['resize', 'scroll']) target.addEventListener(name, schedule);
   window.addEventListener('load', schedule);
-  window.pocSchedule = schedule;
+  // env(safe-area-inset-*) arrives after the first layout and fires no resize or scroll: watch a probe whose size is the inset.
+  new ResizeObserver(schedule).observe(document.getElementById('inset'), {box: 'border-box'});
   const field = document.getElementById('field');
   field.addEventListener('keydown', event => { if (event.key === 'Enter') field.blur(); });
   anchor.addEventListener('pointerdown', () => post({type: 'tap'}));
