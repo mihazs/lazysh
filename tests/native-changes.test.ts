@@ -15,10 +15,11 @@ const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge',
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
-// Jobs that are not required to merge: pull requests never select them, pushes to main always do.
-const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf'];
+// Jobs that are not required to merge: pull requests never select them, pushes to main always do. terminal-perf is report-only
+// too, but it follows the terminal runtime area on a pull request (see the selection test below).
+const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios'];
 const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-mosh', 'native-android-herdr-navigation',
-  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-perf'];
+  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator'];
 const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
 const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
 const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false',
@@ -178,12 +179,12 @@ test.each([
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
   ['Herdr', ['packages/herdr-guard/client.rs'], herdrRun],
   // The app bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt with the native-terminal feature.
-  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'native-terminal-bridge': 1 }],
-  ['the terminal renderer, which the app does not link', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1 }],
+  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1 }],
+  ['the terminal renderer, which the app does not link', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1 }],
   ...(['packages/herdr-upstream/crates/ghostty-vt/src/lib.rs', 'packages/herdr-upstream/vendor/libghostty-vt/build.zig'] as const).map(path => [
-    `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'native-terminal-bridge': 1 }] as const),
-  ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1 }],
-  ['the platform key fixtures the terminal runtime is held to', ['apps/client/e2e/fixtures/platform-keys/mac.json'], { ...clientRun, 'herdr-native': 1 }],
+    `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'terminal-perf': 1, 'native-terminal-bridge': 1 }] as const),
+  ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1, 'terminal-perf': 1 }],
+  ['the platform key fixtures the terminal runtime is held to', ['apps/client/e2e/fixtures/platform-keys/mac.json'], { ...clientRun, 'herdr-native': 1, 'terminal-perf': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
   ['push registration', ['packages/push-registration/src/lib.rs'], { ...clientRun, ...iosRun,
     'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2 }],
@@ -203,6 +204,20 @@ test.each([
 test('the vendored Herdr binding selects the terminal runtime checks, including its Android build; the guard does not', async () => {
   expect((await classify(['packages/herdr-upstream/crates/ghostty-vt/build.rs'])).terminal_runtime).toBe('true');
   expect((await classify(['packages/herdr-guard/client.rs'])).terminal_runtime).toBe('false');
+});
+
+test('the terminal performance gate runs on a pull request for the runtime and the renderer, never for unrelated paths, and on main always', async () => {
+  for (const path of ['packages/terminal-runtime/src/lib.rs', 'packages/terminal-renderer-wgpu/src/lib.rs']) {
+    const outputs = await classify([path]);
+    expect(outputs.terminal_perf, path).toBe('true');
+    expect(await runningJobs(outputs), path).toHaveProperty('terminal-perf', 1);
+  }
+  for (const path of ['docs/architecture/terminal-runtime.md', 'apps/agent/src/main.rs', 'apps/client/src/App.tsx', 'packages/herdr-guard/client.rs', 'packages/mosh-transport/src/lib.rs']) {
+    const outputs = await classify([path]);
+    expect(outputs.terminal_perf, path).toBe('false');
+    expect(await runningJobs(outputs), path).not.toHaveProperty('terminal-perf');
+  }
+  expect(await runningJobs(await classify(['docs/connections.md'], { event: 'push' }))).toHaveProperty('terminal-perf', 1);
 });
 
 test('the nightly runs the Appium suite and the Herdr it needs, and nothing else', async () => {
