@@ -89,7 +89,7 @@ pub(crate) async fn receive(
     output: watch::Sender<Packet>,
 ) -> Result<()> {
     access.check()?;
-    let mut disconnected = host.cancel();
+    let mut disconnected = host.closed();
     if *cancel.borrow() || *disconnected.borrow() {
         return Ok(());
     }

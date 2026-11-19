@@ -9,10 +9,7 @@ use crate::{
 use russh::ChannelMsg;
 use serde::Serialize;
 use std::{pin::Pin, sync::Arc, time::Duration};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite},
-    sync::watch,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 pub(crate) enum Host {
     Remote(Arc<ssh::Session>),
@@ -288,14 +285,6 @@ impl Host {
                 })
                 .await
             }
-        }
-    }
-    /// Turns true, or closes, when the session behind this host ends.
-    pub(crate) fn cancel(&self) -> watch::Receiver<bool> {
-        match self {
-            Self::Remote(session) => session.cancel.subscribe(),
-            #[cfg(desktop)]
-            Self::Local(host) => host.cancel.clone(),
         }
     }
     /// Starts one `lazysh-agent …` command line that keeps running: over an owned SSH channel, or
