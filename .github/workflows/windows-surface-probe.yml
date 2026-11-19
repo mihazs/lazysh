@@ -52,11 +52,19 @@ jobs:
           [System.Windows.Forms.Screen]::AllScreens | Format-List DeviceName, Bounds, Primary, BitsPerPixel
           Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty pv
           [System.Environment]::OSVersion.VersionString
-      - name: Run the probe against the real tao window and WebView2
-        run: target/debug/surface-poc.exe "$RUNNER_TEMP/windows-surface"
+      - name: Run the probe against a transparent tao window and WebView2
+        run: target/debug/surface-poc.exe "$RUNNER_TEMP/windows-surface/transparent-window"
+      # The app's window is opaque today; only the web view would be transparent.
+      - name: Run the probe against an opaque tao window and a transparent WebView2
+        if: ${{ !cancelled() }}
+        run: target/debug/surface-poc.exe --opaque-window "$RUNNER_TEMP/windows-surface/opaque-window"
       - name: Show what the probe saw
         if: ${{ !cancelled() }}
-        run: '[ ! -f "$RUNNER_TEMP/windows-surface/report.md" ] || { echo "### Windows composition probe"; cat "$RUNNER_TEMP/windows-surface/report.md"; } >> "$GITHUB_STEP_SUMMARY"'
+        run: |
+          for mode in transparent-window opaque-window; do
+            report="$RUNNER_TEMP/windows-surface/$mode/report.md"
+            [ ! -f "$report" ] || { echo "### Windows composition probe, $mode"; cat "$report"; } >> "$GITHUB_STEP_SUMMARY"
+          done
       - name: Retain the readbacks of every step
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

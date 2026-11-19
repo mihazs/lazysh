@@ -157,7 +157,13 @@ impl Probe {
     }
 }
 
-pub fn run(hwnd: isize, proxy: EventLoopProxy<Msg>, shared: Shared, out: PathBuf) -> ! {
+pub fn run(
+    hwnd: isize,
+    proxy: EventLoopProxy<Msg>,
+    shared: Shared,
+    out: PathBuf,
+    opaque_window: bool,
+) -> ! {
     let mut probe = Probe {
         hwnd,
         proxy,
@@ -178,14 +184,17 @@ pub fn run(hwnd: isize, proxy: EventLoopProxy<Msg>, shared: Shared, out: PathBuf
     };
     let (screen, print_window) = (valid(Readback::Screen), valid(Readback::PrintWindow));
     if screen {
-        for paint in [Paint::Gdi, Paint::Direct3D12] {
+        // Direct3D 12 first: a GDI-painted child leaves its pixels in the window's surface after it is destroyed, which would
+        // sit under every scenario that follows it.
+        for paint in [Paint::Direct3D12, Paint::Gdi] {
             for order in [Order::Below, Order::BelowClipped, Order::AboveCutOut] {
                 probe.scenario(order, paint);
             }
         }
     }
     let report = format!(
-        "Control (no surface): the page's overlay is drawn in the screen readback: {screen}; in the PrintWindow readback: {print_window}.\n\n{}\n{}\n",
+        "Tao window: {}. Control (no surface): the page's overlay is drawn in the screen readback: {screen}; in the PrintWindow readback: {print_window}.\n\n{}\n{}\n",
+        if opaque_window { "opaque, only the web view is transparent" } else { "transparent (DWM blur-behind), as `with_transparent(true)` makes it" },
         probe.report(),
         probe.notes.join("\n")
     );

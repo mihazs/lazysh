@@ -65,12 +65,13 @@ fn layout_from(body: &str) -> Option<Layout> {
     })
 }
 
-pub fn run(out: PathBuf) -> ! {
+/// `opaque_window` leaves the tao window opaque (the app's default) and makes only the web view transparent.
+pub fn run(out: PathBuf, opaque_window: bool) -> ! {
     let event_loop = EventLoopBuilder::<Msg>::with_user_event().build();
     // Small and near the corner: a hosted runner's desktop can be 1024x768, and the screen readback must see all of the client area.
     let window = WindowBuilder::new()
         .with_title("surface-poc")
-        .with_transparent(true)
+        .with_transparent(!opaque_window)
         .with_always_on_top(true)
         .with_position(LogicalPosition::new(20.0, 20.0))
         .with_inner_size(LogicalSize::new(640.0, 420.0))
@@ -91,7 +92,7 @@ pub fn run(out: PathBuf) -> ! {
     let hwnd = window.hwnd();
     let shared: Shared = Arc::default();
     let latest = shared.clone();
-    std::thread::spawn(move || drive::run(hwnd, proxy, shared, out));
+    std::thread::spawn(move || drive::run(hwnd, proxy, shared, out, opaque_window));
 
     let mut surface: Option<Child> = None;
     event_loop.run(move |event, _, flow| {
