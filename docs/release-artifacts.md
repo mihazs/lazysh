@@ -219,6 +219,12 @@ app's and the dmg's copy with both code signatures removed, because the bundler 
 whole app; no workflow builds macOS packages yet (they are deferred), and that branch has
 not run on Apple hardware.
 
+The measured sizes above predate the bundled companion. Until a release measures the
+bundling packages, their ceilings are the 1.5 times ceiling plus the bundled companion's own
+ceiling (deb 33 + 18, AppImage 143 + 18, Windows installer 12 + 16 MiB), the most the
+companion can add if the package did not compress it. The next release's measurement
+replaces them.
+
 Because the desktop builds wait for the companion artifacts, a release's critical path
 has three runner-queue entries (companion, desktop, publication) instead of two.
 
