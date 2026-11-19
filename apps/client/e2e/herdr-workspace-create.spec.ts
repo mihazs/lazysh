@@ -125,3 +125,30 @@ test('closing the agent question without choosing never launches anything',async
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await commands(page)).not.toContain('herdr_workspace_create');
 });
+
+test('the create flow is a full-screen page on phones and a bounded dialog on desktop',async({page},testInfo)=>{
+  await mount(page);
+  await openWorktree(page);
+  const dialog=page.getByRole('dialog',{name:'New worktree from Development'});
+  const close=dialog.getByRole('button',{name:'Close New worktree from Development',exact:true});
+  const review=dialog.getByRole('button',{name:'Review commands'});
+  await dialog.getByRole('radio',{name:'Yes, start an agent'}).check();
+  if(testInfo.project.name==='phone'){
+    for(const height of [844,420]){
+      await page.setViewportSize({width:390,height});
+      expect(await dialog.boundingBox()).toMatchObject({x:0,y:0,width:390,height});
+      await review.scrollIntoViewIfNeeded();
+      await expect(review).toBeInViewport();
+      await expect(close).toBeInViewport();
+      await fitsWidth(page);
+    }
+    await page.screenshot({path:testInfo.outputPath('create-page.png')});
+  }else{
+    const bounds=(await dialog.boundingBox())!;
+    expect(bounds.x).toBeGreaterThan(0);expect(bounds.y).toBeGreaterThan(0);expect(bounds.width).toBeLessThanOrEqual(560);
+  }
+  // Android Back closes the page without creating anything.
+  await page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back')));
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await commands(page)).not.toContain('herdr_workspace_create');
+});
