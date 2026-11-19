@@ -235,6 +235,8 @@ pub fn run() {
                 devices::device_action,
                 devices::ios_device_probe,
                 devices::android_device_probe,
+                devices::android_ui_tree,
+                devices::android_ui_action,
                 devices::ios_device_action,
                 devices::stream::device_stream_start,
                 devices::stream::device_stream_next,

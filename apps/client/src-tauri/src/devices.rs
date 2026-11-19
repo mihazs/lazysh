@@ -79,6 +79,76 @@ pub async fn android_device_probe(
         .await
 }
 #[tauri::command]
+pub async fn android_ui_tree(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+) -> Protected<serde_json::Value> {
+    access
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            android_command(&id, "ui tree"),
+        ))
+        .await
+}
+/// The identity of a node as `android_ui_tree` listed it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiNode {
+    resource_id: String,
+    text: String,
+    content_description: String,
+    occurrence: u32,
+}
+fn ui_action_command(id: &str, node: &UiNode, kind: &str) -> Result<String> {
+    // The host shortens texts to 256 characters; nothing longer is a node it listed.
+    let field = |value: &str| {
+        if value.chars().count() > 256 || value.contains('\0') {
+            Err(SshError::new("invalid_input", "Invalid accessibility node"))
+        } else {
+            Ok(quote(value))
+        }
+    };
+    if !matches!(kind, "click" | "long-click") || node.occurrence > 5000 {
+        return Err(SshError::new(
+            "invalid_input",
+            "Invalid accessibility action",
+        ));
+    }
+    android_command(
+        id,
+        &format!(
+            "ui act --kind {kind} --resource-id={} --text={} --content-desc={} --occurrence {}",
+            field(&node.resource_id)?,
+            field(&node.text)?,
+            field(&node.content_description)?,
+            node.occurrence
+        ),
+    )
+}
+/// Tap or long-press the one node with this identity; the host re-reads the screen first.
+#[tauri::command]
+pub async fn android_ui_action(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+    node: UiNode,
+    kind: String,
+) -> Protected<serde_json::Value> {
+    access
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            ui_action_command(&id, &node, &kind),
+        ))
+        .await
+}
+#[tauri::command]
 pub async fn ios_device_probe(
     access: AccessLease,
     state: State<'_, AppState>,
@@ -274,5 +344,24 @@ mod tests {
         )
         .is_err());
         assert!(action_command("ios;cmd", "id", DeviceAction::Boot).is_err());
+    }
+    #[test]
+    fn accessibility_actions_carry_the_listed_identity_as_literal_arguments() {
+        let node = UiNode {
+            resource_id: "app:id/ok".into(),
+            text: "It's $(cmd)\n--x".into(),
+            content_description: String::new(),
+            occurrence: 2,
+        };
+        assert_eq!(
+            ui_action_command("emulator-5554", &node, "long-click").unwrap(),
+            "lazysh-agent devices android --id='emulator-5554' ui act --kind long-click --resource-id='app:id/ok' --text='It'\\''s $(cmd)\n--x' --content-desc='' --occurrence 2"
+        );
+        assert!(ui_action_command("emulator-5554", &node, "click; reboot").is_err());
+        let long = UiNode {
+            text: "x".repeat(257),
+            ..node
+        };
+        assert!(ui_action_command("emulator-5554", &long, "click").is_err());
     }
 }

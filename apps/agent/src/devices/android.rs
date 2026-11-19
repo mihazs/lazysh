@@ -12,6 +12,11 @@ const IDLE_SCREENSHOT: Duration = Duration::from_secs(1);
 pub enum AndroidAction {
     Probe,
     Stream,
+    /// Read the screen's accessibility tree or act on one of its nodes.
+    Ui {
+        #[command(subcommand)]
+        command: ui::UiCommand,
+    },
 }
 
 fn ffmpeg_args() -> Vec<String> {
@@ -133,6 +138,9 @@ fn probe(runner: &mut impl Runner, id: &str) -> Result<(u32, u32)> {
     ))
 }
 pub(super) fn execute(runner: &mut impl Runner, id: &str, action: AndroidAction) -> Result<Value> {
+    if let AndroidAction::Ui { command } = action {
+        return ui::execute(runner, id, command);
+    }
     if !matches!(action, AndroidAction::Probe) {
         return Err(Error::InvalidArgument);
     }
