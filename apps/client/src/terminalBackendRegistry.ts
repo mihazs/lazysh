@@ -33,6 +33,16 @@ export type SelectOptions = {
 /** The recorded reasons a backend was refused before the selected one; the diagnostics translate them. */
 export const NOT_REGISTERED = 'not registered';
 export const LACKS_PREFIX = 'lacks ';
+export const DISABLED_IN_BUILD = 'disabled in this build';
+
+/**
+ * The kill switch, the rollback of last resort: a build made with `LAZYSH_NATIVE_TERMINAL=off` never selects, probes or creates the
+ * native backend, whatever the preference, the developer override or a registration says. Read when asked, so a test can flip it.
+ */
+export const nativeTerminalDisabledInBuild = (): boolean => typeof __LAZYSH_NATIVE_TERMINAL_OFF__ !== 'undefined' && __LAZYSH_NATIVE_TERMINAL_OFF__;
+
+/** The engines the Settings choice lists: Native is absent from a build that switched it off. */
+export const selectableTerminalEngines = (): ('auto' | TerminalBackendId)[] => nativeTerminalDisabledInBuild() ? ['auto', 'xterm'] : ['auto', 'native', 'xterm'];
 
 /** The backend every platform can run: the last resort of every selection. */
 const FALLBACK: TerminalBackendId = 'xterm';
@@ -51,8 +61,11 @@ export function createBackendRegistry() {
     const wanted = override ?? preference;
     const source = override ? 'developer override' : 'preference';
     const order = wanted === 'auto' ? [...backends.values()].filter(backend => backend.autoEligible && backend.id !== FALLBACK).map(backend => backend.id) : [wanted];
+    // Even under Auto the record says native is off, so the diagnostics can tell why a session is not on it.
+    if (wanted === 'auto' && nativeTerminalDisabledInBuild() && !order.includes('native')) order.unshift('native');
     const fallbacks: BackendSelection['fallbacks'] = [];
     for (const id of [...order, ...(order.includes(FALLBACK) ? [] : [FALLBACK])]) {
+      if (id === 'native' && nativeTerminalDisabledInBuild()) { fallbacks.push({id, reason: DISABLED_IN_BUILD}); continue; }
       const backend = backends.get(id);
       if (!backend) { fallbacks.push({id, reason: NOT_REGISTERED}); continue; }
       const missing = requires.filter(capability => !backend.capabilities[capability]);

@@ -1,8 +1,8 @@
 import {expect,type Page} from '@playwright/test';
-import {BackendMismatchError,onAdapter} from '../../src/e2eTerminalBackend';
+import {BackendMismatchError,onAdapter,terminalSelection} from '../../src/e2eTerminalBackend';
 import type {TerminalAdapter} from '../../src/terminalAdapter';
 
-export {onAdapter};
+export {onAdapter,terminalSelection};
 
 /** Waits until the terminal on screen has a drawn screen to measure. */
 export const terminalDrawn=(page:Page)=>expect.poll(()=>onAdapter(page,adapter=>{const bounds=adapter.screenBounds();return !!bounds&&bounds.width>0&&bounds.height>0;}).catch(error=>{if(error instanceof BackendMismatchError)throw error;return false;})).toBe(true);

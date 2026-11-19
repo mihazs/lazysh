@@ -1,0 +1,26 @@
+import {expect,test} from '@playwright/test';
+import {installLocalTerminal,connectLocalTerminal} from '../e2e/fixtures/localTerminal';
+import {onAdapter,terminalSelection} from '../e2e/fixtures/terminalState';
+
+/** What the user (or a developer) asked for before the app loads: a stored engine preference and the developer override. */
+type Ask={preference?:'native'|'xterm';override?:'native'|'xterm'};
+const refused={id:'xterm',reason:'fallback',fallbacks:[{id:'native',reason:'disabled in this build'}]};
+const asks:[string,Ask,typeof refused][]=[
+  ['nothing (Auto)',{},refused],
+  ['Native in Settings',{preference:'native'},refused],
+  ['Native by the developer override',{override:'native'},refused],
+  ['Native in Settings and by the developer override',{preference:'native',override:'native'},refused],
+  ['xterm.js in Settings',{preference:'xterm'},{id:'xterm',reason:'preference',fallbacks:[]}],
+];
+
+for(const [name,ask,recorded] of asks)test(`a new session runs xterm.js in a build with the native engine off when it was asked for ${name}`,async({page})=>{
+  await installLocalTerminal(page);
+  await page.addInitScript(({preference,override})=>{
+    if(preference)localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,terminalEngine:preference}));
+    if(override)localStorage.setItem('lazysh.terminal.backend',override);
+  },ask);
+  await page.goto('/');
+  await connectLocalTerminal(page);
+  expect(await onAdapter(page,adapter=>adapter.backend)).toBe('xterm');
+  expect(await terminalSelection(page)).toEqual(recorded);
+});

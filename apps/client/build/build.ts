@@ -3,7 +3,7 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { sourceDefines } from './sourceRevision';
+import { nativeTerminalDefines, sourceDefines } from './sourceRevision';
 
 const root = resolve(import.meta.dir, '..');
 const dist = resolve(process.env.LAZYSH_BUILD_OUT_DIR ?? resolve(root, 'dist'));
@@ -60,6 +60,7 @@ const result = await Bun.build({
   naming: { entry: '[name].[ext]', chunk: '[name]-[hash].[ext]', asset: '[name]-[hash].[ext]' },
   define: {
     ...sourceDefines(),
+    ...nativeTerminalDefines(),
     'process.env.NODE_ENV': '"production"',
     'import.meta.env.DEV': 'false',
     'import.meta.env.PROD': 'true',

@@ -103,7 +103,7 @@ const MAX_PASTE: usize = 64 * 1024;
 /// from: `code` names the physical key and `key` what it produced.
 // The fields are read by the real core, which is built only with the `native-terminal` feature.
 #[derive(Debug, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -143,7 +143,7 @@ pub(crate) enum CoreInput {
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(default)]
 pub(crate) struct Mods {
     pub(crate) shift: bool,
@@ -153,7 +153,7 @@ pub(crate) struct Mods {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum MouseAction {
     Press,
@@ -163,7 +163,7 @@ pub(crate) enum MouseAction {
 
 /// X11 buttons 1 to 5.
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum MouseButton {
     Left,
@@ -238,7 +238,7 @@ impl Link {
 
     /// Whether the renderer's latest lease is valid: the app is unlocked, in the foreground and has not replaced
     /// the renderer. What the core says about the screen (a title, a clipboard write) leaves only while it is.
-    #[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+    #[cfg_attr(not(native_terminal_core), allow(dead_code))]
     pub(crate) fn permits(&self) -> bool {
         self.lease
             .lock()
@@ -440,6 +440,9 @@ pub(crate) fn close_all() {
     live.values().for_each(|core| core.close());
 }
 
+/// What every native terminal command says in a build made with `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`).
+pub(crate) const DISABLED_IN_BUILD: &str = "The native terminal is disabled in this build";
+
 type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 
 /// The History lines setting's range (`scrollback` in `preferences.ts`).
@@ -592,16 +595,21 @@ fn availability(core: bool, host: bool) -> CoreAvailability {
 /// GPU and surface probe is #1336. Allowed while locked: it reads this build, nothing of the user's.
 #[tauri::command]
 pub fn terminal_core_available() -> CoreAvailability {
-    availability(
-        cfg!(feature = "native-terminal"),
-        cfg!(target_os = "android"),
-    )
+    availability(cfg!(native_terminal_core), cfg!(target_os = "android"))
 }
 
 /// The real core, `lazysh-terminal-runtime` on libghostty-vt, which needs Zig 0.16.0 to build; without
-/// the `native-terminal` feature no build needs Zig and the commands report that.
-#[cfg(not(feature = "native-terminal"))]
+/// the `native-terminal` feature no build needs Zig and the commands report that. A build made with
+/// `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`) leaves the core out even with the
+/// feature, and says so.
+#[cfg(not(native_terminal_core))]
 mod native {
+    pub(super) const UNAVAILABLE: &str = if cfg!(native_terminal_disabled) {
+        super::DISABLED_IN_BUILD
+    } else {
+        super::NOT_BUILT
+    };
+
     pub(super) fn factory(
         _: u32,
         _: u32,
@@ -609,11 +617,11 @@ mod native {
         _: crate::app_lock::AccessLease,
         _: tauri::ipc::Channel<crate::ssh::SshEvent>,
     ) -> Result<super::Factory, String> {
-        Err(super::NOT_BUILT.into())
+        Err(UNAVAILABLE.into())
     }
 }
 
-#[cfg(feature = "native-terminal")]
+#[cfg(native_terminal_core)]
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
@@ -1198,7 +1206,7 @@ mod native {
 }
 
 /// Live sessions and reserved scrollback bytes of the real core's hub (lifecycle test only).
-#[cfg(all(test, feature = "native-terminal"))]
+#[cfg(all(test, native_terminal_core))]
 pub(crate) fn hub_usage() -> (usize, usize) {
     native::hub_usage()
 }
@@ -1371,7 +1379,7 @@ pub(crate) mod fake {
     }
 
     /// What a control answer may hold: the state and the text of rows, and nothing a cell grid could ride in.
-    #[cfg(feature = "native-terminal")]
+    #[cfg(native_terminal_core)]
     pub(crate) fn assert_no_cells(answer: &Json) {
         let keys = |value: &Json| -> Vec<String> {
             let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
@@ -1673,7 +1681,7 @@ mod tests {
         let answer = serde_json::to_value(terminal_core_available()).unwrap();
         assert_eq!(
             answer["available"],
-            cfg!(all(feature = "native-terminal", target_os = "android"))
+            cfg!(all(native_terminal_core, target_os = "android"))
         );
         assert!(!answer["reason"].as_str().unwrap().is_empty());
         assert!(crate::app_lock::allowed_while_locked(
@@ -1681,16 +1689,22 @@ mod tests {
         ));
     }
 
-    #[cfg(not(feature = "native-terminal"))]
+    /// What a build without the real core says: it is not built, or (the kill switch, even with the feature) disabled.
+    #[cfg(not(native_terminal_core))]
     #[tokio::test]
-    async fn without_the_feature_the_commands_say_the_core_is_not_built() {
+    async fn without_the_real_core_the_commands_say_why() {
+        let why = if cfg!(native_terminal_disabled) {
+            "The native terminal is disabled in this build"
+        } else {
+            "The native terminal core is not built into this app"
+        };
         let error = terminal_core_open(lease(), channel(), 80, 24, None)
             .await
             .err()
             .unwrap()
             .into_inner()
             .unwrap();
-        assert!(error.contains("not built"), "{error}");
+        assert_eq!(error, why);
         // The ends of the History lines range reach the core; only values outside it are refused.
         for lines in [100, 20_000] {
             let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines))
@@ -1699,7 +1713,7 @@ mod tests {
                 .unwrap()
                 .into_inner()
                 .unwrap();
-            assert!(error.contains("not built"), "{lines}: {error}");
+            assert_eq!(error, why, "{lines}");
         }
         assert!(terminal_core_open(lease(), channel(), 0, 24, None)
             .await

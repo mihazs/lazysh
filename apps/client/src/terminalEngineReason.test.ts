@@ -13,6 +13,7 @@ const selections: Record<string, BackendSelection> = {
   screenReader: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks accessibility'}]},
   lacking: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks ime, mouseReporting'}]},
   probe: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'no Vulkan'}]},
+  killSwitch: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'disabled in this build'}]},
 };
 
 describe('the recorded reason a session got its terminal engine', () => {
@@ -25,6 +26,7 @@ describe('the recorded reason a session got its terminal engine', () => {
       screenReader: 'xterm.js: a screen reader is active and the native engine cannot be read by it',
       lacking: 'xterm.js: the native engine lacks ime, mouseReporting',
       probe: 'xterm.js: the native engine cannot run here (no Vulkan)',
+      killSwitch: 'xterm.js: the native engine is disabled in this build',
     });
   });
 
