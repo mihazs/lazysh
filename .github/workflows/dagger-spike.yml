@@ -1,0 +1,88 @@
+# Throwaway spike for issue #2172: NOT for merge. Measures the verdict-client / verdict-agent commands natively (control)
+# and through Dagger with the engine state persisted via actions/cache (run 1 = cold, re-runs = warm).
+name: dagger-spike
+on:
+  push:
+    branches: [ci/dagger-spike]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  DAGGER_VERSION: 0.21.12
+  DAGGER_NO_NAG: '1'
+  MOON_TOOLCHAIN_FORCE_GLOBALS: 'true'
+jobs:
+  native-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - run: bun install --frozen-lockfile
+      - run: bunx moon run client:build client:check
+
+  native-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: agent
+          save-if: false
+      - run: bun install --frozen-lockfile
+      - run: bunx moon run '#companion:check-rust' '#companion:lint' '#companion:format-check'
+
+  dagger:
+    strategy:
+      fail-fast: false
+      matrix:
+        fn: [client, agent]
+    name: dagger-${{ matrix.fn }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore engine state
+        id: state
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/dagger-state.tar.zst
+          key: dagger-spike-${{ matrix.fn }}-${{ github.sha }}
+          restore-keys: dagger-spike-${{ matrix.fn }}-
+      - name: Start the engine on the restored state
+        run: |
+          mkdir -p /tmp/dagger-state
+          if [ -f ~/dagger-state.tar.zst ]; then
+            ls -l ~/dagger-state.tar.zst
+            sudo tar --zstd -xpf ~/dagger-state.tar.zst -C /tmp/dagger-state
+            echo "restored: $(sudo du -sh /tmp/dagger-state | cut -f1)"
+          fi
+          docker run -d --name dagger-engine --privileged -v /tmp/dagger-state:/var/lib/dagger \
+            registry.dagger.io/engine:v$DAGGER_VERSION
+          timeout 90 sh -c 'until docker logs dagger-engine 2>&1 | grep -qi "running server"; do sleep 1; done' || docker logs dagger-engine | tail -20
+      - name: dagger call ${{ matrix.fn }}
+        uses: dagger/dagger-for-github@v8.4.1
+        env:
+          _EXPERIMENTAL_DAGGER_RUNNER_HOST: docker-container://dagger-engine
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+          call: ${{ matrix.fn }} --nonce=${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Save engine state (tar)
+        if: always()
+        run: |
+          docker stop -t 30 dagger-engine >/dev/null
+          sudo du -sh /tmp/dagger-state
+          sudo tar --zstd -cpf ~/dagger-state.tar.zst -C /tmp/dagger-state .
+          sudo chown "$USER" ~/dagger-state.tar.zst
+          ls -l ~/dagger-state.tar.zst
+      - name: Save engine state (cache)
+        if: always() && steps.state.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/dagger-state.tar.zst
+          key: dagger-spike-${{ matrix.fn }}-${{ github.sha }}
