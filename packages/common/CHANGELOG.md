@@ -1,5 +1,9 @@
 # @lazysh/common
 
+## 1.80.0
+
+No changes in this release.
+
 ## 1.79.7
 
 No changes in this release.
