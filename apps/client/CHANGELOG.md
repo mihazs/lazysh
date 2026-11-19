@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.79.5
+
+### Patch Changes
+
+- b0e1608: Run the native terminal core's performance gate (`terminal-perf`) on pull requests that touch `packages/terminal-runtime`, `packages/terminal-renderer-wgpu` or the vendored ghostty-vt binding, not only on pushes to `main`, so a regression in parse-to-frame cost, allocations, scrollback rows, memory per session or renderer upload volume shows on the pull request that causes it (#2141, part of #1302). The job keeps its injected-slowdown and injected-allocation self-checks and stays report-only, because making it a required check is a repository ruleset change. CI only; the app, its terminal engine and its defaults are unchanged.
+- 08a6272: Add the program workloads of the terminal benchmark suite (W5 vim, W6 tmux and Zellij, W7 Mosh resize and reconnect, W8 agent screens and streaming, W11 background, resume and surface recreation): renderer-neutral replayable workloads built from the recorded captures, an xterm.js page runner and Playwright spec that can also drive an Android WebView on the Waydroid lane, and a native core example that replays the same bytes against the same screens. Test and documentation only; no behaviour changes.
+- @lazysh/account-usage@1.79.5
+  - @lazysh/common@1.79.5
+  - @lazysh/display-idle@1.79.5
+  - @lazysh/et-transport@1.79.5
+  - @lazysh/mosh-transport@1.79.5
+
 ## 1.79.4
 
 ### Patch Changes
