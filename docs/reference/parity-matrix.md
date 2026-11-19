@@ -277,22 +277,22 @@ The real-runtime cases are `#[ignore]` Rust tests (`bun run test:tmux`, `bun run
 
 ### rmux
 
-rmux is not implemented on `main`. [#1140](https://github.com/mihazs/lazysh/issues/1140) slice 1 (discovery, attach, tree and actions through the tmux code, pinned rmux 0.10.0 in `NLR`) is pushed on `feat/rmux-tmux-family` and is not yet a pull request. It is not in a released client. Its remaining acceptance is split into #1675 (Jump To and confirmed input), #1676 (Playwright, Linux GUI and Android) and #1677 (Mosh entry, vanished-session restore). Local sessions on Linux and Windows are #1148. These rows record that state; whichever PR lands rmux updates them with its CI job and test names.
+rmux 0.10.0 is discovered, attached, browsed and acted on through the tmux code (#1140, slice 1) and is Limited: Jump To and confirmed Chat input are #1675. Its real-rmux cases run in `NLR` against the pinned 0.10.0 release installed with its `install.sh`; none has run on `main` yet, so every row is `implemented`. Playwright, Linux GUI and Android cases are #1676, the Mosh entry and vanished-session restore are #1677. Local sessions on Linux and Windows are #1148.
 
 | Capability | Android | Linux | Windows | Evidence, or what is missing |
 | --- | --- | --- | --- | --- |
-| Discovery | missing | missing | missing | #1140. |
-| Attach and reattach | missing | missing | missing | #1140; Android case in #1676. |
+| Discovery | implemented | implemented | implemented | L: `NLR` `multiplexer::tests::real_rmux_lifecycle_and_literal_names` (the parsed tree equals `rmux list-panes -a`) and `ssh::tmux_jump_fixture::real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` (a probe leaves no daemon or socket behind). Unit tests cover capability parsing and the `-N` probe. Android and Windows run the same Rust code; no case drives them. |
+| Attach and reattach | implemented | implemented | implemented | L: `NLR` `real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server` attaches a labelled server over OpenSSH and closing the tab leaves the session. Android case: #1676. |
 | Navigation, Jump To, current marker | missing | missing | missing | #1675. |
-| Create | missing | missing | missing | #1140; worktree: #1141. |
+| Create | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` creates sessions and windows with names containing spaces, quotes, `#` and a trailing `;`, and a session, window and split pane in directories whose names hold `#{x}`, `#[b]`, `#(…)`, `##`, `}` and a trailing space or `;` (#1865). A new Git worktree: #1141. |
 | Agent launch | missing | missing | missing | #1141. |
-| Layout actions | missing | missing | missing | Rename, split and zoom: #1140; close and resize: #1144. |
+| Layout actions | implemented | implemented | implemented | L: `NLR` `real_rmux_lifecycle_and_literal_names` renames, splits, zooms and selects. Close and resize: #1144. |
 | History and clipboard | missing | missing | missing | #1147. |
 | Confirmed input | missing | missing | missing | #1675. |
 | Agent state and notifications | missing | missing | missing | #1146 (PR #1693 records the rmux server label). |
-| Restore | missing | missing | missing | Reattach while the daemon lives: #1140; recreate a vanished session: #1677. After a host reboot: `n/a`, the rmux daemon keeps state in memory and exits with its last session. |
-| Version detection | missing | missing | missing | `rmux capabilities --json`, not `-V`: #1140. |
-| Graceful degradation | missing | missing | missing | #1140 (wire mismatch shows Unsupported). |
+| Restore | implemented | implemented | implemented | Reattach while the daemon lives is the saved-workspace path (`workspace.test.ts`, `App.test.tsx`). Recreate a vanished session: #1677. After a host reboot: `n/a`, the rmux daemon keeps state in memory and exits with its last session. |
+| Version detection | implemented | implemented | implemented | L: `NLR` `real_ssh_discovery_reports_multiplexer_versions_and_support` with `rmux=degraded`; admission uses `rmux capabilities --json`, not `-V`. |
+| Graceful degradation | implemented | implemented | implemented | A daemon that refuses the upgraded client shows Unsupported with "Restart the rmux daemon after upgrading." (stub test in `multiplexer::tests`); no real stale daemon runs in CI. Playwright: #1676. |
 
 On a Windows machine rmux is reached through local sessions only, because its named pipe is bound to the desktop logon's user and integrity level: #1148. A Windows OpenSSH host is out of scope.
 
