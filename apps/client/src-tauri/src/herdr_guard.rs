@@ -643,6 +643,8 @@ impl Action {
 )]
 pub enum Reply {
     Observed {
+        /// The Herdr server this guarded attachment belongs to, so a caller never reads another server's client location.
+        server: String,
         destination: Destination,
     },
     Status {
@@ -869,6 +871,7 @@ impl Control {
                 {
                     WireResult::GuardObserved { guard } if guard.target.valid() => {
                         Ok(Reply::Observed {
+                            server: self.startup.name.clone(),
                             destination: guard.target.public(),
                         })
                     }

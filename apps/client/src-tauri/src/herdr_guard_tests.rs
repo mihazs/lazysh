@@ -61,6 +61,22 @@ fn target() -> Target {
 }
 
 #[test]
+fn observed_reply_names_the_attached_server_beside_the_exact_destination() {
+    let value = serde_json::to_value(Reply::Observed {
+        server: "original".into(),
+        destination: target().public(),
+    })
+    .unwrap();
+    assert_eq!(value["kind"], "observed");
+    assert_eq!(value["server"], "original");
+    assert_eq!(value["destination"]["pane"], "w1:p3");
+    assert_eq!(
+        value["destination"]["runtimeGeneration"],
+        u64::MAX.to_string()
+    );
+}
+
+#[test]
 fn observe_reply_requires_a_strict_target_and_preserves_generation() {
     let value = json!({"id":"guard","result":{"type":"guard_observed","guard":{"target":{
         "workspace":"w1","tab":"w1:t2","pane":"w1:p3","terminal":"term4",

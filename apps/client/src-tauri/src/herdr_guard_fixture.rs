@@ -414,16 +414,19 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         if preseed {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        let destination = timeout(Duration::from_secs(15), async {
+        let observed = timeout(Duration::from_secs(15), async {
             loop {
                 if let Ok(reply) = guard(&app, &lease, &child, json!({"kind":"observe"})).await {
-                    break reply["destination"].clone();
+                    break reply;
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
         .await
         .expect("owned Mosh display did not settle");
+        // The Spaces view marks this client's own location only for the server it is attached to.
+        assert_eq!(observed["server"], name);
+        let destination = observed["destination"].clone();
         let pane_info = servers.json(name, &["pane", "get", pane]).await;
         assert_eq!(pane_info["result"]["pane"]["scroll"]["viewport_rows"], 22);
         let x = destination["viewport"]["x"].as_u64().unwrap();

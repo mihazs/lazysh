@@ -121,7 +121,8 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(within(live).getByText('/project')).toBeTruthy();
   expect(within(live).getByText('Unverified reference; may be stale.')).toBeTruthy();
   await user.click(summary);
-  expect(mocks.invoke.mock.calls.filter(([command])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command))).toEqual([]);
+  // Spaces reads where the guarded client is; that observation grants no input, so it is not an authority call.
+  expect(mocks.invoke.mock.calls.filter(([command,args])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command) && !(command==='herdr_chat' && args?.action?.kind==='observe'))).toEqual([]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
