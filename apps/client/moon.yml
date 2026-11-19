@@ -3,7 +3,7 @@ layer: application
 stack: frontend
 dependsOn: [client-native]
 fileGroups:
-  webSources: ['src/**/*', 'public/**/*', 'index.html', 'vite.config.ts', 'tsconfig*.json']
+  webSources: ['src/**/*', 'build/**/*', 'public/**/*', 'index.html', 'vite.config.ts', 'tsconfig*.json']
 tasks:
   dev:
     command: bun run dev
