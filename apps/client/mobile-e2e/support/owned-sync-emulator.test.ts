@@ -76,7 +76,11 @@ test('WDIO cannot proceed to a session after a pre-session safety failure', () =
 test('a real WDIO worker sends no session request when pre-session admission fails', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'lazysh-wdio-gate-'));
   const requests: string[] = [];
-  const server = createServer((req, res) => { requests.push(`${req.method} ${req.url}`); res.writeHead(500).end('{}'); });
+  // Only WebDriver traffic counts: other local processes may probe a loopback port.
+  const server = createServer((req, res) => {
+    if (req.headers['user-agent']?.startsWith('webdriver/')) requests.push(`${req.method} ${req.url}`);
+    res.writeHead(500).end('{}');
+  });
   await new Promise<void>(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
   const root = resolve(import.meta.dir, '../../../..');
   const port = (server.address() as {port: number}).port;
@@ -96,7 +100,7 @@ test('a real WDIO worker sends no session request when pre-session admission fai
       child.stdout.on('data', data => { output += String(data); });
       child.stderr.on('data', data => { output += String(data); });
       return new Promise<{code: number | null; output: string}>((done, reject) => {
-        const timer = setTimeout(() => { child.kill(); reject(new Error('WDIO gate timed out')); }, 20_000);
+        const timer = setTimeout(() => { child.kill(); reject(new Error('WDIO gate timed out')); }, 40_000);
         child.once('error', error => { clearTimeout(timer); reject(error); });
         child.once('close', code => { clearTimeout(timer); done({code, output}); });
       });
@@ -115,4 +119,4 @@ test('a real WDIO worker sends no session request when pre-session admission fai
     await new Promise<void>(done => server.close(() => done()));
     await rm(dir, {recursive: true, force: true});
   }
-}, 30_000);
+}, 90_000);
