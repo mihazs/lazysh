@@ -1,6 +1,7 @@
 use super::*;
 use std::{collections::VecDeque, io::Write};
 
+const PHONE: &str = "emulator-5554";
 const UUID: &str = "9C405382-203A-4DC0-A11B-B2FC37EBA881";
 struct FakeRunner {
     calls: Vec<(Tool, Vec<String>)>,
@@ -259,6 +260,140 @@ fn touch_swipe_key_and_reboot_target_only_the_selected_android_serial() {
     );
 }
 
+fn android_gesture(id: &str, action: android::AndroidAction) -> DeviceCommand {
+    DeviceCommand::Android {
+        id: id.into(),
+        action,
+    }
+}
+fn tap_at(id: &str, x: u32, y: u32, width: u32, height: u32) -> DeviceCommand {
+    android_gesture(
+        id,
+        android::AndroidAction::Gesture(Gesture::Tap {
+            x,
+            y,
+            width,
+            height,
+        }),
+    )
+}
+fn swipe_from(id: &str, [x, y, to_x, to_y]: [u32; 4], width: u32, height: u32) -> DeviceCommand {
+    android_gesture(
+        id,
+        android::AndroidAction::Gesture(Gesture::Swipe {
+            x,
+            y,
+            to_x,
+            to_y,
+            width,
+            height,
+            duration_ms: 250,
+        }),
+    )
+}
+
+#[test]
+fn android_video_gestures_run_only_while_the_display_keeps_the_mapped_size() {
+    let mut runner = FakeRunner::new(vec![Ok(png(108, 192)), Ok(Vec::new())]);
+    let result = execute(&mut runner, tap_at(PHONE, 54, 96, 108, 192)).unwrap();
+    assert_eq!(result["operation"], "tap");
+    assert_eq!(result["status"], "requested");
+    assert_eq!(
+        runner.calls,
+        vec![
+            (
+                Tool::Adb,
+                args(&["-s", "emulator-5554", "exec-out", "screencap", "-p"])
+            ),
+            (
+                Tool::Adb,
+                args(&["-s", "emulator-5554", "shell", "input", "tap", "54", "96"])
+            )
+        ]
+    );
+    let mut runner = FakeRunner::new(vec![Ok(png(108, 192)), Ok(Vec::new())]);
+    execute(&mut runner, swipe_from(PHONE, [10, 20, 30, 40], 108, 192)).unwrap();
+    assert_eq!(
+        runner.calls[1].1,
+        args(&[
+            "-s",
+            "emulator-5554",
+            "shell",
+            "input",
+            "swipe",
+            "10",
+            "20",
+            "30",
+            "40",
+            "250"
+        ])
+    );
+    // The device rotated after the video's coordinates were mapped: nothing is touched.
+    for gesture in [
+        tap_at(PHONE, 54, 96, 108, 192),
+        swipe_from(PHONE, [10, 20, 30, 40], 108, 192),
+    ] {
+        let mut runner = FakeRunner::new(vec![Ok(png(192, 108))]);
+        assert!(matches!(
+            execute(&mut runner, gesture),
+            Err(Error::Device("DeviceDimensionsChanged"))
+        ));
+        assert_eq!(runner.calls.len(), 1, "only the display size was read");
+    }
+}
+
+#[test]
+fn android_video_gestures_outside_the_mapped_display_or_with_hostile_ids_reach_no_sdk() {
+    let mut runner = FakeRunner::new(vec![]);
+    for gesture in [
+        tap_at(PHONE, 108, 0, 108, 192),
+        tap_at(PHONE, 0, 192, 108, 192),
+        tap_at(PHONE, 0, 0, 0, 0),
+        swipe_from(PHONE, [0, 0, 108, 5], 108, 192),
+    ] {
+        assert!(execute(&mut runner, gesture).is_err());
+    }
+    assert!(execute(
+        &mut runner,
+        DeviceCommand::Android {
+            id: "-s".into(),
+            action: android::AndroidAction::Gesture(Gesture::Tap {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2
+            })
+        }
+    )
+    .is_err());
+    assert!(runner.calls.is_empty());
+}
+
+#[test]
+fn android_video_probe_reports_the_display_size_the_gestures_must_match() {
+    let mut outputs = vec![Ok(b"cmd\nshell_v2\nstat_v2\n".to_vec()), Ok(Vec::new())];
+    outputs.extend(
+        [
+            "Decoder h264 ",
+            "Encoder mjpeg ",
+            "Muxer mpjpeg ",
+            "Filter fps",
+        ]
+        .map(|help| Ok(help.as_bytes().to_vec())),
+    );
+    outputs.push(Ok(png(1080, 1920)));
+    let probe = execute(
+        &mut FakeRunner::new(outputs),
+        android_gesture(PHONE, android::AndroidAction::Probe),
+    )
+    .unwrap();
+    assert_eq!(probe["viewOnly"], false);
+    assert_eq!(probe["displayWidth"], 1080);
+    assert_eq!(probe["displayHeight"], 1920);
+    assert_eq!(probe["width"], 720);
+    assert_eq!(probe["height"], 1280);
+}
+
 #[test]
 fn boot_only_launches_a_discovered_avd_and_does_not_claim_completed_boot() {
     let mut runner = FakeRunner::new(vec![Ok(b"Pixel_API_36\n".to_vec())]);
@@ -427,13 +562,16 @@ pub(super) fn owned_emulator() -> String {
     assert_eq!(std::env::var("ANDROID_SERIAL").as_deref(), Ok(id.as_str()));
     id
 }
+fn sdk_runner() -> SdkRunner {
+    SdkRunner {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    }
+}
 #[test]
 #[ignore = "requires an explicitly selected owned Android emulator and installed SDK"]
 fn android_owned_emulator_inventory_and_screenshot() {
     let id = owned_emulator();
-    let mut runner = SdkRunner {
-        cancelled: Arc::new(AtomicBool::new(false)),
-    };
+    let mut runner = sdk_runner();
     let inventory = execute(
         &mut runner,
         DeviceCommand::List {
@@ -469,6 +607,61 @@ fn android_owned_emulator_inventory_and_screenshot() {
     println!(
         "owned Android SDK preview: {}x{} source, {}x{} JPEG",
         frame["width"], frame["height"], frame["imageWidth"], frame["imageHeight"]
+    );
+}
+
+#[test]
+#[ignore = "requires an explicitly selected owned Android emulator and installed SDK"]
+fn android_owned_emulator_video_gestures_follow_the_display_size() {
+    struct ResetSize(String);
+    impl Drop for ResetSize {
+        fn drop(&mut self) {
+            let _ = sdk_runner().output(
+                Tool::Adb,
+                &args(&["-s", &self.0, "shell", "wm", "size", "reset"]),
+                MAX_SDK_TEXT,
+            );
+        }
+    }
+    let id = owned_emulator();
+    let mut runner = sdk_runner();
+    let (width, height) = android::display_size(&mut runner, &id).unwrap();
+    let tap = |runner: &mut SdkRunner, (width, height): (u32, u32)| {
+        execute(runner, tap_at(&id, width / 2, height / 2, width, height))
+    };
+    tap(&mut runner, (width, height)).expect("a tap at the current display size");
+    let _reset = ResetSize(id.clone());
+    let resized = (width / 2 / 2 * 2, height * 3 / 4 / 2 * 2);
+    runner
+        .output(
+            Tool::Adb,
+            &args(&[
+                "-s",
+                &id,
+                "shell",
+                "wm",
+                "size",
+                &format!("{}x{}", resized.0, resized.1),
+            ]),
+            MAX_SDK_TEXT,
+        )
+        .unwrap();
+    let started = Instant::now();
+    while android::display_size(&mut runner, &id).unwrap() != resized {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "display never resized"
+        );
+        thread::sleep(Duration::from_millis(250));
+    }
+    assert!(matches!(
+        tap(&mut runner, (width, height)),
+        Err(Error::Device("DeviceDimensionsChanged"))
+    ));
+    tap(&mut runner, resized).expect("a tap mapped from the resized display");
+    println!(
+        "owned Android gestures: {width}x{height} accepted, stale mapping refused at {}x{}",
+        resized.0, resized.1
     );
 }
 

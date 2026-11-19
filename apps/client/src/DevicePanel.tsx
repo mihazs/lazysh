@@ -82,6 +82,11 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   const [live, setLive] = useState(false);
   const [continuous, setContinuous] = useState(false);
   const [androidVideoReady, setAndroidVideoReady] = useState(false);
+  // The display's pixel size the companion verified; touch on the video is mapped to it.
+  const [androidDisplay, setAndroidDisplay] = useState<{
+    width: number;
+    height: number;
+  }>();
   const [needsScreenshot, setNeedsScreenshot] = useState(false);
   const [socket, setSocket] = useState("");
   const [companion, setCompanion] = useState<{
@@ -104,6 +109,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     setLive(false);
     setContinuous(false);
     setAndroidVideoReady(false);
+    setAndroidDisplay(undefined);
     setNeedsScreenshot(false);
     setCompanion(undefined);
     setInput(false);
@@ -241,6 +247,28 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       });
       return;
     }
+    if (
+      platform === "android" &&
+      continuous &&
+      androidDisplay &&
+      ["tap", "swipe"].includes(type || "")
+    ) {
+      try {
+        await invoke("android_device_action", {
+          sessionId,
+          id,
+          ...androidDisplay,
+          action,
+        });
+      } catch (error) {
+        // The host refuses once the display rotated or resized: the video no longer matches it.
+        setContinuous(false);
+        setAndroidVideoReady(false);
+        setAndroidDisplay(undefined);
+        throw error;
+      }
+      return;
+    }
     await invoke("device_action", {
       sessionId,
       devicePlatform: platform,
@@ -248,6 +276,10 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       action,
     });
   }
+  // Screenshot input needs a fresh screenshot; video input needs the verified display size.
+  const androidInputBlocked =
+    platform === "android" && (continuous ? !androidDisplay : needsScreenshot);
+  const touchSpace = platform === "ios" ? companion : continuous ? androidDisplay : undefined;
   useEffect(() => {
     if (!live || !selected) return;
     const timer = setInterval(() => {
@@ -289,6 +321,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               setLive(false);
               setContinuous(false);
               setAndroidVideoReady(false);
+              setAndroidDisplay(undefined);
               setNeedsScreenshot(false);
               setCompanion(undefined);
               setInput(false);
@@ -316,18 +349,34 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
                   platform: string;
                   stream: boolean;
                   viewOnly: boolean;
+                  displayWidth?: number;
+                  displayHeight?: number;
                   maximumSeconds: number;
                 }>("android_device_probe", { sessionId, id: selected });
+                const display = [value.displayWidth, value.displayHeight];
                 if (
                   value.schemaVersion !== 1 ||
                   value.id !== selected ||
                   value.platform !== "android" ||
                   value.stream !== true ||
-                  value.viewOnly !== true ||
-                  value.maximumSeconds !== 180
+                  typeof value.viewOnly !== "boolean" ||
+                  value.maximumSeconds !== 180 ||
+                  // A companion without input support reports view-only and no display size.
+                  (value.viewOnly
+                    ? display.some((n) => n !== undefined)
+                    : !display.every(
+                        (n) => Number.isInteger(n) && n! > 0 && n! <= 8192,
+                      ))
                 )
                   throw new LocalUiError('devicesAndroidUnavailable');
-                if (generation === current.current) setAndroidVideoReady(true);
+                if (generation === current.current) {
+                  setAndroidVideoReady(true);
+                  setAndroidDisplay(
+                    value.viewOnly
+                      ? undefined
+                      : { width: value.displayWidth!, height: value.displayHeight! },
+                  );
+                }
               })
             }
           >
@@ -438,8 +487,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
             <input
               type="checkbox"
               disabled={
-                (!device.capabilities.tap && !companion) ||
-                (platform === "android" && (continuous || needsScreenshot))
+                (!device.capabilities.tap && !companion) || androidInputBlocked
               }
               checked={input}
               onChange={(event) => setInput(event.target.checked)}
@@ -491,12 +539,12 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           onPointerDown={(event) => {
             if (
               !input ||
-              (platform === "android" && (continuous || needsScreenshot)) ||
+              androidInputBlocked ||
               busy ||
-              (companion &&
+              (touchSpace &&
                 Math.abs(
                   frame.imageWidth / frame.imageHeight -
-                    companion.width / companion.height,
+                    touchSpace.width / touchSpace.height,
                 ) > 0.02)
             )
               return;
@@ -506,7 +554,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               event.clientY - rect.top,
               rect.width,
               rect.height,
-              platform === "ios" && companion ? companion : frame,
+              touchSpace ?? frame,
             );
             start.current = { ...point, time: Date.now(), id: selected };
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -521,7 +569,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               event.clientY - rect.top,
               rect.width,
               rect.height,
-              platform === "ios" && companion ? companion : frame,
+              touchSpace ?? frame,
             );
             const swipe = Math.hypot(end.x - began.x, end.y - began.y) > 10;
             if (swipe && !device?.capabilities.swipe && !companion) return;
