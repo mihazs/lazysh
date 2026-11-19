@@ -511,7 +511,8 @@ describe('live Herdr discovery',()=>{
   }));
   it('keeps loaded navigation rows enabled during passive reads and blocks only the explicit action',()=>pollingClock(async invoke=>{
     let reads=0;const poll=deferredRead(),action=deferredRead();
-    vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise);
+    // `reads` counts snapshot reads only; stock Herdr has no guard to ask where the client is.
+    vi.mocked(invoke).mockImplementation(command=>command==='herdr_chat'?Promise.reject({kind:'herdr_chat_unavailable'}):command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise);
     const navigate=vi.fn(()=>action.promise.then(()=>{})),close=vi.fn();
     render(<HerdrNavigation sessionId="steady-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={close}/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
