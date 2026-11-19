@@ -15,9 +15,9 @@ const scratch = async () => (await roots.create()).root;
 
 /** Runs `use` inside a throwaway repository holding one empty commit per subject, as the generator finds them. */
 async function inRepositoryWith(subjects: string[], use: (commits: string[]) => Promise<void>) {
-  const directory = await scratch();
+  const { root: directory, env } = await roots.create();
   const git = (...args: string[]) => Bun.spawnSync(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args],
-    { cwd: directory, stdout: 'pipe', stderr: 'pipe' }).stdout.toString().trim();
+    { cwd: directory, env, stdout: 'pipe', stderr: 'pipe' }).stdout.toString().trim();
   git('init', '-q', '-b', 'main');
   const commits = subjects.map(subject => (git('commit', '-q', '--allow-empty', '-m', subject), git('rev-parse', 'HEAD')));
   const previous = process.cwd();
