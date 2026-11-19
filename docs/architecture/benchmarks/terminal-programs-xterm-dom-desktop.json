@@ -1,0 +1,914 @@
+{
+  "schema": 1,
+  "run": "program workloads",
+  "candidate": "xterm-dom",
+  "mode": "full",
+  "host": {
+    "loadAverageAtEnd": [
+      3.3,
+      2.87,
+      3.17
+    ],
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalCpus": 24,
+    "os": "Linux 7.3.3-1-cachyos",
+    "cpuGovernor": "powersave"
+  },
+  "toolchain": {
+    "node": "26.6.0",
+    "chromium": "156.0.8078.4",
+    "androidSerial": null,
+    "device": null,
+    "xterm": "5.5.0"
+  },
+  "source": {
+    "commit": "02c6e90d9ee96a79caf48fe18fef806caf0b55b2",
+    "dirty": true
+  },
+  "limits": "Headless Chromium on a desktop host: not an Android WebView. Each repetition is a fresh session at the recorded geometry; its creation is not timed. Timestamps have 0.1 ms resolution. The recorded sessions are short first-run and scripted screens, not signed-in agent turns, and Neovim was not recorded. No battery or thermal counters.",
+  "results": [
+    {
+      "id": "W5",
+      "title": "vim editing session",
+      "variant": "vim 9 on a three-line file: insert, :set number, gg, :q!",
+      "source": "fixtures/vt/captures.json#capture-vim-edit",
+      "cols": 60,
+      "rows": 12,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 1600,
+      "sha256": "6a3addff353d394634a7cd64bd8d0e78d8e2ddd4c874cb5a23e4b6cd3c4407b8",
+      "steps": 1,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 1,
+        "bytes": 1600,
+        "applyMs": {
+          "n": 100,
+          "min": 0.29999999701976776,
+          "p50": 0.5,
+          "p95": 0.8999999986961484,
+          "p99": 1.3220000007376187,
+          "max": 3.5,
+          "mean": 0.5479999995231628
+        },
+        "renderMs": {
+          "n": 100,
+          "min": 16.5,
+          "p50": 16.699999999254942,
+          "p95": 16.900000002235174,
+          "p99": 17.004000000022355,
+          "max": 17.400000002235174,
+          "mean": 16.745999999381603
+        },
+        "repMs": {
+          "n": 100,
+          "min": 16.5,
+          "p50": 16.699999999254942,
+          "p95": 17,
+          "p99": 17.104000001475217,
+          "max": 17.5,
+          "mean": 16.771999999582768
+        },
+        "applyMiBs": 2.784450561273229,
+        "pacing": {
+          "frames": 300,
+          "frameMs": {
+            "n": 300,
+            "min": 16.599999999999454,
+            "p50": 16.699999999999818,
+            "p95": 16.700000000000728,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.665666666666667
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 5012.451334,
+        "mainThreadMs": {
+          "task": 525.2869999999999,
+          "script": 66.53699999999999,
+          "layout": 50.91,
+          "styleRecalc": 109.406
+        },
+        "layouts": 902,
+        "styleRecalcs": 902,
+        "processCpuMs": {
+          "browser": 19.99999999999999,
+          "renderer": 710,
+          "GPU": 39.99999999999999,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.877254486083984,
+        "heapDeltaMiB": 1.2625389099121094,
+        "domNodes": 24,
+        "rendererRssMiB": 126.046875
+      }
+    },
+    {
+      "id": "W6",
+      "title": "tmux session",
+      "variant": "tmux 3: two splits and a coloured printf",
+      "source": "fixtures/vt/captures.json#capture-tmux-splits",
+      "cols": 60,
+      "rows": 14,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 2100,
+      "sha256": "85bb082e3aa1a8601263c7f8b4ebeb978666776c36b4d97e4d92e2a72584b40d",
+      "steps": 1,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 1,
+        "bytes": 2100,
+        "applyMs": {
+          "n": 100,
+          "min": 0.29999999701976776,
+          "p50": 0.5999999977648258,
+          "p95": 1,
+          "p99": 1.8270000007376213,
+          "max": 4.5,
+          "mean": 0.6419999997317791
+        },
+        "renderMs": {
+          "n": 100,
+          "min": 17.699999999254942,
+          "p50": 18.099999997764826,
+          "p95": 18.89999999869615,
+          "p99": 19.817000000737615,
+          "max": 21.5,
+          "mean": 18.184999999776483
+        },
+        "repMs": {
+          "n": 100,
+          "min": 17.699999999254942,
+          "p50": 18.100000001490116,
+          "p95": 18.89999999869615,
+          "p99": 20.213999999277302,
+          "max": 21.600000001490116,
+          "mean": 18.230999999791383
+        },
+        "applyMiBs": 3.1194954288003722,
+        "pacing": {
+          "frames": 300,
+          "frameMs": {
+            "n": 300,
+            "min": 16.5,
+            "p50": 16.699999999999818,
+            "p95": 16.799999999999272,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.666000000000018
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 5006.777531999999,
+        "mainThreadMs": {
+          "task": 693.195,
+          "script": 111.902,
+          "layout": 133.75400000000002,
+          "styleRecalc": 141.089
+        },
+        "layouts": 3702,
+        "styleRecalcs": 3702,
+        "processCpuMs": {
+          "browser": 19.99999999999999,
+          "renderer": 940.0000000000001,
+          "GPU": 50,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.876007080078125,
+        "heapDeltaMiB": 1.2613029479980469,
+        "domNodes": 24,
+        "rendererRssMiB": 127.3203125
+      }
+    },
+    {
+      "id": "W6",
+      "title": "Zellij session",
+      "variant": "Zellij 0.46: a command, a new pane and a command in it",
+      "source": "fixtures/vt/captures.json#capture-zellij-panes",
+      "cols": 100,
+      "rows": 16,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 18537,
+      "sha256": "661f5177850a5fc738d8ab8ea974c7438a9cb1fd4b7315d4cedcc607a516fbca",
+      "steps": 2,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 2,
+        "bytes": 18537,
+        "applyMs": {
+          "n": 200,
+          "min": 0.7999999970197678,
+          "p50": 1,
+          "p95": 1.5,
+          "p99": 2.306000000722701,
+          "max": 8,
+          "mean": 1.1274999999441206
+        },
+        "renderMs": {
+          "n": 200,
+          "min": 4,
+          "p50": 17.699999999254942,
+          "p95": 19.699999999254942,
+          "p99": 21.003000000007447,
+          "max": 32.099999997764826,
+          "mean": 17.366500000003725
+        },
+        "repMs": {
+          "n": 100,
+          "min": 34.30000000074506,
+          "p50": 34.69999999925494,
+          "p95": 35.60500000156462,
+          "p99": 36.202999999262396,
+          "max": 36.5,
+          "mean": 34.807000000141564
+        },
+        "applyMiBs": 7.839583505143591,
+        "pacing": {
+          "frames": 400,
+          "frameMs": {
+            "n": 400,
+            "min": 16.5,
+            "p50": 16.699999999999818,
+            "p95": 16.700000000000728,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.666000000000007
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 6676.653362999998,
+        "mainThreadMs": {
+          "task": 1167.065,
+          "script": 253.09900000000002,
+          "layout": 301.37,
+          "styleRecalc": 191.90699999999998
+        },
+        "layouts": 8802,
+        "styleRecalcs": 8802,
+        "processCpuMs": {
+          "browser": 39.99999999999998,
+          "renderer": 1690.0000000000002,
+          "GPU": 150.00000000000003,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.8856201171875,
+        "heapDeltaMiB": 1.2714004516601562,
+        "domNodes": 24,
+        "rendererRssMiB": 130.48828125
+      }
+    },
+    {
+      "id": "W7",
+      "title": "Mosh resize",
+      "variant": "six captured display updates, four of which resize",
+      "source": "e2e/fixtures/mosh-resize-frames.json",
+      "cols": 40,
+      "rows": 12,
+      "kind": "mosh",
+      "repeatable": false,
+      "bytes": 1966,
+      "sha256": "2f389c8a89f7786fe851513ad91491be86ccad08cc545356106d367c05a045a7",
+      "steps": 6,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 6,
+        "bytes": 1966,
+        "applyMs": {
+          "n": 600,
+          "min": 0,
+          "p50": 0.7000000029802322,
+          "p95": 1.300000000745058,
+          "p99": 1.6010000015050163,
+          "max": 4.5,
+          "mean": 0.7333333333395422
+        },
+        "renderMs": {
+          "n": 600,
+          "min": 13.899999998509884,
+          "p50": 16.600000001490116,
+          "p95": 17.900000002235174,
+          "p99": 18.29999999705702,
+          "max": 19.400000002235174,
+          "mean": 16.653500000002484
+        },
+        "repMs": {
+          "n": 100,
+          "min": 97.90000000223517,
+          "p50": 100.10000000149012,
+          "p95": 100.40000000223517,
+          "p99": 100.60100000150501,
+          "max": 100.70000000298023,
+          "mean": 100.1230000000447
+        },
+        "applyMiBs": 0.4261190240997303,
+        "pacing": {
+          "frames": 800,
+          "frameMs": {
+            "n": 800,
+            "min": 16.5,
+            "p50": 16.699999999999818,
+            "p95": 16.700000000000728,
+            "p99": 16.800000000000182,
+            "max": 16.80000000000109,
+            "mean": 16.66604250000008
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 13338.784037000001,
+        "mainThreadMs": {
+          "task": 1348.6670000000001,
+          "script": 221.802,
+          "layout": 257.274,
+          "styleRecalc": 259.707
+        },
+        "layouts": 5802,
+        "styleRecalcs": 5802,
+        "processCpuMs": {
+          "browser": 60,
+          "renderer": 1980.0000000000002,
+          "GPU": 159.99999999999997,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.872631072998047,
+        "heapDeltaMiB": 1.2579536437988281,
+        "domNodes": 24,
+        "rendererRssMiB": 127.359375
+      }
+    },
+    {
+      "id": "W7",
+      "title": "Mosh reconnect",
+      "variant": "the first captured display update, on a fresh terminal",
+      "source": "e2e/fixtures/mosh-resize-frames.json",
+      "cols": 40,
+      "rows": 12,
+      "kind": "mosh",
+      "repeatable": false,
+      "bytes": 364,
+      "sha256": "dd01c05d1132666f9cb08950470dfa0011be5fd25819071ba51615f2f7a6ec84",
+      "steps": 1,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 1,
+        "bytes": 364,
+        "applyMs": {
+          "n": 100,
+          "min": 0,
+          "p50": 0.29999999701976776,
+          "p95": 0.5,
+          "p99": 0.7149999992549496,
+          "max": 2.199999999254942,
+          "mean": 0.2819999999180436
+        },
+        "renderMs": {
+          "n": 100,
+          "min": 16.200000002980232,
+          "p50": 17.899999998509884,
+          "p95": 18.805000000819565,
+          "p99": 21.21099999926985,
+          "max": 22.300000000745058,
+          "mean": 18.01899999987334
+        },
+        "repMs": {
+          "n": 100,
+          "min": 16.300000000745058,
+          "p50": 17.900000002235174,
+          "p95": 19,
+          "p99": 21.310999997034674,
+          "max": 22.399999998509884,
+          "mean": 18.08299999963492
+        },
+        "applyMiBs": 1.2309838697615674,
+        "pacing": {
+          "frames": 300,
+          "frameMs": {
+            "n": 300,
+            "min": 16.5,
+            "p50": 16.699999999999818,
+            "p95": 16.799999999999745,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.66577999999999
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 5017.624981000001,
+        "mainThreadMs": {
+          "task": 661.9050000000001,
+          "script": 64.515,
+          "layout": 138.484,
+          "styleRecalc": 120.22099999999999
+        },
+        "layouts": 4502,
+        "styleRecalcs": 4502,
+        "processCpuMs": {
+          "browser": 20.000000000000018,
+          "renderer": 860,
+          "GPU": 49.999999999999986,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.832370758056641,
+        "heapDeltaMiB": 1.2176551818847656,
+        "domNodes": 24,
+        "rendererRssMiB": 127.55859375
+      }
+    },
+    {
+      "id": "W8",
+      "title": "Agent screens",
+      "variant": "Claude Code 2.1 first run: theme picker to login method",
+      "source": "fixtures/vt/captures.json#capture-claude-onboarding",
+      "cols": 100,
+      "rows": 30,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 8291,
+      "sha256": "4430a7cd567b1959f12af6ef95bafd51dfd42f37cd52e3ef1a4596b00c3d3e46",
+      "steps": 1,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 1,
+        "bytes": 8291,
+        "applyMs": {
+          "n": 100,
+          "min": 0.09999999776482582,
+          "p50": 0.30000000074505806,
+          "p95": 0.6999999994412065,
+          "p99": 1.2219999992847554,
+          "max": 3.400000002235174,
+          "mean": 0.39799999982118606
+        },
+        "renderMs": {
+          "n": 100,
+          "min": 18.400000002235174,
+          "p50": 20.09999999962747,
+          "p95": 21.3050000006333,
+          "p99": 27.849000000730182,
+          "max": 32.69999999925494,
+          "mean": 20.321999999694526
+        },
+        "repMs": {
+          "n": 100,
+          "min": 18.5,
+          "p50": 20.100000001490116,
+          "p95": 21.310000000707806,
+          "p99": 27.95200000222775,
+          "max": 33.100000001490116,
+          "mean": 20.38499999988824
+        },
+        "applyMiBs": 19.866617489639818,
+        "pacing": {
+          "frames": 300,
+          "frameMs": {
+            "n": 300,
+            "min": 16.5,
+            "p50": 16.699999999999818,
+            "p95": 16.700000000000294,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.665780000000012
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 5013.736820999999,
+        "mainThreadMs": {
+          "task": 884.172,
+          "script": 134.329,
+          "layout": 267.573,
+          "styleRecalc": 157.453
+        },
+        "layouts": 8402,
+        "styleRecalcs": 8402,
+        "processCpuMs": {
+          "browser": 20.000000000000018,
+          "renderer": 1140.0000000000002,
+          "GPU": 60.00000000000006,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.810432434082031,
+        "heapDeltaMiB": 1.1957283020019531,
+        "domNodes": 34,
+        "rendererRssMiB": 129.97265625
+      }
+    },
+    {
+      "id": "W8",
+      "title": "Agent screens",
+      "variant": "Codex 0.167 first run: sign-in menu",
+      "source": "fixtures/vt/captures.json#capture-codex-login",
+      "cols": 100,
+      "rows": 30,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 1995,
+      "sha256": "f07f4ece4ee6b1a67d6ded2d3ad2a945f0da3dabc63524d46b0cdf5c956b270e",
+      "steps": 1,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 1,
+        "bytes": 1995,
+        "applyMs": {
+          "n": 100,
+          "min": 0.09999999776482582,
+          "p50": 0.30000000074505806,
+          "p95": 0.6999999994412065,
+          "p99": 1.1149999978020864,
+          "max": 2.600000001490116,
+          "mean": 0.36300000015646217
+        },
+        "renderMs": {
+          "n": 100,
+          "min": 18,
+          "p50": 18.300000000745058,
+          "p95": 19.5,
+          "p99": 20.20100000295788,
+          "max": 20.300000000745058,
+          "mean": 18.46600000012666
+        },
+        "repMs": {
+          "n": 100,
+          "min": 18,
+          "p50": 18.399999998509884,
+          "p95": 19.51000000014901,
+          "p99": 20.30300000075251,
+          "max": 20.600000001490116,
+          "mean": 18.520000000037253
+        },
+        "applyMiBs": 5.241267935014899,
+        "pacing": {
+          "frames": 299,
+          "frameMs": {
+            "n": 299,
+            "min": 16.599999999999454,
+            "p50": 16.699999999999818,
+            "p95": 16.700000000000728,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.666220735785956
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 5002.496192999999,
+        "mainThreadMs": {
+          "task": 665.452,
+          "script": 86.559,
+          "layout": 161.596,
+          "styleRecalc": 122.92599999999999
+        },
+        "layouts": 5901,
+        "styleRecalcs": 5901,
+        "processCpuMs": {
+          "browser": 20.000000000000018,
+          "renderer": 900,
+          "GPU": 60.00000000000006,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.826496124267578,
+        "heapDeltaMiB": 1.2117919921875,
+        "domNodes": 24,
+        "rendererRssMiB": 126.65625
+      }
+    },
+    {
+      "id": "W8",
+      "title": "Agent screens",
+      "variant": "OpenCode 2.2 home screen, text typed and cleared",
+      "source": "fixtures/vt/captures.json#capture-opencode-home",
+      "cols": 100,
+      "rows": 30,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 14553,
+      "sha256": "1c1ca933e57f050cdba61178487b2a5e8a98577cbd87f97667be10ffd448ae2c",
+      "steps": 1,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 1,
+      "run": {
+        "reps": 100,
+        "steps": 1,
+        "bytes": 14553,
+        "applyMs": {
+          "n": 100,
+          "min": 0.8999999985098839,
+          "p50": 1.199999999254942,
+          "p95": 2.0050000000745056,
+          "p99": 3.1300000014901315,
+          "max": 6.100000001490116,
+          "mean": 1.3619999998435377
+        },
+        "renderMs": {
+          "n": 100,
+          "min": 18.899999998509884,
+          "p50": 19.399999998509884,
+          "p95": 21.034999999962746,
+          "p99": 22.323000000752522,
+          "max": 24.600000001490116,
+          "mean": 19.557999999783934
+        },
+        "repMs": {
+          "n": 100,
+          "min": 19,
+          "p50": 19.450000001117587,
+          "p95": 21.135000001452863,
+          "p99": 22.526000000014914,
+          "max": 25.100000001490116,
+          "mean": 19.621999999955296
+        },
+        "applyMiBs": 10.190031078013591,
+        "pacing": {
+          "frames": 300,
+          "frameMs": {
+            "n": 300,
+            "min": 16.5,
+            "p50": 16.699999999999818,
+            "p95": 16.799999999999738,
+            "p99": 16.800000000000182,
+            "max": 16.800000000000182,
+            "mean": 16.665666666666667
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 5012.476260999996,
+        "mainThreadMs": {
+          "task": 928.8000000000001,
+          "script": 228.08900000000003,
+          "layout": 204.676,
+          "styleRecalc": 182.131
+        },
+        "layouts": 5502,
+        "styleRecalcs": 5502,
+        "processCpuMs": {
+          "browser": 30.00000000000003,
+          "renderer": 1220,
+          "GPU": 59.99999999999994,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 4.872653961181641,
+        "heapDeltaMiB": 1.2584342956542969,
+        "domNodes": 24,
+        "rendererRssMiB": 128.046875
+      }
+    },
+    {
+      "id": "W8",
+      "title": "Agent streaming",
+      "variant": "seeded: a few words per write, the live region redrawn after each",
+      "source": "bench/workloads.ts agentStream(300 tokens, seed 80)",
+      "cols": 100,
+      "rows": 30,
+      "kind": "stream",
+      "repeatable": false,
+      "bytes": 272397,
+      "sha256": "390e6c3ff03af3a3244bdd71a53eb987381e093763d23c3cf3948d7b431a4028",
+      "steps": 300,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 5,
+      "copies": 1,
+      "run": {
+        "reps": 5,
+        "steps": 300,
+        "bytes": 272397,
+        "applyMs": {
+          "n": 1500,
+          "min": 0.09999999776482582,
+          "p50": 0.5,
+          "p95": 0.9000000022351742,
+          "p99": 1.199999999254942,
+          "max": 1.5,
+          "mean": 0.545133333231012
+        },
+        "renderMs": {
+          "n": 1500,
+          "min": 12.900000002235174,
+          "p50": 16.699999999254942,
+          "p95": 16.905000002123412,
+          "p99": 17.199999999254942,
+          "max": 21.399999998509884,
+          "mean": 16.658933333314955
+        },
+        "repMs": {
+          "n": 5,
+          "min": 4999.89999999851,
+          "p50": 5000.099999997765,
+          "p95": 5000.359999998659,
+          "p99": 5000.39199999854,
+          "max": 5000.39999999851,
+          "mean": 5000.1199999988075
+        },
+        "applyMiBs": 1.5884677926799162,
+        "pacing": {
+          "frames": 1510,
+          "frameMs": {
+            "n": 1510,
+            "min": 0,
+            "p50": 16.699999999999818,
+            "p95": 16.754999999999924,
+            "p99": 16.80000000000109,
+            "max": 16.80000000000291,
+            "mean": 16.65494569536437
+          },
+          "dropped": 0,
+          "nominalMs": 16.69999999999999
+        },
+        "longTasks": {
+          "n": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 25187.558420999994,
+        "mainThreadMs": {
+          "task": 1305.4789999999998,
+          "script": 268.461,
+          "layout": 286.27799999999996,
+          "styleRecalc": 101.073
+        },
+        "layouts": 2002,
+        "styleRecalcs": 2002,
+        "processCpuMs": {
+          "browser": 89.99999999999997,
+          "renderer": 2480,
+          "GPU": 610.0000000000001,
+          "network.mojom.NetworkService": 10.000000000000009
+        },
+        "heapUsedMiB": 4.489505767822266,
+        "heapDeltaMiB": 0.8747901916503906,
+        "domNodes": 24,
+        "rendererRssMiB": 132.68359375
+      }
+    },
+    {
+      "id": "W11",
+      "title": "Background and resume",
+      "variant": "Herdr 0.9 session, hidden while it redraws, then shown and its surface recreated",
+      "source": "fixtures/vt/captures.json#capture-herdr-session",
+      "cols": 100,
+      "rows": 30,
+      "kind": "stream",
+      "repeatable": true,
+      "bytes": 52508,
+      "sha256": "a9511bcb35f8a6d2df118c43b095dc1c8701699ab295567419666a567ccb2e9e",
+      "steps": 4,
+      "refreshNominalMs": 16.69999999999999,
+      "reps": 100,
+      "copies": 40,
+      "run": {
+        "reps": 100,
+        "copies": 40,
+        "bytes": 2100320,
+        "applyMs": {
+          "n": 100,
+          "min": 30.399999998509884,
+          "p50": 32.65000000037253,
+          "p95": 38.13500000145286,
+          "p99": 41.04599999852486,
+          "max": 55.5,
+          "mean": 33.77699999991805
+        },
+        "applyMiBs": 59.301336419434385,
+        "resumeMs": {
+          "n": 100,
+          "min": 17.199999999254942,
+          "p50": 19.15000000037253,
+          "p95": 34.405000002123415,
+          "p99": 35.6979999999703,
+          "max": 55.29999999701977,
+          "mean": 24.363999999985097
+        },
+        "resumeWithoutRender": 0,
+        "recreateMs": {
+          "n": 100,
+          "min": 16.599999997764826,
+          "p50": 16.699999999254942,
+          "p95": 16.800000000745058,
+          "p99": 16.940999998524806,
+          "max": 21,
+          "mean": 16.74099999997765
+        },
+        "recreatedWithRender": 0,
+        "correct": true
+      },
+      "cost": {
+        "windowMs": 29057.54734399999,
+        "mainThreadMs": {
+          "task": 5256.7,
+          "script": 3184.765,
+          "layout": 459.27299999999997,
+          "styleRecalc": 315.916
+        },
+        "layouts": 5002,
+        "styleRecalcs": 5002,
+        "processCpuMs": {
+          "browser": 69.99999999999996,
+          "renderer": 6540,
+          "GPU": 690,
+          "network.mojom.NetworkService": 0
+        },
+        "heapUsedMiB": 5.397491455078125,
+        "heapDeltaMiB": 1.7832717895507812,
+        "domNodes": 64,
+        "rendererRssMiB": 144.73828125
+      }
+    }
+  ]
+}

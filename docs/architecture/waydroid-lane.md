@@ -52,6 +52,18 @@ apps/client/bench/waydroid-lane.sh \
 
 Steps run in the order of the arguments. A failed install or build stops the run (the evidence says the rest did not run); a failed class or benchmark does not hide the ones after it.
 
+### The program workloads on the lane
+
+`apps/client/e2e/terminal-programs.spec.ts` replays W5 to W8 and W11 ([benchmarks](terminal-benchmarks.md#program-workloads-w5-to-w8-and-w11)) through xterm.js in the guest's Android System WebView when `LAZYSH_BENCH_ANDROID` is set, which the lane does for every `--bench` command:
+
+```sh
+apps/client/bench/waydroid-lane.sh --out docs/architecture/benchmarks/terminal-lane-programs-waydroid.json --label programs \
+  --build apps/client/bench/android-webview/build.sh \
+  --bench programs 'cd apps/client && LAZYSH_BENCH_OUT="$LAZYSH_LANE_OUT/programs.json" bun run bench:terminal -- --project desktop e2e/terminal-programs.spec.ts'
+```
+
+The spec fails when the WebView host loses the window focus, so nothing else may use the guest during the run. **This command has not been run:** the session did not start on the day it was written (see [Known blockers](#known-blockers)). The same workloads run on the native core with `examples/program_workloads.rs`, which is a host binary: no run of the core inside the guest exists, so the lane cannot yet put the two engines side by side in one guest.
+
 ### The lane never skips
 
 An instrumentation class fails the lane when it runs no test, when a test is ignored or ends on an assumption (`INSTRUMENTATION_STATUS_CODE` -3 or -4), when a test fails or errors (-1, -2), or when the instrumentation does not finish (a crash, or a runner or class that is not installed). A benchmark fails on a non-zero exit, and also when it exits zero but leaves no result file in `LAZYSH_LANE_OUT` (a Playwright spec that skipped itself measured nothing). A run that could not start produces no evidence at all, so a missing file is never mistaken for a pass.

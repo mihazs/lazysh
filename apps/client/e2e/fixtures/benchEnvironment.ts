@@ -1,6 +1,6 @@
 import { test as base, type CDPSession, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { installNativeBridge } from './nativeBridge';
@@ -79,3 +79,23 @@ export const test = base.extend({
     try { await use(browser.contexts()[0].pages()[0]); } finally { await browser.close(); adb('forward', '--remove', `tcp:${port}`); }
   },
 });
+
+/**
+ * The top of a benchmark spec that runs on the desktop page or, with LAZYSH_BENCH_ANDROID, in a WebView: Chromium's switches from the environment
+ * (returned, for the result file), serial tests, one viewport in smoke mode, and the synthetic native bridge before each test. Call it once at the top level of the spec.
+ */
+export function setUpBenchSpec(full: boolean) {
+  const launchArgs = (process.env.LAZYSH_BENCH_CHROMIUM_ARGS ?? '').split(/\s+/).filter(Boolean);
+  test.use({ launchOptions: { args: launchArgs } });
+  test.describe.configure({ mode: 'serial' });
+  test.skip(({ isMobile }) => !full && isMobile, 'The smoke run needs one viewport.');
+  test.beforeEach(async ({ page }) => { await installBenchBridge(page); });
+  return launchArgs;
+}
+
+/** Writes a benchmark's result document to LAZYSH_BENCH_OUT, or to `apps/client/bench-results/<name>-<mode>-<android or project>.json`. */
+export function writeBenchResult(name: string, full: boolean, project: string, document: unknown) {
+  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/${name}-${full ? 'full' : 'smoke'}-${androidSerial ? 'android' : project}.json`);
+  mkdirSync(path.dirname(out), { recursive: true });
+  writeFileSync(out, JSON.stringify(document, null, 2) + '\n');
+}
