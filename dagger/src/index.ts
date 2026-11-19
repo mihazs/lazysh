@@ -39,6 +39,7 @@ export class Ci {
   async agent(@argument({ defaultPath: "/", ignore: IGNORE }) source: Directory, nonce = ""): Promise<string> {
     const rust = this.toolchain("rust:1-bookworm")
       .withExec(["rustup", "component", "add", "rustfmt", "clippy"])
+      .withEnvVariable("CARGO_INCREMENTAL", "0")
       .withMountedCache("/usr/local/cargo/registry", dag.cacheVolume("cargo-registry"))
       .withMountedCache("/src/target", dag.cacheVolume("agent-target"))
     return this.withSource(rust, source, nonce)

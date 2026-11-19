@@ -16,8 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fn: [client, agent]
-    name: dagger-${{ matrix.fn }}
+        include:
+          - { fn: client, max: 2GB, reserved: 1500MB }
+          - { fn: agent, max: 2GB, reserved: 1500MB }
+          - { fn: agent, max: 3GB, reserved: 2500MB }
+    name: dagger-${{ matrix.fn }}-${{ matrix.max }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -27,8 +30,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/dagger-state.tar.zst
-          key: dagger-cap-${{ matrix.fn }}-${{ github.sha }}
-          restore-keys: dagger-cap-${{ matrix.fn }}-
+          key: dagger-inc0-${{ matrix.fn }}-${{ matrix.max }}-${{ github.sha }}
+          restore-keys: dagger-inc0-${{ matrix.fn }}-${{ matrix.max }}-
       - name: Start the engine on the restored state
         run: |
           mkdir -p /tmp/dagger-state
@@ -37,7 +40,7 @@ jobs:
             sudo tar --zstd -xpf ~/dagger-state.tar.zst -C /tmp/dagger-state
             echo "restored: $(sudo du -sh /tmp/dagger-state | cut -f1)"
           fi
-          printf '{"gc":{"maxUsedSpace":"2GB","reservedSpace":"1500MB","minFreeSpace":"1GB","sweepSize":"50%%"}}' > /tmp/engine.json
+          printf '{"gc":{"maxUsedSpace":"%s","reservedSpace":"%s","minFreeSpace":"1GB","sweepSize":"50%%"}}' '${{ matrix.max }}' '${{ matrix.reserved }}' > /tmp/engine.json
           docker run -d --name dagger-engine --privileged -v /tmp/dagger-state:/var/lib/dagger \
             -v /tmp/engine.json:/etc/dagger/engine.json:ro registry.dagger.io/engine:v$DAGGER_VERSION
           timeout 90 sh -c 'until docker logs dagger-engine 2>&1 | grep -qi "running server"; do sleep 1; done' || docker logs dagger-engine | tail -20
@@ -70,4 +73,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/dagger-state.tar.zst
-          key: dagger-cap-${{ matrix.fn }}-${{ github.sha }}
+          key: dagger-inc0-${{ matrix.fn }}-${{ matrix.max }}-${{ github.sha }}
