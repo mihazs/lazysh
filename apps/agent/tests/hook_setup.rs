@@ -1186,12 +1186,11 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
 impl ProfileFixture {
     fn cli(&self, action: &str, plan: Option<&str>) -> Value {
         let mut command = std::process::Command::new(&self.companion);
-        command.env_clear().env("PATH", "").args([
-            "hooks",
-            action,
-            "--agent",
-            self.target.agent.name(),
-        ]);
+        command
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", self.state())
+            .args(["hooks", action, "--agent", self.target.agent.name()]);
         if action != "preview" {
             command.arg("--profile-root").arg(&self.target.profile);
         }
@@ -2533,4 +2532,159 @@ fn amp_shadow_snapshot_is_ephemeral_and_does_not_rewrite_old_agent_plan_or_recor
         assert_eq!(record.encode().unwrap(), encoded);
         assert!(!String::from_utf8(encoded).unwrap().contains("ampShadows"));
     }
+}
+
+#[cfg(target_os = "linux")]
+impl ProfileFixture {
+    /// The companion store this fixture's hooks report to; nothing creates it until a hook runs.
+    fn state(&self) -> std::path::PathBuf {
+        self._root.path().join("companion state")
+    }
+    /// One real hook delivery: the companion executable ingests a payload, as an agent's hook runs it.
+    fn deliver(&self, agent: &str, payload: Value, pane: Option<&str>) {
+        use std::io::Write;
+        let mut command = std::process::Command::new(&self.companion);
+        command
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", self.state())
+            .args(["ingest", "--agent", agent])
+            .stdin(std::process::Stdio::piped());
+        if let Some(pane) = pane {
+            command.env("TMUX_PANE", pane);
+        }
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+    fn configured(agent: record::Agent) -> Self {
+        let fixture = Self::new(agent);
+        let plan = fixture.cli("status", None)["installPlan"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            fixture.cli("install", Some(&plan))["outcome"]["status"],
+            "configured"
+        );
+        fixture
+    }
+    fn readiness(&self) -> Value {
+        let status = self.cli("status", None);
+        assert_eq!(status["state"], "configured");
+        status["readiness"].clone()
+    }
+}
+#[cfg(target_os = "linux")]
+fn prompt(session: &str) -> Value {
+    json!({"hook_event_name":"UserPromptSubmit","session_id":session,"cwd":"/work/project"})
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn status_tells_a_configured_but_silent_agent_from_one_that_reported_locally() {
+    let fixture = ProfileFixture::configured(record::Agent::Claude);
+    let silent = fixture.readiness();
+    assert_eq!(
+        silent,
+        json!({"schemaVersion":1,"providerReload":"notChecked","projectTrust":"notChecked","localEvent":"none","paneBinding":"notChecked","remoteDelivery":"notChecked"})
+    );
+    assert!(
+        !fixture.state().exists(),
+        "inspecting must not create the companion store"
+    );
+    // Another agent's report says nothing about this one.
+    fixture.deliver("codex", prompt("codex-session"), Some("%1"));
+    assert_eq!(fixture.readiness()["localEvent"], "none");
+
+    let before = chrono::Utc::now();
+    fixture.deliver("claude", prompt("claude-session"), Some("%3"));
+    let heard = fixture.readiness();
+    let after = chrono::Utc::now();
+    assert_eq!(heard["localEvent"], "received");
+    assert_eq!(heard["paneBinding"], "bound");
+    let last = chrono::DateTime::parse_from_rfc3339(heard["lastEventAt"].as_str().unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert!(before - chrono::Duration::seconds(1) <= last && last <= after);
+    for unprobed in ["providerReload", "projectTrust", "remoteDelivery"] {
+        assert_eq!(heard[unprobed], "notChecked");
+    }
+    // The configuration answer is unchanged beside it, in the form an older client reads.
+    let status = fixture.cli("status", None);
+    assert_eq!(status["reporting"], "notChecked");
+    assert_eq!(status["trust"], "notChecked");
+    assert!(status["installPlan"].is_string() && status["removePlan"].is_string());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_latest_report_decides_whether_the_agent_is_tied_to_a_pane() {
+    let fixture = ProfileFixture::configured(record::Agent::Claude);
+    fixture.deliver("claude", prompt("session"), Some("%3"));
+    assert_eq!(fixture.readiness()["paneBinding"], "bound");
+    fixture.deliver("claude", prompt("session"), None);
+    let unbound = fixture.readiness();
+    assert_eq!(unbound["paneBinding"], "unbound");
+    assert_eq!(unbound["localEvent"], "received");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn status_reads_an_existing_store_without_changing_it() {
+    use std::fs;
+    let fixture = ProfileFixture::configured(record::Agent::Claude);
+    fixture.deliver("claude", prompt("session"), Some("%3"));
+    let observe = || {
+        let mut names: Vec<_> = fs::read_dir(fixture.state())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        let content = |name: &str| fs::read(fixture.state().join(name)).unwrap();
+        (
+            names,
+            content("events.sqlite3"),
+            content("events.sqlite3-wal"),
+        )
+    };
+    let before = observe();
+    assert_eq!(fixture.readiness()["localEvent"], "received");
+    assert_eq!(observe(), before);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_store_that_cannot_be_read_without_side_effects_stays_not_checked_rather_than_silent() {
+    use std::{fs, os::unix::fs::symlink};
+    let assert_unprobed = |fixture: &ProfileFixture| {
+        let readiness = fixture.readiness();
+        assert_eq!(readiness["localEvent"], "notChecked");
+        assert_eq!(readiness["paneBinding"], "notChecked");
+        assert!(readiness.get("lastEventAt").is_none());
+    };
+    // The report reached a store whose write-ahead log is no longer there.
+    let fixture = ProfileFixture::configured(record::Agent::Claude);
+    fixture.deliver("claude", prompt("session"), Some("%3"));
+    for sidecar in ["events.sqlite3-wal", "events.sqlite3-shm"] {
+        fs::remove_file(fixture.state().join(sidecar)).unwrap();
+    }
+    assert_unprobed(&fixture);
+    // A file that is not a database.
+    let fixture = ProfileFixture::configured(record::Agent::Claude);
+    fs::create_dir(fixture.state()).unwrap();
+    for name in ["events.sqlite3", "events.sqlite3-wal", "events.sqlite3-shm"] {
+        fs::write(fixture.state().join(name), "not a database").unwrap();
+    }
+    assert_unprobed(&fixture);
+    // A link is never followed.
+    let fixture = ProfileFixture::configured(record::Agent::Claude);
+    fs::create_dir(fixture.state()).unwrap();
+    symlink("/etc/hostname", fixture.state().join("events.sqlite3")).unwrap();
+    assert_unprobed(&fixture);
 }

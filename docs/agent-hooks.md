@@ -90,6 +90,37 @@ selected-layer overrides and Codex trust review still apply. Lazysh never
 accepts Codex hook trust automatically. Review the provider's trust settings,
 start a new session and verify actual lifecycle reports in Agents.
 
+### Reporting readiness
+
+`lazysh-agent hooks status` adds a `readiness` object beside the configuration
+answer, and **Inspect setup** shows it under the status line. It keeps what a
+configured profile cannot tell apart as separate states, so a configured but
+silent agent no longer looks like a working one:
+
+| Field | Values | What it means |
+| --- | --- | --- |
+| `localEvent` | `received`, `none`, `notChecked` | `received`: this host's companion store holds a lifecycle report from this agent, and `lastEventAt` is the time of the newest one. `none`: the store holds no report from it (or does not exist yet). `notChecked`: the store could not be read safely. |
+| `lastEventAt` | RFC 3339 time, only with `received` | When the agent last reported. It is history: it never shows that the agent is running now. |
+| `paneBinding` | `bound`, `unbound`, `notChecked` | Whether the newest report carried a pane identity (tmux or Zellij, inherited by the hook). It says nothing about whether that pane still exists. `notChecked` until a report has arrived. |
+| `providerReload` | `notChecked` | Whether the provider loaded the hooks after the last change. Nothing reads provider processes, so start a new session or restart the provider's server after every change. |
+| `projectTrust` | `notChecked` | Codex hook review, Gemini folder trust and similar prompts. Lazysh never reads or writes provider trust records and never accepts trust automatically; an untrusted project can be silent. |
+| `remoteDelivery` | `notChecked` | Remote push or approval capability. A local report does not prove it: a lifecycle-only integration such as Amp's does not imply approval support, and a local acknowledgement does not prove accepted input. |
+
+`localEvent` and `paneBinding` are about the agent, not the selected profile:
+the companion store records no profile, and a report from any profile of the
+same agent counts. They come from the store the companion on the SSH host
+resolves (`LAZYSH_STATE_DIR`, else the user state directory), which can differ
+from the environment of a running agent. A state that cannot be probed stays
+`notChecked` and is never guessed; in particular an unreadable or unusual store
+is never reported as `none`, and an unprobed host is never reported as missing.
+
+`status` stays read-only. It never creates or initializes the store, it opens an
+existing one read-only and only when its write-ahead log files exist (a reader
+would otherwise create them), and it does not follow links. The field is
+additive: `reporting` and `trust` keep their `notChecked` values and an older
+client ignores `readiness`, while a newer client shows nothing for a companion
+that predates it and shows any state it does not know as not checked.
+
 A stopped operation can leave prepared metadata. Inspect again and explicitly
 choose the next operation; setup never resumes, retries or rolls back a write
 automatically. Partial or edited owned entries produce a conflict requiring
