@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.junit.Assert.assertTrue
 
 /** Drives the real Tauri page of [NativeActivityFixture] the way the renderer does: JavaScript in the WebView and IPC with the unlock nonce. */
@@ -44,13 +45,14 @@ internal object PageDriver {
         if (NativeActivityFixture.readiness(scenario).ready && js(ready) == "true") true else null
     }
 
-    /** One IPC call as the page makes it; the outcome is the JSON of the result, or `error ` and the rejection. */
+    /** One IPC call as the page makes it; the outcome is the JSON of the result, or `error ` and the rejection (as JSON when it is an object, such as an `SshError`). */
     fun invoke(command: String, arguments: String = "{}"): String {
         js("""(()=>{window.__outcome='pending';
             window.__TAURI_INTERNALS__.invoke('app_lock_status').then(status=>window.__TAURI_INTERNALS__.invoke('$command',$arguments,{headers:{'X-Lazysh-Access':status.nonce??''}}))
-              .then(value=>{window.__outcome=JSON.stringify(value??null)},error=>{window.__outcome='error '+error});return true})()""")
+              .then(value=>{window.__outcome=JSON.stringify(value??null)},error=>{window.__outcome='error '+(typeof error==='string'?error:JSON.stringify(error))});return true})()""")
         val text = poll("the outcome of $command") { js("window.__outcome").takeIf { it != "\"pending\"" } }
-        return text.trim('"').replace("\\\"", "\"")
+        // The WebView hands the outcome back as a JS string literal, so a text result keeps its quotes and newlines.
+        return JSONTokener(text).nextValue() as String
     }
 
     /** Puts a hidden element on the page and returns its `getBoundingClientRect()` and pixel ratio as the renderer would read them. */

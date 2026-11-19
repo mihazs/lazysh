@@ -100,6 +100,19 @@ tasks:
     command: tauri android build --target x86_64 --debug --apk --ci --features sync-tls-acceptance,parakeet-android
     env: *androidBuildEnv
     options: *envLocal
+  # The debug APKs with the real terminal core (the optional native-terminal feature: libghostty-vt, built with Zig 0.16.0). The
+  # environment names the Zig, its caches and the admitted Ghostty archives (checks.yml native-android-terminal-core, #2145);
+  # aarch64 is compiled and linked only, the x86_64 one is what the emulator and Waydroid run.
+  build-android-terminal-core:
+    type: build
+    command: tauri android build --target aarch64 --debug --apk --ci --features native-terminal
+    env: *androidBuildEnv
+    options: *envLocal
+  build-android-emulator-terminal-core:
+    type: build
+    command: tauri android build --target x86_64 --debug --apk --ci --features native-terminal
+    env: *androidBuildEnv
+    options: *envLocal
   build-android-fdroid:
     type: build
     command: tauri android build --target aarch64 --apk --ci --features fdroid
@@ -134,7 +147,7 @@ tasks:
   test-android:
     type: test
     script: |-
-      src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshSurvivesDeniedNotificationPermission,app.lazysh.client.NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDpadPanThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshDefaultHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshSurvivesBusyBackgroundThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview,app.lazysh.client.NativeWorkspaceTest#ownedTmuxThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedTmuxLostConnectionThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedZellijThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPasswordLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshEncryptedKeyLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshRotatedHostKeyRefusedThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshBastionRouteThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshAgentForwardingThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPreviewForwardsAndTearsDownThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshFilesAndRepositoryReviewThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshClipboardAndLinksReachTheSystemThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView,app.lazysh.client.NativeWorkspaceTest#ownedSshAutoFallsBackToSshThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshForcedEternalTerminalThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshMoshCustomServerPathAndPortRangeThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshClientEnvironmentThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi,app.lazysh.client.NativeBiometricVaultTest
+      src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshSurvivesDeniedNotificationPermission,app.lazysh.client.NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDpadPanThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshDefaultHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshSurvivesBusyBackgroundThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview,app.lazysh.client.NativeWorkspaceTest#ownedTmuxThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedTmuxLostConnectionThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedZellijThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPasswordLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshEncryptedKeyLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshRotatedHostKeyRefusedThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshBastionRouteThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshAgentForwardingThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPreviewForwardsAndTearsDownThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshFilesAndRepositoryReviewThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshClipboardAndLinksReachTheSystemThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView,app.lazysh.client.NativeWorkspaceTest#ownedSshAutoFallsBackToSshThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshForcedEternalTerminalThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshMoshCustomServerPathAndPortRangeThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshClientEnvironmentThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi,app.lazysh.client.NativeBiometricVaultTest,app.lazysh.client.NativeTerminalCoreTest
     deps: [~:test-android-theme-links]
     options: *local
   test-android-theme-links:
@@ -175,6 +188,19 @@ tasks:
     args: ['^actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes$']
     env: {LAZYSH_ANDROID_UI_HERDR_NAVIGATION: '1'}
     deps: [~:build-android-emulator]
+    options: *envLocal
+  # The real core inside the packaged app against an owned OpenSSH (#2145): ANDROID_SERIAL names the emulator or the Waydroid guest.
+  test-android-terminal-core:
+    type: test
+    command: bun test ../../tests/android-terminal-core.test.ts
+    env: {LAZYSH_ANDROID_UI_TERMINAL_CORE: '1'}
+    deps: [~:build-android-emulator-terminal-core]
+    options: *envLocal
+  # The emulator job's run (checks.yml native-android-terminal-core): it builds both APKs itself, before the emulator boots.
+  test-android-terminal-core-ci:
+    type: test
+    command: bun test ../../tests/android-terminal-core.test.ts
+    env: {LAZYSH_ANDROID_UI_TERMINAL_CORE: '1'}
     options: *envLocal
   test-android-qr:
     type: test

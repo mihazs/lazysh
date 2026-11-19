@@ -192,6 +192,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
         }
     }
+    if (providers.gradleProperty("lazyshTerminalCoreAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/terminal-core-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/terminal-core-ui"
+        }
+    }
     if (providers.gradleProperty("lazyshSshParityAcceptance").orNull == "true") {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-parity-ui"

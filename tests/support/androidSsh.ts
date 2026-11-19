@@ -257,11 +257,11 @@ export async function androidSshCleanup(primary:boolean,steps:readonly (readonly
   if(failed){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
 }
 
-/** The one explicitly selected owned emulator and an adb bound to it; any other device is refused. */
-export function ownedEmulator(acceptance:string) {
+/** The one explicitly selected owned emulator, or the Waydroid guest when the acceptance opts in, and an adb bound to it; any other device is refused. */
+export function ownedEmulator(acceptance:string,waydroid=false) {
   if(process.platform!=='linux')throw new Error(`Owned Android ${acceptance} requires Linux`);
   const serial=process.env.ANDROID_SERIAL;
-  if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
+  if(!serial || !(/^emulator-[0-9]{4,5}$/.test(serial) || waydroid && serial===(process.env.LAZYSH_WAYDROID_SERIAL??'192.168.240.112:5555')))throw new Error('Use an explicitly selected owned emulator');
   const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
   return {serial,adb,device:(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args])};
 }
