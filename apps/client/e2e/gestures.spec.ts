@@ -94,6 +94,30 @@ test('double tap and one-finger swipes run their configured actions on a real to
   await touch.cdp.detach();
 });
 
+test('triple tap runs its own action once while double and single taps wait to see whether more taps follow',async({page},testInfo)=>{
+  await openHistoryWorkspace(page);
+  await page.evaluate(async()=>{
+    const {defaults,savePreferences}=await import('/src/preferences.ts');
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,tap:'pageDown',doubleTap:'tab',tripleTap:'escape'}});
+  });
+  await mount(page);
+  const touch=await touchscreen(page,testInfo);
+  const at=await canvasCenter(page);
+  const taps=async(count:number)=>{for(let tap=0;tap<count;tap++){await touch.send('touchStart',[at]);await touch.send('touchEnd',[]);}};
+  await taps(3);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b']]);
+  // Neither the double nor the single tap action fires late for the same three taps, and the taps leave no selection that would block the next ones.
+  await page.waitForTimeout(500);
+  expect((await recorded(page)).steps).toEqual([['\x1b']]);
+  expect(await page.evaluate(()=>window.gestures.terminal.hasSelection())).toBe(false);
+  await taps(2);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b'],['\t']]);
+  await taps(1);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b'],['\t'],['\x1b[6~']]);
+  expect(await recorded(page)).toMatchObject({zellij:[],sessions:[],errors:[]});
+  await touch.cdp.detach();
+});
+
 test('a multiplexer pinch can resize text or do nothing instead, and multiplexer actions need an attached terminal',async({page},testInfo)=>{
   await openHistoryWorkspace(page);
   const set=(patch:Record<string,unknown>)=>page.evaluate(async patch=>{
@@ -229,6 +253,37 @@ test('a toolbar key runs its long-press action from the keys editor while other 
   expect((await recorded(page)).steps.slice(before).every(step=>step.length===1&&step[0]==='\x1b[D')).toBe(true);
   expect((await recorded(page)).errors).toEqual([]);
   await touch?.cdp.detach();
+});
+
+test('toolbar auto-hide hides the terminal keys for a fine pointer only, and the header button brings them back for that window',async({page},testInfo)=>{
+  await openHistoryWorkspace(page);
+  await page.evaluate(async()=>{
+    const {getPreferences,savePreferences}=await import('/src/preferences.ts');
+    savePreferences({...getPreferences(),autoHideToolbar:true});
+  });
+  await mount(page);
+  const keys=page.getByLabel('Terminal keys',{exact:true});
+  // Touch screens keep their keys: the setting only applies to desktop pointer layouts.
+  if(testInfo.project.name==='phone'){
+    await expect(keys).toBeVisible();
+    await expect(page.getByRole('button',{name:'Hide terminal keys',exact:true})).toBeVisible();
+    return;
+  }
+  await expect(keys).toBeHidden();
+  await page.getByRole('button',{name:'Show terminal keys',exact:true}).click();
+  await expect(keys).toBeVisible();
+  await page.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
+  await expect(keys).toBeHidden();
+  // The choice is not remembered: a fresh terminal starts hidden again, and turning the setting off shows the keys.
+  await page.getByRole('button',{name:'Show terminal keys',exact:true}).click();
+  await page.evaluate(()=>window.gestures.dispose());
+  await mount(page);
+  await expect(keys).toBeHidden();
+  await page.evaluate(async()=>{
+    const {getPreferences,savePreferences}=await import('/src/preferences.ts');
+    savePreferences({...getPreferences(),autoHideToolbar:false});
+  });
+  await expect(keys).toBeVisible();
 });
 
 test('gesture settings offer level-aware defaults, multiplexer pinch and header pull depths, and reset to them',async({page})=>{
