@@ -12,31 +12,6 @@ env:
   DAGGER_NO_NAG: '1'
   MOON_TOOLCHAIN_FORCE_GLOBALS: 'true'
 jobs:
-  native-client:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-bun
-      - run: bun install --frozen-lockfile
-      - run: bunx moon run client:build client:check
-
-  native-agent:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-bun
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: agent
-          save-if: false
-      - run: bun install --frozen-lockfile
-      - run: bunx moon run '#companion:check-rust' '#companion:lint' '#companion:format-check'
-
   dagger:
     strategy:
       fail-fast: false
@@ -52,8 +27,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/dagger-state.tar.zst
-          key: dagger-spike-${{ matrix.fn }}-${{ github.sha }}
-          restore-keys: dagger-spike-${{ matrix.fn }}-
+          key: dagger-cap-${{ matrix.fn }}-${{ github.sha }}
+          restore-keys: dagger-cap-${{ matrix.fn }}-
       - name: Start the engine on the restored state
         run: |
           mkdir -p /tmp/dagger-state
@@ -62,8 +37,9 @@ jobs:
             sudo tar --zstd -xpf ~/dagger-state.tar.zst -C /tmp/dagger-state
             echo "restored: $(sudo du -sh /tmp/dagger-state | cut -f1)"
           fi
+          printf '{"gc":{"maxUsedSpace":"2GB","reservedSpace":"1500MB","minFreeSpace":"1GB","sweepSize":"50%%"}}' > /tmp/engine.json
           docker run -d --name dagger-engine --privileged -v /tmp/dagger-state:/var/lib/dagger \
-            registry.dagger.io/engine:v$DAGGER_VERSION
+            -v /tmp/engine.json:/etc/dagger/engine.json:ro registry.dagger.io/engine:v$DAGGER_VERSION
           timeout 90 sh -c 'until docker logs dagger-engine 2>&1 | grep -qi "running server"; do sleep 1; done' || docker logs dagger-engine | tail -20
       - name: dagger call ${{ matrix.fn }}
         uses: dagger/dagger-for-github@v8.4.1
@@ -72,6 +48,15 @@ jobs:
         with:
           version: ${{ env.DAGGER_VERSION }}
           call: ${{ matrix.fn }} --nonce=${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Prune the engine cache to its policy
+        if: always()
+        run: |
+          command -v dagger || ls -la "$HOME/.local/bin" /usr/local/bin | grep -i dagger
+          docker exec dagger-engine du -sh /var/lib/dagger || true
+          dagger core engine local-cache prune --use-default-policy || true
+          docker exec dagger-engine du -sh /var/lib/dagger || true
+        env:
+          _EXPERIMENTAL_DAGGER_RUNNER_HOST: docker-container://dagger-engine
       - name: Save engine state (tar)
         if: always()
         run: |
@@ -85,4 +70,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/dagger-state.tar.zst
-          key: dagger-spike-${{ matrix.fn }}-${{ github.sha }}
+          key: dagger-cap-${{ matrix.fn }}-${{ github.sha }}
