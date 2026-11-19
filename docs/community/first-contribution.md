@@ -50,8 +50,9 @@ Always state failed and unexecuted checks. Never bypass a failing duplicate gate
 Review `git diff`, add the issue-linked patch, and commit with a Conventional
 Commit subject. Inspect author and committer with `git log -1 --format=fuller`.
 Push to your fork and open a PR targeting upstream `main`, using all required
-template sections. User-facing changes need a root Unreleased changelog entry
-and an appropriate Changeset (`bun run changeset`); documentation about workflow
+template sections. User-facing changes need an appropriate Changeset
+(`bun run changeset`) whose summary is the changelog entry (`type(scope): headline`,
+then details; see CONTRIBUTING.md, "Changelog entries"); documentation about workflow
 alone has the exemption described in CONTRIBUTING.md.
 
 CI reports checks individually. Read the failed job's first relevant error,

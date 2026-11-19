@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { verifyRelease } from './bun-lock';
+import { changelogSection, parseEntries, renderGrouped } from './changelog-model.mjs';
 
 export const companionTargets = {
   'linux-agent-x64': { triple: 'x86_64-unknown-linux-musl', os: 'linux', arch: 'x64' },
@@ -193,8 +194,6 @@ export async function buildIdentity(root: string): Promise<Identity> {
 }
 
 const stableVersion = /^\d+\.\d+\.\d+$/;
-const changelogSection = (changelog: string, version: string) =>
-  changelog.split(new RegExp(`^## ${version.replaceAll('.', '\\.')}\\s*$`, 'm'))[1]?.split(/^## /m)[0];
 
 /** Stable versions prepared after the latest published version below `version` but never published themselves. */
 export function skippedVersions(changelog: string, version: string, published: string[]) {
@@ -217,12 +216,13 @@ export async function releaseNotes(root: string, version: string, initial = fals
   const changelog = await Bun.file(join(root, 'apps/client/CHANGELOG.md')).text();
   const section = changelogSection(changelog, version);
   requireArtifact(section?.trim(), 'missing version changelog');
-  let notes = section.trim();
   // A prepared version whose publication never happened still shipped to users through this release.
-  for (const skipped of skippedVersions(changelog, version, published)) {
-    const body = changelogSection(changelog, skipped)?.trim();
-    if (body) notes += `\n\n## Also included from ${skipped} (prepared but not published separately)\n\n${body}`;
-  }
+  const skipped = skippedVersions(changelog, version, published);
+  const entries = [section, ...skipped.map(item => changelogSection(changelog, item) ?? '')].flatMap(parseEntries);
+  const included = [...skipped].reverse();
+  let notes = [included.length ? `Includes the unpublished version${included.length > 1 ? 's' : ''} ${
+    [included.slice(0, -1).join(', '), included.at(-1)].filter(Boolean).join(' and ')}.` : '', renderGrouped(entries, '##') || section.trim()]
+    .filter(Boolean).join('\n\n');
   if (initial) {
     const policy = await Bun.file(join(root, '.changeset/release-policy.json')).json();
     requireArtifact(policy.initialPublication?.version === version, 'initial notes version not allowlisted');

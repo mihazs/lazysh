@@ -43,8 +43,8 @@ Select the highest impact in the consumed changesets before merging:
 
 ## CHANGELOG (merge gate)
 
-- [ ] Root `CHANGELOG.md` history and `[Unreleased]` entries remain intact.
-- [ ] Generated package changelogs match consumed fragments; changed defaults and breaking behavior remain explicit.
+- [ ] Root `CHANGELOG.md` has the new release section, `[Unreleased]` holds no entries, and the development history is intact.
+- [ ] Generated package changelogs and the root section match the consumed fragments, grouped as New, Improved, Fixed, Documentation and Under the hood; changed defaults and breaking behavior remain explicit.
 
 ## Notes for reviewers
 
