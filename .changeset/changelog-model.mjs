@@ -41,11 +41,10 @@ export function classifyLegacy(text, bump) {
 
 const balanced = text => (text.match(/\(/g) ?? []).length === (text.match(/\)/g) ?? []).length && (text.match(/`/g) ?? []).length % 2 === 0;
 
-/** A long sentence as a headline: cut at its first colon or semicolon, else at its last clause break, that fits outside parentheses and code; else at a word. */
+/** A long sentence as a headline: cut at its first colon or semicolon that fits outside parentheses and code, else at a word. */
 function shorten(text, limit) {
   if (text.length <= limit) return text;
-  const breaks = pattern => [...text.matchAll(pattern)].map(match => match.index).filter(index => index >= 20 && index <= limit && balanced(text.slice(0, index)));
-  const clause = breaks(/[:;] /g)[0] ?? breaks(/,? (?:and|but|so|which|while|instead of|with) |, /g).at(-1);
+  const clause = [...text.matchAll(/[:;] /g)].map(match => match.index).find(index => index >= 20 && index <= limit && balanced(text.slice(0, index)));
   if (clause !== undefined) return text.slice(0, clause);
   let cut = text.slice(0, limit - 1);
   cut = cut.slice(0, Math.max(cut.lastIndexOf(' '), 1));

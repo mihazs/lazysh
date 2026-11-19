@@ -40,7 +40,9 @@ becomes one line in the package changelog,
 squash commit that added the fragment (no link when it is not there), with the
 details inside a collapsed `<details>` block. It adds no commit hashes and no
 dependency-update lines. `bun run release:version` then prepends the version's
-section to the root `CHANGELOG.md` (`.changeset/changelog-rotate.ts`), moving any
+section to the root `CHANGELOG.md` (`.changeset/changelog-rotate.ts`) with one line per
+change and no details, because the duplicate scan covers that file and the collapsed
+blocks of two similar fragments of one pull request would be clones, and moves any
 hand-written bullets still under `[Unreleased]` into it. The GitHub release notes
 (`releaseNotes()` in `.changeset/release-artifacts.ts`) regroup the same lines as
 **New**, **Improved**, **Fixed**, **Documentation** and **Under the hood**, merge in

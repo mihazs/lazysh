@@ -174,11 +174,13 @@ Extra prose that stays.
 `;
 
 test('rotating a release moves the Unreleased bullets into its section, classified, and leaves the history untouched', () => {
-  const section = '### Minor Changes\n\n- feat(agents): Switch a session ([#5](https://github.com/mihazs/lazysh/pull/5))\n';
+  const entry = (details: string) => `- feat(agents): Switch a session ([#5](https://github.com/mihazs/lazysh/pull/5))\n\n  <details><summary>Details</summary>\n\n  ${details}\n\n  </details>\n`;
+  const section = `### Minor Changes\n\n${entry('Off by default.')}${entry('Same headline from a second fragment of the pull request.')}`;
   const rotated = rotate(rootChangelog, section, '1.1.0', '2026-02-03');
   expect(rotated).toContain('## [Unreleased]\n\nPending changes live in the fragments.\n\nExtra prose that stays.\n\n## [1.1.0] - 2026-02-03\n\n### New\n\n');
   expect(rotated).toContain('- **agents:** Switch a session ([#5](https://github.com/mihazs/lazysh/pull/5))\n- Add a tab strip.\n\n### Improved\n\n- Changed the export format.\n\n### Fixed\n\n- Fix the pane title (#1). It\n  was stale.\n\n## [1.0.0]');
   expect(rotated.slice(rotated.indexOf('## [1.0.0]'))).toBe(rootChangelog.slice(rootChangelog.indexOf('## [1.0.0]')));
+  expect(rotated).not.toContain('<details>');
   const bullets = (text: string) => text.match(/^- /gm)?.length ?? 0;
   expect(bullets(rotated)).toBe(bullets(rootChangelog) + 1);
   expect(() => rotate(rotated, section, '1.1.0', '2026-02-03')).toThrow('already has a section');

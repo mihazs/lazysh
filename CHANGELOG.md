@@ -1,9 +1,9 @@
 # Changelog
 
 Notable changes to lazysh, newest first. The section of each release is generated from the changeset fragments that
-shipped in it when the version is prepared, grouped as New, Improved, Fixed, Documentation and Under the hood, one line per
-change with a link to its pull request and the details collapsed. The GitHub release for that version carries the same text.
-How to write an entry: [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries).
+shipped in it when the version is prepared: one line per change, grouped as New, Improved, Fixed, Documentation and Under
+the hood, with a link to its pull request. The GitHub release for that version carries the same lines with each change's
+details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries).
 
 ## [Unreleased]
 

@@ -37,8 +37,12 @@ export function rotate(root: string, clientSection: string, version: string, dat
   if (root.includes(`## [${version}]`)) throw new Error(`CHANGELOG.md already has a section for ${version}`);
   const end = after.search(/^## /m);
   const { items, rest } = legacyItems(end < 0 ? after : after.slice(0, end));
-  const generated = parseEntries(clientSection).map(entry => ({ type: entry.type, text: renderEntry(entry, true) }));
-  // The moved bullets stay verbatim, single paragraphs as before: the whole-entry structure of a generated one could clone.
+  // One line per change, without the collapsed details: this file is scanned for clones, and the multi-line blocks of two
+  // similar fragments of one pull request (same headline, same link, same opening) are one. Details live in the package
+  // changelog and the GitHub release. Moved bullets stay verbatim, as written.
+  const seen = new Set<string>();
+  const generated = parseEntries(clientSection).map(entry => ({ type: entry.type, text: renderEntry({ ...entry, details: '' }, true) }))
+    .filter(({ text }) => !seen.has(text) && seen.add(text));
   const section = `## [${version}] - ${date}\n\n${groupMarkdown([...generated, ...classified(items)], '###') || 'No user-facing changes.'}\n\n`;
   return `${head}## [Unreleased]\n\n${rest ? `${rest}\n\n` : ''}${section}${end < 0 ? '' : after.slice(end)}`;
 }
