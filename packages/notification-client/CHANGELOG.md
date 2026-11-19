@@ -1,5 +1,9 @@
 # @lazysh/notification-client
 
+## 1.80.4
+
+No changes in this release.
+
 ## 1.80.3
 
 ### Patch Changes

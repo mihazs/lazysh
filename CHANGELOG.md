@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.80.4] - 2026-11-19
+
+### Documentation
+
+- **changelog:** Write release notes as New, Improved and Fixed lists with one linked line per change ([#2165](https://github.com/mihazs/lazysh/pull/2165))
+
 ## Development history before the structured changelog (unversioned)
 
 The unversioned development log that was written by hand is kept as it was written and grouped by each entry's leading
