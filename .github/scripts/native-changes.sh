@@ -6,7 +6,7 @@
 # consumers are uncertain it must select more jobs, never fewer.
 # Exception: a pull request never selects the jobs that are not required to merge (companion
 # candidates, macOS and Windows desktop, iOS simulator, Mosh, Herdr navigation, auxiliary
-# Android, ntfy, terminal core on macOS). They run on pushes to main, where main-verdict.yml reports their verdict.
+# Android, ntfy, terminal core on macOS and iOS). They run on pushes to main, where main-verdict.yml reports their verdict.
 # The terminal performance gate (terminal_perf) is report-only too, but a pull request that selects the terminal runtime area runs it.
 set -u
 
@@ -145,7 +145,7 @@ case "$linux$linux_runtimes$android_runtime$android_herdr$android_appium" in *tr
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
 # Outputs of jobs that are not required to merge and that no pull request selects: pushes keep them.
-main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios terminal_macos '
+main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios terminal_macos terminal_ios '
 
 native=false
 for output in \
@@ -169,7 +169,8 @@ for output in \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
   "terminal_macos=$(flag has terminal_runtime)" \
-  "linux_surface=$(flag any linux_surface)"; do
+  "linux_surface=$(flag any linux_surface)" \
+  "terminal_ios=$(flag has terminal_runtime)"; do
   # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
   name=${output%%=*}
