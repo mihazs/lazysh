@@ -2,6 +2,8 @@
 //! (`fixtures/osc52.json`; `apps/client/src/osc52Fixture.test.ts` records `decodeClipboardRequest`'s
 //! answers for the same requests and fails if they drift).
 
+// Only `fixture_cases` is read here; `replay` serves the tests that feed a case's bytes to a core.
+#[allow(dead_code)]
 mod replay;
 mod support;
 
