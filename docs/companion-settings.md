@@ -12,6 +12,15 @@ The Agents panel shows host settings after a valid companion snapshot is availab
 4. If the companion is unsupported or unavailable, update it before retrying. If another client changed the revision, refresh and review its values before saving again.
 5. Start a new operation to use the new values. Stop any existing stream separately; saving settings does not terminate it.
 
+### Host browser
+
+Under the three switches, **Host browser** has its own row and its own **Save host browser setting** button. It is **off by default** and the only switch that is, because a browser started on the host can reach the web sessions you sign in to inside it. The app reads and saves it separately from the three switches (the companion keeps it in its own file with its own revision), so saving one never sends the other's values.
+
+- Turning it **on** asks first, once per host on this device. The confirmation names what the browser can reach: the host's network and the services listening only on the host, any file the browser can open, and every site you sign in to inside it. **Keep it off** changes nothing.
+- The confirmation is remembered on this device for that saved host only. It is not part of [encrypted sync](sync.md), never leaves the device, and the app stores only the host's id for it: no page address, title or image. Two saved profiles for the same machine are asked separately. Turning the switch **off** needs no confirmation.
+- A companion that predates the command shows the row as unavailable with a message to update the companion, and the app writes nothing. If another client changed the revision, the app asks you to refresh before saving again.
+- Nothing in this row starts a browser: it only allows one. The browser view itself ships with the Chrome viewer ([#1254](https://github.com/mihazs/lazysh/issues/1254)).
+
 ## Change settings from the host terminal
 
 These shell commands require a PATH installation. For a managed-only installation, use the app controls above or substitute its verified [absolute executable path](how-to/configure-companion.md#install-on-the-remote-host). Run `lazysh-agent settings show` and note its revision. To disable recorded usage only when that revision is `0`, run:
