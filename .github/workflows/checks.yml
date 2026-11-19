@@ -569,9 +569,9 @@ jobs:
           "$CARGO_TARGET_DIR/release/examples/perf_gate" | tee "$RUNNER_TEMP/perf-gate.md"
           { echo '### Terminal runtime performance gate'; cat "$RUNNER_TEMP/perf-gate.md"; } >> "$GITHUB_STEP_SUMMARY"
       # Exit 1 is a failed gate; a crash exits differently and does not count as the gate working.
-      - name: Prove the gate fails on an injected slowdown and on injected allocations
+      - name: Prove the gate fails on an injected slowdown, injected allocations and no scrollback compaction
         run: |
-          for mode in slow allocs; do
+          for mode in slow allocs nocompaction; do
             status=0
             "$CARGO_TARGET_DIR/release/examples/perf_gate" --inject "$mode" > "$RUNNER_TEMP/inject-$mode.md" || status=$?
             [ "$status" -eq 1 ] || { echo "::error::perf_gate --inject $mode exited $status, expected 1"; exit 1; }

@@ -6,7 +6,7 @@ use crate::mosh::{self, Action, Display, DisplayFailure};
 use crate::render::Theme;
 use crate::size::{Size, SizeAuthority, SizeOutcome};
 use crate::titles::Titles;
-use ghostty_vt::{ActiveScreen, CellWide, Terminal};
+use ghostty_vt::{ActiveScreen, CellWide, Terminal, TerminalCompressionResult};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Range;
@@ -650,6 +650,12 @@ impl TerminalRuntime {
             length: bar.total,
             following: bar.offset + bar.len >= bar.total,
         })
+    }
+
+    /// One bounded step of libghostty-vt's idle scrollback compression; `true` while more work
+    /// remains. Meant for a session nobody is looking at once its input has stopped.
+    pub fn compress_scrollback(&mut self) -> Result<bool, Error> {
+        Ok(self.terminal.compress_incremental()? == TerminalCompressionResult::Pending)
     }
 
     pub fn scrollback_rows(&self) -> Result<usize, Error> {
