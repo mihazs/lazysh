@@ -26,6 +26,8 @@ export type NativeTerminalOptions = NativeAdapterOptions & {
   rows: number;
   /** The History lines setting (100 to 20,000). */
   scrollbackLines: number;
+  /** The session's transport is Mosh: its frames decide the grid's size, so the core follows them and takes the renderer's sizes as intent. */
+  canonicalFrames?: boolean;
   /** Everything on `events` that is not the core's: the transport's `closed` notice and auth hints. */
   onTransportEvent?: (event: SshEvent) => void;
 };
@@ -70,7 +72,8 @@ export async function probeNativeCore(): Promise<BackendProbe> {
  * starts with `events`, so the session id arrives later, through `bind`; until then the adapter shows the blank screen the core opens with.
  */
 export async function createNativeTerminalAdapter(options: NativeTerminalOptions): Promise<NativeTerminalOpening> {
-  const {columns, rows, scrollbackLines, onTransportEvent, ...adapterOptions} = options;
+  const {columns, rows, scrollbackLines, canonicalFrames, onTransportEvent, ...adapterOptions} = options;
+  let {theme} = adapterOptions;
   const events = new Channel<NativeCoreEvent | SshEvent>();
   const listeners = new Set<(event: NativeCoreEvent) => void>();
   const deliver = sessionOutput<NativeCoreEvent | SshEvent>(event => {
@@ -78,7 +81,9 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   });
   events.onmessage = deliver;
   try {
-    await protectedInvoke('terminal_core_open', {events, cols: columns, rows, scrollbackLines});
+    // The colours the core reports to the programs that ask for them, and the Mosh mode, are fixed before its first byte.
+    const config = theme || canonicalFrames ? {theme, canonicalFrames} : undefined;
+    await protectedInvoke('terminal_core_open', {events, cols: columns, rows, scrollbackLines, config});
   } catch (error) {
     deliver.dispose();
     throw asError(error);
@@ -100,7 +105,11 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   // The core sends under the lease of the reader's latest command, so after a lock it is silent until a reader speaks again.
   const stopWatching = subscribeAccess(() => {
     const now = isAccessReady();
-    if (now && !ready) call('terminal_core_set_active', {active}).catch(noop);
+    if (now && !ready) {
+      call('terminal_core_set_active', {active}).catch(noop);
+      // A theme chosen while the app was locked was refused, and must not be lost.
+      if (theme) call('terminal_core_theme', {theme}).catch(noop);
+    }
     ready = now;
   });
 
@@ -115,6 +124,10 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
     setActive(value) {
       active = value;
       call('terminal_core_set_active', {active}).catch(noop);
+    },
+    setTheme(next) {
+      theme = next;
+      call('terminal_core_theme', {theme}).catch(noop);
     },
     subscribe(listener) {
       listeners.add(listener);

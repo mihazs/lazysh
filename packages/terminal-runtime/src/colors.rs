@@ -51,11 +51,20 @@ pub(crate) struct ColorQueries {
 impl ColorQueries {
     pub(crate) fn new(theme: &Theme) -> Self {
         Self {
-            colors: [theme.foreground, theme.background, theme.cursor],
+            colors: Self::of(theme),
             state: State::Ground,
             text: [0; MAX_TEXT],
             len: 0,
         }
+    }
+
+    /// Answer the next queries from `theme`. A query being read keeps its place: the colour it gets is the one in force when it ends.
+    pub(crate) fn set(&mut self, theme: &Theme) {
+        self.colors = Self::of(theme);
+    }
+
+    fn of(theme: &Theme) -> [RgbColor; 3] {
+        [theme.foreground, theme.background, theme.cursor]
     }
 
     /// The next completed query at or after `from`: the offset just past the byte the VT dispatches

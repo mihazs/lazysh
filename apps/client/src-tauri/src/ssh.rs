@@ -5918,9 +5918,16 @@ mod tests {
             );
             let (session, _dir, core_server) = output_session().await;
             let events = Channel::new(|_| Ok(()));
-            crate::terminal_core::terminal_core_open(access_lease(), events.clone(), 80, 24, None)
-                .await
-                .unwrap();
+            crate::terminal_core::terminal_core_open(
+                access_lease(),
+                events.clone(),
+                80,
+                24,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
             let prepared = crate::terminal_core::prepare(&events).unwrap().unwrap();
             attach_core(prepared, "bench-core", &session);
             let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());

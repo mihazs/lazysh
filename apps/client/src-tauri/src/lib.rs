@@ -206,6 +206,7 @@ pub fn run() {
                 terminal_core::terminal_core_scroll,
                 terminal_core::terminal_core_resize,
                 terminal_core::terminal_core_set_active,
+                terminal_core::terminal_core_theme,
                 terminal_core::terminal_core_close,
                 terminal_core::terminal_core_available,
                 terminal_core::native_terminal_probe,

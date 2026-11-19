@@ -52,6 +52,7 @@ fn main() {
         "terminal_core_scroll",
         "terminal_core_resize",
         "terminal_core_set_active",
+        "terminal_core_theme",
         "terminal_core_close",
         "terminal_core_available",
         "native_terminal_probe",

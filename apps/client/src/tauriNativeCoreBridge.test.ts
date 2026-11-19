@@ -5,7 +5,8 @@ const invoke = vi.hoisted(() => vi.fn());
 const inApp = vi.hoisted(() => ({value: true}));
 vi.mock('@tauri-apps/api/core', () => ({invoke, isTauri: () => inApp.value, Channel: class { onmessage?: (event: unknown) => void; }}));
 import {acknowledgeAccessReady, accessSnapshot, applyAccessStatus} from './access';
-import {createNativeTerminalAdapter, probeNativeCore, type NativeTerminalOpening} from './tauriNativeCoreBridge';
+import type {TerminalPreferences, TerminalTheme} from './terminalAdapter';
+import {createNativeTerminalAdapter, probeNativeCore, type NativeTerminalOptions, type NativeTerminalOpening} from './tauriNativeCoreBridge';
 
 const modes = {bracketedPaste: true, mouseTracking: 'vt200', alternateScreen: false, applicationCursorKeys: true};
 /** What the Rust commands answer: the state without the History lines setting, and the text of a window of rows. */
@@ -26,12 +27,18 @@ function setLocked(locked: boolean) {
   return nonce;
 }
 
-async function open(session: Promise<string> = Promise.resolve('local:7')): Promise<NativeTerminalOpening> {
-  const opening = await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: 5000, onTransportEvent: transport});
+async function open(session: Promise<string> = Promise.resolve('local:7'), options: Partial<NativeTerminalOptions> = {}): Promise<NativeTerminalOpening> {
+  const opening = await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: 5000, onTransportEvent: transport, ...options});
   opening.bind(session);
   await flush();
   return opening;
 }
+/** What the preferences hand the adapter whenever one changes; only the theme concerns the core. */
+const preferences = (theme: TerminalTheme): TerminalPreferences => ({
+  fontFamily: 'monospace', fontSize: 14, cursorStyle: 'block', cursorBlink: false, scrollbackLines: 5000, optionAsMeta: false, screenReader: false, brightBold: true, theme,
+});
+const forest: TerminalTheme = {background: '#101311', foreground: '#d9e0d6', cursor: '#c4eb89', red: '#f48781'};
+const paper: TerminalTheme = {background: '#faf8f2', foreground: '#242822', cursor: '#375c29', extendedAnsi: ['#000000']};
 const ring = (opening: NativeTerminalOpening, times = 1) => { for (let i = 0; i < times; i++) opening.events.onmessage!({type: 'changed'}); };
 
 beforeEach(() => {
@@ -77,6 +84,48 @@ describe('the native core over the Tauri commands', () => {
     expect(adapter.cursor()).toEqual({x: 3, y: 1});
     expect(adapter.readRows!(40, 3)).toEqual(['$ ls', 'file.txt', '']);
     expect(adapter.metrics().scrollbackLines).toBe(5000);
+    await adapter.dispose();
+  });
+
+  it('opens the core with the app\'s colours and the Mosh mode, and without a config when it has neither', async () => {
+    const plain = await open();
+    expect(invoke.mock.calls[0][1].config).toBeUndefined();
+    await plain.adapter.dispose();
+    invoke.mockClear();
+    const mosh = await open(undefined, {theme: forest, canonicalFrames: true});
+    expect(invoke.mock.calls[0][1]).toEqual({events: mosh.events, cols: 80, rows: 24, scrollbackLines: 5000, config: {theme: forest, canonicalFrames: true}});
+    // The theme the core was opened with is not sent again.
+    mosh.adapter.applyPreferences(preferences({...forest}));
+    await flush();
+    expect(commands()).toEqual(['terminal_core_open']);
+    await mosh.adapter.dispose();
+  });
+
+  it('tells the core about a theme change once, in order after the session starts, and not after the terminal is gone', async () => {
+    const opening = await open(undefined, {theme: forest});
+    opening.adapter.applyPreferences(preferences(paper));
+    opening.adapter.applyPreferences(preferences({...paper}));
+    await flush();
+    expect(invoke.mock.calls.slice(1).map(([command, args]) => [command, args])).toEqual([['terminal_core_theme', {sessionId: 'local:7', theme: paper}]]);
+    opening.adapter.applyPreferences(preferences(forest));
+    await flush();
+    expect(invoke).toHaveBeenLastCalledWith('terminal_core_theme', {sessionId: 'local:7', theme: forest}, expect.anything());
+    await opening.adapter.dispose();
+    invoke.mockClear();
+    opening.adapter.applyPreferences(preferences(paper));
+    await flush();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('sends the theme chosen while the app was locked once it is unlocked', async () => {
+    const {adapter} = await open();
+    setLocked(true);
+    adapter.applyPreferences(preferences(paper));
+    await flush();
+    expect(commands()).toEqual(['terminal_core_open']);
+    const nonce = setLocked(false);
+    await flush();
+    expect(invoke).toHaveBeenLastCalledWith('terminal_core_theme', {sessionId: 'local:7', theme: paper}, {headers: {'X-Lazysh-Access': nonce}});
     await adapter.dispose();
   });
 

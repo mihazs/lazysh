@@ -1214,6 +1214,9 @@ jobs:
             terminal_core::native::tests::paste_is_bracketed_only_after_the_program_enabled_it
             terminal_core::native::tests::a_core_answers_a_reader_from_the_real_screen_and_never_with_a_cell
             terminal_core::native::tests::a_locked_app_is_told_nothing_and_the_next_reader_brings_the_core_back_to_life
+            terminal_core::native::tests::colour_queries_get_the_apps_theme_and_a_theme_change_changes_the_next_answer
+            terminal_core::native::tests::a_theme_that_is_not_a_set_of_hex_colours_opens_no_core_and_changes_nothing
+            terminal_core::native::tests::a_mosh_session_follows_the_sizes_of_its_frames_and_a_plain_one_does_not
             local::tests::the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader
           )
           for case_name in "${guards[@]}"; do

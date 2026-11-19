@@ -92,8 +92,22 @@ pub(crate) trait Core: Send + Sync {
     /// Whether a reader is looking. An inactive core keeps parsing and wakes nobody; becoming active rings once
     /// to catch up. A core starts active.
     fn set_active(&self, lease: &AccessLease, active: bool);
+    /// The app's terminal theme changed: report these colours to the queries that arrive from now on.
+    fn set_theme(&self, theme: &Json) -> Result<(), String>;
     /// Free the core now. Idempotent.
     fn close(&self);
+}
+
+/// What a renderer opens a core with besides its size and history, as `terminal_core_open`'s `config`.
+#[derive(Debug, Default, Deserialize)]
+#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct CoreConfig {
+    /// The app's terminal theme as the client's `TerminalTheme` (CSS hex colours). The core reports it to programs
+    /// that ask for the default colours (`OSC 10`, `11`, `12` and `4`); absent, it reports its own default colours.
+    pub(crate) theme: Option<Json>,
+    /// The session's transport is Mosh: its frames decide the grid's size and the renderer's sizes are only intent.
+    pub(crate) canonical_frames: bool,
 }
 
 /// Most text one paste (or one committed text) may carry, the limit `write_stdin` puts on a paste.
@@ -448,7 +462,8 @@ const HISTORY_LINES: std::ops::RangeInclusive<u32> = 100..=20_000;
 /// Like the terminal commands, the two that create or read a screen belong to the current renderer:
 /// a replaced renderer's lease is refused. `scrollback_lines` is the History lines setting; the core
 /// requests a budget for that many rows of ordinary output (see `scrollback_bytes_for_lines`);
-/// the hub may grant less. When absent, the core uses its default history budget.
+/// the hub may grant less. When absent, the core uses its default history budget. `config` is how the session differs
+/// from the default core: the app's colours and the Mosh canonical-frame mode, both fixed before the first byte.
 #[tauri::command]
 pub async fn terminal_core_open(
     lease: AccessLease,
@@ -456,6 +471,7 @@ pub async fn terminal_core_open(
     cols: u32,
     rows: u32,
     scrollback_lines: Option<u32>,
+    config: Option<CoreConfig>,
 ) -> AccessResult<()> {
     lease
         .run(async {
@@ -469,7 +485,14 @@ pub async fn terminal_core_open(
             }
             offer(
                 &events,
-                native::factory(cols, rows, scrollback_lines, lease.clone(), events.clone())?,
+                native::factory(
+                    cols,
+                    rows,
+                    scrollback_lines,
+                    config.unwrap_or_default(),
+                    lease.clone(),
+                    events.clone(),
+                )?,
             );
             Ok(())
         })
@@ -556,6 +579,18 @@ pub async fn terminal_core_set_active(
             live(&session_id)?.set_active(&lease, active);
             Ok(())
         })
+        .await
+}
+
+/// The app's terminal theme changed (the client's `TerminalTheme`): the core reports its colours from now on.
+#[tauri::command]
+pub async fn terminal_core_theme(
+    lease: AccessLease,
+    session_id: String,
+    theme: Json,
+) -> AccessResult<()> {
+    lease
+        .run(async { live(&session_id)?.set_theme(&theme) })
         .await
 }
 
@@ -676,6 +711,7 @@ mod native {
         _: u32,
         _: u32,
         _: Option<u32>,
+        _: super::CoreConfig,
         _: crate::app_lock::AccessLease,
         _: tauri::ipc::Channel<crate::ssh::SshEvent>,
     ) -> Result<super::Factory, String> {
@@ -693,8 +729,8 @@ mod native {
     use lazysh_terminal_runtime::{
         control_window, dom_mods, ffi, scrollback_bytes_for_lines, Config, ControlEvent,
         ControlSnapshot, DomKey, Doorbell, Error as RuntimeError, Hooks, Hub, HubConfig, KeyInput,
-        MouseInput, Offer, Origin, PtyWriter, Refused, ScrollAction, Session, Size,
-        TerminalRuntime,
+        MouseInput, Offer, Origin, PtyWriter, Refused, RgbColor, ScrollAction, Session, Size,
+        TerminalRuntime, Theme,
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
@@ -719,6 +755,96 @@ mod native {
         fn write(&self, _: Origin, bytes: &[u8]) -> Result<(), Refused> {
             self.0.write(bytes).map_err(|_| Refused)
         }
+    }
+
+    /// The names of the sixteen ANSI colours in a `TerminalTheme`, in palette order.
+    const ANSI_NAMES: [&str; 16] = [
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "brightBlack",
+        "brightRed",
+        "brightGreen",
+        "brightYellow",
+        "brightBlue",
+        "brightMagenta",
+        "brightCyan",
+        "brightWhite",
+    ];
+
+    /// xterm.js's own sixteen ANSI colours: what the xterm.js engine draws, and so what a program probing the
+    /// palette must see, for a colour the theme leaves out (the bundled themes name only some of them).
+    const XTERM_ANSI: [&str; 16] = [
+        "#2e3436", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
+        "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec",
+    ];
+
+    /// `#rgb`, `#rrggbb` or `#rrggbbaa` (the forms a lazysh theme holds; the alpha, which only a selection uses, is dropped).
+    fn css_color(text: &str) -> Option<RgbColor> {
+        let digits = text.strip_prefix('#')?;
+        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let value = |digits: &str| u8::from_str_radix(digits, 16).ok();
+        let [r, g, b] = match digits.len() {
+            3 => [0, 1, 2].map(|at| value(&digits[at..=at]).map(|nibble| nibble * 17)),
+            6 | 8 => [0, 2, 4].map(|at| value(&digits[at..at + 2])),
+            _ => return None,
+        };
+        Some(RgbColor {
+            r: r?,
+            g: g?,
+            b: b?,
+        })
+    }
+
+    /// The colours a `TerminalTheme` gives a core to report: the default foreground, background and cursor, the
+    /// sixteen ANSI colours and `extendedAnsi` (palette entries 16 and up). What it does not name is what xterm.js
+    /// draws, so the core and the xterm.js engine answer a probe alike. Selection colours are the renderer's.
+    fn theme_of(json: &Json) -> Result<Theme, String> {
+        let object = json
+            .as_object()
+            .ok_or("The terminal theme must be an object")?;
+        let color = |key: &str| match object.get(key) {
+            None | Some(Json::Null) => Ok(None),
+            Some(value) => value
+                .as_str()
+                .and_then(css_color)
+                .map(Some)
+                .ok_or_else(|| format!("The terminal theme's {key} is not a hex colour")),
+        };
+        let constant = |text| css_color(text).expect("a colour written in this file");
+        let mut theme = Theme {
+            cursor: constant("#ffffff"),
+            ..Theme::default()
+        };
+        for (entry, ansi) in theme.palette.iter_mut().zip(XTERM_ANSI) {
+            *entry = constant(ansi);
+        }
+        theme.foreground = color("foreground")?.unwrap_or(theme.foreground);
+        theme.background = color("background")?.unwrap_or(theme.background);
+        theme.cursor = color("cursor")?.unwrap_or(theme.cursor);
+        for (entry, name) in theme.palette.iter_mut().zip(ANSI_NAMES) {
+            *entry = color(name)?.unwrap_or(*entry);
+        }
+        if let Some(extended) = object.get("extendedAnsi").filter(|value| !value.is_null()) {
+            let extended = extended
+                .as_array()
+                .filter(|colors| colors.len() <= 240)
+                .ok_or("The terminal theme's extendedAnsi must be at most 240 colours")?;
+            for (entry, value) in theme.palette[16..].iter_mut().zip(extended) {
+                *entry = value
+                    .as_str()
+                    .and_then(css_color)
+                    .ok_or("The terminal theme's extendedAnsi holds a colour that is not hex")?;
+            }
+        }
+        Ok(theme)
     }
 
     /// Live sessions and reserved scrollback bytes in the process-wide hub, for the lifecycle test.
@@ -832,6 +958,14 @@ mod native {
             }
         }
 
+        fn set_theme(&self, theme: &Json) -> Result<(), String> {
+            let theme = theme_of(theme)?;
+            self.0
+                .with(|runtime| runtime.set_theme(&theme))
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
+        }
+
         fn input(&self, lease: &AccessLease, input: CoreInput) -> Result<usize, String> {
             self.1.use_lease(lease);
             match input {
@@ -898,10 +1032,12 @@ mod native {
         cols: u32,
         rows: u32,
         scrollback_lines: Option<u32>,
+        open: CoreConfig,
         lease: AccessLease,
         events: Channel<SshEvent>,
     ) -> Result<Factory, String> {
         let defaults = Config::default();
+        let theme = open.theme.as_ref().map(theme_of).transpose()?;
         let config = Config {
             size: Size::new(cols as u16, rows as u16),
             scrollback_bytes: scrollback_lines.map_or(defaults.scrollback_bytes, |lines| {
@@ -909,9 +1045,8 @@ mod native {
             }),
             // The transport windows are 256 KiB: a producer holding credit always fits.
             ingress_bytes: crate::ssh::OUTPUT_WINDOW as usize,
-            // A field the crate adds later keeps its default instead of breaking this build, as
-            // `canonical_frames` did while no CI job compiled the `native-terminal` feature.
-            ..defaults
+            canonical_frames: open.canonical_frames,
+            theme: theme.unwrap_or(defaults.theme),
         };
         Ok(Box::new(move || {
             let (core, link) = create(config, &lease, move |event| {
@@ -969,6 +1104,14 @@ mod native {
             }
         }
 
+        fn wait_until(done: impl Fn() -> bool) {
+            let start = Instant::now();
+            while !done() {
+                assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
         /// A real core and what it wrote to the transport so far.
         struct Fixture {
             core: Runtime,
@@ -1015,11 +1158,7 @@ mod native {
             }
 
             fn wait(&self, done: impl Fn() -> bool) {
-                let start = Instant::now();
-                while !done() {
-                    assert!(start.elapsed() < Duration::from_secs(10), "timed out");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+                wait_until(done);
             }
 
             /// The bytes one input event put on the transport (none when the modes ask for nothing).
@@ -1185,11 +1324,7 @@ mod native {
         fn parsed(core: &Runtime, output: &[u8]) {
             let before = core.0.stats().unwrap().processed;
             assert!(matches!(core.0.feed(output.to_vec()), Ok(Offer::Accepted)));
-            let start = Instant::now();
-            while core.0.stats().unwrap().processed < before + output.len() as u64 {
-                assert!(start.elapsed() < Duration::from_secs(10), "timed out");
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            wait_until(|| core.0.stats().unwrap().processed >= before + output.len() as u64);
         }
 
         #[test]
@@ -1283,6 +1418,220 @@ mod native {
             );
         }
 
+        /// A core opened the way the renderer opens one, `terminal_core_open` and then the transport starting on the
+        /// same channel, with the bytes it wrote to that transport.
+        struct Opened {
+            id: &'static str,
+            lease: AccessLease,
+            core: Arc<dyn Core>,
+            written: Arc<Mutex<Vec<u8>>>,
+        }
+
+        async fn opened(id: &'static str, config: Option<CoreConfig>) -> Opened {
+            let lease = crate::app_lock::AccessState::disabled()
+                .lease(None)
+                .unwrap();
+            let channel = Channel::new(|_| Ok(()));
+            terminal_core_open(lease.clone(), channel.clone(), 80, 24, None, config)
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap();
+            let prepared = prepare(&channel).unwrap().expect("the offer");
+            let core = prepared.core.clone();
+            let written = Arc::new(Mutex::new(Vec::new()));
+            let transport = written.clone();
+            prepared.attach(
+                id,
+                &CoreSlot::default(),
+                Arc::new(|_| {}),
+                Arc::new(move |bytes, _| {
+                    transport.lock().unwrap().extend(bytes);
+                    Ok(())
+                }),
+            );
+            Opened {
+                id,
+                lease,
+                core,
+                written,
+            }
+        }
+
+        impl Opened {
+            /// What the core wrote to the transport in answer to `output`: everything before the reply to a
+            /// device-status report sent behind it, which marks the end of what the core parsed.
+            fn answers_to(&self, output: &[u8]) -> String {
+                const DONE: &[u8] = b"\x1b[0n";
+                self.written.lock().unwrap().clear();
+                self.core.feed([output, b"\x1b[5n"].concat()).unwrap();
+                wait_until(|| self.written.lock().unwrap().ends_with(DONE));
+                let written = std::mem::take(&mut *self.written.lock().unwrap());
+                String::from_utf8(written[..written.len() - DONE.len()].to_vec()).unwrap()
+            }
+
+            /// The core's grid after asking for `resize` (or as it is), through the commands.
+            async fn size(&self, resize: Option<(u32, u32)>) -> (u64, u64) {
+                let answer = match resize {
+                    Some((cols, rows)) => {
+                        terminal_core_resize(self.lease.clone(), self.id.into(), cols, rows, None)
+                            .await
+                    }
+                    None => terminal_core_snapshot(self.lease.clone(), self.id.into(), None).await,
+                };
+                let state = answer.unwrap().into_inner().unwrap()["state"].clone();
+                (
+                    state["columns"].as_u64().unwrap(),
+                    state["rows"].as_u64().unwrap(),
+                )
+            }
+
+            async fn retheme(&self, theme: Json) -> Result<(), String> {
+                match terminal_core_theme(self.lease.clone(), self.id.into(), theme).await {
+                    Ok(done) => {
+                        done.into_inner().unwrap();
+                        Ok(())
+                    }
+                    Err(error) => Err(error.into_inner().unwrap()),
+                }
+            }
+        }
+
+        fn app_theme(background: &str) -> CoreConfig {
+            CoreConfig {
+                theme: Some(serde_json::json!({
+                    "foreground": "#d9e0d6", "background": background, "cursor": "#c4eb89",
+                    "red": "#f48781", "extendedAnsi": ["#010203"],
+                    "selectionBackground": "#40543a80", "cursorAccent": "#000000"
+                })),
+                ..CoreConfig::default()
+            }
+        }
+
+        const COLOUR_QUERIES: &[u8] =
+            b"\x1b]11;?\x07\x1b]10;?\x1b\\\x1b]12;?\x07\x1b]4;1;?\x07\x1b]4;2;?\x07\x1b]4;16;?\x07";
+
+        #[tokio::test]
+        #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+        async fn colour_queries_get_the_apps_theme_and_a_theme_change_changes_the_next_answer() {
+            let _kept = tests_keeping_cores().read();
+            let themed = opened("theme-open", Some(app_theme("#101311"))).await;
+            let plain = opened("theme-default", None).await;
+            // Background, foreground and cursor, then ANSI red and extendedAnsi 0 from the theme, and ANSI green
+            // (which the theme leaves out) as xterm.js draws it.
+            assert_eq!(
+                themed.answers_to(COLOUR_QUERIES),
+                "\x1b]11;rgb:1010/1313/1111\x07\x1b]10;rgb:d9d9/e0e0/d6d6\x1b\\\x1b]12;rgb:c4c4/ebeb/8989\x07\
+                 \x1b]4;1;rgb:f4f4/8787/8181\x07\x1b]4;2;rgb:4e4e/9a9a/0606\x07\x1b]4;16;rgb:0101/0202/0303\x07"
+            );
+            assert_eq!(
+                plain.answers_to(b"\x1b]11;?\x07"),
+                "\x1b]11;rgb:0000/0000/0000\x07",
+                "a core opened without a theme reports its own colours"
+            );
+
+            themed
+                .retheme(serde_json::json!({"background": "#abc", "foreground": "#000", "cursor": "#102030", "red": "#112233", "extendedAnsi": ["#040506"]}))
+                .await
+                .unwrap();
+            assert_eq!(
+                themed.answers_to(COLOUR_QUERIES),
+                "\x1b]11;rgb:aaaa/bbbb/cccc\x07\x1b]10;rgb:0000/0000/0000\x1b\\\x1b]12;rgb:1010/2020/3030\x07\
+                 \x1b]4;1;rgb:1111/2222/3333\x07\x1b]4;2;rgb:4e4e/9a9a/0606\x07\x1b]4;16;rgb:0404/0505/0606\x07"
+            );
+            assert_eq!(
+                plain.answers_to(b"\x1b]11;?\x07"),
+                "\x1b]11;rgb:0000/0000/0000\x07",
+                "another session's colours did not move"
+            );
+            close("theme-open");
+            close("theme-default");
+        }
+
+        #[tokio::test]
+        #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+        async fn a_theme_that_is_not_a_set_of_hex_colours_opens_no_core_and_changes_nothing() {
+            let _kept = tests_keeping_cores().read();
+            let themed = opened("theme-refused", Some(app_theme("#101311"))).await;
+            let too_many = vec!["#000000"; 241];
+            for theme in [
+                serde_json::json!("dark"),
+                serde_json::json!({"background": "red"}),
+                serde_json::json!({"foreground": 7}),
+                serde_json::json!({"cursor": "#12345"}),
+                serde_json::json!({"black": "#gg0000"}),
+                serde_json::json!({"cursor": "#ééé"}),
+                serde_json::json!({"extendedAnsi": too_many}),
+                serde_json::json!({"extendedAnsi": ["#000000", "nope"]}),
+                serde_json::json!({"extendedAnsi": "#000000"}),
+            ] {
+                assert!(
+                    themed.retheme(theme.clone()).await.is_err(),
+                    "{theme} changed the theme"
+                );
+                let channel = Channel::new(|_| Ok(()));
+                let lease = themed.lease.clone();
+                let config = CoreConfig {
+                    theme: Some(theme.clone()),
+                    ..CoreConfig::default()
+                };
+                let refused =
+                    terminal_core_open(lease, channel.clone(), 80, 24, None, Some(config))
+                        .await
+                        .err()
+                        .unwrap()
+                        .into_inner()
+                        .unwrap();
+                assert!(refused.contains("terminal theme"), "{theme}: {refused}");
+                assert!(
+                    prepare(&channel).unwrap().is_none(),
+                    "{theme} left an offer behind"
+                );
+            }
+            assert_eq!(
+                themed.answers_to(b"\x1b]11;?\x07"),
+                "\x1b]11;rgb:1010/1313/1111\x07",
+                "the theme in force is the one before the refusals"
+            );
+            close("theme-refused");
+        }
+
+        #[tokio::test]
+        #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+        async fn a_mosh_session_follows_the_sizes_of_its_frames_and_a_plain_one_does_not() {
+            let _kept = tests_keeping_cores().read();
+            let mosh = opened(
+                "mosh-canonical",
+                Some(CoreConfig {
+                    canonical_frames: true,
+                    ..CoreConfig::default()
+                }),
+            )
+            .await;
+            let plain = opened("mosh-plain", None).await;
+            let frame = |id: u32, cols: u32, rows: u32| {
+                format!(
+                    "\x1b]7777;lazysh-mosh;1;begin;{id};{cols};{rows}\x1b\\hello\x1b]7777;lazysh-mosh;1;end;{id}\x1b\\"
+                )
+            };
+            for core in [&mosh, &plain] {
+                assert_eq!(core.answers_to(frame(1, 50, 12).as_bytes()), "");
+            }
+            assert_eq!(mosh.size(None).await, (50, 12), "the frame sized the grid");
+            assert_eq!(
+                plain.size(None).await,
+                (80, 24),
+                "a core not told it is Mosh ignores frames"
+            );
+            // The renderer's size is an intent to the transport, which alone decides what the grid is.
+            assert_eq!(mosh.size(Some((100, 30))).await, (50, 12));
+            assert_eq!(plain.size(Some((100, 30))).await, (100, 30));
+            assert_eq!(mosh.answers_to(frame(2, 60, 20).as_bytes()), "");
+            assert_eq!(mosh.size(None).await, (60, 20));
+            close("mosh-canonical");
+            close("mosh-plain");
+        }
+
         #[test]
         fn input_is_refused_and_counted_when_the_renderer_was_replaced() {
             let fixture = fixture();
@@ -1320,6 +1669,8 @@ pub(crate) mod fake {
         pub(crate) peak_queued: Arc<AtomicUsize>,
         pub(crate) feeds: Arc<AtomicUsize>,
         pub(crate) sizes: Mutex<Vec<(u32, u32)>>,
+        /// The themes the bridge handed to `Core::set_theme`, in order.
+        pub(crate) themes: Mutex<Vec<Json>>,
         /// The input events the bridge handed to `Core::input`, in order.
         pub(crate) inputs: Mutex<Vec<CoreInput>>,
         pub(crate) closed: std::sync::atomic::AtomicBool,
@@ -1350,6 +1701,7 @@ pub(crate) mod fake {
                 peak_queued: Arc::default(),
                 feeds: Arc::default(),
                 sizes: Mutex::default(),
+                themes: Mutex::default(),
                 inputs: Mutex::default(),
                 closed: Default::default(),
                 active: std::sync::atomic::AtomicBool::new(true),
@@ -1455,6 +1807,11 @@ pub(crate) mod fake {
 
         fn set_active(&self, _: &AccessLease, active: bool) {
             self.active.store(active, SeqCst);
+        }
+
+        fn set_theme(&self, theme: &Json) -> Result<(), String> {
+            self.themes.lock().unwrap().push(theme.clone());
+            Ok(())
         }
 
         fn close(&self) {
@@ -1564,6 +1921,7 @@ mod tests {
             "terminal_core_scroll",
             "terminal_core_resize",
             "terminal_core_set_active",
+            "terminal_core_theme",
         ] {
             assert!(!allowed_while_locked(protected), "{protected}");
         }
@@ -1594,17 +1952,22 @@ mod tests {
                 terminal_core_resize(lease.clone(), id(), 80, 24, None)
                     .await
                     .is_ok(),
-                terminal_core_set_active(lease, id(), true).await.is_ok(),
+                terminal_core_set_active(lease.clone(), id(), true)
+                    .await
+                    .is_ok(),
+                terminal_core_theme(lease, id(), serde_json::json!({}))
+                    .await
+                    .is_ok(),
             ]
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        assert_eq!(runtime.block_on(ask(lease.clone())), [true; 4]);
+        assert_eq!(runtime.block_on(ask(lease.clone())), [true; 5]);
         access.lock().unwrap();
         assert_eq!(
             runtime.block_on(ask(lease)),
-            [false; 4],
+            [false; 5],
             "every control command is refused to a lease the lock revoked"
         );
         close("locked-control");
@@ -1666,7 +2029,25 @@ mod tests {
             .await
             .unwrap();
         assert!(!core.active.load(std::sync::atomic::Ordering::SeqCst));
+        let theme = serde_json::json!({"background": "#101311"});
+        terminal_core_theme(renderer.clone(), "control-gated".into(), theme.clone())
+            .await
+            .unwrap();
+        assert_eq!(*core.themes.lock().unwrap(), std::slice::from_ref(&theme));
+        assert!(
+            terminal_core_theme(renderer.clone(), "nobody".into(), theme.clone())
+                .await
+                .is_err(),
+            "no session, no theme"
+        );
         access.replace_renderer().unwrap();
+        assert!(
+            terminal_core_theme(renderer.clone(), "control-gated".into(), theme)
+                .await
+                .is_err(),
+            "a replaced renderer is refused"
+        );
+        assert_eq!(core.themes.lock().unwrap().len(), 1);
         for result in [
             terminal_core_snapshot(renderer.clone(), "control-gated".into(), None).await,
             terminal_core_scroll(renderer.clone(), "control-gated".into(), scroll(), None).await,
@@ -1738,7 +2119,7 @@ mod tests {
     #[tokio::test]
     async fn open_refuses_history_lines_outside_the_setting_range() {
         for lines in [0, 99, 20_001, u32::MAX] {
-            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines))
+            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines), None)
                 .await
                 .err()
                 .unwrap()
@@ -1851,7 +2232,7 @@ mod tests {
     #[cfg(not(feature = "native-terminal"))]
     #[tokio::test]
     async fn without_the_feature_the_commands_say_the_core_is_not_built() {
-        let error = terminal_core_open(lease(), channel(), 80, 24, None)
+        let error = terminal_core_open(lease(), channel(), 80, 24, None, None)
             .await
             .err()
             .unwrap()
@@ -1860,7 +2241,7 @@ mod tests {
         assert!(error.contains("not built"), "{error}");
         // The ends of the History lines range reach the core; only values outside it are refused.
         for lines in [100, 20_000] {
-            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines))
+            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines), None)
                 .await
                 .err()
                 .unwrap()
@@ -1868,7 +2249,7 @@ mod tests {
                 .unwrap();
             assert!(error.contains("not built"), "{lines}: {error}");
         }
-        assert!(terminal_core_open(lease(), channel(), 0, 24, None)
+        assert!(terminal_core_open(lease(), channel(), 0, 24, None, None)
             .await
             .is_err());
         assert!(terminal_core_text(lease(), "none".into()).await.is_err());
