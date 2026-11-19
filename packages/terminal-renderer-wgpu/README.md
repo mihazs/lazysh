@@ -2,9 +2,9 @@
 
 wgpu implementation of the [Terminal Renderer API](../../docs/architecture/native-rendering.md#terminal-renderer-api)
 ([#1324](https://github.com/mihazs/lazysh/issues/1324), epic [#1302](https://github.com/mihazs/lazysh/issues/1302)).
-Not wired into the app: the Android surface is [#1327](https://github.com/mihazs/lazysh/issues/1327), text with real
-fonts is [#1325](https://github.com/mihazs/lazysh/issues/1325), and cursor blink, scale changes and loss recovery
-([#1326](https://github.com/mihazs/lazysh/issues/1326)) build on it.
+Not wired into the app: the Android surface is [#1327](https://github.com/mihazs/lazysh/issues/1327) and text with real
+fonts is [#1325](https://github.com/mihazs/lazysh/issues/1325); cursor blink, scale changes and loss recovery
+([#1326](https://github.com/mihazs/lazysh/issues/1326)) are in, for the reference renderer's dot-pattern glyphs.
 
 What it does, and where the tests that show it live:
 
@@ -16,7 +16,10 @@ What it does, and where the tests that show it live:
 | Bounded GPU memory | A fixed-size atlas of one- and two-cell slots with LRU eviction (`src/atlas.rs`); a frame with more distinct glyphs than slots is drawn in several passes; the instance buffer is capped | `memory_has_an_upper_bound_under_glyph_churn`, `an_atlas_smaller_than_the_screen_draws_the_same_pixels`, unit tests in `src/atlas.rs` |
 | Explicit cleanup | `destroy` destroys every buffer and texture, then reads the driver's counters | `destroy_releases_the_buffers_and_textures_it_created` |
 | Capability fallbacks | `Policy` ranks backends (Vulkan then OpenGL ES on Android and Linux, Metal on Apple, Direct3D 12 then Vulkan on Windows); software adapters are refused unless allowed; no usable adapter is `RenderError::Unsupported`, not a loss | `src/adapter.rs` unit tests, `tests/frames.rs` |
-| Device loss | `resume` builds a new device from core state; a loss reported by a device that was already replaced is ignored | `a_lost_device_recovers_from_a_snapshot` |
+| Device loss | `resume` builds a new device from core state; a loss reported by a device that was already replaced is ignored; a reset the renderer was not told about is learned from the device | `a_lost_device_recovers_from_a_snapshot`, `tests/lifecycle.rs` (five losses, identical pixels, resource counts, bounded time) |
+| Cursor blink | `wants_blink_timer()` and the host-side `BlinkClock`: one timer for every session, none for a steady or hidden cursor; a phase is one row in one pass | `tests/lifecycle.rs` (virtual time) |
+| Display scale and refresh rate | `CellMetrics::scaled` and `set_appearance` + `resize` repaint from the held screen; `FramePacer` draws at most once per refresh | `tests/lifecycle.rs`, goldens at 2x and 3x |
+| Selection highlight | the layout's selection overlay; a drag redraws only the rows it changes | `a_selection_drag_redraws_only_the_rows_it_changes_and_matches_the_reference` |
 
 The surface is an offscreen texture (`Target`), which is what the tests and examples read back with `read_image`.
 Glyphs are still the reference renderer's dot patterns; fonts are #1325.

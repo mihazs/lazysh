@@ -126,6 +126,9 @@ pub struct GpuStats {
     pub atlas_spills: u64,
     /// Devices built after the first: recoveries from a loss.
     pub device_recoveries: u64,
+    /// Time spent in `resume` building those devices, pipelines and resources (the part of a
+    /// recovery that is not the host's snapshot and redraw).
+    pub recovery_time: std::time::Duration,
 }
 
 impl GpuStats {
@@ -141,6 +144,7 @@ impl GpuStats {
             atlas_upload_bytes: self.atlas_upload_bytes + other.atlas_upload_bytes,
             atlas_spills: self.atlas_spills + other.atlas_spills,
             device_recoveries: self.device_recoveries + other.device_recoveries,
+            recovery_time: self.recovery_time + other.recovery_time,
         }
     }
 }
@@ -299,11 +303,26 @@ impl Gpu {
         let size = check_size(side, target.width, target.height)?;
         let mine = epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let current = epoch.clone();
-        device.set_device_lost_callback(move |_, _| {
+        let report = move |flag: &AtomicBool| {
             if current.load(Ordering::SeqCst) == mine {
-                lost.store(true, Ordering::SeqCst);
+                flag.store(true, Ordering::SeqCst);
             }
-        });
+        };
+        let (on_loss, on_error) = (lost.clone(), lost);
+        let loss = report.clone();
+        device.set_device_lost_callback(move |_, _| loss(&on_loss));
+        // wgpu panics on an error nobody captured. After a loss the driver answers every call
+        // with one, and an out-of-memory or internal error is the driver failing: those mark the
+        // device lost, so the host recovers. A validation error is this crate's own bug and still panics.
+        device.on_uncaptured_error(Arc::new(move |error| match error {
+            wgpu::Error::OutOfMemory { .. } | wgpu::Error::Internal { .. } => report(&on_error),
+            wgpu::Error::Validation {
+                ref description, ..
+            } if description.contains("lost") || description.contains("destroyed") => {
+                report(&on_error)
+            }
+            other => panic!("wgpu error: {other}"),
+        }));
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terminal shader"),
@@ -450,11 +469,9 @@ impl Gpu {
         Ok(())
     }
 
-    /// A new cell size or font list changes every mask: start the atlas over.
-    fn reset_atlas(&mut self, appearance: &Appearance) -> Result<(), RenderError> {
-        self.atlas =
-            Atlas::new(self.atlas.size, appearance.metrics).ok_or(RenderError::InvalidSize)?;
-        Ok(())
+    /// An empty atlas of the same texture for the cells of `appearance`.
+    fn new_atlas(&self, appearance: &Appearance) -> Result<Atlas, RenderError> {
+        Atlas::new(self.atlas.size, appearance.metrics).ok_or(RenderError::InvalidSize)
     }
 
     fn memory(&self) -> GpuMemory {
@@ -711,6 +728,15 @@ impl WgpuRenderer {
         self.core.lose_device();
     }
 
+    /// Simulate a driver reset the renderer was not told about: only the device is destroyed. The
+    /// loss is learned the way a real one is, from the device's callback or from the errors of
+    /// later calls, and every call then reports `DeviceLost` until `resume`.
+    pub fn reset_device_behind_the_renderers_back(&mut self) {
+        if let Some(gpu) = &self.gpu {
+            gpu.device.destroy();
+        }
+    }
+
     /// The target as an image. Waits for the GPU; for tests and the bench check, not a frame path.
     pub fn read_image(&mut self) -> Result<Image, RenderError> {
         let gpu = self.gpu_mut()?;
@@ -782,12 +808,21 @@ impl TerminalRenderer for WgpuRenderer {
     }
 
     fn set_appearance(&mut self, appearance: Appearance) -> Result<(), RenderError> {
-        let masks_change = self.core.appearance.metrics != appearance.metrics
-            || self.core.appearance.font_families != appearance.font_families;
+        self.core.live()?;
+        appearance.metrics.validate()?;
+        let before = &self.core.appearance;
+        // A new cell size or font list changes every mask: the new atlas is built first, so a
+        // size the texture cannot hold is refused with everything unchanged.
+        let atlas = if before.metrics != appearance.metrics
+            || before.font_families != appearance.font_families
+        {
+            Some(self.gpu()?.new_atlas(&appearance)?)
+        } else {
+            None
+        };
         self.core.set_appearance(appearance)?;
-        if masks_change {
-            let appearance = self.core.appearance.clone();
-            self.gpu_mut()?.reset_atlas(&appearance)?;
+        if let Some(atlas) = atlas {
+            self.gpu_mut()?.atlas = atlas;
         }
         Ok(())
     }
@@ -835,6 +870,7 @@ impl TerminalRenderer for WgpuRenderer {
     fn resume(&mut self) -> Result<(), RenderError> {
         if self.core.resume()? == Resume::DeviceRecovered {
             // A destroyed device cannot be reused: build a new one, keeping the counters.
+            let started = Instant::now();
             if let Some(old) = self.gpu.take() {
                 self.epoch.fetch_add(1, Ordering::SeqCst);
                 old.release();
@@ -843,7 +879,10 @@ impl TerminalRenderer for WgpuRenderer {
             }
             let (target, appearance) = (&self.target, &self.core.appearance);
             match Gpu::new(target, appearance, self.core.lost_flag(), &self.epoch) {
-                Ok(gpu) => self.gpu = Some(gpu),
+                Ok(gpu) => {
+                    self.gpu = Some(gpu);
+                    self.carried.recovery_time += started.elapsed();
+                }
                 Err(error) => {
                     // Still no device: stay lost, so the host tries again later.
                     self.core.lose_device();
