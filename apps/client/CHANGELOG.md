@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.79.7
+
+### Patch Changes
+
+- 173aa0d: Run the six named terminal end-to-end specs per terminal backend (#1703): `LAZYSH_E2E_TERMINAL_BACKEND=xterm|native bun run test:e2e:terminal` sets the developer override before the page loads and `onAdapter` fails the spec when the terminal on screen is another backend, so a silent fallback cannot pass as the requested engine. CI runs the xterm arm and a native arm that is reported skipped, with the backend registry's reason, until the native backend is registered. Test code and CI only; no product behaviour changes.
+- @lazysh/account-usage@1.79.7
+  - @lazysh/common@1.79.7
+  - @lazysh/display-idle@1.79.7
+  - @lazysh/et-transport@1.79.7
+  - @lazysh/mosh-transport@1.79.7
+
 ## 1.79.6
 
 ### Patch Changes
