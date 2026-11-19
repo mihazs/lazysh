@@ -1,5 +1,41 @@
 # @lazysh/client
 
+## 1.81.0
+
+### Minor Changes
+
+- feat(herdr): mark the Spaces row this device's own guarded client shows as current ([#1783](https://github.com/mihazs/lazysh/pull/1783))
+
+  <details><summary>Details</summary>
+
+  Issue #591. Stock Herdr only reports the server's shared focus, which another connection can move, so the marker still follows that focus there. With the optional guarded Herdr host attached, the attached client reports its own workspace, tab and pane, and Spaces marks those instead, but only when the report names the server being read; while a Chat turn holds the guard the last reading is kept, and without the guard the marker returns to the shared focus. Needs a guarded Herdr host; it is built from the repository and not distributed yet (#1522). Real two-client acceptance on a device is not part of this change. No defaults change.
+
+  </details>
+- feat(devices): inspect and act on an Android device's screen elements from the device controls ([#1774](https://github.com/mihazs/lazysh/pull/1774))
+
+  <details><summary>Details</summary>
+
+  Issue #19. **Inspect screen elements** lists what Android's accessibility service reports on the foreground screen (label, class, resource id, bounds and actionable flags, at most 300), and **Tap** and **Long press** act on one element: the host companion (`lazysh-agent devices android ui tree` and `ui act`) re-reads the screen, finds the one enabled element with that identity and touches the centre of its bounds, or fails without touching anything when none matches. The buttons need **Enable device input**. No scrolling, text entry or iOS accessibility yet. Needs the updated host companion. No defaults change.
+
+  </details>
+
+### Patch Changes
+
+- test(terminal): Run the terminal adapter contract suite against the real core in CI and fail on an untested capability ([#2169](https://github.com/mihazs/lazysh/pull/2169))
+
+  <details><summary>Details</summary>
+
+  Part of #1305 and #1302. A test-only JSON-RPC process over stdio in the terminal runtime crate (`examples/control_stdio.rs`) calls the same session, doorbell and control-plane functions as the app's `terminal_core_*` commands, and the `herdr-native` CI job, which has Zig and Bun, runs the unchanged contract suite over it through the native terminal adapter. A guard now fails when a backend claims a capability that no passing test case verifies, and every backend registered in `terminalBackends.ts` must pass the suite and the cases of each capability it declares. No behaviour changes: the app, the terminal engines and every default are untouched, and xterm.js stays the only registered engine.
+
+  </details>
+- fix(client): show the Herdr New workspace and New worktree flow as a full-screen page on phones ([#1776](https://github.com/mihazs/lazysh/pull/1776))
+
+  <details><summary>Details</summary>
+
+  Issue #588. The flow is a long form with a command review and a result, but it opened as a bottom sheet that left the form and its **Cancel** / **Review commands** buttons squeezed under a partial-height card. On a phone window (up to 600 px wide) it now fills the screen under a header whose Close button stays visible while the form scrolls, including at short heights and with the keyboard open; Back, Escape, the explicit command review and the wait for the host to finish are unchanged. Larger windows keep the same centred dialog. No default changes.
+
+  </details>
+
 ## 1.80.4
 
 ### Patch Changes

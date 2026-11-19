@@ -10,6 +10,21 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.81.0] - 2026-11-19
+
+### New
+
+- **herdr:** mark the Spaces row this device's own guarded client shows as current ([#1783](https://github.com/mihazs/lazysh/pull/1783))
+- **devices:** inspect and act on an Android device's screen elements from the device controls ([#1774](https://github.com/mihazs/lazysh/pull/1774))
+
+### Fixed
+
+- **client:** show the Herdr New workspace and New worktree flow as a full-screen page on phones ([#1776](https://github.com/mihazs/lazysh/pull/1776))
+
+### Under the hood
+
+- **terminal:** Run the terminal adapter contract suite against the real core in CI and fail on an untested capability ([#2169](https://github.com/mihazs/lazysh/pull/2169))
+
 ## [1.80.4] - 2026-11-19
 
 ### Documentation
