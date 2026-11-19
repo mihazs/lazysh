@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.79.4
+
+### Patch Changes
+
+- 46786ee: Remember a per-device terminal engine choice (Auto, Native or xterm.js) and record, for every new session, which engine it got and why, with the reasons in English, Brazilian Portuguese and Spanish (#2092, first slice, part of #1302). New sessions ask the registry for the saved choice, the developer override still wins, and an open session keeps its engine. The choice is never part of encrypted sync. There is no Settings control yet and only xterm.js is registered, so every choice runs xterm.js and nothing changes for users; no default changes.
+- 76f1473: Mount a native terminal session through its anchor: the terminal pane attaches a native adapter to its container, places the Android native surface on it through the anchor tracker and takes it down when the pane is hidden or ends, and while a surface is shown every ancestor of the container stops painting its background so the surface below the page is visible, with the composer and other overlays above it. An xterm.js pane is unchanged. No backend registration gives a session a native terminal and release builds refuse the surface commands, so xterm.js stays the only engine and the default and nothing changes for users.
+- @lazysh/account-usage@1.79.4
+  - @lazysh/common@1.79.4
+  - @lazysh/display-idle@1.79.4
+  - @lazysh/et-transport@1.79.4
+  - @lazysh/mosh-transport@1.79.4
+
 ## 1.79.3
 
 ### Patch Changes
