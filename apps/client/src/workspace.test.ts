@@ -57,6 +57,20 @@ it('rejects tmux restoration names with controls or more than 200 UTF8 bytes bef
   expect(readWorkspace()).toHaveLength(1);
 });
 
+it('restores an rmux terminal on its labelled server and refuses an unsafe label', () => {
+  saveWorkspace([
+    {hostId:'a',attached:{kind:'rmux',name:'agent workspace',tmuxServer:'lab 世界'}},
+    {hostId:'b',attached:{kind:'rmux',name:'agent workspace',tmuxServer:'a/b'}},
+    {hostId:'c',attached:{kind:'zellij',name:'agent workspace',tmuxServer:'lab'}},
+  ]);
+  expect(readWorkspace()).toEqual([{hostId:'a',attached:{kind:'rmux',name:'agent workspace',tmuxServer:'lab 世界'}}]);
+  localStorage.setItem('lazysh.workspace.v1',JSON.stringify([
+    {hostId:'a',attached:{kind:'rmux',name:'line\nbreak'}},
+    {hostId:'b',attached:{kind:'rmux',name:'ok',tmuxServer:'..'}},
+  ]));
+  expect(readWorkspace()).toEqual([]);
+});
+
 it("restores bounded Mosh options without storing transport secrets", () => {
   const mosh = {
     serverPath: "/opt/mosh-server",

@@ -970,7 +970,7 @@ pub(crate) async fn local_control_command(
     server: &crate::tmux_server::TmuxServer,
 ) -> tokio::process::Command {
     let mut command = crate::host::local_command("tmux").await;
-    command.args(["-u", "-L", server.name(), "-C", "attach-session", "-f"]);
+    command.args(["-u", "-L", server.label(), "-C", "attach-session", "-f"]);
     command.args([
         "no-output,ignore-size",
         "-t",

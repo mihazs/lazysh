@@ -149,12 +149,15 @@ Use one of:
 ```sh
 lazysh --host SAVED_ID --mux tmux
 lazysh --host SAVED_ID --mux tmux:agents
+lazysh --host SAVED_ID --mux rmux
+lazysh --host SAVED_ID --mux rmux:agents
 lazysh --host SAVED_ID --mux herdr
 ```
 
 Single-dash and `--option=value` forms also work, in either selector order.
 `--mux` requires a saved host, cannot accompany `--dir`, and accepts exactly the
-three forms above. `tmux` and `tmux:default` select the explicit default server.
+five forms above. `tmux` and `tmux:default` select the explicit default server; `rmux`
+and `rmux:default` do the same on [rmux](multiplexers.md#rmux).
 Named servers use the existing [literal native validation](multiplexers.md#tmux):
 1–64 UTF-8 bytes, no slash/control characters, and neither `.` nor `..`.
 Shell quoting belongs to your shell; lazysh does not reinterpret the resulting
