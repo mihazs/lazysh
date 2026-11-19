@@ -37,7 +37,7 @@ mod mosh;
 mod multiplexer;
 #[cfg(desktop)]
 mod native_program;
-#[cfg(feature = "native-terminal")]
+#[cfg(native_terminal_core)]
 mod native_renderer;
 mod native_terminal_surface;
 mod notifications;
@@ -86,10 +86,10 @@ fn build_unspawned_windows(app: &tauri::App) -> tauri::Result<()> {
     for window in config.app.windows.iter().filter(|window| !window.create) {
         tauri::WebviewWindowBuilder::from_config(app.handle(), window)?
             .enable_clipboard_access()
-            .transparent(cfg!(feature = "native-terminal"))
+            .transparent(cfg!(native_terminal_core))
             .build()?;
     }
-    #[cfg(feature = "native-terminal")]
+    #[cfg(native_terminal_core)]
     native_terminal_surface::linux::record_display();
     Ok(())
 }

@@ -1,4 +1,4 @@
-import {describe, expect, it, vi} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {TerminalAdapter, TerminalBackendId, TerminalCapabilities} from './terminalAdapter';
 import {createBackendRegistry, type BackendProbe} from './terminalBackendRegistry';
 
@@ -69,5 +69,43 @@ describe('terminal backend selection', () => {
     await expect(r.select()).rejects.toThrow('No terminal backend is usable: xterm (not registered)');
     const {r: both} = registry();
     expect(() => both.register({id: 'xterm', capabilities: capabilities(), autoEligible: true, probe: () => ({ok: true}), create: () => adapter('xterm')})).toThrow('already registered');
+  });
+});
+
+describe('the build-time kill switch of the native backend', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const killed = {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'disabled in this build'}]};
+
+  it('lets a registered native backend through when the switch is not set, as before', async () => {
+    for (const stub of [() => {}, () => vi.stubGlobal('__LAZYSH_NATIVE_TERMINAL_OFF__', false)]) {
+      stub();
+      expect(await registry({autoEligible: true}).r.select({override: 'native'})).toMatchObject({id: 'native', reason: 'developer override'});
+      expect(await registry({autoEligible: true}).r.refusal('native')).toBeUndefined();
+    }
+  });
+
+  it('ignores the preference and the developer override for a registered, eligible, probed-ok native backend, and never probes or creates it', async () => {
+    vi.stubGlobal('__LAZYSH_NATIVE_TERMINAL_OFF__', true);
+    const {r, probe} = registry({autoEligible: true});
+    expect(await r.select({preference: 'native'})).toEqual(killed);
+    expect(await r.select({override: 'native'})).toEqual(killed);
+    expect(await r.select({preference: 'auto'})).toEqual(killed);
+    expect(await r.select()).toEqual(killed);
+    const {adapter: created} = await r.create({preference: 'native'});
+    expect([created.backend, probe.mock.calls.length]).toEqual(['xterm', 0]);
+  });
+
+  it('records that native is off under Auto when nothing registers it, and keeps what the user chose when it is xterm.js', async () => {
+    vi.stubGlobal('__LAZYSH_NATIVE_TERMINAL_OFF__', true);
+    const r = createBackendRegistry();
+    r.register({id: 'xterm', capabilities: capabilities(), autoEligible: true, probe: () => ({ok: true}), create: () => adapter('xterm')});
+    expect(await r.select()).toEqual(killed);
+    expect(await r.select({preference: 'xterm'})).toEqual({id: 'xterm', reason: 'preference', fallbacks: []});
+  });
+
+  it('refuses Native with the reason for the Settings choice, so the choice is disabled in such a build', async () => {
+    vi.stubGlobal('__LAZYSH_NATIVE_TERMINAL_OFF__', true);
+    const {r, probe} = registry({autoEligible: true});
+    expect([await r.refusal('native'), await r.refusal('xterm'), probe.mock.calls.length]).toEqual(['disabled in this build', undefined, 0]);
   });
 });

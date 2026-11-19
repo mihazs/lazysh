@@ -11,3 +11,10 @@ export function sourceDefines(): Record<string, string> {
   } catch { /* Source archives may not include Git metadata. */ }
   return { __LAZYSH_SOURCE_REVISION__: JSON.stringify(sourceRevision), __LAZYSH_SOURCE_DIRTY__: JSON.stringify(sourceDirty) };
 }
+
+// The build-time kill switch of the native terminal engine (docs/architecture/terminal-migration-plan.md); src-tauri/build.rs reads
+// the same variable, and Vite and the Bun build embed the same constant.
+export function nativeTerminalDefines(value = process.env.LAZYSH_NATIVE_TERMINAL || 'on'): Record<string, string> {
+  if (value !== 'on' && value !== 'off') throw new Error(`LAZYSH_NATIVE_TERMINAL must be "on" or "off", not "${value}".`);
+  return { __LAZYSH_NATIVE_TERMINAL_OFF__: JSON.stringify(value === 'off') };
+}

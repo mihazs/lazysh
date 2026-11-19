@@ -154,6 +154,9 @@ jobs:
         working-directory: apps/client
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: native
+      # The kill switch (#1342): a production bundle built with LAZYSH_NATIVE_TERMINAL=off keeps every new session on xterm.js.
+      - run: bun run test:e2e:kill-switch
+        working-directory: apps/client
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
@@ -1288,6 +1291,20 @@ jobs:
           path: ${{ runner.temp }}/linux-surface-app
           if-no-files-found: warn
           retention-days: 7
+      # The kill switch (#1342): with LAZYSH_NATIVE_TERMINAL=off the app leaves the real core out even though the feature is on, and the
+      # bridge and surface commands say so. The guards fail the step if a rename leaves a case unlisted.
+      - name: Check that the kill switch removes the real core from a build with the feature on
+        env:
+          LAZYSH_NATIVE_TERMINAL: 'off'
+        run: |
+          guards=(
+            terminal_core::tests::without_the_real_core_the_commands_say_why
+            native_terminal_surface::tests::the_surface_is_refused_disabled_in_this_build
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --exact "${guards[@]}"
 
   native-desktop:
     needs: changes

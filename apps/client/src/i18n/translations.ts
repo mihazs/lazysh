@@ -2571,6 +2571,7 @@ const translations = {
   terminalEnginePreference: ["escolhido nas Configurações", "elegido en la configuración"],
   terminalEngineOverride: ["escolhido pela substituição do desenvolvedor", "elegido por la anulación del desarrollador"],
   terminalEngineNotRegistered: ["o mecanismo nativo ainda não está disponível nesta plataforma", "el motor nativo aún no está disponible en esta plataforma"],
+  terminalEngineDisabledInBuild: ["o mecanismo nativo está desativado nesta versão do app", "el motor nativo está desactivado en esta compilación"],
   terminalEngineLacksAccessibility: ["um leitor de tela está ativo e o mecanismo nativo não pode ser lido por ele", "un lector de pantalla está activo y el motor nativo no puede ser leído por él"],
   terminalEngineLacks: ["o mecanismo nativo não oferece {{capabilities}}", "el motor nativo no ofrece {{capabilities}}"],
   terminalEngineProbeFailed: ["o mecanismo nativo não pode ser executado aqui ({{detail}})", "el motor nativo no puede ejecutarse aquí ({{detail}})"],

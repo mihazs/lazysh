@@ -1,10 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { sourceDefines } from './build/sourceRevision';
+import { nativeTerminalDefines, sourceDefines } from './build/sourceRevision';
 
 export default defineConfig({
   plugins: [react()],
-  define: sourceDefines(),
+  define: { ...sourceDefines(), ...nativeTerminalDefines() },
   clearScreen: false,
   server: { port: 1420, strictPort: true, host: '127.0.0.1', watch: { ignored: ['**/src-tauri/**'] } },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],

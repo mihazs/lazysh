@@ -1,4 +1,24 @@
+/// The build-time kill switch of the native terminal engine (`vite.config.ts` reads the same variable): `off` leaves the real core
+/// out of the app (`native_terminal_disabled`); otherwise the `native-terminal` feature builds it (`native_terminal_core`).
+fn native_terminal_cfg() {
+    println!("cargo:rerun-if-env-changed=LAZYSH_NATIVE_TERMINAL");
+    println!("cargo:rustc-check-cfg=cfg(native_terminal_core, native_terminal_disabled)");
+    match std::env::var("LAZYSH_NATIVE_TERMINAL")
+        .unwrap_or_default()
+        .as_str()
+    {
+        "off" => println!("cargo:rustc-cfg=native_terminal_disabled"),
+        "" | "on" => {
+            if std::env::var_os("CARGO_FEATURE_NATIVE_TERMINAL").is_some() {
+                println!("cargo:rustc-cfg=native_terminal_core");
+            }
+        }
+        other => panic!("LAZYSH_NATIVE_TERMINAL must be \"on\" or \"off\", not \"{other}\""),
+    }
+}
+
 fn main() {
+    native_terminal_cfg();
     // Parakeet runs on Linux and Windows x86_64 and, when the Google Android build opts in, on Android arm64/x86_64.
     println!("cargo:rustc-check-cfg=cfg(parakeet_local)");
     let (os, arch) = (

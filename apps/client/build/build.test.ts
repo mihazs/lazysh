@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { nativeTerminalDefines } from './sourceRevision';
 
 const out = await mkdtemp(join(tmpdir(), 'lazysh-bun-build-'));
 afterAll(() => rm(out, { recursive: true, force: true }));
@@ -48,4 +49,10 @@ test('build-time constants and the production flags are substituted and ?raw lic
 
 test('files from public/ are copied to the output root', () => {
   expect(existsSync(join(out, 'favicon.svg'))).toBe(true);
+});
+
+test('the native terminal kill switch is off only when asked, and any other value fails the build', () => {
+  expect(nativeTerminalDefines('on')).toEqual({ __LAZYSH_NATIVE_TERMINAL_OFF__: 'false' });
+  expect(nativeTerminalDefines('off')).toEqual({ __LAZYSH_NATIVE_TERMINAL_OFF__: 'true' });
+  expect(() => nativeTerminalDefines('maybe')).toThrow('LAZYSH_NATIVE_TERMINAL must be "on" or "off", not "maybe".');
 });
