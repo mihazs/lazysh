@@ -2,9 +2,10 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({invoke, isTauri: () => true, Channel: class { onmessage?: (event: unknown) => void; }}));
+const inApp = vi.hoisted(() => ({value: true}));
+vi.mock('@tauri-apps/api/core', () => ({invoke, isTauri: () => inApp.value, Channel: class { onmessage?: (event: unknown) => void; }}));
 import {acknowledgeAccessReady, accessSnapshot, applyAccessStatus} from './access';
-import {createNativeTerminalAdapter, type NativeTerminalOpening} from './tauriNativeCoreBridge';
+import {createNativeTerminalAdapter, probeNativeCore, type NativeTerminalOpening} from './tauriNativeCoreBridge';
 
 const modes = {bracketedPaste: true, mouseTracking: 'vt200', alternateScreen: false, applicationCursorKeys: true};
 /** What the Rust commands answer: the state without the History lines setting, and the text of a window of rows. */
@@ -36,6 +37,7 @@ const ring = (opening: NativeTerminalOpening, times = 1) => { for (let i = 0; i 
 beforeEach(() => {
   vi.useFakeTimers();
   invoke.mockReset();
+  inApp.value = true;
   invoke.mockImplementation(async (command: string) => command === 'terminal_core_snapshot' || command === 'terminal_core_scroll' ? structuredClone(answer) : undefined);
   transport.mockReset();
   setLocked(false);
@@ -190,5 +192,33 @@ describe('the native core over the Tauri commands', () => {
     invoke.mockClear();
     await expect(createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: 5000})).rejects.toThrow('App access changed');
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('the native backend probe', () => {
+  const asks = (answer: unknown) => { invoke.mockResolvedValueOnce(answer); return probeNativeCore(); };
+
+  it('passes only when the app says the core and its surface host are present', async () => {
+    expect(await asks({available: true, reason: 'The native terminal core and its surface host are present'})).toEqual({ok: true});
+    expect(invoke).toHaveBeenCalledWith('terminal_core_available');
+  });
+
+  it('carries the reason the app gives for a refusal', async () => {
+    expect(await asks({available: false, reason: 'The native terminal core is not built into this app'})).toEqual({ok: false, reason: 'The native terminal core is not built into this app'});
+  });
+
+  it.each([undefined, null, {available: 'yes'}, {}])('refuses, with a reason, an answer that is not an explicit yes (%j)', async answer => {
+    expect(await asks(answer)).toEqual({ok: false, reason: 'the app did not report a native terminal core'});
+  });
+
+  it('refuses outside the app without calling it', async () => {
+    inApp.value = false;
+    expect(await probeNativeCore()).toEqual({ok: false, reason: 'this is not the lazysh app'});
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('leaves a rejected command to the registry, which records it', async () => {
+    invoke.mockRejectedValueOnce('command not allowed');
+    await expect(probeNativeCore()).rejects.toBe('command not allowed');
   });
 });
