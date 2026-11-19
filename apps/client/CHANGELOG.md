@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.79.6
+
+### Patch Changes
+
+- 5d29b1a: Fix the owned Android SSH parity job on its CI emulator (#1737): the Files and preview cases connected on the Auto transport, which starts a real mosh-server on their command-running sshds and failed intermittently with "Mosh connection ended before startup completed". Both cases now choose SSH in the Add Host dialog. Test infrastructure only; the app is unchanged.
+- 6d90b09: Teach the wgpu renderer of the native terminal engine to blink the cursor from one shared timer (no timer at all while blink is off or the cursor is hidden), pace frames to the display refresh, follow a display scale change, and recover from a lost GPU device from the core's state with the same pixels. It is not wired into the app yet and xterm.js stays the only engine and the default, so nothing changes for users; this is groundwork for trying the native engine behind an explicit opt-in.
+- @lazysh/account-usage@1.79.6
+  - @lazysh/common@1.79.6
+  - @lazysh/display-idle@1.79.6
+  - @lazysh/et-transport@1.79.6
+  - @lazysh/mosh-transport@1.79.6
+
 ## 1.79.5
 
 ### Patch Changes
