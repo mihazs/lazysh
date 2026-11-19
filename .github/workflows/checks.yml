@@ -967,6 +967,16 @@ jobs:
           if(Object.keys(receipt).length!==Object.keys(expected).length || Object.entries(expected).some(([key,value])=>receipt[key]!==value))throw new Error("Stock Herdr provenance mismatch");'
           chmod 700 herdr
           printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-stock-herdr/herdr" >> "$GITHUB_ENV"
+      - name: Exercise the pinned pane input actor against the unchanged stock Herdr
+        shell: bash
+        env:
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: |
+          # The actor needs SO_PEERPIDFD (Linux 6.5); the kernel is part of the evidence.
+          uname -r
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-agent --test herdr_pane_input_stock -- --list --ignored | grep -c ': test$' | grep -Fx 5
+          cargo test --locked -p lazysh-agent --test herdr_pane_input_stock -- --ignored --test-threads=1
       - name: Exercise ordinary Mosh Herdr entries from PATH and the default user installation
         shell: bash
         env:
