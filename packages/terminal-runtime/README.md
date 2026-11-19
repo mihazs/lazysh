@@ -55,6 +55,7 @@ cargo +1.96.1 run --release --example inspect_bench # text queries: Herdr's tap 
 cargo +1.96.1 run --release --example scrollback_budget # rows kept per byte budget by width and content (History lines mapping)
 cargo +1.96.1 run --release --example perf_gate     # the CI regression gate (`terminal-perf` job); --inject slow|allocs|nocompaction must fail it
 cargo +1.96.1 run --release --example selection_bench # selection and search on a large scrollback
+cargo +1.96.1 build --example control_stdio        # the stdio JSON-RPC harness of the client's adapter contract suite (LAZYSH_CONTROL_STDIO=<binary> in apps/client)
 ```
 
 ## Target status

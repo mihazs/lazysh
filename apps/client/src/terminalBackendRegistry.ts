@@ -65,6 +65,8 @@ export function createBackendRegistry() {
   }
 
   return {
+    /** Every registered backend, in registration order. */
+    registrations: (): readonly BackendRegistration[] => [...backends.values()],
     register(backend: BackendRegistration) {
       if (backends.has(backend.id)) throw new Error(`Terminal backend ${backend.id} is already registered.`);
       backends.set(backend.id, backend);
