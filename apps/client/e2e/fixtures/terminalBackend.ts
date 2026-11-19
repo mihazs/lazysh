@@ -1,29 +1,9 @@
 import {test as base, type Page} from '@playwright/test';
 import type {TerminalBackendId} from '../../src/terminalAdapter';
+import {BACKEND_ENV, requestedBackend} from '../../src/e2eTerminalBackend';
 
-/**
- * The backend matrix of the terminal specs: `LAZYSH_E2E_TERMINAL_BACKEND=xterm|native` makes every spec that takes its `test` from
- * here ask for that backend through the developer override, before the page loads, and `onAdapter` then fails the spec when the
- * terminal on screen is another backend. Unset, a spec runs on whatever the app picks and nothing is asserted about it.
- */
-export const BACKEND_ENV = 'LAZYSH_E2E_TERMINAL_BACKEND';
 // The key of `developerBackendOverride` in src/terminalBackends.ts, not imported because that module loads the xterm adapter.
 const OVERRIDE_KEY = 'lazysh.terminal.backend';
-
-export function requestedBackend(env: Record<string, string | undefined> = process.env): TerminalBackendId | undefined {
-  const value = env[BACKEND_ENV];
-  if (!value) return undefined;
-  if (value !== 'xterm' && value !== 'native') throw new Error(`${BACKEND_ENV} must be xterm or native, not "${value}".`);
-  return value;
-}
-
-/** Thrown for a terminal that is not the requested backend, so a caller that retries on errors can still let it through. */
-export class BackendMismatchError extends Error {}
-
-/** A request the app did not honour (it fell back, or a fixture mounts one backend) would pass as green on the wrong engine. */
-export function assertBackendUsed(used: TerminalBackendId, requested = requestedBackend()) {
-  if (requested && used !== requested) throw new BackendMismatchError(`${BACKEND_ENV}=${requested} but the terminal on screen is the ${used} backend: the app fell back or a fixture mounts ${used}, so this run says nothing about ${requested}.`);
-}
 
 type Availability = {ok: true} | {ok: false; reason: string};
 
