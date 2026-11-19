@@ -12,6 +12,9 @@ registry.register({
 });
 // The native backend registers here once its platform gate passes (docs/architecture/terminal-migration-plan.md).
 
+/** What `createTerminalAdapter` can select, so a test can hold each registration to the adapter contract. */
+export const registeredBackends = () => registry.registrations();
+
 const OVERRIDE_KEY = 'lazysh.terminal.backend';
 
 /** A developer's backend choice, kept in localStorage; anything else is ignored. */
