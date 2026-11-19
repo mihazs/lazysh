@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.80.2
+
+### Patch Changes
+
+- d173b72: Run the Linux native surface composition probe in CI: a new `native-linux-surface` job builds `packages/terminal-runtime/prototypes/linux-surface` and runs its checks under a headless sway compositor (pixels read back with grim) for `wl_shm` and a wgpu Vulkan swapchain on lavapipe at scale 1 and 2, and on Xvfb for X11, asserting exact anchor pixels, overlap, resize and recreate. CI and prototype only; no behaviour changes.
+- 5cdafc7: Keep the Playwright e2e fixtures out of the `src` type-check that the release source build runs. The terminal backend selection and `onAdapter` now live in a Playwright-free module under `src`, so the F-Droid build, which removes `playwright-core`, type-checks again; the terminal e2e specs behave as before. Internal build fix: no behaviour changes for users.
+- 578289d: Build the client with Bun (`bun build/build.ts`: Bun transpiles the TypeScript and bundles it, with code splitting) instead of `tsc -b && vite build`, so the build is much faster and a type error in a test or an e2e fixture can no longer fail a release source build. `tsc -b` now only type-checks, in `client:check`, which `checks` and the main verdict still run. Vite stays the dev server and the Vitest and Playwright runtime. Build tooling only; the app's behaviour does not change.
+- @lazysh/account-usage@1.80.2
+  - @lazysh/common@1.80.2
+  - @lazysh/display-idle@1.80.2
+  - @lazysh/et-transport@1.80.2
+  - @lazysh/mosh-transport@1.80.2
+
 ## 1.80.1
 
 ### Patch Changes
