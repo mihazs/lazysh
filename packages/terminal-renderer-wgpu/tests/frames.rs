@@ -230,6 +230,17 @@ fn a_backend_the_host_does_not_have_is_unsupported_and_the_next_one_is_used() {
     assert_ne!(r.adapter().unwrap().backend, Backend::Metal);
 }
 
+/// The Apple policy lists Metal alone, so this is also what a macOS CI log shows about the host's GPU.
+#[test]
+fn on_apple_the_renderer_runs_on_metal() {
+    if !cfg!(target_vendor = "apple") {
+        return;
+    }
+    let info = gpu(10, 2).adapter().unwrap().clone();
+    eprintln!("Metal adapter: {info:?}");
+    assert_eq!(info.backend, Backend::Metal);
+}
+
 #[test]
 fn the_strict_policy_never_returns_a_software_adapter() {
     let strict = Policy::for_platform();

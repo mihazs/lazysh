@@ -139,6 +139,11 @@ impl Encoders {
             event.set_consumed_mods(input.mods & MOD_SHIFT);
         }
         self.key.set_from_terminal(terminal);
+        // libghostty-vt built for macOS treats Alt as a text-composing Option unless told otherwise, and
+        // `set_from_terminal` resets that. The app decides per platform whether Option is Meta
+        // (`terminalPlatformKeys.ts` clears Alt when Option typed a character), so the core must send an Alt
+        // it is given as Alt everywhere: the same event, the same bytes on every platform.
+        self.key.set_macos_option_as_alt(true);
         let bytes = self.key.encode(&event)?;
         // A program that never asked for a protocol cannot read its escape codes: a shell would print
         // them as junk, and xterm.js sends nothing for these chords either.
