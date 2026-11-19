@@ -1,28 +1,8 @@
 import {expect,type Page} from '@playwright/test';
+import {BackendMismatchError,onAdapter} from '../../src/e2eTerminalBackend';
 import type {TerminalAdapter} from '../../src/terminalAdapter';
-import {assertBackendUsed,BackendMismatchError,requestedBackend} from './terminalBackend';
 
-/**
- * Runs `use` in the page against the TerminalAdapter of the terminal drawn on screen: rows (`readRows`), cursor, viewport,
- * selection and geometry come from the adapter, never from a backend's DOM or buffer, so a spec asserts the same way on any
- * backend. The App keeps its sessions in React state, so the adapter is taken from the visible `TerminalPane`'s `session` prop
- * rather than through a hook in the product. `use` is serialized: it reaches only its two arguments. When a backend was requested
- * (`LAZYSH_E2E_TERMINAL_BACKEND`), a terminal of another backend throws before `use` runs, so a silent fallback fails the spec.
- */
-export async function onAdapter<R,A=void>(page:Page,use:(adapter:TerminalAdapter,arg:A)=>R|Promise<R>,arg?:A):Promise<R> {
-  const adapter=await page.evaluateHandle(()=>{
-    type Fiber={memoizedProps?:{session?:{adapter?:unknown}}|null;return:Fiber|null};
-    const canvas=[...document.querySelectorAll('.terminal-canvas')].find(node=>node.getClientRects().length>0);
-    const key=canvas&&Object.keys(canvas).find(name=>name.startsWith('__reactFiber$'));
-    for(let fiber=key?Reflect.get(canvas,key) as Fiber|null:null;fiber;fiber=fiber.return)if(fiber.memoizedProps?.session?.adapter)return fiber.memoizedProps.session.adapter as TerminalAdapter;
-    throw new Error('No terminal is drawn on this page.');
-  });
-  try{
-    const requested=requestedBackend();
-    if(requested)assertBackendUsed(await adapter.evaluate(terminal=>terminal.backend),requested);
-    return await adapter.evaluate(use as never,arg) as R;
-  }finally{await adapter.dispose();}
-}
+export {onAdapter};
 
 /** Waits until the terminal on screen has a drawn screen to measure. */
 export const terminalDrawn=(page:Page)=>expect.poll(()=>onAdapter(page,adapter=>{const bounds=adapter.screenBounds();return !!bounds&&bounds.width>0&&bounds.height>0;}).catch(error=>{if(error instanceof BackendMismatchError)throw error;return false;})).toBe(true);
