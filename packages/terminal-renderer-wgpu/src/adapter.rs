@@ -214,23 +214,26 @@ mod tests {
 
     #[test]
     fn software_adapters_are_refused_unless_allowed_and_then_come_last() {
-        let all = [
-            adapter(Backend::Vulkan, DeviceType::Cpu),
-            adapter(Backend::Vulkan, DeviceType::IntegratedGpu),
-        ];
         let strict = Policy::for_platform();
+        // The platform's own first backend: Vulkan is not on the Apple policy, which lists Metal alone.
+        let backend = strict.backends[0];
+        let all = [
+            adapter(backend, DeviceType::Cpu),
+            adapter(backend, DeviceType::IntegratedGpu),
+        ];
         let mut lenient = strict.clone();
         lenient.allow_software = true;
-        let only_cpu = [adapter(Backend::Vulkan, DeviceType::Cpu)];
+        let only_cpu = [adapter(backend, DeviceType::Cpu)];
         assert!(!ranked(&strict, &only_cpu).contains(&0));
         assert_eq!(ranked(&lenient, &only_cpu), [0]);
-        if strict.backends.contains(&Backend::Vulkan) {
-            assert_eq!(picks(&strict, &all), ["Vulkan IntegratedGpu"]);
-            assert_eq!(
-                picks(&lenient, &all),
-                ["Vulkan IntegratedGpu", "Vulkan Cpu"]
-            );
-        }
+        assert_eq!(picks(&strict, &all), [format!("{backend:?} IntegratedGpu")]);
+        assert_eq!(
+            picks(&lenient, &all),
+            [
+                format!("{backend:?} IntegratedGpu"),
+                format!("{backend:?} Cpu")
+            ]
+        );
     }
 
     #[test]

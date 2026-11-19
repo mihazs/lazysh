@@ -31,6 +31,10 @@ checkout with `herdr-upstream`, `terminal-runtime` and this crate as siblings, a
 (see the runtime README). The tests need a GPU adapter and **fail without one** instead of skipping, because a
 skipped correctness check looks like a pass. CI has none, so it installs Mesa's software Vulkan (lavapipe) and the
 tests use `Policy::for_platform().with_software()`; the shipping policy refuses software adapters.
+The report-only `terminal-macos` job runs the same tests on `macos-latest` on Metal, the only backend of the Apple
+policy. The hosted runner's adapter is `Apple Paravirtual device`, a virtual machine's GPU (`IntegratedGpu`, backend
+Metal, as the log of `on_apple_the_renderer_runs_on_metal` prints it), so a pass there is not a measurement of a real
+Mac's GPU or drivers.
 
 ```sh
 cargo +1.96.1 test --locked

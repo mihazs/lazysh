@@ -63,11 +63,15 @@ Checked with `cargo check --target` from a Linux x86_64 host, Zig 0.16.0:
 | Target | Result |
 | --- | --- |
 | `x86_64-unknown-linux-gnu` | builds, tests pass |
-| `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl`, `aarch64-apple-darwin` | build script and crates compile |
+| `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl` | build script and crates compile |
+| `aarch64-apple-darwin` | the build script, the crates, their tests and examples compile and clippy is clean from the Linux host; on a Mac, the report-only `terminal-macos` job of `checks.yml` (pushes to `main`) builds libghostty-vt against the runner's Apple SDK with Zig 0.16.0 for Apple silicon and runs this crate's and the renderer's tests on `macos-latest`. A pull-request run of it on macOS 26.7 (Xcode 26.6, macOS 26.5 SDK) passed: [run 44387474497](https://github.com/mihazs/lazysh/actions/runs/44387474497) |
 | `aarch64-apple-ios` | fails: libghostty-vt's Apple SDK package needs a macOS SDK (`pkg/apple-sdk/build.zig`), unavailable on this host |
 | `x86_64-pc-windows-msvc` | fails: Zig has no MSVC libc headers here; Herdr's build accepts `LIBGHOSTTY_VT_WINDOWS_LIBC`, not provided |
 | `aarch64-linux-android`, `x86_64-linux-android` | `cargo check` and a link of the library and every test executable pass, with Zig 0.16.0 and NDK r29.0.14206865 (`ANDROID_NDK_HOME`; the Rust linker is the NDK's `<triple>24-clang`, API 24 being the app's `minSdkVersion`). The binding's `build.rs` maps both triples ([#2098](https://github.com/mihazs/lazysh/issues/2098), a documented local modification in `herdr-upstream/PROVENANCE.md`), the `herdr-native` job runs them, and the vendored `libghostty-vt` build already selects the NDK with 16 KiB page alignment. The static archive is about 18 MiB per ABI in the debug profile. Linked, not run: no test has executed on Android, Waydroid or an emulator |
 
 The iOS build belongs to [#1312](https://github.com/mihazs/lazysh/issues/1312), blocked by
 [#384](https://github.com/mihazs/lazysh/issues/384); none of those checks may be relaxed to pass.
-Compiling is not running: no target other than the Linux host has executed a test.
+Compiling is not running: apart from the Linux host and the macOS job above, no target has executed a test.
+That run found one real difference between hosts: libghostty-vt built for macOS sends no ESC prefix for Alt unless
+its `macos_option_as_alt` option is set (Option composes text there), and `setopt_from_terminal` resets it, so the
+runtime sets it on every key encode and an Alt it is given is Alt on every host.
