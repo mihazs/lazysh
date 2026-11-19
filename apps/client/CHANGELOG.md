@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.80.0
+
+### Minor Changes
+
+- 1772589: Add the Host browser switch to host settings: a separate row, off by default, that reads and saves the companion's `settings host-browser` setting with its own revision, and asks once per host on this device, naming what the browser can reach, before it is turned on. The confirmation stays on the device and never enters the encrypted sync. A companion without the command shows the row as unavailable with an update message. The browser view itself ships with the Chrome viewer.
+
+### Patch Changes
+
+- b522053: Build libghostty-vt against the Apple SDK and run the terminal core's and the wgpu renderer's tests on `macos-latest` (aarch64-apple-darwin, the renderer on Metal) in a new report-only `terminal-macos` CI job on pushes to `main`, so a break that only shows on macOS no longer waits for a native surface to be written. The first hosted run found that a macOS build of libghostty-vt sends no ESC prefix for Alt unless told Option is Alt, so the core now says so on every key encode; two tests that assumed a non-Apple host were fixed. The core is not wired into the app yet: no behaviour changes for users.
+- 62e9f7f: Add the native terminal core's control-plane commands and event stream: state, scrolling, sizing and a bounded window of row text, never cell data, plus a change doorbell and the program's title, bell, directory and clipboard reports on the session's Channel. Nothing creates a native session yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+- ea11422: Compact the scrollback of native terminal sessions nobody is looking at (#1338): a session with no view attached that has received nothing for two seconds has its history compressed by libghostty-vt in small steps on an idle worker, and it is restored on access. On one desktop host a full session went from about 4 MiB to about 0.5 MiB resident and ten sessions from about 40 MiB to about 8 MiB when nine were idle, with the history unchanged. The native core is not the default engine: xterm.js stays the default, and no setting or default changes.
+- @lazysh/account-usage@1.80.0
+  - @lazysh/common@1.80.0
+  - @lazysh/display-idle@1.80.0
+  - @lazysh/et-transport@1.80.0
+  - @lazysh/mosh-transport@1.80.0
+
 ## 1.79.7
 
 ### Patch Changes
