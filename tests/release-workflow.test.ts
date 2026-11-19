@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { releaseTargets } from '../.changeset/release-artifacts';
 import { desktopCompanions, type DesktopTarget } from '../.changeset/release-bundle';
-import { gitFixtureRoots, spawnText } from './support/gitFixture';
+import { gitFixtureRoots, project, spawnText } from './support/gitFixture';
 import { document, evaluate, executedSteps, interpolate, releasePush, runnerJobs, type Context, type RunnerJob } from './support/workflowGraph';
 
 const tag = '.github/workflows/release-tag.yml';
@@ -160,7 +160,7 @@ case "$*" in
 esac
 `, { mode: 0o755 });
   const execute = (fail: string) => spawnText(workspace, ['bash', '-e', '-c', step.run], {
-    ...env, PATH: `${bin}:${process.env.PATH}`, LOG: log, FAIL: fail, NDK_HOME: '/ndk', RUNNER_TEMP: '/owned' });
+    ...env, PATH: `${bin}:${process.env.PATH}`, LOG: log, FAIL: fail, NDK_HOME: '/ndk', RUNNER_TEMP: '/owned', GITHUB_WORKSPACE: project });
   expect((await execute('')).code).toBe(0);
   expect((await Bun.file(log).text()).trim().split('\n')).toEqual([
     'build foss', 'validate android-foss-arm64 /owned/installation-files/android-foss-arm64 foss',

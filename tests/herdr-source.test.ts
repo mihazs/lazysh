@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execute, runFakeBuild } from './support/fakeBuild';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const prefix = 'packages/herdr-upstream/';
@@ -235,24 +236,8 @@ const herdrStep = async (select: (step: any) => boolean) => {
   const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/checks.yml')).text()) as any;
   return workflow.jobs['herdr-native'].steps.find(select);
 };
-const execute = async (argv: string[], cwd: string, env: Record<string, string> = {}) => {
-  const child = Bun.spawn(argv, { cwd, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe', timeout: 30_000 });
-  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { exit, stdout, stderr };
-};
-
-/** Run `argv` with a fake `name` build whose Nth run prints and exits as `plan[N - 1]` ("status:output"). */
-async function runFakeBuild(plan: string[], name: string, argv: (build: string) => string[], env: Record<string, string> = {}) {
-  const fixture = await mkdtemp(join(tmpdir(), 'lazysh-retry-zig-fetch-')), bin = join(fixture, 'bin'), build = join(bin, name);
-  try {
-    await mkdir(bin);
-    await writeFile(build, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$0.calls"\nstep=$(printf "%s\\n" "$PLAN" | sed -n "$(wc -l < "$0.calls")p")\nprintf "%s\\n" "${step#*:}" >&2\nexit "${step%%:*}"\n', { mode: 0o700 });
-    const result = await execute(argv(build, bin), fixture, { PLAN: plan.join('\n'), LAZYSH_FETCH_DELAY: '0', ...env, PATH: `${bin}:${process.env.PATH}` });
-    return { ...result, calls: (await Bun.file(build + '.calls').text()).trim().split('\n') };
-  } finally { await rm(fixture, { recursive: true, force: true }); }
-}
 const retried = (plan: string[], env?: Record<string, string>) =>
-  runFakeBuild(plan, 'build', build => ['sh', join(root, '.github/scripts/retry-zig-fetch.sh'), build, '--locked'], env);
+  runFakeBuild(plan, 'build', build => ['sh', join(root, '.github/scripts/retry-zig-fetch.sh'), build, '--locked'], { LAZYSH_FETCH_DELAY: '0', ...env });
 
 test.each([
   "HTTP response read failure: ConnectionResetByPeer", 'invalid HTTP response: HttpConnectionClosing',
@@ -288,7 +273,7 @@ test('a clean build runs once without a warning', async () => {
 test('the guarded Herdr build retries a Zig dependency download failure with the same Cargo arguments', async () => {
   const step = await herdrStep(candidate => candidate.name === 'Build the real optional Herdr binary');
   const result = await runFakeBuild(['101:error: invalid HTTP response: HttpConnectionClosing', '0:built'], 'cargo',
-    () => ['bash', '-e', '-c', step.run], { GITHUB_WORKSPACE: root });
+    () => ['bash', '-e', '-c', step.run], { GITHUB_WORKSPACE: root, LAZYSH_FETCH_DELAY: '0' });
   expect(result).toMatchObject({ exit: 0, calls: ['+1.96.1 build --locked', '+1.96.1 build --locked'] });
 });
 
