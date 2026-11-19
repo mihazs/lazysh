@@ -185,6 +185,23 @@ describe('the native core over the Tauri commands', () => {
     await adapter.dispose();
   });
 
+  it('sends a key as the key input the core encodes, in order with the text around it', async () => {
+    const {adapter} = await open();
+    const key = {type: 'key', code: 'PageUp', key: 'PageUp', mods: {shift: false, ctrl: false, alt: false, meta: false}, repeat: false, release: false, composing: false} as const;
+    adapter.sendInput('a', 'ime');
+    adapter.sendKey(key);
+    adapter.sendKey({...key, release: true});
+    adapter.sendInput('b', 'ime');
+    await flush();
+    expect(invoke.mock.calls.slice(1).map(([command, args]) => [command, args])).toEqual([
+      ['terminal_core_input', {sessionId: 'local:7', input: {type: 'text', text: 'a'}}],
+      ['terminal_core_input', {sessionId: 'local:7', input: key}],
+      ['terminal_core_input', {sessionId: 'local:7', input: {...key, release: true}}],
+      ['terminal_core_input', {sessionId: 'local:7', input: {type: 'text', text: 'b'}}],
+    ]);
+    await adapter.dispose();
+  });
+
   it('drops the input of a locked app and wakes the core again after the unlock', async () => {
     const {adapter} = await open();
     setLocked(true);

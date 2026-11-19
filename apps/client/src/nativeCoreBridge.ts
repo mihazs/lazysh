@@ -4,6 +4,7 @@
  * cell grid, styles or pixels; the renderer reads those inside the runtime.
  */
 import type {Disposable, TerminalInputOrigin, TerminalModes, TerminalScrollAction, TerminalTheme, TerminalViewport} from './terminalAdapter';
+import type {CoreKeyInput} from './terminalPlatformKeys';
 
 export type NativeCoreState = {
   columns: number;
@@ -35,6 +36,8 @@ export interface NativeCoreBridge {
   scroll(action: TerminalScrollAction): Promise<NativeCoreSnapshot>;
   /** Typed input, a paste or a terminal reply, as the text the program should receive. */
   input(data: string | Uint8Array, origin: TerminalInputOrigin): Promise<void>;
+  /** A key as the DOM reports it, after the platform rules; the core encodes it for the modes the program set. */
+  key(input: CoreKeyInput): Promise<void>;
   /** Present only when the WebView hands transport bytes to the core (a core-only build, tests). A runtime that owns the transport has none. */
   feed?(bytes: Uint8Array): Promise<NativeCoreSnapshot>;
   /** Present when the WebView sizes the core itself; with a transport the core follows the PTY resize instead. */

@@ -1,19 +1,8 @@
 import {expect,test,type Page} from '@playwright/test';
-import {openHistoryWorkspace} from './fixtures/terminalHistory';
+import {canvas,mountNativeSurface as mount} from './fixtures/nativeSurfacePage';
 import {swipe} from './fixtures/touchSwipe';
 
-type Engine='native'|'xterm';
-const canvas='.terminal-canvas';
 test.afterEach(async({page})=>{await page.evaluate(()=>window.nativeSurface?.dispose());});
-
-async function mount(page:Page,engine:Engine,refuse=false) {
-  await openHistoryWorkspace(page);
-  await page.evaluate(async options=>{
-    const fixture=await import('/e2e/fixtures/NativeSurfaceHarness.tsx');
-    window.nativeSurface=await fixture.mountNativeSurfaceHarness(options);
-  },{engine,refuse});
-  await expect(page.locator(canvas)).toBeVisible();
-}
 
 const rectOf=(page:Page)=>page.evaluate(selector=>{const {x,y,width,height}=document.querySelector(selector)!.getBoundingClientRect();return {x,y,width,height};},canvas);
 const surfaceCalls=(page:Page,command?:'place'|'remove')=>page.evaluate(command=>window.nativeSurface.calls.filter(call=>!command||call.command===command),command);
