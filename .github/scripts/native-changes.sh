@@ -51,6 +51,8 @@ classify() {
     .changeset/*/*) add all ;;
     docs/* | .changeset/*.md | .github/ISSUE_TEMPLATE/* | .github/pull_request_template.md | \
       .github/release_pull_request_template.md | .github/TEMPLATES.md) add docs ;;
+    # A standalone prototype crate with its own lock file and its own workflow: no checks.yml job builds it.
+    packages/terminal-runtime/prototypes/windows-surface/* | .github/workflows/windows-surface-probe.yml) add none ;;
     packages/*/*) package "$1" ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;

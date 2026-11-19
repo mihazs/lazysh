@@ -1,0 +1,67 @@
+name: windows-surface-probe
+
+# The Windows composition probe (#1332, gate G19): does a child window show through the transparent WebView2 the app
+# uses? It opens the real tao and wry window on this runner's desktop, stacks a child window below the web view (GDI-painted
+# and Direct3D 12) and above it with the overlay cut out of it, reads its own window back twice (PrintWindow and a screen
+# copy) and writes what it saw. The first run is a measurement, not a gate: the job fails only when the page itself is not
+# visible in the screen readback, because then nothing it reports means anything. Not a required check, and no checks.yml job
+# selects it (.github/scripts/native-changes.sh). Results and limits: docs/architecture/windows-surface-composition-poc.md.
+on:
+  pull_request:
+    paths:
+      - packages/terminal-runtime/prototypes/windows-surface/**
+      - .github/workflows/windows-surface-probe.yml
+  push:
+    branches: [main, test/windows-composition-probe]
+    paths:
+      - packages/terminal-runtime/prototypes/windows-surface/**
+      - .github/workflows/windows-surface-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-surface-probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/terminal-runtime/prototypes/windows-surface
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.1
+      # Pull requests restore main's entry and never save their own, like the other Rust caches.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/terminal-runtime/prototypes/windows-surface
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test the probe's pixel arithmetic
+        run: cargo test --locked
+      - run: cargo build --locked
+      - name: Describe the desktop the probe reads back
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::AllScreens | Format-List DeviceName, Bounds, Primary, BitsPerPixel
+          Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty pv
+          [System.Environment]::OSVersion.VersionString
+      - name: Run the probe against the real tao window and WebView2
+        run: target/debug/surface-poc.exe "$RUNNER_TEMP/windows-surface"
+      - name: Show what the probe saw
+        if: ${{ !cancelled() }}
+        run: '[ ! -f "$RUNNER_TEMP/windows-surface/report.md" ] || { echo "### Windows composition probe"; cat "$RUNNER_TEMP/windows-surface/report.md"; } >> "$GITHUB_STEP_SUMMARY"'
+      - name: Retain the readbacks of every step
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-windows-surface
+          path: ${{ runner.temp }}/windows-surface
+          if-no-files-found: warn
+          retention-days: 7

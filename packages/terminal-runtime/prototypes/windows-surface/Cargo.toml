@@ -1,0 +1,28 @@
+[package]
+name = "lazysh-windows-surface-poc"
+version = "0.0.0"
+edition = "2021"
+description = "Composition probe for a native terminal surface beside the WebView2 web view (#1332); not shipped"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Standalone, like the Linux probe: the windowing and GPU crates must not reach the app's workspace or the runtime's lock file.
+[workspace]
+
+[[bin]]
+name = "surface-poc"
+path = "src/main.rs"
+
+[dependencies]
+png = "0.17"
+
+# The versions the app ships (Cargo.lock at the repository root): tauri 2.12.5 uses wry 0.57.1 on tao 0.37.2.
+# Everything that opens a window is Windows-only; the pixel arithmetic in src/pixels.rs builds and is tested anywhere.
+[target.'cfg(windows)'.dependencies]
+tao = "=0.37.2"
+wry = "=0.57.1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
+raw-window-handle = "0.6"
+pollster = "0.4"
+serde_json = "1"
