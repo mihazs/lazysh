@@ -1,4 +1,5 @@
-import {expect,test,type Page,type BrowserContext} from '@playwright/test';
+import {expect,type Page,type BrowserContext} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import type {mountTerminalImeHarness} from './fixtures/TerminalImeHarness';
 declare global {interface Window {ownedIme:ReturnType<typeof mountTerminalImeHarness>}}
 

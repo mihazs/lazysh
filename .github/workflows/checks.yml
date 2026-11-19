@@ -136,7 +136,16 @@ jobs:
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
+      # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
+      # for xterm.js through the developer override, and a terminal of another backend fails them.
       - run: bunx moon run client:test-e2e
+        env:
+          LAZYSH_E2E_TERMINAL_BACKEND: xterm
+      # The native arm: skipped, with the backend registry's reason in the log, until the native backend is registered; then it runs.
+      - run: bun run test:e2e:terminal
+        working-directory: apps/client
+        env:
+          LAZYSH_E2E_TERMINAL_BACKEND: native
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
