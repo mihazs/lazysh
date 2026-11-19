@@ -5,8 +5,8 @@
 mod replay;
 mod support;
 
-use replay::*;
 use lazysh_terminal_runtime::{clipboard_consent_text, MAX_CLIPBOARD_TEXT_BYTES};
+use replay::*;
 use support::*;
 
 #[test]

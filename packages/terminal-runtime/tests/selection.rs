@@ -5,8 +5,8 @@
 mod replay;
 mod support;
 
-use replay::*;
 use lazysh_terminal_runtime::{CellPos, CellRange, Direction, SearchHit};
+use replay::*;
 use serde_json::Value;
 use support::*;
 
