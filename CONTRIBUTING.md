@@ -112,7 +112,7 @@ Two pull requests can each pass `checks` and still break `main` together (the v1
 per ref, and GitHub keeps one running and one pending run per group, so on a busy trunk the run of an
 older merge commit is cancelled while pending and never reports. The `main-verdict` workflow closes
 that gap: every push to `main` gets its own run (group `main-verdict-<sha>`, never cancelled) of three
-parallel jobs, `verdict-client` (`moon run client:build`, which is `tsc -b && vite build`),
+parallel jobs, `verdict-client` (`moon run client:build client:check`: the Bun build, then the `tsc -b` type check),
 `verdict-agent` (`moon run '#companion:check-rust'`) and `verdict-release-tools` (`bun run test:release`).
 It completes within minutes, runs no native, emulator or end-to-end job, and its check names differ
 from the required `client`, `agent` and `release-tools` jobs on purpose: it is not a required status

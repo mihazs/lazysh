@@ -34,8 +34,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-bun
       - run: bun install --frozen-lockfile
-      # client:build is `tsc -b && vite build`.
-      - run: bunx moon run client:build
+      # client:build is `bun build/build.ts` (Bun transpiles and bundles); client:check is the type check (`tsc -b`), kept out of the build so a
+      # type error in a test or e2e fixture can never fail the release source build.
+      - run: bunx moon run client:build client:check
 
   agent:
     name: verdict-agent
