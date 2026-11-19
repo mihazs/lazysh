@@ -1,18 +1,20 @@
 name: windows-surface-probe
 
 # The Windows composition probe (#1332, gate G19): does a child window show through the transparent WebView2 the app
-# uses? It opens the real tao and wry window on this runner's desktop, stacks a child window below the web view (GDI-painted
-# and Direct3D 12) and above it with the overlay cut out of it, reads its own window back twice (PrintWindow and a screen
-# copy) and writes what it saw. The first run is a measurement, not a gate: the job fails only when the page itself is not
-# visible in the screen readback, because then nothing it reports means anything. Not a required check, and no checks.yml job
-# selects it (.github/scripts/native-changes.sh). Results and limits: docs/architecture/windows-surface-composition-poc.md.
+# uses? It opens the real tao and wry window on this runner's desktop, stacks a child window below the web view and above
+# it with the overlay cut out of it (GDI-painted and as a Direct3D 12 swapchain), reads its own window back twice
+# (PrintWindow and a screen copy) and writes what it saw, once with a transparent tao window and once with an opaque one.
+# The job fails when the page itself is not visible in the screen readback (nothing it reports then means anything) and
+# when the recorded strategy, a Direct3D 12 child below the web view and above it with a cut-out, stops holding.
+# Not a required check, and no checks.yml job selects it (.github/scripts/native-changes.sh).
+# Results and limits: docs/architecture/windows-surface-composition-poc.md.
 on:
   pull_request:
     paths:
       - packages/terminal-runtime/prototypes/windows-surface/**
       - .github/workflows/windows-surface-probe.yml
   push:
-    branches: [main, test/windows-composition-probe]
+    branches: [main]
     paths:
       - packages/terminal-runtime/prototypes/windows-surface/**
       - .github/workflows/windows-surface-probe.yml

@@ -109,6 +109,16 @@ impl Probe {
         self.ask(Cmd::Destroy).unwrap_or_else(|e| die(&e));
     }
 
+    /// Every step of the surface passes in the screen readback, which is what the user sees.
+    fn holds(&self, surface: &str) -> bool {
+        let mut steps = self
+            .rows
+            .iter()
+            .filter(|r| r.surface == surface && r.readback == Readback::Screen)
+            .peekable();
+        steps.peek().is_some() && steps.all(|r| r.seen.as_ref().is_ok_and(Judgement::placed))
+    }
+
     /// One line per surface and readback: pass or fail for each step, whether the page's overlay stayed on top, and the colour at the anchor.
     fn report(&self) -> String {
         let mut table = String::from("| Surface | Readback | Created | Moved | Destroyed | Recreated | Overlay over surface | Colour at anchor, created |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n");
@@ -192,13 +202,19 @@ pub fn run(
             }
         }
     }
+    // The decision the measurement recorded: a Direct3D 12 child below the web view, and, as the fallback, above it with the overlay cut out.
+    let held = probe.holds("below-direct3d12") && probe.holds("abovecutout-direct3d12");
     let report = format!(
-        "Tao window: {}. Control (no surface): the page's overlay is drawn in the screen readback: {screen}; in the PrintWindow readback: {print_window}.\n\n{}\n{}\n",
+        "Tao window: {}. Control (no surface): the page's overlay is drawn in the screen readback: {screen}; in the PrintWindow readback: {print_window}. The recorded strategy holds on the screen readback: {held}.\n\n{}\n{}\n",
         if opaque_window { "opaque, only the web view is transparent" } else { "transparent (DWM blur-behind), as `with_transparent(true)` makes it" },
         probe.report(),
         probe.notes.join("\n")
     );
     fs::write(probe.out.join("report.md"), &report).unwrap_or_else(|e| die(&e.to_string()));
     println!("\n{report}");
-    std::process::exit(if screen { 0 } else { 2 })
+    std::process::exit(match (screen, held) {
+        (false, _) => 2,
+        (true, false) => 1,
+        (true, true) => 0,
+    })
 }
