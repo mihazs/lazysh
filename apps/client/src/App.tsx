@@ -95,7 +95,7 @@ import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
-import { usePreferences } from "./preferences";
+import { getPreferences, usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, sessionIntent, type SessionIntent } from "./workspace";
@@ -142,7 +142,7 @@ async function prepareSession(
   lease: AccessLease,
 ) {
   const { createTerminalAdapter } = await import("./terminalBackends");
-  const { adapter } = await createTerminalAdapter();
+  const { adapter, selection } = await createTerminalAdapter({ preference: getPreferences().terminalEngine });
   lease.assert();
   const session: LiveSession = {
     id: "",
@@ -150,6 +150,7 @@ async function prepareSession(
     name,
     destination,
     adapter,
+    selection,
     connected: true,
   };
   let pendingBytes = 0;

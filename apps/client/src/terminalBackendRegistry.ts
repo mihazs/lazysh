@@ -30,6 +30,10 @@ export type SelectOptions = {
   requires?: (keyof TerminalCapabilities)[];
 };
 
+/** The recorded reasons a backend was refused before the selected one; the diagnostics translate them. */
+export const NOT_REGISTERED = 'not registered';
+export const LACKS_PREFIX = 'lacks ';
+
 /** The backend every platform can run: the last resort of every selection. */
 const FALLBACK: TerminalBackendId = 'xterm';
 
@@ -50,9 +54,9 @@ export function createBackendRegistry() {
     const fallbacks: BackendSelection['fallbacks'] = [];
     for (const id of [...order, ...(order.includes(FALLBACK) ? [] : [FALLBACK])]) {
       const backend = backends.get(id);
-      if (!backend) { fallbacks.push({id, reason: 'not registered'}); continue; }
+      if (!backend) { fallbacks.push({id, reason: NOT_REGISTERED}); continue; }
       const missing = requires.filter(capability => !backend.capabilities[capability]);
-      if (missing.length) { fallbacks.push({id, reason: `lacks ${missing.join(', ')}`}); continue; }
+      if (missing.length) { fallbacks.push({id, reason: `${LACKS_PREFIX}${missing.join(', ')}`}); continue; }
       const probe = await probeOnce(backend);
       if (!probe.ok) { fallbacks.push({id, reason: probe.reason}); continue; }
       return {id, reason: fallbacks.length ? 'fallback' : wanted === 'auto' ? 'automatic' : source, fallbacks};

@@ -10,13 +10,14 @@ import {xtermCapabilities} from './xtermTerminalAdapter';
 beforeAll(stubMatchMedia);
 afterEach(() => localStorage.clear());
 
+const native = (over: Partial<TerminalCapabilities>) => {
+  const registry = createBackendRegistry();
+  registry.register({id: 'xterm', capabilities: xtermCapabilities, autoEligible: true, probe: () => ({ok: true}), create: () => ({backend: 'xterm'}) as TerminalAdapter});
+  registry.register({id: 'native', capabilities: {...xtermCapabilities, nativeRendering: true, ...over}, autoEligible: true, probe: () => ({ok: true}), create: () => ({backend: 'native'}) as TerminalAdapter});
+  return registry;
+};
+
 describe('backend selection for a reader who uses a screen reader', () => {
-  const native = (over: Partial<TerminalCapabilities>) => {
-    const registry = createBackendRegistry();
-    registry.register({id: 'xterm', capabilities: xtermCapabilities, autoEligible: true, probe: () => ({ok: true}), create: () => ({backend: 'xterm'}) as TerminalAdapter});
-    registry.register({id: 'native', capabilities: {...xtermCapabilities, nativeRendering: true, ...over}, autoEligible: true, probe: () => ({ok: true}), create: () => ({backend: 'native'}) as TerminalAdapter});
-    return registry;
-  };
 
   it('keeps a native backend that cannot reach a screen reader out of a new session and records why', async () => {
     const registry = native({accessibility: false});
@@ -39,5 +40,36 @@ describe('backend selection for a reader who uses a screen reader', () => {
     expect(reading.selection).toMatchObject({id: 'xterm', fallbacks: []});
     expect(reading.adapter.capabilities.accessibility).toBe(true);
     await reading.adapter.dispose();
+  });
+});
+
+describe('the engine each preference value selects', () => {
+  it('uses xterm.js for every value while it is the only registered engine, and records that Native was refused', async () => {
+    const selections = await Promise.all((['auto', 'xterm', 'native'] as const).map(async preference => {
+      const {selection, adapter} = await createTerminalAdapter({preference});
+      await adapter.dispose();
+      return selection;
+    }));
+    expect(selections).toEqual([
+      {id: 'xterm', reason: 'automatic', fallbacks: []},
+      {id: 'xterm', reason: 'preference', fallbacks: []},
+      {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'not registered'}]},
+    ]);
+  });
+
+  it('lets Auto and Native pick the native engine where it is registered, and xterm.js always win when chosen', async () => {
+    const registry = native({accessibility: true});
+    expect(await Promise.all((['auto', 'native', 'xterm'] as const).map(async preference => (await createTerminalAdapter({preference}, registry)).selection.id))).toEqual(['native', 'native', 'xterm']);
+  });
+
+  it('keeps a developer override above the preference', async () => {
+    localStorage.setItem('lazysh.terminal.backend', 'xterm');
+    expect((await createTerminalAdapter({preference: 'native'}, native({accessibility: true}))).selection).toEqual({id: 'xterm', reason: 'developer override', fallbacks: []});
+  });
+
+  it('refuses a native engine that a screen reader cannot reach under Auto as well as under Native, with the reason', async () => {
+    savePreferences({...defaults, screenReader: true});
+    for (const preference of ['auto', 'native'] as const)
+      expect((await createTerminalAdapter({preference}, native({accessibility: false}))).selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks accessibility'}]});
   });
 });

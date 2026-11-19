@@ -2441,6 +2441,16 @@ const translations = {
   agentStopAsked: ["Pedido enviado ao agente. Aguardando o registro.", "Petición enviada al agente. Esperando el registro."],
   agentStopUnconfirmed: ["Não confirmado. O agente não registrou a parada; confira o terminal.", "No confirmado. El agente no registró la detención; revisa el terminal."],
   agentStopFailed: ["O pedido não foi enviado. Pare no terminal.", "La petición no se envió. Deténlo en el terminal."],
+  terminalEngineXterm: ["xterm.js", "xterm.js"],
+  terminalEngineNative: ["Nativo", "Nativo"],
+  terminalEngineUsed: ["{{engine}}: {{reason}}", "{{engine}}: {{reason}}"],
+  terminalEngineAutomatic: ["escolhido automaticamente", "elegido automáticamente"],
+  terminalEnginePreference: ["escolhido nas Configurações", "elegido en la configuración"],
+  terminalEngineOverride: ["escolhido pela substituição do desenvolvedor", "elegido por la anulación del desarrollador"],
+  terminalEngineNotRegistered: ["o mecanismo nativo ainda não está disponível nesta plataforma", "el motor nativo aún no está disponible en esta plataforma"],
+  terminalEngineLacksAccessibility: ["um leitor de tela está ativo e o mecanismo nativo não pode ser lido por ele", "un lector de pantalla está activo y el motor nativo no puede ser leído por él"],
+  terminalEngineLacks: ["o mecanismo nativo não oferece {{capabilities}}", "el motor nativo no ofrece {{capabilities}}"],
+  terminalEngineProbeFailed: ["o mecanismo nativo não pode ser executado aqui ({{detail}})", "el motor nativo no puede ejecutarse aquí ({{detail}})"],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;
