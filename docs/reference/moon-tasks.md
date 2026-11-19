@@ -63,7 +63,7 @@ so `apps/client/src-tauri/moon.yml` declares `agent`, `mosh-transport`, `portabl
 
 | Task | Runs | Cached |
 | --- | --- | --- |
-| `build` | `bun run build` (`tsc -b && vite build`; Tauri's `beforeBuildCommand` calls the same script) | no: Vite embeds the Git revision |
+| `build` | `bun run build` (`vite build` under bun, no type check: `client:check` runs `tsc -b`; Tauri's `beforeBuildCommand` calls the same script) | no: Vite embeds the Git revision |
 | `check` | `bun run check` | yes |
 | `test` | `bun run test` (Vitest) | yes |
 | `check-native-gui` | `tsc --project tsconfig.native-gui.json` | yes |

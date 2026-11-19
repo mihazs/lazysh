@@ -132,7 +132,7 @@ App token is used when configured, otherwise the default GitHub token and its
 normal workflow-admission constraints apply. No registry token is needed. The
 generated PR body uses the repository's release review template and retains the
 pending publication gates.
-The `main-verdict` workflow (client `tsc -b` and build, companion compile check, release-tools
+The `main-verdict` workflow (client build and `tsc -b` type check, companion compile check, release-tools
 tests) reports on every `main` commit, because pull requests that each pass `checks` can still
 type-check or build badly once combined. It is evidence, not a merge gate for the version PR; see
 [Main verdict](../CONTRIBUTING.md#main-verdict).

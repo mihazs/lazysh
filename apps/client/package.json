@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:terminal": "playwright test e2e/terminal-ime.spec.ts e2e/terminal-swiftkey.spec.ts e2e/terminal-selection.spec.ts e2e/terminal-clipboard.spec.ts e2e/herdr-switch-tap.spec.ts e2e/mosh-resize.spec.ts",
