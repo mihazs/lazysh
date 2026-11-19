@@ -11,6 +11,7 @@
 
 mod blink;
 mod colors;
+mod doorbell;
 mod frame;
 mod hub;
 mod ingress;
@@ -22,8 +23,10 @@ mod reference;
 mod render;
 mod runtime;
 mod size;
+mod titles;
 
 pub use blink::{BlinkClock, FramePacer, BLINK_HALF_PERIOD};
+pub use doorbell::Doorbell;
 pub use frame::{Cell, Frame, Row};
 pub use hub::{
     Hooks, Hub, HubConfig, HubError, Origin, PtyWriter, Refused, Session, SessionError, Stats,
@@ -38,7 +41,9 @@ pub use render::{
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
 pub use runtime::{
-    scrollback_bytes_for_lines, Config, Error, Events, Geometry, Modes, TerminalRuntime, Viewport,
+    control_window, scrollback_bytes_for_lines, Config, ControlCursor, ControlEvent, ControlModes,
+    ControlSnapshot, ControlState, Error, Events, Geometry, Modes, MouseTracking, RowWindow,
+    ScrollAction, TerminalRuntime, Viewport, CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX,
     MAX_READ_ROWS,
 };
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};

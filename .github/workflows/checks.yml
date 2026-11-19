@@ -892,6 +892,9 @@ jobs:
             local::tests::local_pty_output_is_parsed_by_the_real_core_and_readable_as_text
             local::tests::a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget
             terminal_core::native::tests::paste_is_bracketed_only_after_the_program_enabled_it
+            terminal_core::native::tests::a_core_answers_a_reader_from_the_real_screen_and_never_with_a_cell
+            terminal_core::native::tests::a_locked_app_is_told_nothing_and_the_next_reader_brings_the_core_back_to_life
+            local::tests::the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader
           )
           for case_name in "${guards[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"

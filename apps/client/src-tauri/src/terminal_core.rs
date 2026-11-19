@@ -16,6 +16,12 @@
 //! writer sends under the renderer's latest [`AccessLease`] (the one that opened the core, replaced by
 //! each input command) and refuses once that lease is no longer valid, so nothing goes out while the
 //! app is locked, backgrounded or its renderer was replaced; a refused reply is dropped, never held.
+//!
+//! The control plane (#1321): `terminal_core_snapshot`, `_scroll`, `_resize` and `_set_active` answer with the state
+//! and the text of a bounded window of rows, never a cell, and the core's event stream (the screen changed, title,
+//! bell, directory, clipboard) goes out on the same `Channel` that opened it, at most one `changed` per read of the
+//! state however much output arrives. The logic is the runtime crate's (`control_*`, [`Doorbell`]), which the stdio
+//! harness shares; this module gates it behind the renderer's access lease.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
@@ -24,6 +30,11 @@ use serde::Deserialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use tauri::ipc::Channel;
+
+/// What the control commands answer and take, as JSON: the runtime crate's `ControlSnapshot` and `ScrollAction`
+/// serialized, which that crate pins to the fixture of what xterm.js answers. The commands pass it through, so the
+/// wire format has one definition and a build without the `native-terminal` feature needs no copy of it.
+pub(crate) type Json = serde_json::Value;
 
 /// Destination of terminal output after the access checks. `data` runs inside the access-gated send,
 /// so it must not block; an `Err` means the consumer is gone and ends the transport's output.
@@ -59,6 +70,28 @@ pub(crate) trait Core: Send + Sync {
     /// under `lease`; the bytes sent (0 when the modes ask for nothing, such as a focus event the
     /// program did not enable). Refused while `lease` is no longer valid.
     fn input(&self, lease: &AccessLease, input: CoreInput) -> Result<usize, String>;
+    /// The control plane: the state and a bounded window of row text, never cells. Reading rearms the doorbell
+    /// and refreshes the lease the core's events leave under. `window` is the rows asked for, bounded by the core.
+    fn control_snapshot(&self, lease: &AccessLease, window: Option<usize>) -> Result<Json, String>;
+    /// Moves the viewport as a reader asked, then answers like [`Core::control_snapshot`].
+    fn control_scroll(
+        &self,
+        lease: &AccessLease,
+        action: Json,
+        window: Option<usize>,
+    ) -> Result<Json, String>;
+    /// Sizes the core as [`Core::resize`] does, then answers with the state it has (a transport that owns the
+    /// size keeps it).
+    fn control_resize(
+        &self,
+        lease: &AccessLease,
+        cols: u32,
+        rows: u32,
+        window: Option<usize>,
+    ) -> Result<Json, String>;
+    /// Whether a reader is looking. An inactive core keeps parsing and wakes nobody; becoming active rings once
+    /// to catch up. A core starts active.
+    fn set_active(&self, lease: &AccessLease, active: bool);
     /// Free the core now. Idempotent.
     fn close(&self);
 }
@@ -201,6 +234,17 @@ impl Link {
     /// The lease later writes are made under (replies included, which no command carries a lease for).
     pub(crate) fn use_lease(&self, lease: &AccessLease) {
         *self.lease.lock().unwrap_or_else(PoisonError::into_inner) = Some(lease.clone());
+    }
+
+    /// Whether the renderer's latest lease is valid: the app is unlocked, in the foreground and has not replaced
+    /// the renderer. What the core says about the screen (a title, a clipboard write) leaves only while it is.
+    #[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+    pub(crate) fn permits(&self) -> bool {
+        self.lease
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|lease| lease.check().is_ok())
     }
 
     /// One write to the transport: refused before the session is attached, once the lease is no longer
@@ -425,7 +469,7 @@ pub async fn terminal_core_open(
             }
             offer(
                 &events,
-                native::factory(cols, rows, scrollback_lines, lease.clone())?,
+                native::factory(cols, rows, scrollback_lines, lease.clone(), events.clone())?,
             );
             Ok(())
         })
@@ -458,6 +502,63 @@ pub async fn terminal_core_text(lease: AccessLease, session_id: String) -> Acces
         .await
 }
 
+/// The control plane (#1321) belongs to the current renderer like `terminal_core_text`: a locked app or a replaced
+/// renderer is refused. `window` is how many rows of text the answer may carry; the core bounds it.
+#[tauri::command]
+pub async fn terminal_core_snapshot(
+    lease: AccessLease,
+    session_id: String,
+    window: Option<usize>,
+) -> AccessResult<Json> {
+    lease
+        .run(async { live(&session_id)?.control_snapshot(&lease, window) })
+        .await
+}
+
+#[tauri::command]
+pub async fn terminal_core_scroll(
+    lease: AccessLease,
+    session_id: String,
+    action: Json,
+    window: Option<usize>,
+) -> AccessResult<Json> {
+    lease
+        .run(async { live(&session_id)?.control_scroll(&lease, action, window) })
+        .await
+}
+
+/// For a core the renderer sizes itself. A core behind a transport follows the transport's own resize, which the
+/// renderer already sends; this command is how a snapshot of the result is asked for, and what a core-only build uses.
+#[tauri::command]
+pub async fn terminal_core_resize(
+    lease: AccessLease,
+    session_id: String,
+    cols: u32,
+    rows: u32,
+    window: Option<usize>,
+) -> AccessResult<Json> {
+    lease
+        .run(async {
+            crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
+            live(&session_id)?.control_resize(&lease, cols, rows, window)
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn terminal_core_set_active(
+    lease: AccessLease,
+    session_id: String,
+    active: bool,
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            live(&session_id)?.set_active(&lease, active);
+            Ok(())
+        })
+        .await
+}
+
 #[tauri::command]
 pub fn terminal_core_close(session_id: String) -> Result<(), String> {
     close(&session_id);
@@ -473,6 +574,7 @@ mod native {
         _: u32,
         _: Option<u32>,
         _: crate::app_lock::AccessLease,
+        _: tauri::ipc::Channel<crate::ssh::SshEvent>,
     ) -> Result<super::Factory, String> {
         Err("The native terminal core is not built into this app".into())
     }
@@ -482,8 +584,10 @@ mod native {
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
-        dom_mods, ffi, scrollback_bytes_for_lines, Config, DomKey, Hooks, Hub, HubConfig, KeyInput,
-        MouseInput, Offer, Origin, PtyWriter, Refused, Session, Size,
+        control_window, dom_mods, ffi, scrollback_bytes_for_lines, Config, ControlEvent,
+        ControlSnapshot, DomKey, Doorbell, Error as RuntimeError, Hooks, Hub, HubConfig, KeyInput,
+        MouseInput, Offer, Origin, PtyWriter, Refused, ScrollAction, Session, Size,
+        TerminalRuntime,
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
@@ -505,7 +609,41 @@ mod native {
         (HUB.live(), HUB.scrollback_reserved())
     }
 
-    struct Runtime(Session, Arc<Link>);
+    /// A core's session, the link to its transport and the doorbell that tells its reader what changed.
+    struct Runtime(Session, Arc<Link>, Arc<Doorbell>);
+
+    impl From<ControlEvent> for SshEvent {
+        fn from(event: ControlEvent) -> Self {
+            match event {
+                ControlEvent::Changed => Self::Changed,
+                ControlEvent::Title { title } => Self::Title { title },
+                ControlEvent::Bell => Self::Bell,
+                ControlEvent::Cwd { path } => Self::Cwd { path },
+                ControlEvent::Clipboard { text } => Self::Clipboard { text },
+            }
+        }
+    }
+
+    impl Runtime {
+        /// One control-plane read, for the reader that holds `lease`: the lease later events leave under, the
+        /// doorbell rearmed first (so output that lands during the read rings again rather than being missed),
+        /// then the answer under the session lock.
+        fn answer(
+            &self,
+            lease: &AccessLease,
+            window: Option<usize>,
+            ask: impl FnOnce(&mut TerminalRuntime, usize) -> Result<ControlSnapshot, RuntimeError>,
+        ) -> Result<Json, String> {
+            self.1.use_lease(lease);
+            self.2.read();
+            let answer = self
+                .0
+                .with(|runtime| ask(runtime, control_window(window)))
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(answer).map_err(|error| error.to_string())
+        }
+    }
 
     impl Core for Runtime {
         fn feed(&self, chunk: Vec<u8>) -> Result<(), String> {
@@ -531,6 +669,49 @@ mod native {
                 .map_err(|error| error.to_string())?
                 .map(drop)
                 .map_err(|error| error.to_string())
+        }
+
+        fn control_snapshot(
+            &self,
+            lease: &AccessLease,
+            window: Option<usize>,
+        ) -> Result<Json, String> {
+            self.answer(lease, window, |runtime, rows| {
+                runtime.control_snapshot(rows)
+            })
+        }
+
+        fn control_scroll(
+            &self,
+            lease: &AccessLease,
+            action: Json,
+            window: Option<usize>,
+        ) -> Result<Json, String> {
+            let action: ScrollAction = serde_json::from_value(action)
+                .map_err(|error| format!("Not a scroll action: {error}"))?;
+            self.answer(lease, window, |runtime, rows| {
+                runtime.control_scroll(action, rows)
+            })
+        }
+
+        fn control_resize(
+            &self,
+            lease: &AccessLease,
+            cols: u32,
+            rows: u32,
+            window: Option<usize>,
+        ) -> Result<Json, String> {
+            self.answer(lease, window, |runtime, window| {
+                runtime.control_resize(cols as u16, rows as u16, window)
+            })
+        }
+
+        fn set_active(&self, lease: &AccessLease, active: bool) {
+            self.1.use_lease(lease);
+            self.0.set_active(active);
+            if active {
+                self.2.wake();
+            }
         }
 
         fn input(&self, lease: &AccessLease, input: CoreInput) -> Result<usize, String> {
@@ -600,6 +781,7 @@ mod native {
         rows: u32,
         scrollback_lines: Option<u32>,
         lease: AccessLease,
+        events: Channel<SshEvent>,
     ) -> Result<Factory, String> {
         let defaults = Config::default();
         let config = Config {
@@ -614,26 +796,37 @@ mod native {
             ..defaults
         };
         Ok(Box::new(move || {
-            let (core, link) = create(config, &lease)?;
+            let (core, link) = create(config, &lease, move |event| {
+                let _ = events.send(event.into());
+            })?;
             Ok(Prepared::new(Arc::new(core), link))
         }))
     }
 
     /// A session in the hub whose replies and encoded input go through the returned [`Link`], under
-    /// `lease` until a command brings a newer one.
-    fn create(config: Config, lease: &AccessLease) -> Result<(Runtime, Arc<Link>), String> {
+    /// `lease` until a command brings a newer one. The session starts active: it was opened to be looked at.
+    /// Its event stream goes to `events`, only while that lease is valid: a locked app is told nothing.
+    fn create(
+        config: Config,
+        lease: &AccessLease,
+        events: impl Fn(ControlEvent) + Send + Sync + 'static,
+    ) -> Result<(Runtime, Arc<Link>), String> {
         let link = Arc::new(Link::default());
         link.use_lease(lease);
         let credit = link.returner();
+        let permitted = link.clone();
+        let doorbell = Arc::new(Doorbell::new(events, move || permitted.permits()));
         let hooks = Hooks {
             writer: Arc::new(Writer(link.clone())),
             credit: Box::new(move |bytes| credit(bytes)),
-            changed: None,
+            changed: Some(doorbell.hook()),
         };
         let session = HUB
             .create(uuid::Uuid::new_v4().to_string(), config, hooks)
             .map_err(|error| error.to_string())?;
-        Ok((Runtime(session, link.clone()), link))
+        doorbell.bind(session.clone());
+        session.set_active(true);
+        Ok((Runtime(session, link.clone(), doorbell), link))
     }
 
     #[cfg(test)]
@@ -657,7 +850,7 @@ mod native {
                 scrollback_bytes: 64 * 1024,
                 ..Config::default()
             };
-            let (core, link) = create(config, &access.lease(None).unwrap()).unwrap();
+            let (core, link) = create(config, &access.lease(None).unwrap(), |_| {}).unwrap();
             let sent = Arc::new(Mutex::new(Vec::new()));
             let queue_sent = sent.clone();
             let _ = link.credit.set(Arc::new(|_| {}));
@@ -839,6 +1032,122 @@ mod native {
             fixture.core.close();
         }
 
+        /// A real core whose event stream is recorded, opened under `lease`.
+        fn watched_core(lease: &AccessLease) -> (Runtime, Arc<Mutex<Vec<ControlEvent>>>) {
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            let log = sent.clone();
+            let config = Config {
+                size: Size::new(40, 5),
+                scrollback_bytes: 64 * 1024,
+                ..Config::default()
+            };
+            let (core, link) =
+                create(config, lease, move |event| log.lock().unwrap().push(event)).unwrap();
+            let _ = link.credit.set(Arc::new(|_| {}));
+            (core, sent)
+        }
+
+        fn parsed(core: &Runtime, output: &[u8]) {
+            let before = core.0.stats().unwrap().processed;
+            assert!(matches!(core.0.feed(output.to_vec()), Ok(Offer::Accepted)));
+            let start = Instant::now();
+            while core.0.stats().unwrap().processed < before + output.len() as u64 {
+                assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        #[test]
+        fn a_locked_app_is_told_nothing_and_the_next_reader_brings_the_core_back_to_life() {
+            let access = crate::ssh::test_support::unlocked_access();
+            let lease = crate::ssh::test_support::ready_lease(&access);
+            let (core, sent) = watched_core(&lease);
+            parsed(&core, b"\x07one\r\n");
+            let start = Instant::now();
+            while sent.lock().unwrap().len() < 2 {
+                assert!(start.elapsed() < Duration::from_secs(10), "no events");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                *sent.lock().unwrap(),
+                [ControlEvent::Bell, ControlEvent::Changed]
+            );
+            // Reading rearms the doorbell; then the app locks and the program keeps talking.
+            core.control_snapshot(&lease, None).unwrap();
+            sent.lock().unwrap().clear();
+            access.lock().unwrap();
+            parsed(&core, b"\x07\x1b]0;secret title\x07two\r\n");
+            parsed(&core, b"three\r\n");
+            assert_eq!(
+                *sent.lock().unwrap(),
+                [],
+                "nothing about the screen leaves while locked"
+            );
+            assert!(
+                core.control_snapshot(&lease, None).is_ok(),
+                "the core still parses"
+            );
+            // Unlocked, a reader with the new lease is answered and what was held comes out.
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+            let fresh = access
+                .lease(access.status().unwrap().nonce.as_deref())
+                .unwrap();
+            core.set_active(&fresh, true);
+            assert_eq!(
+                *sent.lock().unwrap(),
+                [
+                    ControlEvent::Title {
+                        title: "secret title".into()
+                    },
+                    ControlEvent::Bell,
+                    ControlEvent::Changed,
+                ]
+            );
+            core.close();
+        }
+
+        #[test]
+        fn a_core_answers_a_reader_from_the_real_screen_and_never_with_a_cell() {
+            let lease = crate::app_lock::AccessState::disabled()
+                .lease(None)
+                .unwrap();
+            let (core, _) = watched_core(&lease);
+            let rows: String = (0..30).map(|row| format!("row {row}\r\n")).collect();
+            parsed(&core, rows.as_bytes());
+            let live = core.control_snapshot(&lease, Some(8)).unwrap();
+            fake::assert_no_cells(&live);
+            assert_eq!(live["state"]["columns"], 40);
+            assert_eq!(live["state"]["viewport"]["following"], true);
+            assert_eq!(live["window"]["rows"].as_array().unwrap().len(), 8);
+            assert_eq!(live["window"]["rows"][6], "row 29");
+            let top = core
+                .control_scroll(&lease, serde_json::json!({"kind": "toTop"}), Some(8))
+                .unwrap();
+            fake::assert_no_cells(&top);
+            assert_eq!(top["state"]["viewport"]["top"], 0);
+            assert_eq!(top["window"]["rows"][0], "row 0");
+            let bad = core.control_scroll(&lease, serde_json::json!({"kind": "sideways"}), None);
+            assert!(bad.unwrap_err().starts_with("Not a scroll action"));
+            let resized = core.control_resize(&lease, 20, 7, Some(8)).unwrap();
+            fake::assert_no_cells(&resized);
+            assert_eq!(
+                (
+                    resized["state"]["columns"].as_u64(),
+                    resized["state"]["rows"].as_u64()
+                ),
+                (Some(20), Some(7))
+            );
+            // Whatever the reader asks, the answer is bounded.
+            let wide = core.control_snapshot(&lease, Some(usize::MAX)).unwrap();
+            assert!(wide["window"]["rows"].as_array().unwrap().len() <= 1024);
+            core.close();
+            assert!(
+                core.control_snapshot(&lease, None).is_err(),
+                "a closed core answers nothing"
+            );
+        }
+
         #[test]
         fn input_is_refused_and_counted_when_the_renderer_was_replaced() {
             let fixture = fixture();
@@ -879,6 +1188,8 @@ pub(crate) mod fake {
         /// The input events the bridge handed to `Core::input`, in order.
         pub(crate) inputs: Mutex<Vec<CoreInput>>,
         pub(crate) closed: std::sync::atomic::AtomicBool,
+        /// What the last `set_active` said; a core starts active.
+        pub(crate) active: std::sync::atomic::AtomicBool,
         queued: Arc<AtomicUsize>,
     }
 
@@ -906,6 +1217,7 @@ pub(crate) mod fake {
                 sizes: Mutex::default(),
                 inputs: Mutex::default(),
                 closed: Default::default(),
+                active: std::sync::atomic::AtomicBool::new(true),
                 queued: Arc::default(),
             });
             let (seen, queued) = (core.seen.clone(), core.queued.clone());
@@ -980,6 +1292,36 @@ pub(crate) mod fake {
             Ok(0)
         }
 
+        /// The parsed bytes as one row of text: enough to see what the commands do with a lease.
+        fn control_snapshot(&self, _: &AccessLease, window: Option<usize>) -> Result<Json, String> {
+            let text = String::from_utf8_lossy(&self.seen.lock().unwrap()).into_owned();
+            Ok(serde_json::json!({"window": {"first": 0, "rows": [text]}, "asked": window}))
+        }
+
+        fn control_scroll(
+            &self,
+            lease: &AccessLease,
+            _: Json,
+            window: Option<usize>,
+        ) -> Result<Json, String> {
+            self.control_snapshot(lease, window)
+        }
+
+        fn control_resize(
+            &self,
+            lease: &AccessLease,
+            cols: u32,
+            rows: u32,
+            window: Option<usize>,
+        ) -> Result<Json, String> {
+            self.resize(cols, rows)?;
+            self.control_snapshot(lease, window)
+        }
+
+        fn set_active(&self, _: &AccessLease, active: bool) {
+            self.active.store(active, SeqCst);
+        }
+
         fn close(&self) {
             self.closed.store(true, SeqCst);
         }
@@ -993,6 +1335,40 @@ pub(crate) mod fake {
         fn closed(&self, _: String, _: bool) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    /// What a control answer may hold: the state and the text of rows, and nothing a cell grid could ride in.
+    #[cfg(feature = "native-terminal")]
+    pub(crate) fn assert_no_cells(answer: &Json) {
+        let keys = |value: &Json| -> Vec<String> {
+            let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(keys(answer), ["state", "window"]);
+        let state = &answer["state"];
+        assert_eq!(
+            keys(state),
+            ["columns", "cursor", "modes", "rows", "viewport"]
+        );
+        assert_eq!(keys(&state["cursor"]), ["x", "y"]);
+        assert_eq!(
+            keys(&state["modes"]),
+            [
+                "alternateScreen",
+                "applicationCursorKeys",
+                "bracketedPaste",
+                "mouseTracking"
+            ]
+        );
+        assert_eq!(
+            keys(&state["viewport"]),
+            ["following", "length", "rows", "top"]
+        );
+        assert_eq!(keys(&answer["window"]), ["first", "rows"]);
+        let rows = answer["window"]["rows"].as_array().unwrap();
+        assert!(rows.iter().all(Json::is_string), "a row is its text");
+        assert!(rows.len() <= 1024, "a window is bounded");
     }
 
     /// Deterministic pseudo-random bytes (xorshift), so a checksum covers real entropy.
@@ -1049,9 +1425,124 @@ mod tests {
             "terminal_core_open",
             "terminal_core_input",
             "terminal_core_text",
+            "terminal_core_snapshot",
+            "terminal_core_scroll",
+            "terminal_core_resize",
+            "terminal_core_set_active",
         ] {
             assert!(!allowed_while_locked(protected), "{protected}");
         }
+    }
+
+    #[test]
+    fn a_locked_app_can_not_ask_the_control_plane_a_question() {
+        let access = crate::ssh::test_support::unlocked_access();
+        let lease = crate::ssh::test_support::ready_lease(&access);
+        let (_core, prepared) = ChecksumCore::prepared();
+        let _kept = tests_keeping_cores().read();
+        prepared.attach(
+            "locked-control",
+            &CoreSlot::default(),
+            Arc::new(|_| {}),
+            Arc::new(|_, _| Ok(())),
+        );
+        let ask = |lease: AccessLease| async move {
+            let id = || "locked-control".to_owned();
+            let scroll = serde_json::json!({"kind": "toBottom"});
+            [
+                terminal_core_snapshot(lease.clone(), id(), None)
+                    .await
+                    .is_ok(),
+                terminal_core_scroll(lease.clone(), id(), scroll, None)
+                    .await
+                    .is_ok(),
+                terminal_core_resize(lease.clone(), id(), 80, 24, None)
+                    .await
+                    .is_ok(),
+                terminal_core_set_active(lease, id(), true).await.is_ok(),
+            ]
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(runtime.block_on(ask(lease.clone())), [true; 4]);
+        access.lock().unwrap();
+        assert_eq!(
+            runtime.block_on(ask(lease)),
+            [false; 4],
+            "every control command is refused to a lease the lock revoked"
+        );
+        close("locked-control");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_control_commands_need_a_session_a_valid_size_and_the_current_renderer() {
+        let _kept = tests_keeping_cores().read();
+        let access = crate::app_lock::AccessState::disabled();
+        let renderer = access.lease(None).unwrap();
+        let (core, prepared) = ChecksumCore::prepared();
+        prepared.attach(
+            "control-gated",
+            &CoreSlot::default(),
+            Arc::new(|_| {}),
+            Arc::new(|_, _| Ok(())),
+        );
+        let message = |result: AccessResult<Json>| result.err().unwrap().into_inner().unwrap();
+        let scroll = || serde_json::json!({"kind": "toTop"});
+        assert!(
+            terminal_core_snapshot(renderer.clone(), "control-gated".into(), Some(4))
+                .await
+                .unwrap()
+                .into_inner()
+                .is_ok()
+        );
+        for result in [
+            terminal_core_snapshot(renderer.clone(), "nobody".into(), None).await,
+            terminal_core_scroll(renderer.clone(), "nobody".into(), scroll(), None).await,
+            terminal_core_resize(renderer.clone(), "nobody".into(), 80, 24, None).await,
+        ] {
+            assert_eq!(message(result), "No native terminal core for this session");
+        }
+        assert!(
+            terminal_core_set_active(renderer.clone(), "nobody".into(), true)
+                .await
+                .err()
+                .is_some()
+        );
+        for (cols, rows) in [(0, 24), (80, 0), (1001, 24), (80, 1001)] {
+            let refused =
+                terminal_core_resize(renderer.clone(), "control-gated".into(), cols, rows, None)
+                    .await;
+            assert!(
+                message(refused).contains("between 1 and 1000"),
+                "{cols}x{rows}"
+            );
+        }
+        assert!(
+            core.sizes.lock().unwrap().is_empty(),
+            "a refused size reaches no core"
+        );
+        terminal_core_resize(renderer.clone(), "control-gated".into(), 90, 30, None)
+            .await
+            .unwrap();
+        assert_eq!(*core.sizes.lock().unwrap(), [(90, 30)]);
+        terminal_core_set_active(renderer.clone(), "control-gated".into(), false)
+            .await
+            .unwrap();
+        assert!(!core.active.load(std::sync::atomic::Ordering::SeqCst));
+        access.replace_renderer().unwrap();
+        for result in [
+            terminal_core_snapshot(renderer.clone(), "control-gated".into(), None).await,
+            terminal_core_scroll(renderer.clone(), "control-gated".into(), scroll(), None).await,
+            terminal_core_resize(renderer.clone(), "control-gated".into(), 80, 24, None).await,
+        ] {
+            assert!(
+                result.err().unwrap().into_inner().is_err(),
+                "a replaced renderer is refused"
+            );
+        }
+        close("control-gated");
     }
 
     #[test]

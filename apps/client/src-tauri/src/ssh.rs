@@ -1044,6 +1044,8 @@ pub(crate) enum Input {
 }
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+// The core's event stream is built only with the `native-terminal` feature.
+#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
 pub enum SshEvent {
     Data {
         data: Vec<u8>,
@@ -1059,6 +1061,20 @@ pub enum SshEvent {
     #[serde(rename = "authHint")]
     AuthHint {
         hint: crate::auth_hints::Hint,
+    },
+    /// The native core's event stream (#1321), on the Channel the core was opened with, in the shape of the
+    /// client's `NativeCoreEvent`: the screen changed (at most once per read of its state, a doorbell to pull a
+    /// snapshot), and what the program reported, decoded and bounded by the core.
+    Changed,
+    Title {
+        title: String,
+    },
+    Bell,
+    Cwd {
+        path: String,
+    },
+    Clipboard {
+        text: String,
     },
 }
 #[derive(Serialize)]

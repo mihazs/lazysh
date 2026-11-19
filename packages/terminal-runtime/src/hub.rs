@@ -559,6 +559,13 @@ impl Session {
         self.cell.attached.store(false, Release);
     }
 
+    /// Whether a reader is looking: [`Hooks::changed`] fires as output arrives while it is, and an inactive
+    /// session keeps parsing and wakes nobody. Unlike [`attach`](Self::attach) it builds no frame, for a reader of
+    /// text (the control plane) that draws nothing; a new session starts inactive.
+    pub fn set_active(&self, active: bool) {
+        self.cell.attached.store(active, Release);
+    }
+
     pub fn take_frame(&self) -> Result<Option<Frame>, SessionError> {
         Ok(self.with(|runtime| runtime.take_frame())??)
     }
