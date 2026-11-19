@@ -66,6 +66,10 @@ Conventions:
 The tables are in the [moon task reference](docs/reference/moon-tasks.md) and the procedures in
 [Run tasks with moon](docs/how-to/run-tasks-with-moon.md).
 
+### CI functions (Dagger)
+
+The `dagger/` module holds CI functions that run the same locally and in Actions (`dagger functions`, `dagger call workspace …`). It needs the Dagger CLI at the version in `dagger.json` and a Linux container runtime. See [Run CI functions locally with Dagger](docs/how-to/run-ci-locally-with-dagger.md) and [ADR 0006](docs/architecture/adr-0006-dagger-for-ci.md) for the conditions each migrated job must meet.
+
 ### Which CI jobs a pull request runs
 
 `client` and `agent` always run. On a pull request, the `changes` job runs
