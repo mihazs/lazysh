@@ -184,7 +184,7 @@ test.each([
   ...(['packages/herdr-upstream/crates/ghostty-vt/src/lib.rs', 'packages/herdr-upstream/vendor/libghostty-vt/build.zig'] as const).map(path => [
     `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1 }] as const),
   ['the Linux composition probe, a standalone prototype crate', ['packages/terminal-runtime/prototypes/linux-surface/scripts/check.py'], { ...alwaysRun, 'native-linux-surface': 1 }],
-  ["Herdr's own source, which the terminal runtime does not build on", ['packages/herdr-upstream/src/main.rs'], herdrRun],
+  ["Herdr's own source, which the terminal runtime does not build on", ['packages/herdr-upstream/src/main.rs'], { ...herdrRun, 'terminal-perf': 1 }],
   ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-windows': 1 }],
   ['the platform key fixtures the terminal runtime is held to', ['apps/client/e2e/fixtures/platform-keys/mac.json'], { ...clientRun, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-windows': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
