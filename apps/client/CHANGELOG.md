@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.80.1
+
+### Patch Changes
+
+- e331eae: Add a Windows composition probe for the native terminal engine (#1332, part of #1302): a standalone tao and wry program under `packages/terminal-runtime/prototypes/windows-surface` and a `windows-surface-probe` workflow that opens the real window and WebView2 page on a `windows-latest` runner, stacks a child window below the transparent web view (GDI-painted and as a Direct3D 12 swapchain) and above it with the page's overlay cut out of it, reads its own window back with `PrintWindow` and a screen copy, and writes what it saw. On the hosted runner a Direct3D 12 child below the transparent WebView2 shows through exactly, with an opaque or a transparent tao window; the job fails if that stops holding. Nothing in the app, its terminal engine or its defaults changes: Windows keeps xterm.js and Auto resolves to xterm.js there.
+- ed94471: Add the client's bridge over the native terminal core's commands: it opens a core, hands the transport the Channel the core's reports arrive on, pulls the screen's state at most once per 16 ms however much output arrives, sends typed text and pastes, drops input while the app is locked and wakes the core again after the unlock. Nothing registers the native engine yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+- @lazysh/account-usage@1.80.1
+  - @lazysh/common@1.80.1
+  - @lazysh/display-idle@1.80.1
+  - @lazysh/et-transport@1.80.1
+  - @lazysh/mosh-transport@1.80.1
+
 ## 1.80.0
 
 ### Minor Changes
