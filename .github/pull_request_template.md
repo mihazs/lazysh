@@ -49,18 +49,23 @@
 
 ## CHANGELOG (merge gate)
 
-- [ ] I added a `CHANGELOG.md` `[Unreleased]` entry. It is **required** for any
-      user-facing change: new flag / env var / endpoint / IPC command / settings
-      key, changed behaviour, or an observable bug fix. (Exempt only for
-      internal refactors, dead-code removal, and test-only churn.)
+- [ ] I added the Changesets fragment (`bun run changeset`) that is this
+      change's changelog entry. Its first line is `type(scope): headline`
+      (`feat`, `fix`, `perf`, `docs`, `refactor`, `build`, `ci`, `test`, `chore`
+      or `revert`; a user-facing headline of at most 110 characters), then a blank
+      line and the details. It is **required** for any user-facing change: new flag
+      / env var / endpoint / IPC command / settings key, changed behaviour, or an
+      observable bug fix. Internal refactors, dead-code removal and test-only
+      churn use an empty fragment, or one for a completed milestone. A root
+      `CHANGELOG.md` `[Unreleased]` entry is no longer required. Check the result
+      with `bun run changelog:preview`.
 - [ ] Any changed **default** (flag behaviour, config default, env var,
-      response shape) is called out explicitly in "What changed" above.
-- [ ] I added the corresponding Changesets fragment (`bun run changeset`),
-      or an empty fragment for non-milestone internal/test-only follow-up work.
-      A completed milestone needs a real version bump and published release,
-      including a patch fragment for an internal/test-only milestone. Version PRs consume
-      these fragments; their merges trigger verified application publication. Creating
-      a fragment alone does not publish anything.
+      response shape) is called out explicitly in the fragment's details and in
+      "What changed" above.
+- [ ] A completed milestone has a real version bump and published release,
+      including a patch fragment for an internal/test-only milestone. Version PRs
+      consume these fragments; their merges trigger verified application
+      publication. Creating a fragment alone does not publish anything.
 
 Reviewers treat a missing entry as blocking, so add it up front if you want
 your PR to merge on the first pass.

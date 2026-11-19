@@ -217,8 +217,9 @@ test('notes carry the changes of prepared versions that were never published sin
   await mkdir(join(root, 'apps/client'), { recursive: true });
   await mkdir(join(root, 'docs'));
   await Bun.write(join(root, 'docs/install-and-update.md'), '# Install\n\n## Current native acceptance status\n\nNative gaps.\n');
-  await Bun.write(join(root, 'apps/client/CHANGELOG.md'), '# Client\n\n## 1.21.0\n\nToolbar pages.\n\n## 1.20.1\n\nSkipped patch.\n\n'
-    + '## 1.20.0\n\nSkipped minor.\n\n## 1.19.0\n\nPublished earlier.\n\n## 1.18.0\n\nOlder release.\n');
+  await Bun.write(join(root, 'apps/client/CHANGELOG.md'), '# Client\n\n## 1.21.0\n\n### Minor Changes\n\n- 1111111: Toolbar pages.\n\n'
+    + '## 1.20.1\n\n### Patch Changes\n\n- 2222222: Fix a skipped patch.\n\n## 1.20.0\n\n### Minor Changes\n\n- 3333333: Skipped minor.\n\n'
+    + '## 1.19.0\n\n- 4444444: Published earlier.\n\n## 1.18.0\n\n- 5555555: Older release.\n');
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe', env: { ...process.env,
       GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -230,14 +231,14 @@ test('notes carry the changes of prepared versions that were never published sin
   for (const tag of ['v1.18.0', 'v1.19.0', 'v1.21.0', 'not-a-version', 'v2.0.0-rc.1']) git('tag', tag);
   expect(publishedTagVersions(root).sort()).toEqual(['1.18.0', '1.19.0', '1.21.0']);
   const notes = await releaseNotes(root, '1.21.0', false, publishedTagVersions(root));
-  const order = ['Toolbar pages.', 'Also included from 1.20.1', 'Skipped patch.', 'Also included from 1.20.0', 'Skipped minor.', 'Native gaps.']
-    .map(text => notes.indexOf(text));
+  const order = ['Includes the unpublished versions 1.20.0 and 1.20.1.', '## New', 'Toolbar pages', 'Skipped minor', '## Fixed', 'Fix a skipped patch',
+    'Native gaps.'].map(text => notes.indexOf(text));
   expect(order.every(index => index >= 0)).toBe(true);
   expect(order).toEqual([...order].sort((a, b) => a - b));
   for (const text of ['Published earlier.', 'Older release.']) expect(notes).not.toContain(text);
   // A release directly after a published version, or without any tags, keeps only its own section.
-  expect(await releaseNotes(root, '1.21.0', false, ['1.20.1'])).not.toContain('Also included');
-  expect(await releaseNotes(root, '1.21.0')).not.toContain('Also included');
+  expect(await releaseNotes(root, '1.21.0', false, ['1.20.1'])).not.toContain('Includes the unpublished');
+  expect(await releaseNotes(root, '1.21.0')).not.toContain('Includes the unpublished');
 }));
 
 test('publication uploads a complete digest-acknowledged draft before making it public', () => fixture(async root => {

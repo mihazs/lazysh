@@ -213,10 +213,9 @@ to confirm no place is missed.
    checks actually ran: a catalog that passes unit tests is not evidence of native
    or physical-device language behavior.
 6. **Documentation and release.** Update the supported-language and System
-   resolution paragraphs above, add a `CHANGELOG.md` `[Unreleased]` entry that names
-   the language and states that **System** stays the default (a matching system tag
-   now selects the new catalog instead of English), and add a minor Changesets
-   fragment.
+   resolution paragraphs above, add a minor Changesets fragment, which is the changelog
+   entry, that names the language and states in its details that **System** stays
+   the default (a matching system tag now selects the new catalog instead of English).
 
 ## Apple permission explanations
 

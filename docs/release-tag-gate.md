@@ -112,7 +112,8 @@ rather than build completion order. Existing
 releases are never overwritten or automatically resumed after uncertain outcomes.
 Every release includes the current native acceptance status from
 [install-and-update.md](install-and-update.md#current-native-acceptance-status);
-initial notes additionally include the root Unreleased changes. Missing status
+the notes group the version's changelog entries as New, Improved, Fixed, Documentation
+and Under the hood, and initial notes additionally include the root Unreleased changes. Missing status
 blocks note generation. Passing build gates does not claim full native parity.
 See [release-artifacts.md](release-artifacts.md) for signing and activation limits.
 

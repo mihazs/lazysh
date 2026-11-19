@@ -14,19 +14,43 @@ issue and project card; a fragment, merge or tag alone is not a release. This
 applies to the current version and every future version, without backfilling
 historical versions. Existing signing, scan and installer gates remain mandatory.
 
-For a user-facing change, keep the required root `CHANGELOG.md` `[Unreleased]`
-entry, including changed defaults, and run `bun run changeset` to add a fragment
-with the appropriate patch, minor or major impact. Select an affected owned
-package; the fixed group releases together. Existing root history and
-`[Unreleased]` entries are retained verbatim by versioning, not automatically
-retrospectively converted into fragments. Generated package changelogs begin
-with the first consumed fragment. Internal/test-only follow-up changes can use an
+For a user-facing change, run `bun run changeset` and add a fragment with the
+appropriate patch, minor or major impact. The fragment is the changelog entry: its
+first line is `type(scope): headline` and the details, including changed
+defaults, follow after a blank line (see [Changelog
+entries](../CONTRIBUTING.md#changelog-entries)). A separate root `CHANGELOG.md`
+`[Unreleased]` entry is no longer required; one that is still added is moved into
+the release section when the version is prepared. Select an affected owned
+package; the fixed group releases together. The pre-commit hook lints only the
+staged fragments; fragments written before the format are not rejected, because
+the generator derives a headline and a type from their text. Internal/test-only
+follow-up changes can use an
 empty changeset (`bun run changeset --empty`) when covered by a planned release.
 A completed milestone must have a real version bump, including at least a patch
 fragment for an internal/test-only milestone. No registry configuration is needed.
 An empty-only plan does not create a version PR: fragments remain until a real
 release fragment arrives, and the workflow checks planned releases rather than
 the number of fragment files.
+
+## Release notes and changelogs
+
+`.changeset/changelog.mjs` is the Changesets changelog generator. Each fragment
+becomes one line in the package changelog,
+`- type(scope): headline ([#N](…))`, where `N` is read from the `(#N)` of the
+squash commit that added the fragment (no link when it is not there), with the
+details inside a collapsed `<details>` block. It adds no commit hashes and no
+dependency-update lines. `bun run release:version` then prepends the version's
+section to the root `CHANGELOG.md` (`.changeset/changelog-rotate.ts`), moving any
+hand-written bullets still under `[Unreleased]` into it. The GitHub release notes
+(`releaseNotes()` in `.changeset/release-artifacts.ts`) regroup the same lines as
+**New**, **Improved**, **Fixed**, **Documentation** and **Under the hood**, merge in
+the versions that were prepared but never published with one "Includes the
+unpublished versions" line, and end with the native acceptance status.
+`.changeset/changelog-model.mjs` holds the shared parsing, the legacy classifier and
+the rendering; `bun run changelog:preview` prints the pending fragments in the same
+grouping. The root history from before the structured changelog stays verbatim under
+its own heading in `CHANGELOG.md`; it was not converted into fragments, and generated
+package changelogs begin with the first consumed fragment.
 
 The existing PR release-impact selection and review still apply. All work starts
 from and targets `main`; the generated `changeset-release/main` branch is reset
@@ -164,8 +188,9 @@ the original workspaces’ histories began with automated release PRs #220 and
 #239. New workspaces begin their generated history at their first release. These
 files contain no handwritten entries. Shared fixed-train release notes and accumulated
 dependency entries can legitimately repeat across that output. Keep manual
-release explanations in the root `CHANGELOG.md` or authored changeset fragments,
-which remain scanned along with documentation and source/tests. Do not broaden
+release explanations in authored changeset fragments, which remain scanned along
+with the root `CHANGELOG.md` (its release sections are generated from them, so it is
+not in the generated scope), documentation and source/tests. Do not broaden
 this list to a changelog glob or add handwritten content to a generated file.
 Changing workspace membership requires reviewing this exact generated-path list.
 

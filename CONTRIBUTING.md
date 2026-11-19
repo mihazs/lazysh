@@ -218,17 +218,53 @@ release bump covers them. Empty fragments are suitable only for follow-up work
 covered by a planned release; an empty-only plan cannot deliver a milestone.
 
 Add a Changesets fragment with `bun run changeset` for the selected release
-impact, alongside the required root changelog entry below. The private workspace
+impact; the fragment is also the change's changelog entry (see [Changelog
+entries](#changelog-entries)). The private workspace
 packages release together; generated package changelogs and synchronized
 Bun/Cargo/Tauri versions are prepared in a separate reviewed release PR. See
 [versioning and milestone releases](docs/versioning.md) for tooling, native version
 inheritance and the GitHub PR-creation/CI-approval prerequisites. This does not
 configure registry or application-store publishing.
 
-User-facing changes require an entry under `[Unreleased]` in `CHANGELOG.md`.
-Explicitly identify changed defaults. Internal refactors, dead-code removal and
-test-only changes are exempt. Pure repository workflow documentation is also
-exempt. Review and resolve findings, then merge ready changes autonomously.
+Explicitly identify changed defaults in the fragment's details. Internal
+refactors, dead-code removal and test-only changes need only an empty fragment
+(or none when no milestone depends on them). Pure repository workflow
+documentation is also exempt. Review and resolve findings, then merge ready
+changes autonomously.
+
+### Changelog entries
+
+The changeset fragment is the changelog entry. Do not also write a root
+`CHANGELOG.md` `[Unreleased]` entry: it is no longer required, and one that is
+still added is moved into the next release section when the version is prepared.
+A fragment's summary is
+
+```md
+---
+"@lazysh/client": minor
+---
+
+feat(ssh): keep the host binding when a connection is restored
+
+Details for people who want them: what changed, what did not, and every changed
+default. Any Markdown, including lists and code.
+```
+
+- The first line is `type(scope): headline`. `type` is one of `feat`, `fix`,
+  `perf`, `docs`, `refactor`, `build`, `ci`, `test`, `chore` or `revert`; the scope
+  is optional and `!` after it marks a breaking change. The headline is one
+  sentence written for the people who use lazysh, at most 110 characters.
+- Details, if any, follow after a blank line and are collapsed in the release.
+- Each release's notes group the lines as **New** (`feat`), **Improved** (`perf`,
+  `refactor`), **Fixed** (`fix`), **Documentation** (`docs`) and **Under the hood**
+  (`build`, `ci`, `test`, `chore`, `revert`), one line per change with a link to its
+  pull request, and the same text is written to the root `CHANGELOG.md` and the
+  GitHub release. `bun run changelog:preview` prints the pending fragments grouped
+  that way.
+- The pre-commit hook checks only the fragments you stage
+  (`bun .changeset/lint-fragments.ts <files>` runs it by hand) and prints the line
+  to fix. Fragments written before this format keep working: their first sentence
+  becomes the headline and the type is inferred.
 
 The code scan retains the existing vendored/build exclusions and excludes
 `packages/parakeet-runtime/licenses/**`: upstream legal text must remain verbatim.
