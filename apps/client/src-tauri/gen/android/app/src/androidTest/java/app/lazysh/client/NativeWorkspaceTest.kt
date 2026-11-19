@@ -4818,6 +4818,16 @@ class NativeWorkspaceTest {
         pasteOwnedText(scenario, parityKey, privateKey, label)
     }
 
+    /**
+     * A saved host starts on Auto, which tries Mosh first. An owned sshd that runs commands would start a real
+     * mosh-server for that attempt, and a Mosh startup that ends early surfaces as a refusal instead of the SSH
+     * fallback (CI: "Mosh connection ended before startup completed"). Cases that prove SSH features pick SSH in the
+     * Add Host dialog, as the other owned cases do: the saved preference reaches the connect dialog, where the
+     * transport select sits in the collapsed Connection options and so is not hit-testable.
+     */
+    private fun chooseOwnedSshTransport(scenario: ActivityScenario<MainActivity>, parity: OwnedParity) =
+        selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
+
     /** Waits for this refusal in the open dialog with no terminal; unlike awaitDocument, an alert is the goal. */
     private fun awaitOwnedRefusal(scenario: ActivityScenario<MainActivity>, stage: String, text: String) {
         val expected = """(()=>{const alert=document.querySelector('[role=dialog] [role=alert]');
@@ -5050,7 +5060,7 @@ class NativeWorkspaceTest {
                 assertTrue("$stage: the forward must listen on a valid device port", local in 1..65535)
                 return local
             }
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("preview"))
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("preview")) { chooseOwnedSshTransport(scenario, parity) }
             parity.mark("preview")
             openOwnedConnect(scenario, name)
             chooseOwnedPrivateKey(scenario, preview.getString("privateKey"), parity.label)
@@ -5109,7 +5119,7 @@ class NativeWorkspaceTest {
             fun awaitIdle(stage: String, panel: String) = awaitPanel("$stage: $panel idle", "!document.querySelector('$panel [role=status]')")
             fun awaitAlert(stage: String, panel: String, text: String) = awaitPanel(stage,
                 "document.querySelector('$panel .inline-error[role=alert]')?.textContent.includes(${JSONObject.quote(text)})===true")
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("files"))
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("files")) { chooseOwnedSshTransport(scenario, parity) }
             parity.mark("files")
             openOwnedConnect(scenario, name)
             chooseOwnedPrivateKey(scenario, files.getString("privateKey"), parity.label)
