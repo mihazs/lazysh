@@ -112,6 +112,7 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
       const text = typeof data === 'string' ? data : new TextDecoder('utf-8', {fatal: true}).decode(data);
       await call('terminal_core_input', {input: {type: 'text', text}});
     },
+    async key(input) { await call('terminal_core_input', {input}); },
     setActive(value) {
       active = value;
       call('terminal_core_set_active', {active}).catch(noop);

@@ -38,12 +38,12 @@ Closing these gaps, without relaxing source integrity checks, is [#1312](https:/
 
 ### Platform parity checklist ([#1334](https://github.com/mihazs/lazysh/issues/1334))
 
-A platform stays on xterm.js until every row below is verified for it, with evidence in the pull request that ticks it. "Modelled" means the behaviour is checked on one host with the platform's rules emulated, which is not the platform: no native surface exists on any platform yet (#1327, #1330 to #1333), so nothing is verified on a device or a real OS.
+A platform stays on xterm.js until every row below is verified for it, with evidence in the pull request that ticks it. "Modelled" means the behaviour is checked on one host with the platform's rules emulated, which is not the platform: no native surface exists on any platform yet (#1327, #1330 to #1333), so nothing is verified on a device or a real OS. "Editor tested on Chromium" means the DOM input editor of a native session ([adapter](terminal-adapter.md#native-backend-1321), #1334 slice 1334a) is driven by Playwright in Chromium on the Linux host, over the headless stand-in core, with the platform's keyboard rules emulated: the recorded key matrix, the history-scroll keys, composition in both browsers' orders and through Chromium's input method, and paste. It is not the platform's browser engine or input method, and the Rust core's bytes for the keys are held to the same fixtures by `tests/platform_keys.rs`.
 
 | Area | Android | iOS | Linux | Windows | macOS |
 | --- | --- | --- | --- | --- | --- |
-| Keyboard: typed characters, Alt and Meta chords | not started (#1328) | not started | modelled | modelled | modelled |
-| IME composition | not started (#1328) | not started | not started (#982) | not started | not started |
+| Keyboard: typed characters, Alt and Meta chords | not started (#1328) | editor built, Chromium only | modelled, editor tested on Chromium | modelled, editor tested on Chromium | modelled, editor tested on Chromium |
+| IME composition | not started (#1328) | editor built, no iOS keyboard run | editor tested on Chromium, no IBus (#982) | editor tested on Chromium, no Windows IME | editor tested on Chromium, no macOS input method |
 | Mouse reporting and wheel | not started | not started | not started | not started | not started |
 | Touch and gestures | not started (#1328) | not started | n/a | n/a | n/a |
 | Selection and clipboard | not started | not started | not started | not started | not started |

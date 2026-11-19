@@ -8,6 +8,7 @@ import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
 import type {LiveSession} from '../../src/terminal';
 import type {SurfaceAnchor} from '../../src/terminalSurfaceAnchor';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
+import {getPreferences,savePreferences} from '../../src/preferences';
 import '../../src/styles.css';
 
 export type SurfaceCall={command:'place';session:string;anchor:SurfaceAnchor;background:number}|{command:'remove';session:string};
@@ -52,6 +53,11 @@ export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'n
   return {session,core,calls,errors,chain,
     /** Shows or hides the pane as switching sessions does. */
     setActive:render,
+    /** The Option as Meta setting, as the pane hands it to the adapter once it has rendered. */
+    async setOptionAsMeta(optionAsMeta:boolean){
+      savePreferences({...getPreferences(),optionAsMeta});
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    },
     /** Ends the pane while the adapter lives on, as closing its session does. */
     unmount:()=>root.unmount(),
     /** Output from the program, as the transport would deliver it. */
