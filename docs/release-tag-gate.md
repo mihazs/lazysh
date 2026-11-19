@@ -69,15 +69,18 @@ container build path, not a claim of Vagrant `--server` execution or hermeticity
 
 ## Job graph and runner queue
 
-A release takes two runner-queue entries on its critical path and eleven runner slots
-(previously five entries and fourteen slots). Each GitHub-hosted job waits in the
+A release takes three runner-queue entries on its critical path and eleven runner slots
+(previously five entries and fourteen slots; the desktop builds were the second entry
+until they began bundling the verified companion). Each GitHub-hosted job waits in the
 account-wide queue, so stages that run one after another add queue time.
 
 1. `source-build` starts with admission and recipe preparation, which were a
    separate `candidate` job. Each later step requires `enabled == 'true'` from that
-   admission. The platform builds in `release-artifacts.yml` start in the same queue
-   entry. They bind the exact trusted main event SHA, hold contents-read tokens and
-   produce private same-run artifacts only.
+   admission. The companion and Android builds in `release-artifacts.yml` start in the same
+   queue entry. They bind the exact trusted main event SHA, hold contents-read tokens and
+   produce private same-run artifacts only. The desktop builds start when the companion
+   job has finished, because each package bundles the companion built and verified for its
+   platform there ([bundled companion](release-artifacts.md#bundled-companion)).
 2. `reserve` runs beside them, takes no part in the critical path and starts the
    candidate's branch reservation (see
    [Ref writes and workflow files](#ref-writes-and-workflow-files)).

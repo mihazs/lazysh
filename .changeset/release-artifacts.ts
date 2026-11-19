@@ -34,8 +34,9 @@ const MiB = 1024 * 1024;
  * "Measured release size"). Raise one only with a new measurement. Targets with no published build keep the 2 GiB bound.
  */
 export const packageBudgetsMiB: { [T in ArtifactTarget]?: { [extension: string]: number } } = {
-  'linux-x64': { deb: 33, AppImage: 143 },
-  'windows-x64': { exe: 12 },
+  // Desktop packages bundle their platform's companion: the 1.5x ceiling plus that companion's own ceiling, until a release measures them.
+  'linux-x64': { deb: 51, AppImage: 161 },
+  'windows-x64': { exe: 28 },
   'android-google-arm64': { apk: 47 },
   'android-foss-arm64': { apk: 47 },
   'linux-agent-x64': { bin: 18 },
@@ -48,7 +49,7 @@ export const packageMaximumBytes = (target: ArtifactTarget, extension: string) =
   (packageBudgetsMiB[target]?.[extension] ?? 2048) * MiB;
 export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64',
   ...Object.keys(companionTargets) as CompanionTarget[]];
-type Identity = { sha: string; version: string };
+export type Identity = { sha: string; version: string };
 type Signing = 'unsigned' | 'ad-hoc' | 'signed';
 type ArtifactFile = { name: string; bytes: number; sha256: string };
 export type ArtifactReceipt = Identity & {

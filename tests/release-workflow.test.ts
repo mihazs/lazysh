@@ -2,6 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { releaseTargets } from '../.changeset/release-artifacts';
+import { desktopCompanions, type DesktopTarget } from '../.changeset/release-bundle';
 import { gitFixtureRoots, spawnText } from './support/gitFixture';
 import { document, evaluate, executedSteps, interpolate, releasePush, runnerJobs, type Context, type RunnerJob } from './support/workflowGraph';
 
@@ -16,17 +17,18 @@ async function steps(entry: RunnerJob, row: Context) {
   return executedSteps(entry.job.steps, { ...entry.context, matrix: row, steps: { prepare: { outputs: { enabled: 'true' } } } });
 }
 
-test('a release push queues two runner entries on its critical path and eleven runner slots', () => {
+// The desktop builds wait for the verified companions they bundle, so the critical path has three entries.
+test('a release push queues three runner entries on its critical path and eleven runner slots', () => {
   const slots = release.map(entry => [`${entry.file.split('/').pop()}#${entry.id}`, entry.rows.length, entry.queueEntry]);
   expect(slots.sort()).toEqual([
     ['companion-artifacts.yml#binary', 5, 1],
     ['release-artifacts.yml#android', 1, 1],
-    ['release-artifacts.yml#desktop', 2, 1],
-    ['release-tag.yml#publish', 1, 2],
+    ['release-artifacts.yml#desktop', 2, 2],
+    ['release-tag.yml#publish', 1, 3],
     ['release-tag.yml#reserve', 1, 1],
     ['release-tag.yml#source-build', 1, 1],
   ]);
-  expect(Math.max(...release.map(entry => entry.queueEntry))).toBe(2);
+  expect(Math.max(...release.map(entry => entry.queueEntry))).toBe(3);
   expect(release.reduce((total, entry) => total + entry.rows.length, 0)).toBe(11);
 });
 
@@ -52,6 +54,34 @@ test('publication waits for the admitted source build and every verified platfor
   }
   expect(uploads.filter(name => name !== 'verified-tag-build-receipts').sort())
     .toEqual(releaseTargets.map(target => `release-${target}`).sort());
+});
+
+test('each desktop build stages the verified companion its own platform uploaded before the Tauri build, and verifies against the same directory', async () => {
+  const uploaded = new Set<string>();
+  const companion = named('binary');
+  for (const row of companion.rows) for (const { step, context } of await steps(companion, row)) {
+    if (step.uses === 'actions/upload-artifact@v4') uploaded.add(String(interpolate(step.with.name, context)));
+  }
+  const desktop = named('desktop');
+  expect((await document('.github/workflows/release-artifacts.yml')).jobs.desktop.needs).toBe('companion');
+  expect(desktop.rows.map(row => row.target)).toEqual(['linux-x64', 'windows-x64']);
+  for (const row of desktop.rows) {
+    const executed = await steps(desktop, row);
+    const at = (matches: (step: any) => boolean) => executed.findIndex(({ step }) => matches(step));
+    const download = at(step => step.uses === 'actions/download-artifact@v4');
+    const stage = at(step => step.run?.includes('release-bundle.ts stage'));
+    const build = at(step => step.run?.includes('tauri build'));
+    const validate = at(step => step.run?.includes('release-platform.ts'));
+    expect([download, stage, build, validate].every(index => index >= 0) && download < stage && stage < build && build < validate).toBe(true);
+    const wanted = `release-${desktopCompanions[row.target as DesktopTarget].companion}`;
+    expect(interpolate(executed[download].step.with.name, executed[download].context)).toBe(wanted);
+    expect(uploaded.has(wanted)).toBe(true);
+    const directory = interpolate(executed[download].step.with.path, executed[download].context);
+    const staged = interpolate(executed[stage].step.run, executed[stage].context);
+    expect(staged).toContain(`stage ${row.target} "${directory}"`);
+    expect(interpolate(executed[validate].step.env.LAZYSH_COMPANION_DIR, executed[validate].context)).toBe(directory);
+    expect(executed[build].step.run).toContain('--config src-tauri/tauri.bundled-agent.conf.json');
+  }
 });
 
 test('only the reservation and publication jobs can write, and only their ref and publish steps receive the token', async () => {

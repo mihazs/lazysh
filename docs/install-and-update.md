@@ -145,6 +145,10 @@ replaces the application binary, not its user configuration directory. Retain
 backups; do not delete the configuration directory as an update step. AppImages
 may require the distribution's FUSE compatibility package. Desktop WebKit and
 other runtime dependencies are checked by the native package/build acceptance.
+Both packages carry the `lazysh-agent` companion for this device next to the
+application (`/usr/bin/lazysh-agent` in the Debian package); the release check
+unpacks each package and requires the published companion, so a fresh install
+needs no separate companion install for local sessions.
 
 ## Windows
 
@@ -153,6 +157,9 @@ updating. An unsigned installer can show an unknown-publisher/SmartScreen warnin
 unsigned does not establish publisher identity. Only proceed after independently
 verifying the source and checksum. A later signed channel must document its
 publisher certificate. Never disable system-wide security protection to install.
+The installer also places `lazysh-agent.exe` beside the application, the
+published Windows companion byte for byte, which the release acceptance checks after
+the install and after the same-version repair.
 
 ## macOS
 
