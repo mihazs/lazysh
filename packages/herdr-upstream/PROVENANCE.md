@@ -35,9 +35,29 @@ The opt-in Cargo feature `lazysh-managed` ([#1754](https://github.com/mihazs/laz
 
 Default builds, including the debug CI artifact, keep upstream's names on purpose. At least fourteen upstream test and fixture files hardcode them, and the original manifest must keep identifying upstream bytes. The feature is therefore enabled only for the managed build and its acceptance. `src/config/io.rs` is the one new modified path; it carries a change notice, leaves the unchanged-vendor scan exemption (the other `src/config/` files keep theirs) and was refactored for the zero-clone rule without behavior change: the two non-Windows directory functions and the Windows variants share one helper each, and two upstream tests share one config-loading helper. The Windows branch was type-checked in isolation only; no Windows build has run.
 
-The `herdr-native` job ends with `cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input acceptance::`. It runs the owned real-server acceptance with the feature on, plus one case that starts a real server and client under private `HOME` and XDG roots and asserts that `config/` holds exactly `lazysh-herdr`, that the session socket is inside it, and that no entry named `herdr`, `herdr-dev` or `.herdr*` exists anywhere below any root. That step runs after the guarded and stock artifacts are retained because the feature rebuilds `target/debug/herdr`; the retained debug artifact is not a managed build.
+The `herdr-native` job runs that acceptance with the feature on, against the release-profile executable described next: it includes one case that starts a real server and client under private `HOME` and XDG roots and asserts that `config/` holds exactly `lazysh-herdr`, that the session socket is inside it, and that no entry named `herdr`, `herdr-dev` or `.herdr*` exists anywhere below any root. The retained debug artifact is not a managed build.
 
-This establishes the namespace for a Linux debug build only. It does not make the managed build self-contained: `herdr update`, `herdr channel set` and the background update check can still replace the executable with a stock release ([#1755](https://github.com/mihazs/lazysh/issues/1755)). A release-profile build, its libc floor and receipt ([#1756](https://github.com/mihazs/lazysh/issues/1756)), the complete notice inventory ([#1757](https://github.com/mihazs/lazysh/issues/1757)), publication ([#1758](https://github.com/mihazs/lazysh/issues/1758)) and other operating systems remain open. Nothing here installs or distributes a binary.
+It does not make the managed build self-contained: `herdr update`, `herdr channel set` and the background update check can still replace the executable with a stock release ([#1755](https://github.com/mihazs/lazysh/issues/1755)). The complete notice inventory ([#1757](https://github.com/mihazs/lazysh/issues/1757)), publication ([#1758](https://github.com/mihazs/lazysh/issues/1758)) and other operating systems remain open. Nothing here installs or distributes a binary.
+
+### Release-profile managed build and libc floor
+
+[#1756](https://github.com/mihazs/lazysh/issues/1756), under [#1522](https://github.com/mihazs/lazysh/issues/1522). After the debug artifacts are sealed, the `herdr-native` job builds the derivative as it would ship, from the same copied pinned source and the same admitted Rust 1.96.1 and Zig 0.16.0: `cargo +1.96.1 build --locked --release --features lazysh-managed --bin herdr`. It records the executable's SHA-256, runs the owned real-server acceptance with `cargo +1.96.1 test --locked --release --features lazysh-managed --test guarded_input acceptance::`, and requires the SHA-256 unchanged afterwards, so the acceptance ran against the bytes that are retained and Cargo did not rebuild them. The debug artifacts and the CI debug acceptance of the managed feature are not repeated: the release acceptance runs the same cases, including the namespace case above, and the job's time limit rose from 30 to 45 minutes for the second build.
+
+**Deployment floor: glibc 2.35.** The producer is Ubuntu 22.04, the oldest native consumer, so the executable must run on Ubuntu 22.04 and newer, Debian 12 and newer, and other x86-64 hosts with glibc 2.35 or newer. Older glibc, such as RHEL 9's 2.34, and musl hosts are not claimed. `.github/scripts/herdr-release-receipt.sh` measures the highest `GLIBC_x.y` version in the executable's version-needs table with `readelf` and compares versions numerically (`GLIBC_2.9` is older than `GLIBC_2.14`). It fails the job when that maximum is above the floor, when the file is not a 64-bit x86-64 ELF executable, and when the executable needs no glibc symbol version at all, because an unmeasured floor is not a stated one. A failed check writes no receipt. Raise the floor, in the script and here together, only with an explicit decision about which hosts stop being supported. The debug artifact needed at most `GLIBC_2.34` on this runner ([native GUI testing](../../docs/native-gui-testing.md)); the release maximum is recorded in each receipt rather than assumed.
+
+The retained `managed-herdr-linux-x86_64-<run>-<attempt>` artifact (14 days) holds `herdr` and `receipt.json`:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion`, `target`, `profile` | `1`, `x86_64-unknown-linux-gnu`, `release` |
+| `features` | the Cargo features the executable was built with (`lazysh-managed`) |
+| `sourceCommit`, `manifestSha256` | the pinned upstream commit and the digest of the original `SOURCE-MANIFEST.sha256` the derivative is compared against |
+| `checkout` | the lazysh commit that holds the modified sources |
+| `toolchains` | `rustc` and `cargo` version lines, the Zig version and the build host's glibc |
+| `libc` | the documented `floor` and the measured `maximum` |
+| `binarySha256` | the SHA-256 of the retained executable |
+
+This is the producer half of the release asset. It does not publish anything, add the executable to the release set or `SHA256SUMS`, include the redistribution notices or source offer ([#1757](https://github.com/mihazs/lazysh/issues/1757), [#1758](https://github.com/mihazs/lazysh/issues/1758)), or claim support for any platform: Linux x86-64 stays the only target until another host has native evidence. The build is not byte-reproducible, and its libc floor is measured on this one runner image. The receipt records those bytes and tools; it is not a signature.
 
 ## Optional build and verification
 
@@ -106,8 +126,9 @@ cargo +1.96.1 test --locked --bin herdr guarded_input::
 cargo +1.96.1 test --locked --bin herdr terminal::runtime_registry::guard_identity_tests::
 HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture" cargo +1.96.1 test --locked --test guarded_input acceptance:: -- --nocapture
 cargo +1.96.1 test --locked --bin herdr api::schema::tests::generated_protocol_schema_artifact_is_current -- --exact
-# Last, because it rebuilds target/debug/herdr with the managed namespace:
-cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input acceptance::
+# Last: the managed release build and its acceptance use target/release and leave target/debug untouched:
+cargo +1.96.1 build --locked --release --features lazysh-managed --bin herdr
+cargo +1.96.1 test --locked --release --features lazysh-managed --test guarded_input acceptance::
 ```
 
 The example is a native Cargo process fixture that only writes its owned invocation marker and exits. It never implements SSH or opens a network. Its current-source build must precede the explicit path passed to acceptance; an arbitrary existing absolute binary is not provenance. Real-server cases use only private temporary sockets/config, two owned servers, an owned shell workload, and tracked child cleanup. They do not establish lazysh's future SSH/access-lease adapter, provider identity, GUI/physical-device or Windows guarded acceptance. Unsupported socket receive deadlines fail closed for guarded attachment while ordinary attachment retains upstream behavior.
