@@ -25,6 +25,12 @@ export function readArchive(host:string):ArchivedReport[] {
   return readAll()[host] ?? [];
 }
 
+/** Several hosts' archives from one read of the storage. */
+export function readArchives(hosts:readonly string[]):Record<string,ArchivedReport[]> {
+  const all=readAll();
+  return Object.fromEntries(hosts.map(host=>[host,all[host] ?? []]));
+}
+
 /** Persists one host's archive; the board still works for this session without storage. */
 export function saveArchive(host:string,rows:readonly ArchivedReport[]) {
   const all=readAll();

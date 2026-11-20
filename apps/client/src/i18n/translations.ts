@@ -313,6 +313,12 @@ const translations = {
   agentsRestore: ["Restaurar", "Restaurar"],
   agentsRestoreReport: ["Restaurar relato de {{agent}} em {{project}}", "Restaurar informe de {{agent}} en {{project}}"],
   agentsProjectGroup: ["{{project}} em {{host}}", "{{project}} en {{host}}"],
+  agentsScope: ["Escopo do painel", "Ámbito del panel"],
+  agentsScopeHost: ["Este host", "Este host"],
+  agentsScopeAll: ["Todos os hosts", "Todos los hosts"],
+  agentsOpenReport: ["Abrir relato de {{agent}} em {{project}} em {{host}}", "Abrir informe de {{agent}} en {{project}} en {{host}}"],
+  agentsHostsLimited: ["Exibindo {{shown}} de {{total}} hosts conectados.", "Mostrando {{shown}} de {{total}} hosts conectados."],
+  agentsAllHostsArchived: ["{{total}} relatos arquivados estão ocultos aqui. Restaure-os no painel de cada host.", "{{total}} informes archivados están ocultos aquí. Restáuralos en el panel de cada host."],
 
   defaultMuxPreferencesHint: ["Escolha um multiplexador padrão para cada host salvo. Edite um host para selecionar Herdr, tmux ou Zellij e a sessão para anexar ou criar ao conectar.", "Elige un multiplexor predeterminado para cada host guardado. Edita un host para seleccionar Herdr, tmux o Zellij y la sesión para conectar o crear al conectarte."],
   defaultMuxLabel: ["Multiplexador padrão", "Multiplexor predeterminado"],
