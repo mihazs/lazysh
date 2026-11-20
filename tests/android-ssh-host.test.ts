@@ -8,6 +8,8 @@ import {prepareAgentBoardHooks} from './support/androidAgentBoard';
 import {TmuxFixture} from './support/androidTmux';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
+import {observeAndroidUploadRecovery,UPLOAD_RECOVERY_QUIET_MS} from './support/androidUploadRecovery';
+import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
 import {sshCommand,receiverProbeErrors} from './support/sshFixture';
 import {identity,reportOwnedTeardownFailure} from './support/ownedProcess';
 
@@ -150,6 +152,73 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced 
     await expect(observer.assertVerified()).rejects.toThrow('Owned Mosh bootstrapped again');
   } finally {await observer.stop();try{await fixture.stop();}finally{await client?.stop();}}
 },15_000);
+
+// The device half is a shell command in a live Mosh terminal plus an SSH connection through the relay; here
+// a real mosh-client and ssh clients stand in for it, so the host witness runs against real daemons.
+const uploadRecoveryScenarios:[string,{closed?:'create',quiet?:'create',uploaded?:'rewrite',bytes?:number},string?][]=[
+  ['accepts an explicit upload after the manual reconnect and a quiet interval',{}],
+  ['refuses a destination created while the SSH control is closed',{closed:'create'},'before the manual reconnect'],
+  ['refuses an upload made by the reconnect itself',{quiet:'create'},'without an explicit Upload'],
+  ['refuses a file rewritten after its upload completed',{uploaded:'rewrite'},'changed after it completed'],
+  ['refuses a file that never reached the expected size',{bytes:1},'incomplete'],
+];
+for(const [title,mutations,failure] of uploadRecoveryScenarios)test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')(`owned namespaced SSH upload recovery witness ${title}`,async()=>{
+  const binary=await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Mosh witness binary','sh',['-c','command -v mosh-server'])).trim());
+  const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary,observeMoshBootstraps:true});
+  const relay=await OwnedSshRelay.start(fixture.port),relayPort=relay.port,name=`owned-recovery-${fixture.nonce}.png`,destination=join(fixture.directory,name);
+  const witness=observeAndroidUploadRecovery(fixture,relay,name),image=Buffer.alloc(4096,7);
+  const until=async(done:()=>boolean|Promise<boolean>,stage:string)=>{
+    const deadline=performance.now()+10_000;
+    while(!await done()){witness.check();expect(performance.now(),stage).toBeLessThan(deadline);await Bun.sleep(10);}
+  };
+  const present=(path:string)=>stat(path).then(()=>true,()=>false);
+  const clients:OwnedProcess[]=[];
+  try {
+    const control=await fixture.client(true,undefined,relayPort);clients.push(control);
+    await until(()=>control.stdout.includes(fixture.prompt),'app SSH stream through the relay');
+    const receipt=`printf '%s %s\\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" >${fixture.directory}/upload-control.tmp; mv ${fixture.directory}/upload-control.tmp ${fixture.directory}/upload-control; while ! test -f ${fixture.directory}/upload-control-ack; do sleep .1; done; printf 'CONTROL_%s_CLOSED\\n' ${fixture.nonce}; sleep 90`;
+    const bootstrap=await fixture.client(true,"'mosh-server' new -s -c 256 -p 60000:61000 -l 'LC_ALL=C.UTF-8' -- /bin/sh -c '"+receipt.replaceAll("'","'\\''")+"'");
+    const connect=(await bootstrap.finish('owned Mosh recovery bootstrap',5000)).match(/MOSH CONNECT ([0-9]+) ([A-Za-z0-9+/=]+)/);
+    expect(connect!==null).toBe(true);
+    const terminal=new OwnedProcess('/usr/bin/script',['-q','-e','-c',`stty rows 24 cols 80; exec mosh-client 127.0.0.1 ${connect![1]}`,'/dev/null'],undefined,{...process.env,TERM:'xterm-256color',MOSH_KEY:connect![2]});
+    clients.push(terminal);
+    await until(()=>present(join(fixture.directory,'upload-control')),'device receipt');
+    await until(()=>present(join(fixture.directory,'upload-control-ack')),'host closure acknowledged');
+    // Only the app's SSH stream closed: its client ends, the listeners stay, and the Mosh shell prints on.
+    await expect(control.finish('closed SSH control',3000)).rejects.toThrow('Owned fixture failed: closed SSH control');clients.shift();
+    expect(await listening(relayPort)).toBe(true);expect(await listening(fixture.port)).toBe(true);expect(relay.active).toBe(0);
+    await until(()=>terminal.stdout.includes(`CONTROL_${fixture.nonce}_CLOSED`),'Mosh terminal after the SSH closure');
+    if(mutations.closed)await writeFile(destination,image,{flag:'wx'});
+    else {
+      // The manual reconnect is a new SSH connection through the same relay.
+      const reconnect=await fixture.client(true,undefined,relayPort);clients.push(reconnect);
+      await until(()=>reconnect.stdout.includes(fixture.prompt),'manual reconnect through the relay');
+      await Bun.sleep(200);
+      if(mutations.quiet)await writeFile(destination,image,{flag:'wx'});
+      else {
+        await Bun.sleep(UPLOAD_RECOVERY_QUIET_MS+300);
+        await writeFile(destination,image,{flag:'wx'});
+        await Bun.sleep(200);
+        if(mutations.uploaded)await writeFile(destination,Buffer.alloc(image.length,9));
+      }
+    }
+    if(failure) {
+      // The witness polls every 20 ms; give it time to see the mutation before asking for its verdict.
+      await Bun.sleep(100);
+      await expect(witness.assertVerified(mutations.bytes??image.length)).rejects.toThrow(failure);
+    } else {
+      await witness.assertVerified(image.length);
+      expect((await readFile(destination)).equals(image)).toBe(true);
+    }
+  } finally {
+    await witness.stop();
+    const failures:unknown[]=[];
+    for(const step of [...clients.map(client=>()=>client.stop()),()=>relay.stop(),()=>fixture.stop()])try{await step();}catch(error){failures.push(error);}
+    if(failures.length)throw new AggregateError(failures,'Owned upload recovery cleanup failed');
+    expect(await listening(relayPort)).toBe(false);expect(await listening(fixture.port)).toBe(false);
+    await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+  }
+},30_000);
 
 test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails explicitly while still removing its private directory',async()=>{
   const fixture=await SshFixture.start();
