@@ -44,7 +44,7 @@ ONNX Runtime is **1.28.2**, from the upstream-selected [runtime distribution](ht
 | Windows x64 MD Release | `6fdf64a246ff8c46a303f84b7514e94eda63ae8fefa94491b157f9c14449dbaa` |
 | iOS static XCFramework | `2c2299acbb461d26d4bac4bc85985d40e7c7177ed6072703ae0846d88b0b4599` |
 
-The iOS archive digest is the publisher release API digest; no iOS archive was downloaded during the initial Linux proof. Its device/simulator slice paths follow the official iOS recipe. Android uses API 24 and the caller's NDK toolchain; final 16 KiB ELF compatibility needs execution/build evidence. Windows uses the dynamic CRT to match normal Cargo MSVC builds. All platforms must share the client's existing C++ runtime rather than bundle conflicting runtimes.
+The iOS archive digest is the publisher release API digest; no iOS archive was downloaded during the initial Linux proof. Its device/simulator slice paths follow the official iOS recipe. Android uses API 24 and the caller's NDK toolchain, and the Android ORT archive's protobuf symbols are renamed into a private namespace like the Linux one (Mosh's pinned static protobuf-lite shares the client shared object). The x86_64 client library built with NDK 29.0.14206865 has 16 KiB aligned load segments; execution was checked on one API 33 x86_64 guest only. Windows uses the dynamic CRT to match normal Cargo MSVC builds. All platforms must share the client's existing C++ runtime rather than bundle conflicting runtimes.
 
 ## Runtime licenses
 
