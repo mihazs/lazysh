@@ -1875,6 +1875,7 @@ jobs:
             'host::tests::local::local_files_list_and_read_with_remote_bounds: test' \
             'host::tests::local::local_previews_proxy_http_report_discovery_and_stop_with_the_session: test' \
             'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' \
+            'host::tests::local::local_run_status_returns_a_failing_exit_as_data_where_run_refuses_it: test' \
             'host::tests::local::local_uploads_create_private_distinct_files_and_never_replace_one: test' \
             'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' \
             'host::tests::local::wsl::a_distribution_reports_files_and_repository_only_when_git_starts_inside_it: test' \

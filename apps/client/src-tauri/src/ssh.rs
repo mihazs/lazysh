@@ -3000,6 +3000,23 @@ pub(crate) async fn exec_for_access(
     )
     .await
 }
+/// `exec_for_access` for a command whose exit status the caller interprets.
+pub(crate) async fn exec_for_access_status(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+) -> Result<ExecOutput> {
+    exec_status(
+        session,
+        command,
+        lease,
+        OP_TIMEOUT,
+        FILE_LIMIT as usize,
+        None,
+        &mut |_| {},
+    )
+    .await
+}
 pub(crate) async fn exec_bounded(
     session: &Session,
     command: String,
@@ -3080,14 +3097,14 @@ pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
 pub(crate) struct ExecOutput {
     pub(crate) status: Option<u32>,
     pub(crate) stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 impl ExecOutput {
     pub(crate) fn unsupported_large_history_flag(&self) -> bool {
         self.status == Some(2) && unknown_large_history_flag(&String::from_utf8_lossy(&self.stderr))
     }
     /// The output of a command that had to succeed.
-    fn text(self) -> Result<String> {
+    pub(crate) fn text(self) -> Result<String> {
         check_exit(self.status, &self.stderr)?;
         command_text(self.stdout)
     }
