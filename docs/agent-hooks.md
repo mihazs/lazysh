@@ -118,6 +118,42 @@ adapters. Reports contain bounded session identity, agent name, project path,
 status, a generic summary and the inherited tmux pane hint, when available.
 Prompts, tool arguments, transcript paths and provider credentials are discarded.
 
+### Setup readiness
+
+Configured hook files do not show that an agent reports. `lazysh-agent hooks status`
+therefore adds a `readiness` object (`schemaVersion` 1) to every supported status,
+and the setup panel lists it as seven separate steps after **Inspect setup**. The
+existing `reporting` and `trust` fields keep their `notChecked` value; no existing
+field changes.
+
+| Step | Where it comes from |
+| --- | --- |
+| Companion installed | The status itself: the companion answered. |
+| Hook files configured | The existing `state`: `configured`, `conflict` or not configured. |
+| Provider reloaded after the change | `providerReloaded`, always `notChecked`: no provider process is inspected and none is restarted. Start a new session. |
+| Project trusted by the provider | `projectTrusted`, always `notChecked`: provider trust records (Codex hook review, Gemini folder trust and similar) are never read, written or bypassed, and Codex hook trust is never accepted automatically. |
+| Lifecycle event received on this host | `localEvent`, below. |
+| Current pane bound to the session | `paneBound`, always `notChecked`: the status does not know which pane you mean, and a script notification that carries a terminal location never binds a pane. |
+| Remote delivery and approval | `remoteDelivery`, always `notChecked`: a local event does not prove a remote push or an accepted answer, and a provider that reports lifecycle (Amp) need not support approvals. |
+
+`localEvent` is the only probe. It reads the companion's own session store without
+opening it for writing: `{"state":"received","lastEventAt":"…"}` when a lifecycle
+event of that agent is retained, `{"state":"none"}` when this host's store has none
+(or no store exists yet, which `status` never creates), and `{"state":"notChecked"}`
+when the store cannot be read safely (not a database, a link, owned by someone
+else, locked or still being created). The match is by agent, not by profile: two
+profiles of one agent share it. The time is the latest event, not a sign that the
+agent is alive, and the store keeps seven days and 100 sessions, so `none` means no
+retained event on the host's own state directory (`LAZYSH_STATE_DIR`, else the
+user state directory); a hook run with a different state directory records
+elsewhere. When the hook files are configured and `localEvent` is `none`, the panel
+says the host has recorded no event from that agent and what to do next.
+
+The report is additive in both directions. A client that predates it ignores
+`readiness`; a client that has it shows every step as not checked when an older
+companion sends none, and ignores a report with another `schemaVersion` or a
+malformed `localEvent` instead of failing the status.
+
 ## Claude Code, Codex and OpenCode
 
 `lazysh-agent claude-config` prints the existing Claude configuration fragment.

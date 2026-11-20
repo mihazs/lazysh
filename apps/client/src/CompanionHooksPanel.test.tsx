@@ -2,7 +2,7 @@
 import {it,expect,vi,beforeEach,afterEach} from 'vitest';
 import {render,screen,fireEvent,act,cleanup} from '@testing-library/react';
 import {applyAccessStatus} from './access';
-import {uiI18n} from './i18n/core';
+import {formatDateTime,uiI18n} from './i18n/core';
 const {hooks,discover}=vi.hoisted(()=>({hooks:vi.fn(),discover:vi.fn()}));
 vi.mock('./bridge',()=>({api:{companionHooks:hooks,companionHookDiscovery:discover}}));
 import CompanionHooksPanel,{parseHookStatus,parseHookDiscovery} from './CompanionHooksPanel';
@@ -340,4 +340,49 @@ it('keeps manual Amp exact-owned removal enabled through a same-name shadow with
   fireEvent.click(screen.getByRole('button',{name:'Remove lazysh hooks'}));await act(async()=>{});
   expect(hooks.mock.calls[1]).toEqual(['owned-amp-shadow',{agent:'amp',action:'remove',profileRoot:'/owned/profile',expectedPlan:inspected.removePlan}]);
   expect(hooks.mock.calls.map(call=>call[1].action)).toEqual(['status','remove','status']);
+});
+
+const readiness=(localEvent:unknown)=>({schemaVersion:1,localEvent,providerReloaded:'notChecked',projectTrusted:'notChecked',paneBound:'notChecked',remoteDelivery:'notChecked'});
+const lastEventAt='2026-11-15T10:20:30.123456Z';
+it('reads the additive readiness report and keeps an older or newer companion working',()=>{
+  expect(parseHookStatus({...inspected,readiness:readiness({state:'received',lastEventAt})}).localEvent).toEqual({state:'received',lastEventAt:Date.parse(lastEventAt)});
+  expect(parseHookStatus({...inspected,readiness:readiness({state:'none'})}).localEvent).toEqual({state:'none'});
+  expect(parseHookStatus({...inspected,state:'conflict',readiness:readiness({state:'notChecked'})}).localEvent).toEqual({state:'notChecked'});
+  // An older companion sends no report; a newer or malformed one is ignored rather than failing the status.
+  for(const report of [undefined,null,'received',{...readiness({state:'none'}),schemaVersion:2},readiness({state:'alive'}),readiness({state:'received',lastEventAt:'yesterday'}),readiness(undefined)])
+    expect(parseHookStatus({...inspected,readiness:report}).localEvent).toBeUndefined();
+  expect(()=>parseHookStatus({...inspected,trust:'trusted',readiness:readiness({state:'none'})})).toThrow();
+});
+async function inspectWith(report:unknown){
+  hooks.mockResolvedValueOnce({...inspected,state:'configured',...(report===undefined?{}:{readiness:report})});
+  render(<CompanionHooksPanel sessionId="readiness" visible/>);selectProfile();
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  return screen.findByRole('list',{name:'Readiness'});
+}
+const silent='Hooks are configured, but this host has recorded no event from this agent. Start a new session, review the provider’s hook trust prompt and run a prompt.';
+it('shows a configured but silent agent apart from one with a received local event',async()=>{
+  const none=await inspectWith(readiness({state:'none'}));
+  expect([...none.querySelectorAll('li')].map(row=>row.textContent)).toEqual([
+    'Companion installed: Yes','Hook files configured: Yes','Provider reloaded after the change: Not checked','Project trusted by the provider: Not checked',
+    'Lifecycle event received on this host: None recorded','Current pane bound to the session: Not checked','Remote delivery and approval: Not checked']);
+  expect(screen.getByText(silent)).toBeTruthy();
+  cleanup();hooks.mockReset();
+  const received=await inspectWith(readiness({state:'received',lastEventAt}));
+  expect(received.textContent).toContain(`Lifecycle event received on this host: Last event ${formatDateTime(Date.parse(lastEventAt))} (history, not proof the agent is running)`);
+  expect(received.textContent).not.toContain('None recorded');
+  expect(screen.queryByText(silent)).toBeNull();
+});
+it('reads an older companion without a readiness report as not checked, never as silent',async()=>{
+  const rows=await inspectWith(undefined);
+  expect(rows.textContent).toContain('Lifecycle event received on this host: Not checked');
+  expect(screen.queryByText(silent)).toBeNull();
+});
+it.each([['pt-BR','Prontidão','Nenhum registrado'],['es','Preparación','Ninguno registrado']])('renders the readiness report in %s',async(language,title,none)=>{
+  await uiI18n.changeLanguage(language);
+  hooks.mockResolvedValueOnce({...inspected,state:'configured',readiness:readiness({state:'none'})});
+  render(<CompanionHooksPanel sessionId="readiness-locale" visible/>);
+  fireEvent.change(screen.getByLabelText(language==='pt-BR'?'Provedor do hook':'Proveedor del hook'),{target:{value:'codex'}});
+  fireEvent.change(screen.getByLabelText(language==='pt-BR'?'Diretório do perfil no servidor':'Directorio del perfil del servidor'),{target:{value:'/owned/profile'}});
+  fireEvent.click(screen.getByRole('button',{name:language==='pt-BR'?'Verificar configuração':'Inspeccionar configuración'}));
+  expect((await screen.findByRole('list',{name:title})).textContent).toContain(none);
 });

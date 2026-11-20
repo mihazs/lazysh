@@ -166,7 +166,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         const request=args.request as {agent:string;action:string;profileRoot:string;expectedPlan?:string};
         if(args.sessionId!=='owned-navigation-ssh' || request.agent!=='codex' || request.profileRoot!=='/owned/profile')throw new Error('Wrong owned hook inspection target');
         state.hookActions.push(request.action);
-        if(request.action==='status')return {schemaVersion:1,supported:true,state:state.hooksConfigured?'configured':null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),trust:'notChecked',reporting:'notChecked'};
+        if(request.action==='status')return {schemaVersion:1,supported:true,state:state.hooksConfigured?'configured':null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),trust:'notChecked',reporting:'notChecked',readiness:{schemaVersion:1,localEvent:{state:'none'}}};
         if(request.action==='install' && request.expectedPlan==='a'.repeat(64)){state.hooksConfigured=true;return {schemaVersion:1,outcome:{status:'configured'},trust:'notChecked',reporting:'notChecked'};}
         throw new Error('Uninspected hook mutation');
       }
@@ -849,6 +849,8 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   expect(await actions()).toEqual(['status']);
   await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
   await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  await expect(board.getByRole('list',{name:'Readiness',exact:true}).getByText('Lifecycle event received on this host: None recorded',{exact:true})).toBeVisible();
+  await expect(board.getByText('Hooks are configured, but this host has recorded no event from this agent.',{exact:false})).toBeVisible();
   await expect(board.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status','install','status']);
   await expect(board.locator('.agent-card')).toHaveCount(0);
