@@ -1,0 +1,8 @@
+---
+"@lazysh/client": minor
+"@lazysh/agent": minor
+---
+
+feat(agents): follow a Grok Build session in the Agent view
+
+With the updated host companion, print the opted-in hook fragment (`lazysh-agent grok-config --reported-history`), review it and save it as `~/.grok/hooks/lazysh.json`: a Grok Build hook then reports the session id, the pane it ran in and the path of its session log (`updates.jsonl`), and the Agent view of that tmux pane shows the conversation (turns, thinking, tool calls with their output and status, the plan card) and the state (working, done, failed, waiting for an approval), polling the log about every two seconds, with the guarded send. The Claude Code hooks reach Grok Build too (it runs `~/.claude/settings.json`), so a report that carries Grok's own input is now shown as **Grok Build**, not as a Claude Code session. Nothing is guessed from processes or from the newest file of a folder: a report without a log path binds nothing, a sub-agent's events are ignored, and two different paths for one session stay unusable. Questions and approvals stay in the terminal; the view says so and holds the draft, and it offers Grok Build no Stop key and no `@` or `/` suggestions because no key was checked on a real Grok Build. The same terminal notice now also appears when Gemini CLI or OpenCode waits for an approval or a plan decision, which the view cannot answer. A session past 10,000 log records or 16 MiB shows the reader's error and leaves the terminal. Verified with synthetic fixtures built from the pinned official source and the real executable on Linux; no Grok Build binary or account was available, so a run against a real agent is still open on #1842. No defaults change.
