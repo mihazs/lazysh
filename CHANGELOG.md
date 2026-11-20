@@ -10,6 +10,17 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.90.0] - 2026-11-20
+
+### New
+
+- Add the app's bridge to the host browser relay ([#1886](https://github.com/mihazs/lazysh/pull/1886))
+- **terminal:** check the device's GPU before the native terminal engine is offered ([#2221](https://github.com/mihazs/lazysh/pull/2221))
+
+### Fixed
+
+- **release:** List changes from every package in the release notes, not only the client's ([#2232](https://github.com/mihazs/lazysh/pull/2232))
+
 ## [1.89.1] - 2026-11-20
 
 ### Under the hood
