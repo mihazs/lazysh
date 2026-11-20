@@ -32,6 +32,8 @@ mod links;
 mod local;
 mod mosh;
 mod multiplexer;
+#[cfg(feature = "native-terminal")]
+mod native_renderer;
 mod native_terminal_surface;
 mod notifications;
 mod previews;

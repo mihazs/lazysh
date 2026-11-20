@@ -18,13 +18,14 @@
 //!   keeps its fallback renderer.
 //!
 //! The surface of this crate is an offscreen texture (`Target`), which is what the tests and the
-//! benchmarks read back. A window or `ANativeWindow` surface is #1327; the text path with real
-//! fonts is #1325 (glyph masks still come from the reference dot patterns of the layout).
+//! benchmarks read back. A target with a [`Window`] also presents: `present` copies that texture to
+//! the window's swapchain, so a frame still costs only its dirty rows. The text path with real fonts
+//! is #1325 (glyph masks still come from the reference dot patterns of the layout).
 
 mod adapter;
 mod atlas;
 
-pub use adapter::{rank, ranked, AdapterInfo, Policy};
+pub use adapter::{rank, ranked, AdapterInfo, Policy, Window};
 
 use atlas::{Atlas, Slot};
 use bytemuck::{Pod, Zeroable};
@@ -46,12 +47,15 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 const INSTANCE: u64 = std::mem::size_of::<Instance>() as u64;
 
-/// The surface: an offscreen texture of this size in device pixels, on the adapter the policy picks.
+/// The surface: an offscreen texture of this size in device pixels, on the adapter the policy picks,
+/// and the window it is presented on, if any.
 #[derive(Debug, Clone)]
 pub struct Target {
     pub width: u32,
     pub height: u32,
     pub policy: Policy,
+    /// Where `present` shows the texture; `None` draws offscreen only.
+    pub window: Option<Window>,
     /// Side of the square glyph atlas in texels (the device's limit if smaller). The default holds
     /// thousands of glyphs; tests shrink it to make eviction happen.
     pub atlas_side: u32,
@@ -64,7 +68,16 @@ impl Target {
             width,
             height,
             policy: Policy::for_platform(),
+            window: None,
             atlas_side: ATLAS_SIDE,
+        }
+    }
+
+    /// Present on `window`, whose surface is `width` x `height` device pixels.
+    pub fn on_window(window: Window, width: u32, height: u32) -> Self {
+        Self {
+            window: Some(window),
+            ..Self::new(width, height)
         }
     }
 
@@ -282,6 +295,169 @@ struct Gpu {
     stats: GpuStats,
     /// Work submitted since the last `present`.
     pending: bool,
+    /// The window's swapchain, for a target with a window.
+    screen: Option<Swapchain>,
+}
+
+/// The swapchain of a window and the pipeline that copies the target to it.
+struct Swapchain {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    /// Binds the target's view: rebuilt when the target is.
+    source: wgpu::BindGroup,
+}
+
+const SOURCE_TEXTURE: wgpu::BindingType = wgpu::BindingType::Texture {
+    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+    view_dimension: wgpu::TextureViewDimension::D2,
+    multisampled: false,
+};
+
+fn color_target(
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 1] {
+    [Some(wgpu::ColorTargetState {
+        format,
+        blend,
+        write_mask: wgpu::ColorWrites::ALL,
+    })]
+}
+
+fn color_attachment(
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+) -> [Option<wgpu::RenderPassColorAttachment<'_>>; 1] {
+    [Some(wgpu::RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: wgpu::Operations {
+            load,
+            store: wgpu::StoreOp::Store,
+        },
+    })]
+}
+
+impl Swapchain {
+    fn new(
+        device: &wgpu::Device,
+        surface: wgpu::Surface<'static>,
+        config: wgpu::SurfaceConfiguration,
+        target: &wgpu::TextureView,
+    ) -> Self {
+        surface.configure(device, &config);
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("present shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("present layout"),
+            entries: &[layout_entry(
+                0,
+                wgpu::ShaderStages::FRAGMENT,
+                SOURCE_TEXTURE,
+            )],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("present pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("present pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &color_target(config.format, None),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let source = Self::source(device, &layout, target);
+        Self {
+            surface,
+            config,
+            pipeline,
+            layout,
+            source,
+        }
+    }
+
+    fn source(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        target: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present source"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(target),
+            }],
+        })
+    }
+
+    /// The target changed size: so does the swapchain.
+    fn resize(&mut self, device: &wgpu::Device, target: &wgpu::TextureView, size: (u32, u32)) {
+        (self.config.width, self.config.height) = size;
+        self.surface.configure(device, &self.config);
+        self.source = Self::source(device, &self.layout, target);
+    }
+
+    /// Copy the target to the window's next image and show it. `Ok(false)` when the platform had no
+    /// image to give now (occluded, timed out): the target keeps the picture for a later frame.
+    fn show(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<bool, RenderError> {
+        use wgpu::CurrentSurfaceTexture::*;
+        let image = match self.surface.get_current_texture() {
+            Success(image) | Suboptimal(image) => image,
+            Outdated => {
+                // The window changed under the swapchain: configure again and take its image.
+                self.surface.configure(device, &self.config);
+                match self.surface.get_current_texture() {
+                    Success(image) | Suboptimal(image) => image,
+                    Lost | Validation => return Err(RenderError::DeviceLost),
+                    Outdated | Timeout | Occluded => return Ok(false),
+                }
+            }
+            Timeout | Occluded => return Ok(false),
+            Lost | Validation => return Err(RenderError::DeviceLost),
+        };
+        let view = image
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("present pass"),
+                color_attachments: &color_attachment(&view, wgpu::LoadOp::Load),
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.source, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit([encoder.finish()]);
+        queue.present(image);
+        Ok(true)
+    }
 }
 
 impl Gpu {
@@ -297,8 +473,12 @@ impl Gpu {
             info,
             device,
             queue,
-            ..
-        } = adapter::select(&target.policy)?;
+            screen,
+        } = adapter::select(
+            &target.policy,
+            target.window,
+            (target.width.max(1), target.height.max(1)),
+        )?;
         let side = device.limits().max_texture_dimension_2d;
         let size = check_size(side, target.width, target.height)?;
         let mine = epoch.fetch_add(1, Ordering::SeqCst) + 1;
@@ -340,15 +520,7 @@ impl Gpu {
                         min_binding_size: None,
                     },
                 ),
-                layout_entry(
-                    1,
-                    wgpu::ShaderStages::FRAGMENT,
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                ),
+                layout_entry(1, wgpu::ShaderStages::FRAGMENT, SOURCE_TEXTURE),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -373,11 +545,7 @@ impl Gpu {
                 module: &module,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &color_target(FORMAT, Some(wgpu::BlendState::ALPHA_BLENDING)),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -418,6 +586,8 @@ impl Gpu {
             ],
         });
         let (target, target_view) = Self::target(&device, size);
+        let screen =
+            screen.map(|(surface, config)| Swapchain::new(&device, surface, config, &target_view));
         let gpu = Self {
             info,
             instances: instance_buffer(&device, 1024),
@@ -436,6 +606,7 @@ impl Gpu {
             mask: Vec::new(),
             stats: GpuStats::default(),
             pending: false,
+            screen,
         };
         gpu.write_globals();
         Ok(gpu)
@@ -447,7 +618,10 @@ impl Gpu {
             "terminal target",
             size,
             FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // Drawn to, read back by `read_image`, and sampled when it is copied to a window.
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
         )
     }
 
@@ -466,6 +640,9 @@ impl Gpu {
         (self.target, self.target_view) = Self::target(&self.device, size);
         self.size = size;
         self.write_globals();
+        if let Some(screen) = &mut self.screen {
+            screen.resize(&self.device, &self.target_view, size);
+        }
         Ok(())
     }
 
@@ -628,15 +805,7 @@ impl Gpu {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("terminal pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.target_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &color_attachment(&self.target_view, load),
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -849,8 +1018,9 @@ impl TerminalRenderer for WgpuRenderer {
         Ok(self.core.finish_draw(&plan))
     }
 
-    /// An offscreen target has no swapchain, so presenting waits until the GPU has finished what
-    /// `draw` submitted: the latest moment a swapchain image could be shown.
+    /// On a window, the target is copied to the swapchain's next image and shown. An offscreen
+    /// target has no swapchain, so presenting waits until the GPU has finished what `draw`
+    /// submitted: the latest moment a swapchain image could be shown.
     fn present(&mut self) -> Result<(), RenderError> {
         if !self.core.begin_present()? {
             return Ok(());
@@ -860,10 +1030,26 @@ impl TerminalRenderer for WgpuRenderer {
             return Ok(());
         }
         let started = Instant::now();
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|_| RenderError::DeviceLost)?;
-        self.core.finish_present(0, started);
+        let Some(screen) = &gpu.screen else {
+            gpu.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|_| RenderError::DeviceLost)?;
+            self.core.finish_present(0, started);
+            return Ok(());
+        };
+        match screen.show(&gpu.device, &gpu.queue) {
+            Ok(true) => {
+                gpu.stats.submissions += 1;
+                self.core.finish_present(0, started);
+            }
+            // Nothing was shown: the next `present` tries again.
+            Ok(false) => gpu.pending = true,
+            Err(error) => {
+                // The swapchain is gone with its surface: `resume` builds both again.
+                self.core.lose_device();
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
