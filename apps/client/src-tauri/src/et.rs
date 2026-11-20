@@ -151,9 +151,34 @@ pub(crate) async fn bootstrap(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn connect_et(
     lease: AccessLease,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    options: Options,
+    cols: u32,
+    rows: u32,
+    events: Channel<SshEvent>,
+) -> AccessResult<Connected> {
+    connect_et_inner(
+        Some(app),
+        lease,
+        state,
+        session_id,
+        options,
+        cols,
+        rows,
+        events,
+    )
+    .await
+}
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn connect_et_inner(
+    app: Option<tauri::AppHandle>,
+    lease: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     options: Options,
@@ -166,7 +191,7 @@ pub async fn connect_et(
             let parent = state.session(&session_id).await?;
             crate::ssh::check_size(cols, rows)?;
             let bootstrap = bootstrap(&parent, &lease, options).await?;
-            crate::ssh::spawn_native_terminal(
+            let connected = crate::ssh::spawn_native_terminal(
                 &state,
                 lease.clone(),
                 parent,
@@ -187,7 +212,17 @@ pub async fn connect_et(
                     ))
                 },
             )
-            .await
+            .await?;
+            if let Some(app) = app {
+                let session = state.session(&connected.session_id).await?;
+                crate::ssh::file_control::start_automatic(
+                    app,
+                    state.inner().clone(),
+                    connected.session_id.clone(),
+                    session,
+                );
+            }
+            Ok(connected)
         })
         .await
 }
@@ -548,14 +583,15 @@ pub(crate) mod tests {
                 .into_owned(),
             ..Default::default()
         };
-        assert!(connect_et(
+        assert!(connect_et_inner(
+            None,
             access_lease(),
             app.state(),
             parent.clone(),
             invalid,
             80,
             24,
-            Channel::new(|_| Ok(()))
+            Channel::new(|_| Ok(())),
         )
         .await
         .is_err());
@@ -566,7 +602,8 @@ pub(crate) mod tests {
             }
             Ok(())
         });
-        let connected = connect_et(
+        let connected = connect_et_inner(
+            None,
             access_lease(),
             app.state(),
             parent.clone(),
