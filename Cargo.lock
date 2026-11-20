@@ -4218,6 +4218,7 @@ name = "lazysh-terminal-runtime"
 version = "0.0.0"
 dependencies = [
  "ghostty-vt",
+ "regex",
  "serde",
 ]
 

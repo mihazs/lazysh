@@ -16,6 +16,8 @@ rust-version = "1.96"
 ghostty-vt = { path = "../herdr-upstream/crates/ghostty-vt" }
 # The control plane's answers and events are the wire format of the app's commands and of the stdio harness (#1321).
 serde = { version = "1", features = ["derive"] }
+# URL and host-path detection (links.rs): the patterns of terminalLinks.ts, kept as regular expressions.
+regex = { version = "1", default-features = false, features = ["std", "perf"] }
 
 [dev-dependencies]
 # Goldens only: already in the lock through ghostty-vt.
