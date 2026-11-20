@@ -183,6 +183,51 @@ only), and macOS or iOS packages (not published; they keep the 2 GiB bound until
 published build gives them a measurement). Remeasure a release with
 `gh release download vX.Y.Z -p release.json` and read `platforms[].files[].bytes`.
 
+## Bundled companion
+
+Each desktop package carries the `lazysh-agent` of its own platform beside the app,
+so a fresh install has a local companion (the local arm resolves it first). The
+desktop job does not build it: it downloads the `release-<companion target>`
+artifact the same run's `companion` job built, verified and receipted, and
+`bun .changeset/release-bundle.ts stage` binds that receipt to this build's commit and
+version, requires exactly the receipt's file at its SHA256, and copies it to
+`apps/client/src-tauri/binaries/lazysh-agent-<host triple>` (ignored by Git). The Tauri build then reads
+`src-tauri/tauri.bundled-agent.conf.json`, whose `bundle.externalBin` entry packages that
+file; it is passed with `--config` on release builds only, because Tauri refuses to compile a
+crate whose configured sidecar is missing and every ordinary `cargo build`, `cargo test`
+and `tauri dev` would then need a staged binary.
+
+| Package | Companion | Where it lands |
+| --- | --- | --- |
+| `linux-x64` deb | `linux-agent-x64` (static musl) | `/usr/bin/lazysh-agent` |
+| `linux-x64` AppImage | `linux-agent-x64` | `usr/bin/lazysh-agent` of the image |
+| `windows-x64` NSIS installer | `windows-agent-x64` | `lazysh-agent.exe` beside `lazysh.exe` |
+| `macos-arm64` / `macos-x64` app, dmg | `macos-agent-arm64` / `macos-agent-x64` | `Contents/MacOS/lazysh-agent` |
+
+`.changeset/release-platform.ts` then unpacks each package it built and fails the release
+when the companion is missing, is not executable or differs from the published one: `dpkg-deb
+--extract` for the deb, `--appimage-extract` for the AppImage (no FUSE needed), and the
+installed directory during the Windows installer acceptance, which compares length and
+SHA256 after the install and again after the same-version repair. The deb and the
+installer carry the published bytes exactly. linuxdeploy adds a `RUNPATH` to every
+executable in the AppImage's `usr/bin`, so that copy is compared section by section:
+every loaded ELF section except `.dynamic` and `.dynstr` must match the published
+executable, and a different set of sections or any other changed byte fails. The check
+reads the version through the receipt (a companion of another commit or version is refused
+before the build starts), not by running the unpacked file. The macOS branch compares the
+app's and the dmg's copy with both code signatures removed, because the bundler signs the
+whole app; no workflow builds macOS packages yet (they are deferred), and that branch has
+not run on Apple hardware.
+
+The measured sizes above predate the bundled companion. Until a release measures the
+bundling packages, their ceilings are the 1.5 times ceiling plus the bundled companion's own
+ceiling (deb 33 + 18, AppImage 143 + 18, Windows installer 12 + 16 MiB), the most the
+companion can add if the package did not compress it. The next release's measurement
+replaces them.
+
+Because the desktop builds wait for the companion artifacts, a release's critical path
+has three runner-queue entries (companion, desktop, publication) instead of two.
+
 ## Runner layout
 
 The release uses as few hosted runners as its acceptance checks allow:
