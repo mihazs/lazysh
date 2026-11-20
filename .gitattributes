@@ -9,3 +9,8 @@ fastlane/metadata/android/**/*.txt text eol=lf
 
 # Keep the upstream portable-pty patch byte-identical, including its trailing spaces.
 packages/herdr-upstream/vendor/patches/portable-pty/0004-skip-directories-when-resolving-windows-programs.patch -whitespace
+
+# The Dagger SDK commits its generated bindings; `dagger generate` rewrites them.
+.dagger/modules/ci/clients/** linguist-generated -whitespace
+.dagger/modules/ci/entrypoint/** linguist-generated -whitespace
+.dagger/modules/ci/__dagger.dispatch.ts linguist-generated -whitespace
