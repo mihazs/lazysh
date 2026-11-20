@@ -1,11 +1,16 @@
-//! The Android surface a native terminal draws on (#1327). The renderer places a session's `SurfaceView`
+//! The surface a native terminal draws on. On Android (#1327) the renderer places a session's `SurfaceView`
 //! behind the transparent WebView at a DOM anchor and asks for its state; the Kotlin plugin owns the
 //! surface and its lifecycle, Rust owns the session state and will own the renderer. Developer-only:
 //! nothing in the app calls these yet, and a release build refuses every command (`native_surface_disabled`).
+//! On Linux (#1331) the same three commands place a Wayland subsurface below the web view ([`linux`]), in a
+//! build with the `native-terminal` feature only. Every other build has no surface.
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
+
+#[cfg(all(target_os = "linux", feature = "native-terminal"))]
+pub(crate) mod linux;
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs.
 const MAX_SESSION_LEN: usize = 64;
@@ -117,7 +122,14 @@ pub async fn native_terminal_surface_place(
         }))
         .await
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    {
+        linux::place(&app, session, anchor, background).await
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(target_os = "linux", feature = "native-terminal")
+    )))]
     {
         let _ = app;
         Err(unavailable())
@@ -132,7 +144,14 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         call::<()>(&app, "remove", serde_json::json!({ "session": session })).await
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    {
+        linux::remove(&app, session).await
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(target_os = "linux", feature = "native-terminal")
+    )))]
     {
         let _ = app;
         Ok(())
@@ -150,16 +169,26 @@ pub async fn native_terminal_surface_state(
     {
         call(&app, "state", serde_json::json!({ "session": session })).await
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    {
+        linux::state(&app, session).await
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(target_os = "linux", feature = "native-terminal")
+    )))]
     {
         let _ = app;
         Err(unavailable())
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(
+    target_os = "android",
+    all(target_os = "linux", feature = "native-terminal")
+)))]
 fn unavailable() -> String {
-    "The native terminal surface exists on Android only.".into()
+    "This build has no native terminal surface.".into()
 }
 
 /// The Kotlin plugin rejects with a stable code (`native_surface_*`); it is the only plugin text that reaches the page.
