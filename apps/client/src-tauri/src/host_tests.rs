@@ -1269,7 +1269,7 @@ exec "$@"
             let reported = serde_json::to_value(working.tools().await).unwrap();
             assert_eq!(
                 reported,
-                serde_json::json!({"files": true, "repository": true, "companion": false, "attachments": false, "previews": false})
+                serde_json::json!({"files": true, "repository": true, "companion": false, "companionSource": null, "attachments": false, "previews": false})
             );
             // `wsl.exe` fails when the distribution has no `git`.
             let missing = script(&temp.path().join("no-git.exe"), "#!/bin/sh\nexit 1\n");
@@ -1278,7 +1278,7 @@ exec "$@"
                 .await;
             assert_eq!(
                 serde_json::to_value(reported).unwrap(),
-                serde_json::json!({"files": false, "repository": false, "companion": false, "attachments": false, "previews": false})
+                serde_json::json!({"files": false, "repository": false, "companion": false, "companionSource": null, "attachments": false, "previews": false})
             );
         }
     }
