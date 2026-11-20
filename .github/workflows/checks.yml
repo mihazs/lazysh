@@ -1355,6 +1355,7 @@ jobs:
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
             tmux) bun run test:android-tmux; exit $? ;;
+            zellij) bun run test:android-zellij; exit $? ;;
             ssh-parity) bun run test:android-ssh-parity; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
@@ -1462,6 +1463,38 @@ jobs:
       LAZYSH_ANDROID_RUNTIME_OWNER: tmux
       LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-tmux-results
     steps: *android-owned-runtime-steps
+
+  # Owned pinned Zellij 0.45.1 on the emulator (#1645); separate so its verdict is attributable. It needs no companion
+  # or tmux build: the session, its two tabs and the host readback come from the owned fixture and the pinned release.
+  native-android-zellij:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: zellij
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *android-toolchains
+      - *android-owned-rust
+      - *android-owned-host-dependencies
+      - *android-owned-namespace
+      - *pinned-download-cache
+      - *pinned-zellij
+      - run: bun install --frozen-lockfile
+      - *android-cache-identity
+      - *android-owned-cache
+      - *android-owned-kvm
+      - *android-runtime-emulator
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-android-zellij-results
+          path: *android-runtime-result-paths
+          if-no-files-found: warn
+          retention-days: 3
 
   # The Appium + WebdriverIO device suite (ADR 0002, #1412) on the same API 36 emulator, with owned SSH and stock Herdr hosts
   # and the real companion. Report-only: not a required check until it has passed 20 consecutive runs of main and the

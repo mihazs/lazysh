@@ -3015,6 +3015,15 @@ class NativeWorkspaceTest {
         }
     }
 
+    // The attached display a multiplexer case opened is closed whatever the case did; a failure to close it never replaces the case's own failure.
+    private fun closeOwnedDisplay(scenario: ActivityScenario<MainActivity>, child: String, primaryFailure: Throwable?) {
+        try {
+            if (evaluate(scenario, present("button[aria-label='Disconnect $child']")) == "true") endOwnedConnection(scenario, child)
+        } catch (cleanup: Throwable) {
+            if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+        }
+    }
+
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, a top/bottom split and zoom of beta's pane from the Sessions
@@ -3246,11 +3255,99 @@ class NativeWorkspaceTest {
             primaryFailure = failure
             throw failure
         } finally {
-            try {
-                if (evaluate(scenario, present("button[aria-label='Disconnect $child']")) == "true") endOwnedConnection(scenario, child)
-            } catch (cleanup: Throwable) {
-                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
-            }
+            closeOwnedDisplay(scenario, child, primaryFailure)
+        }
+    }
+
+    // The host harness owns this pinned Zellij session and the command pane of each of its two tabs. This case drives only the
+    // packaged UI: product discovery, the session list, attach, the numbered tab control, tab-close detach and reattach. While it
+    // runs, the host reads the active tab back with `zellij action list-tabs --json` and afterwards proves that the original panes
+    // were never restarted.
+    private fun verifyOwnedZellij(scenario: ActivityScenario<MainActivity>, zellij: JSONObject, parent: String) {
+        val session = zellij.getString("name")
+        require(Regex("owned-zellij-[a-f0-9]{12}").matches(session)) { "Owned Zellij fixture required" }
+        val tabs = zellij.getJSONArray("tabs")
+        require(tabs.length() == 2) { "Owned Zellij topology required" }
+        val alpha = tabs.getJSONObject(0)
+        val beta = tabs.getJSONObject(1)
+        require(alpha.getInt("position") == 0 && alpha.getString("name") == "alpha" && beta.getInt("position") == 1 && beta.getString("name") == "beta")
+        for (tab in listOf(alpha, beta)) require(Regex("ZELLIJ_(ALPHA|BETA)_[a-f0-9]{32}").matches(tab.getString("marker")))
+        val child = "$parent / $session"
+        val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
+        require(observer.length <= 4096)
+        val panel = "section.multiplexer-panel"
+        val panelPath = "//section[contains(@class,'multiplexer-panel')]"
+        val controls = "section[aria-label='Zellij $session controls']"
+        val quote = JSONObject::quote
+        fun button(root: String, label: String) = "Array.from(document.querySelectorAll(${quote("$root button")})).filter(x=>x.textContent.trim()===${quote(label)} && !x.disabled).length===1"
+        fun clickButton(xpathRoot: String, label: String) =
+            onWebView().withElement(findElement(Locator.XPATH, "$xpathRoot//button[normalize-space(.)='$label']")).perform(webScrollIntoView()).perform(webClick())
+        // The Sessions panel names the pinned Zellij after product discovery and lists exactly this one session on request.
+        fun listSessions(stage: String) {
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "Zellij discovered $stage", """
+                (()=>{const panels=document.querySelectorAll(${quote(panel)});
+                  return panels.length===1 && !panels[0].querySelector('.loading,[role=alert]') &&
+                    /Zellij 0\.45\.1 \(Supported\)/.test(panels[0].querySelector('p.muted')?.textContent??'') && ${button(panel, "List zellij sessions")};})()
+            """)
+            clickButton(panelPath, "List zellij sessions")
+            awaitDocument(scenario, "Zellij session listed $stage", """
+                (()=>{const found=document.querySelector(${quote(panel)});
+                  if(!found || found.querySelector('.loading,[role=alert]'))return false;
+                  const rows=Array.from(found.querySelectorAll('.mux-row strong')).map(x=>x.textContent.trim()).filter(x=>x.startsWith('zellij: '));
+                  return rows.length===1 && rows[0]===${quote("zellij: $session")} && ${button(panel, "Attach zellij $session")};})()
+            """)
+        }
+        fun attach(stage: String) {
+            listSessions("before $stage")
+            clickButton(panelPath, "Attach zellij $session")
+            awaitDocument(scenario, "Zellij display attached $stage", """
+                (()=>{const open=document.querySelectorAll('.session-tabs [role=tab]');
+                  return open.length===2 && open[1].textContent.trim()===${quote(child)} && open[1].getAttribute('aria-selected')==='true';})()
+            """)
+        }
+        // The visible display is the real Zellij client of the selected tab: its own marker is on screen and the other tab's is not.
+        fun shows(target: JSONObject, other: JSONObject, stage: String) {
+            sessionView(scenario, "Terminal")
+            awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,${JSONArray(listOf(parent, child))},1,${quote(target.getString("marker"))},${JSONArray(listOf(other.getString("marker")))});})()")
+        }
+        // Control opens the quick-tab buttons of this session; the status line confirms the action reached Zellij.
+        fun numbered(target: JSONObject) {
+            val label = "Tab ${target.getInt("position") + 1}"
+            listSessions("before $label")
+            clickButton(panelPath, "Control Zellij $session")
+            awaitDocument(scenario, "Zellij $label control ready", button(controls, label))
+            clickButton("//section[@aria-label='Zellij $session controls']", label)
+            awaitDocument(scenario, "Zellij $label sent", """
+                ${button(controls, label)} && !document.querySelector(${quote("$controls [role=alert]")}) &&
+                  document.querySelector(${quote("$controls [role=status]")})?.textContent.trim()===${quote("Action sent to Zellij.")}
+            """)
+        }
+        fun detach(stage: String) {
+            endOwnedConnection(scenario, child)
+            awaitDocument(scenario, "Zellij display detached $stage", """
+                (()=>{const open=document.querySelectorAll('.session-tabs [role=tab]');return open.length===1 && open[0].textContent.trim()===${quote(parent)};})()
+            """)
+            if (evaluate(scenario, "document.querySelector('.session-tabs [role=tab]')?.getAttribute('aria-selected')==='true'") != "true") selectOwnedConnection(scenario, parent)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            attach("first")
+            shows(alpha, beta, "attached Zellij shows its first tab")
+            numbered(beta)
+            shows(beta, alpha, "Zellij numbered Tab 2 shows its tab")
+            detach("by closing its tab")
+            attach("again")
+            shows(beta, alpha, "reattached Zellij shows the same selected tab")
+            numbered(alpha)
+            shows(alpha, beta, "Zellij numbered Tab 1 shows its tab")
+            detach("after the second attach")
+            println("lazysh Zellij: live discovery, session list, attach, numbered tabs, tab-close detach and reattach completed")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            closeOwnedDisplay(scenario, child, primaryFailure)
         }
     }
 
@@ -3328,6 +3425,7 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
+    @Test fun ownedZellijThroughRealUi() = ownedSshUi(false, requireZellij = true)
 
     /**
      * Lost connection on a saved-credential tmux host (#1640). tests/support/androidLostConnection.ts runs the pinned
@@ -4119,7 +4217,8 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false) {
+        require(!requireZellij || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded && !requireTmux)) { "Owned Zellij mode must be isolated" }
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
         require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
@@ -4138,6 +4237,7 @@ class NativeWorkspaceTest {
         require(requireIme == fixture.has("ime")) { "Owned IME fixture mode mismatch" }
         require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
         require(requireTmux == fixture.has("tmux")) { "Owned tmux fixture mode mismatch" }
+        require(requireZellij == fixture.has("zellij")) { "Owned Zellij fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -4553,6 +4653,8 @@ class NativeWorkspaceTest {
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
             } else if (requireTmux) {
                 verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name)
+            } else if (requireZellij) {
+                verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)
             } else if (requireDpad) {
                 verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {
@@ -4734,7 +4836,8 @@ class NativeWorkspaceTest {
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
             }
             val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name)
-                else if (requireTmux) listOf("$name / ${fixture.getJSONObject("tmux").getString("name")}", name) else listOf(name)
+                else if (requireTmux) listOf("$name / ${fixture.getJSONObject("tmux").getString("name")}", name)
+                else if (requireZellij) listOf("$name / ${fixture.getJSONObject("zellij").getString("name")}", name) else listOf(name)
             for (ownedName in ownedNames) {
                 cleanupUi {
                     cleanupStage = SshUiCleanupStage.SESSION_SELECT
