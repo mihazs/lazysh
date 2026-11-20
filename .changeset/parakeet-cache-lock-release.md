@@ -2,4 +2,6 @@
 "@lazysh/client": patch
 ---
 
-Release the local Parakeet cache lock when its owner closes, even when a child inherited its descriptor (#2009).
+fix(voice): release the local Parakeet cache lock when its owner closes
+
+A child process that inherited the lock's descriptor no longer keeps the cache unavailable after its owner exits (#2009).
