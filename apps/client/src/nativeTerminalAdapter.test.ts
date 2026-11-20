@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import {describe, expect, it} from 'vitest';
 import {createHeadlessCore, type HeadlessCore, type HeadlessCoreOptions} from './xterm/nativeCoreHeadless';
-import {openNativeTerminalAdapter} from './nativeTerminalAdapter';
+import {nativeCapabilities, openNativeTerminalAdapter} from './nativeTerminalAdapter';
+import {mountScreenReaderMirror} from './terminalScreenReader';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
 import type {NativeCoreBridge, NativeCoreSnapshot} from './nativeCoreBridge';
 
@@ -66,6 +67,37 @@ describe('native backend specifics', () => {
     expect(owned.adapter.dataPath).toBe('runtime');
     expect(owned.adapter.write).toBeUndefined();
     await Promise.all([fed.adapter.dispose(), owned.adapter.dispose()]);
+  });
+
+  it('is readable by a screen reader only while a mirror of its rows is mounted, and speaks new output in a bounded polite log', async () => {
+    const {adapter} = await open({rows: 4});
+    await adapter.write!(text('$ make\r\n'));
+    expect(adapter.capabilities.accessibility).toBe(false);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const mirror = mountScreenReaderMirror(adapter, host, {settleMs: 1, minIntervalMs: 0, maxLines: 2, logSize: 3});
+    expect(adapter.capabilities.accessibility).toBe(true);
+    // The backend's registration is what selection reads: it still refuses a screen-reader session.
+    expect(nativeCapabilities.accessibility).toBe(false);
+    const rows = () => [...host.querySelectorAll('[role=list] [role=listitem]')].map(item => item.textContent);
+    const spoken = () => [...host.querySelector('[role=log]')!.children].map(entry => entry.textContent);
+    expect(rows()).toEqual(['$ make', '', '', '']);
+    await adapter.write!(text('built\r\n'));
+    await sleep(30);
+    expect(rows()).toEqual(['$ make', 'built', '', '']);
+    expect(spoken()).toEqual(['built']);
+    for (let burst = 0; burst < 6; burst++) {
+      await adapter.write!(text(Array.from({length: 8}, (_, line) => `out ${burst}.${line}\r\n`).join('')));
+      await sleep(30);
+    }
+    expect(rows()).toHaveLength(4);
+    expect(spoken()).toHaveLength(3);
+    expect(spoken().at(-1)).toMatch(/lines changed$/);
+    mirror.dispose();
+    expect(adapter.capabilities.accessibility).toBe(false);
+    expect(host.childElementCount).toBe(0);
+    host.remove();
+    await adapter.dispose();
   });
 
   it('never receives cells: every answer is the small state plus the text of a bounded window of rows', async () => {

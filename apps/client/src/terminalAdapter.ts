@@ -190,6 +190,8 @@ export interface TerminalAdapter {
   clearSelection(): void;
   /** Present with the `screenInspection` capability: trimmed text of absolute rows, optionally of a column span. Never cells. */
   readRows?(first: number, count: number, columns?: {start: number; end: number}): string[];
+  /** A screen-reader mirror of the rows is mounted (terminalScreenReader.ts): `capabilities.accessibility` is true until the result is disposed. Only a backend a screen reader cannot reach by itself has this. */
+  screenReaderMirrored?(): Disposable;
   /** Wraps around the buffer; `from` is the previous hit's row. */
   search(query: string, direction: 1 | -1, from?: number): TerminalSearchHit | undefined;
 

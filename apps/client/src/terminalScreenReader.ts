@@ -71,6 +71,7 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
   list.setAttribute('role', 'list'); list.setAttribute('aria-label', t('terminalA11yScreen'));
   log.setAttribute('role', 'log');
   region.append(list, log); host.append(region);
+  const declared = adapter.screenReaderMirrored?.();
 
   let before: string[] = [], cursorRow = -1, selection: string | undefined;
   let pending: string[] = [], lastAnnounced = Number.NEGATIVE_INFINITY;
@@ -140,6 +141,7 @@ export function mountScreenReaderMirror(adapter: TerminalAdapter, host: HTMLElem
       subscription.dispose();
       clearTimeout(settleTimer); clearTimeout(announceTimer);
       region.remove();
+      declared?.dispose();
     },
   };
 }
