@@ -98,7 +98,7 @@ it('keeps native Parakeet stages and finishing ownership while only captions cha
   expect(invoke).toHaveBeenCalledWith('voice_parakeet_cancel',{requestId:request.requestId},{headers:{'X-Lazysh-Access':'d'.repeat(64)}});
   Object.assign(fixture.status,{busy:false,requestId:null,stage:'idle'});await act(async()=>{fixture.install();});
 });
-it.each(['','Parakeet requires a supported Linux x86_64 desktop.','Native <reason> {{key}}'])('distinguishes the local initial reason from received native reason %j without text matching',async reason=>{
+it.each(['','Parakeet requires a supported Linux or Windows x86_64 desktop.','Native <reason> {{key}}'])('distinguishes the local initial reason from received native reason %j without text matching',async reason=>{
   let release!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementation(async command=>command==='voice_parakeet_status'?new Promise(resolve=>{release=resolve;}):[]);
   render(<VoicePanel/>);

@@ -1,11 +1,11 @@
 # Dictation
 
-Whisper remains the default. On Linux x86_64 and in the Google build of the Android
-app, [Parakeet dictation](voice-parakeet.md) adds an explicitly downloaded local
-model, automatic language detection, and a reusable recognizer. Cancel discards
-its result while synchronous native work may continue; controls remain busy until
-that worker finishes. Other platforms and the F-Droid build report Parakeet
-unavailable.
+Whisper remains the default. On Linux x86_64, Windows x86_64 and in the Google build
+of the Android app, [Parakeet dictation](voice-parakeet.md) adds an explicitly
+downloaded local model, automatic language detection, and a reusable recognizer.
+Cancel discards its result while synchronous native work may continue; controls
+remain busy until that worker finishes. Other platforms and the F-Droid build
+report Parakeet unavailable.
 
 Open Voice, explicitly download a catalog model or import a trusted Whisper tiny/base GGML `.bin` file, choose its language, and select Record speech. Microphone permission is requested only when recording starts. Stop and transcribe runs the model on this device. Edit the draft before copying it or staging it in the current terminal composer. Staging does not send a prompt.
 

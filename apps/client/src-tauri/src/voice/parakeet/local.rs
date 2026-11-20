@@ -8,12 +8,22 @@ use std::{
     collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{Seek, SeekFrom, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     sync::{atomic::Ordering, Mutex},
     time::Duration,
 };
 use tokio::sync::watch;
+
+// The private cache is trusted from the operating system's own notion of ownership: mode bits on Unix, the owner
+// SID and DACL on Windows.
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as platform;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as platform;
 
 const CACHE_ERROR: &str =
     "Private Parakeet model storage is unavailable or is in use by another app process";
@@ -31,61 +41,36 @@ struct Cache {
 }
 impl Cache {
     fn new(root: PathBuf) -> Result<Self> {
-        let parent = root
-            .parent()
-            .ok_or(CACHE_ERROR)?
-            .canonicalize()
-            .map_err(|_| CACHE_ERROR)?;
-        let current = unsafe { (libc::geteuid(), libc::getegid()) };
-        for ancestor in parent.ancestors() {
-            let metadata = fs::symlink_metadata(ancestor).map_err(|_| CACHE_ERROR)?;
-            if !metadata.is_dir()
-                || !trusted_ancestor(
-                    (metadata.uid(), metadata.gid(), metadata.mode()),
-                    current,
-                    cfg!(target_os = "android"),
-                )
-            {
-                return Err(CACHE_ERROR.into());
-            }
-        }
+        let parent = platform::trusted_parent(&root)?;
         let root = parent.join("parakeet");
-        let mut builder = fs::DirBuilder::new();
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-        match builder.create(&root) {
+        match platform::create_private_directory(&root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(_) => return Err(CACHE_ERROR.into()),
         }
-        private(&fs::symlink_metadata(&root).map_err(|_| CACHE_ERROR)?, true)?;
+        private(&root, true)?;
         let lock_path = root.join("cache.lock");
-        if let Ok(metadata) = fs::symlink_metadata(&lock_path) {
-            private(&metadata, false)?;
+        if lock_path.symlink_metadata().is_ok() {
+            private(&lock_path, false)?;
         }
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(lock_path)
-            .map_err(|_| CACHE_ERROR)?;
-        private(&lock.metadata().map_err(|_| CACHE_ERROR)?, false)?;
+        let lock = open_lock(&lock_path).map_err(|_| CACHE_ERROR)?;
+        platform::private(
+            &lock_path,
+            &lock.metadata().map_err(|_| CACHE_ERROR)?,
+            false,
+        )?;
         lock.try_lock().map_err(|_| CACHE_ERROR)?;
         // Exclusive process ownership precedes cleanup; never remove another live recognizer's files.
         for entry in fs::read_dir(&root).map_err(|_| CACHE_ERROR)? {
             let entry = entry.map_err(|_| CACHE_ERROR)?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            let metadata = fs::symlink_metadata(entry.path()).map_err(|_| CACHE_ERROR)?;
             if name.strip_suffix(".part").is_some_and(valid_id) {
-                private(&metadata, false)?;
+                private(&entry.path(), false)?;
                 fs::remove_file(entry.path()).map_err(|_| CACHE_ERROR)?;
             } else if name.strip_prefix("lazysh-parakeet-").is_some_and(|tail| {
                 tail.len() == 6 && tail.bytes().all(|c| c.is_ascii_alphanumeric())
             }) {
-                private(&metadata, true)?;
+                private(&entry.path(), true)?;
                 fs::remove_dir_all(entry.path()).map_err(|_| CACHE_ERROR)?;
             }
         }
@@ -95,46 +80,22 @@ impl Cache {
         self.root.join(ARCHIVE_NAME)
     }
     fn installed(&self) -> bool {
-        fs::symlink_metadata(self.archive()).is_ok_and(|m| private(&m, false).is_ok())
+        private(&self.archive(), false).is_ok()
     }
     fn open_archive(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(self.archive())
-            .map_err(|_| "Download the Parakeet model first")?;
+        let path = self.archive();
+        let file = open_archive(&path).map_err(|_| "Download the Parakeet model first")?;
         let metadata = file.metadata().map_err(|_| CACHE_ERROR)?;
-        private(&metadata, false)?;
+        platform::private(&path, &metadata, false)?;
         if metadata.len() != ARCHIVE_BYTES {
             return Err("Stored Parakeet archive is not the one this lazysh version pins (an earlier version may have installed it); remove it and download again".into());
         }
         Ok(file)
     }
 }
-/// `(owner, group, mode)` of a directory above the cache. Root and this app own safe ancestors, writable only by
-/// trusted identities. Android's `system` account owns `/data`, and an app's data directories are typically
-/// group-writable (mode 0771) by the app's own group, which no other app shares.
-fn trusted_ancestor(
-    (owner, group, mode): (u32, u32, u32),
-    (uid, gid): (u32, u32),
-    android: bool,
-) -> bool {
-    let trusted_owner = owner == 0 || owner == uid || (android && owner == 1000);
-    let trusted_group = android && (matches!(group, 0 | 1000) || group == gid);
-    let writable = mode & 0o002 != 0 || (mode & 0o020 != 0 && !trusted_group);
-    trusted_owner && (!writable || (owner == 0 && mode & 0o1000 != 0))
-}
 /// The model lives on private storage that may be small, so a lack of space is refused before any byte is written.
-#[allow(clippy::unnecessary_cast)] // statvfs field widths differ between libc targets
 fn require_free_space(directory: &Path, needed: u64) -> Result<()> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let path = CString::new(directory.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
-    // SAFETY: `path` is NUL-terminated and outlives the call; a zeroed statvfs is a valid out-parameter.
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
-        return Err(CACHE_ERROR.into());
-    }
-    if (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64) < needed {
+    if platform::free_space(directory)? < needed {
         return Err(format!(
             "Parakeet needs about {:.1} GB of free storage to prepare its model; free some space and try again",
             needed as f64 / 1e9
@@ -142,20 +103,38 @@ fn require_free_space(directory: &Path, needed: u64) -> Result<()> {
     }
     Ok(())
 }
-fn private(metadata: &fs::Metadata, directory: bool) -> Result<()> {
-    if metadata.file_type().is_symlink()
-        || (if directory {
-            !metadata.is_dir()
-        } else {
-            !metadata.is_file()
-        })
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
-        || (!directory && metadata.nlink() != 1)
-    {
-        return Err(CACHE_ERROR.into());
+fn open_lock(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    platform::owner_only(&mut options);
+    platform::no_follow(&mut options);
+    options.open(path)
+}
+fn open_archive(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    platform::no_follow(&mut options);
+    options.open(path)
+}
+/// A new download that is not private on arrival is removed before any byte is written to it.
+fn create_partial(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    platform::owner_only(&mut options);
+    let file = options.open(path)?;
+    if let Err(error) = platform::private(path, &file.metadata()?, false) {
+        let _ = fs::remove_file(path);
+        return Err(std::io::Error::other(error));
     }
-    Ok(())
+    Ok(file)
+}
+/// `path` is a private, unlinked directory or regular file of the expected kind (never a link followed).
+fn private(path: &Path, directory: bool) -> Result<()> {
+    platform::private(
+        path,
+        &fs::symlink_metadata(path).map_err(|_| CACHE_ERROR)?,
+        directory,
+    )
 }
 fn valid_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
@@ -319,13 +298,7 @@ impl Manager {
         require_free_space(&self.cache.root, self.peak_disk)?;
         work.keep_engine = false;
         let partial = self.cache.root.join(format!("{id}.part"));
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&partial)
-            .map_err(|_| "Cannot create Parakeet download")?;
+        let mut file = create_partial(&partial).map_err(|_| "Cannot create Parakeet download")?;
         work.partial = Some(partial.clone());
         transfer(
             &mut work,
@@ -413,10 +386,9 @@ fn install_worker(mut work: Work, mut file: File, partial: PathBuf) -> Result<()
     file.seek(SeekFrom::Start(0))
         .map_err(|_| "Cannot rewind Parakeet archive")?;
     work.prepare(file)?;
-    work.commit(|| publish(&partial, &work.manager.cache.archive()))?;
+    work.commit(|| platform::publish(&partial, &work.manager.cache.archive()))?;
     work.keep_engine = true;
-    File::open(&work.manager.cache.root)
-        .and_then(|root| root.sync_all())
+    platform::sync_directory(&work.manager.cache.root)
         .map_err(|_| "Cannot synchronize Parakeet model directory")?;
     drop(work);
     Ok(())
@@ -559,36 +531,6 @@ async fn transfer(
         return Err(REPUBLISHED.into());
     }
     work.check()
-}
-#[cfg(not(target_os = "android"))]
-fn publish(source: &Path, destination: &Path) -> Result<()> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
-    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
-    // SAFETY: Both private-cache names are terminated and live through the call.
-    // Linux NOREPLACE atomically publishes one name without a hard-link crash window.
-    if unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    } != 0
-    {
-        return Err(PUBLISH_FAILED.into());
-    }
-    Ok(())
-}
-// bionic only exports renameat2 from API 30 and the app supports API 24. The cache lock and the single active slot
-// leave no other writer between this check and the atomic same-directory rename.
-#[cfg(target_os = "android")]
-fn publish(source: &Path, destination: &Path) -> Result<()> {
-    if fs::symlink_metadata(destination).is_ok() {
-        return Err(PUBLISH_FAILED.into());
-    }
-    fs::rename(source, destination).map_err(|_| PUBLISH_FAILED.into())
 }
 fn publisher_client() -> Result<Client> {
     super::super::download::client(publisher_url, "Unsupported Parakeet download redirect")

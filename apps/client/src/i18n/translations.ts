@@ -1739,7 +1739,7 @@ const translations = {
   voiceParakeetOption: ["Parakeet · local", "Parakeet · local"],
   voiceCloudOption: ["Nuvem", "Nube"],
   voiceEngineReason: ["{{engine}}: {{reason}}", "{{engine}}: {{reason}}"],
-  voiceParakeetInitial: ["Parakeet exige um desktop Linux x86_64 compatível ou o app Android da versão Google.", "Parakeet requiere un equipo de escritorio Linux x86_64 compatible o la app de Android de la versión de Google."],
+  voiceParakeetInitial: ["Parakeet exige um desktop Linux ou Windows x86_64 compatível ou o app Android da versão Google.", "Parakeet requiere un equipo de escritorio Linux o Windows x86_64 compatible o la app de Android de la versión de Google."],
   voiceAppleInitial: ["Apple SpeechAnalyzer exige um dispositivo iOS compatível.", "Apple SpeechAnalyzer requiere un dispositivo iOS compatible."],
   voiceWhisperHint: ["Whisper é executado neste dispositivo. O áudio permanece neste dispositivo. Os downloads usam Hugging Face; importe somente arquivos GGML confiáveis.", "Whisper se ejecuta en este dispositivo. El audio permanece en este dispositivo. Las descargas usan Hugging Face; importa solo archivos GGML de confianza."],
   voiceWhisperAbout: ["Sobre os modelos Whisper", "Acerca de los modelos Whisper"],
