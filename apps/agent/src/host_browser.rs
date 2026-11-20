@@ -14,6 +14,7 @@ use std::{
 };
 
 pub mod input;
+pub mod ladder;
 pub mod outbox;
 pub mod profile;
 pub mod relay;
