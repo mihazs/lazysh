@@ -10,6 +10,8 @@ export type LiveSession = {
   connected: boolean;
   disposed?: true;
   local?: true;
+  /** The local target a local session runs in; absent or `default` is the login shell. */
+  target?: string;
   moshResize?: import('./terminalAdapter').CanonicalResize;
   mosh?: {serverPath: string; portMin: number; portMax: number};
   et?: {serverPath: string; port: number};

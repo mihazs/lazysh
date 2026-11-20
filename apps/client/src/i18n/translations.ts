@@ -1259,6 +1259,8 @@ const translations = {
   appUnavailableInThisAppBuild: ['indisponível nesta versão do aplicativo', 'no disponible en esta versión de la aplicación'],
   appVerifiedSSHControlConnectionHasEnded: ['A conexão de controle SSH verificada foi encerrada', 'La conexión de control SSH verificada ha finalizado'],
   appThisDeviceLocalShell: ['Este dispositivo · shell local', 'Este dispositivo · shell local'],
+  appThisDeviceTarget: ['Este dispositivo · {{target}}', 'Este dispositivo · {{target}}'],
+  appLocalTerminalTarget: ['Destino do terminal local', 'Destino de la terminal local'],
   appWorkspaceRestorationCancelled: ['Restauração do espaço de trabalho cancelada', 'Restauración del espacio de trabajo cancelada'],
   appIOSCouldNotChangeTheAppIcon: ['O iOS não pôde alterar o ícone do aplicativo.', 'iOS no pudo cambiar el icono de la aplicación.'],
   appUnknownRefreshBeforeChanging: ['Desconhecido — atualize antes de alterar', 'Desconocido — actualiza antes de cambiar'],

@@ -1231,6 +1231,8 @@ export const english = {
   "appUnavailableInThisAppBuild": "unavailable in this app build",
   "appVerifiedSSHControlConnectionHasEnded": "Verified SSH control connection has ended",
   "appThisDeviceLocalShell": "This device · local shell",
+  "appThisDeviceTarget": "This device · {{target}}",
+  "appLocalTerminalTarget": "Local terminal target",
   "appWorkspaceRestorationCancelled": "Workspace restoration cancelled",
   "appIOSCouldNotChangeTheAppIcon": "iOS could not change the app icon.",
   "appUnknownRefreshBeforeChanging": "Unknown — refresh before changing",

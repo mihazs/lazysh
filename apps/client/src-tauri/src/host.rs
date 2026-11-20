@@ -1,12 +1,16 @@
 //! One host context for host tools: an SSH session or this desktop device.
 //! The remote arm calls the existing SSH code unchanged; the local arm runs argv
 //! directly (never a shell string) and reads files with `std::fs`.
+#[cfg(desktop)]
+use crate::local::{Located, Wsl};
 use crate::{
     app_lock::AccessLease,
     local::LocalState,
     ssh::{self, AppState, Destination, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
 };
 use serde::Serialize;
+#[cfg(desktop)]
+use std::path::{Path, PathBuf};
 use std::{pin::Pin, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
@@ -119,10 +123,11 @@ impl Host {
     ) -> Result<Self> {
         if id.starts_with("local:") {
             #[cfg(desktop)]
-            return crate::local::usage_session(local, id, lease)
-                .map(|cancel| {
+            return crate::local::host_session(local, id, lease)
+                .map(|(cancel, wsl)| {
                     Self::Local(LocalHost {
                         cancel,
+                        wsl,
                         #[cfg(test)]
                         env: local.test_env(),
                     })
@@ -140,7 +145,8 @@ impl Host {
         Ok(Self::Remote(state.session(id).await?))
     }
     /// Resolves a session for a tool that names `dir`; local Windows sessions refuse
-    /// UNC and device paths here, before Git could open an SMB share with them.
+    /// UNC and device paths here, before Git could open an SMB share with them, and a WSL
+    /// session takes Linux paths only, as `git -C` runs inside the distribution.
     pub(crate) async fn resolve_dir(
         state: &AppState,
         local: &LocalState,
@@ -150,8 +156,8 @@ impl Host {
     ) -> Result<Self> {
         let host = Self::resolve(state, local, id, lease).await?;
         #[cfg(desktop)]
-        if matches!(host, Self::Local(_)) {
-            local_fs::resolve(dir)?;
+        if let Self::Local(local) = &host {
+            local.check_dir(dir)?;
         }
         #[cfg(not(desktop))]
         let _ = dir;
@@ -200,6 +206,11 @@ impl Host {
             Self::Remote(session) => crate::companion::exec(session, line, lease).await,
             // Boxed: the local arm's buffers would otherwise grow every remote caller's future.
             #[cfg(desktop)]
+            Self::Local(host) if host.wsl.is_some() => Err(SshError::new(
+                "remote_command_failed",
+                "lazysh-agent does not run inside a WSL target yet",
+            )),
+            #[cfg(desktop)]
             Self::Local(host) => {
                 Box::pin(async {
                     let cmd = if lasting {
@@ -242,7 +253,10 @@ impl Host {
         match self {
             Self::Remote(session) => ssh::sftp_list_dir(session, lease, path).await,
             #[cfg(desktop)]
-            Self::Local(host) => host.blocking(lease, move || local_fs::list(&path)).await,
+            Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
+                host.blocking(lease, move || local_fs::list(&path)).await
+            }
         }
     }
     /// The login home directory: SFTP's canonical form of its starting directory over
@@ -251,7 +265,16 @@ impl Host {
         match self {
             Self::Remote(session) => ssh::sftp_home(session, lease).await,
             #[cfg(desktop)]
-            Self::Local(host) => host.blocking(lease, local_fs::home).await,
+            Self::Local(host) => match &host.wsl {
+                // `--cd ~` starts in the distribution user's home.
+                Some(_) => {
+                    let output = host
+                        .exec(lease, &Cmd::new(&[], &["pwd", "-P"]), OP_TIMEOUT, 4096 + 1)
+                        .await?;
+                    ssh::absolute_home(String::from_utf8_lossy(&output).trim_end().to_owned())
+                }
+                None => host.blocking(lease, local_fs::home).await,
+            },
         }
     }
     /// What `path` is, without reading it; a dangling link is an error.
@@ -279,7 +302,11 @@ impl Host {
             .await
             .map_err(|_| SshError::new("timeout", "Reading file information timed out"))?,
             #[cfg(desktop)]
-            Self::Local(host) => host.blocking(lease, move || local_fs::stat(&path)).await,
+            Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
+                let stat = host.blocking(lease, move || local_fs::stat(&path)).await?;
+                host.logical(stat)
+            }
         }
     }
     /// Opens a regular file for streaming. A symbolic link is followed only when `follow_link`.
@@ -310,6 +337,7 @@ impl Host {
             .map_err(|_| SshError::new("timeout", "Opening the file timed out"))?,
             #[cfg(desktop)]
             Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
                 let (file, size) = host
                     .blocking(lease, move || local_fs::open_regular(&path, follow_link))
                     .await?;
@@ -325,10 +353,13 @@ impl Host {
         match self {
             Self::Remote(session) => ssh::sftp_read_text(session, lease, path).await,
             #[cfg(desktop)]
-            Self::Local(host) => ssh::preview_text(
-                host.blocking(lease, move || local_fs::read(&path, FILE_LIMIT))
-                    .await?,
-            ),
+            Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
+                ssh::preview_text(
+                    host.blocking(lease, move || local_fs::read(&path, FILE_LIMIT))
+                        .await?,
+                )
+            }
         }
     }
     /// At most `limit + 1` bytes of a regular file; symbolic links are refused.
@@ -354,9 +385,22 @@ impl Host {
             .map_err(|_| SshError::new("timeout", "Reading file timed out"))?,
             #[cfg(desktop)]
             Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
                 host.blocking(lease, move || local_fs::read(&path, limit))
                     .await
             }
+        }
+    }
+    /// Uploads and previews act on this Windows device, so a WSL session refuses them: they would
+    /// write to or reach a port of Windows while the terminal runs in the distribution.
+    pub(crate) fn refuse_in_wsl(&self, what: &str) -> Result<()> {
+        match self {
+            #[cfg(desktop)]
+            Self::Local(host) if host.wsl.is_some() => Err(SshError::new(
+                "remote_command_failed",
+                format!("{what} does not run inside a WSL target yet"),
+            )),
+            _ => Ok(()),
         }
     }
     /// Turns true when the session ends.
@@ -376,6 +420,7 @@ impl Host {
         data: Vec<u8>,
         work: &crate::attachment_upload::Work,
     ) -> Result<crate::attachment_upload::Uploaded> {
+        self.refuse_in_wsl("Attachments")?;
         match self {
             Self::Remote(session) => {
                 ssh::transfer_file(session, lease, destination, data, work).await
@@ -396,6 +441,7 @@ impl Host {
         port: u16,
         deadline: tokio::time::Instant,
     ) -> Result<Stream> {
+        self.refuse_in_wsl("Previews")?;
         match self {
             Self::Remote(session) => {
                 crate::previews::remote_stream(&session.handle, lease, address, port, deadline)
@@ -443,6 +489,8 @@ fn not_regular() -> SshError {
 #[cfg(desktop)]
 pub(crate) struct LocalHost {
     cancel: tokio::sync::watch::Receiver<bool>,
+    /// The distribution a WSL session runs its commands and reads its files in.
+    wsl: Option<Wsl>,
     #[cfg(test)]
     env: Vec<(String, String)>,
 }
@@ -481,6 +529,19 @@ impl LocalHost {
         limit: usize,
     ) -> Result<Vec<u8>> {
         use std::process::Stdio;
+        let wrapped;
+        let cmd = match &self.wsl {
+            Some(wsl) => {
+                wrapped = Cmd {
+                    env: &[],
+                    argv: wsl.argv(cmd.env, &cmd.argv),
+                    // The Windows user's Herdr install directory is not on the distribution's PATH.
+                    herdr: false,
+                };
+                &wrapped
+            }
+            None => cmd,
+        };
         let (program, args) = cmd
             .argv
             .split_first()
@@ -575,6 +636,44 @@ impl LocalHost {
             let _ = child.kill().await;
         }
         result
+    }
+    /// The native path `path` names: a local path, or one read through the WSL share, where a
+    /// Windows drive path first becomes its Linux path with `wslpath`.
+    async fn locate(&self, lease: &AccessLease, path: &str) -> Result<PathBuf> {
+        let Some(wsl) = &self.wsl else {
+            return local_fs::resolve(path);
+        };
+        let linux = match wsl.locate(path)? {
+            Located::Linux(linux) => linux,
+            Located::Drive(drive) => {
+                let cmd = Cmd::new(&[], &["wslpath", "-u", "-a", &drive]);
+                wsl.translated(&self.exec(lease, &cmd, OP_TIMEOUT, 4096 + 1).await?)?
+            }
+        };
+        Ok(wsl.fs_path(&linux))
+    }
+    /// Refuses a directory a tool could not start in: before Git sees it.
+    fn check_dir(&self, dir: &str) -> Result<()> {
+        match &self.wsl {
+            None => local_fs::resolve(dir).map(drop),
+            Some(wsl) => match wsl.locate(dir)? {
+                Located::Linux(_) => Ok(()),
+                Located::Drive(_) => Err(SshError::new(
+                    "invalid_path",
+                    "Enter an absolute path such as /home/user",
+                )),
+            },
+        }
+    }
+    /// A link's target as a path of the session: a Linux path in a distribution, and an error
+    /// when the link leaves it.
+    fn logical(&self, mut stat: FileStat) -> Result<FileStat> {
+        if let (Some(wsl), Some(link)) = (&self.wsl, &stat.link) {
+            stat.link = Some(wsl.linux_path(Path::new(link)).ok_or_else(|| {
+                SshError::new("invalid_path", "The link points outside this WSL target")
+            })?);
+        }
+        Ok(stat)
     }
     async fn blocking<T: Send + 'static>(
         &self,
@@ -699,7 +798,7 @@ pub(crate) async fn local_program(program: &str) -> bool {
 #[cfg(desktop)]
 mod local_fs {
     use super::*;
-    use std::{fs, io::Read, path::PathBuf};
+    use std::{fs, io::Read};
 
     /// Absolute drive or POSIX paths; relative paths resolve under the home directory.
     pub(super) fn resolve(path: &str) -> Result<PathBuf> {
@@ -711,7 +810,7 @@ mod local_fs {
                 .ok_or_else(|| SshError::new("invalid_path", "The home directory is unavailable"))?
                 .join(path)
         };
-        // UNC and device namespaces stay closed; WSL paths arrive with their own target.
+        // UNC and device namespaces stay closed; a WSL target reads its own share through `Wsl`.
         #[cfg(windows)]
         if !matches!(path.components().next(), Some(std::path::Component::Prefix(prefix))
             if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
@@ -729,10 +828,10 @@ mod local_fs {
             .ok_or_else(|| SshError::new("home_unavailable", "The home directory is unavailable"))
             .and_then(ssh::absolute_home)
     }
-    pub(super) fn list(path: &str) -> Result<Vec<FileEntry>> {
+    pub(super) fn list(path: &Path) -> Result<Vec<FileEntry>> {
         let mut entries = Vec::new();
         let mut name_bytes = 0usize;
-        for entry in fs::read_dir(resolve(path)?)? {
+        for entry in fs::read_dir(path)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             name_bytes += name.len();
@@ -747,13 +846,12 @@ mod local_fs {
         ssh::sort_entries(&mut entries);
         Ok(entries)
     }
-    pub(super) fn stat(path: &str) -> Result<FileStat> {
-        let path = resolve(path)?;
-        let own = fs::symlink_metadata(&path)?;
+    pub(super) fn stat(path: &Path) -> Result<FileStat> {
+        let own = fs::symlink_metadata(path)?;
         let (metadata, link) = if own.file_type().is_symlink() {
-            let resolved = fs::canonicalize(&path)?;
+            let resolved = fs::canonicalize(path)?;
             (
-                fs::metadata(&path)?,
+                fs::metadata(path)?,
                 Some(resolved.to_string_lossy().into_owned()),
             )
         } else {
@@ -769,9 +867,8 @@ mod local_fs {
         Ok(FileStat::new(kind, Some(metadata.len()), link))
     }
     /// A regular file and its size; a symbolic link is refused unless `follow_link`.
-    pub(super) fn open_regular(path: &str, follow_link: bool) -> Result<(fs::File, u64)> {
-        let path = resolve(path)?;
-        let metadata = fs::symlink_metadata(&path)?;
+    pub(super) fn open_regular(path: &Path, follow_link: bool) -> Result<(fs::File, u64)> {
+        let metadata = fs::symlink_metadata(path)?;
         if metadata.file_type().is_symlink() {
             if !follow_link {
                 return Err(unconfirmed_link());
@@ -792,7 +889,7 @@ mod local_fs {
             &mut options,
             if follow_link { 0 } else { 0x0020_0000 }, // FILE_FLAG_OPEN_REPARSE_POINT
         );
-        let file = options.open(&path)?;
+        let file = options.open(path)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() {
             return Err(not_regular());
@@ -910,7 +1007,7 @@ mod local_fs {
     pub(super) fn keep_private(_: &fs::File) -> Result<()> {
         Ok(())
     }
-    pub(super) fn read(path: &str, limit: u64) -> Result<Vec<u8>> {
+    pub(super) fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
         // Previews have always reported a link as "not a regular file".
         let (file, _) = open_regular(path, false).map_err(|error| {
             if error.kind() == "symlink_unconfirmed" {

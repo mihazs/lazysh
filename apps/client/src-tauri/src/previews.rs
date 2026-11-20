@@ -554,6 +554,7 @@ pub async fn discover_preview_ports(
 /// The host's TCP listeners: the remote shell line over SSH, argv on this device
 /// (`ss` or `lsof`, `netstat` on Windows) parsed here.
 async fn listening(host: &Host, access: &AccessLease) -> Result<Vec<Listener>> {
+    host.refuse_in_wsl("Previews")?;
     match host {
         Host::Remote(session) => host_listeners(session, access).await,
         #[cfg(desktop)]

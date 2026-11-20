@@ -3,6 +3,8 @@ export type SessionAttachment = {kind: MultiplexerKind; name: string; restoreNam
 export type SessionIntent = {
   hostId?: string;
   local?: true;
+  /** The local target of a local session (`pwsh`, `wsl:Ubuntu`, ...); the default shell saves none. */
+  target?: string;
   auto?: AutoOptions;
   et?: { serverPath: string; port: number };
   mosh?: { serverPath: string; portMin: number; portMax: number };
@@ -26,13 +28,17 @@ export function validTmuxServer(name: unknown): name is string {
 function validTmuxName(name: string) {
   return name.length > 0 && new TextEncoder().encode(name).length <= 200 && !/[\x00-\x1f\x7f-\x9f]/.test(name);
 }
+/** A target id native detection can produce; `default` is never saved. */
+function validLocalTarget(target: unknown) {
+  return typeof target === 'string' && /^(pwsh|powershell|gitbash|wsl:[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(target);
+}
 export function readWorkspace(): SessionIntent[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) || "[]");
     if (!Array.isArray(value) || value.length > 20) return [];
     return value.filter(
       (item): item is SessionIntent =>
-        (item?.local === true && Object.keys(item).length === 1) || (
+        (item?.local === true && Object.keys(item).every(name => name === 'local' || (name === 'target' && validLocalTarget(item.target)))) || (
         !!item &&
         typeof item === "object" &&
         item.local === undefined &&
@@ -63,8 +69,8 @@ function restorableAttachment({attached}: LiveIntent) {
     (attached.tmuxServer === undefined || (attached.kind === 'tmux' && validTmuxServer(attached.tmuxServer))));
 }
 /** The saved connection intention of one live session; terminal content and credentials stay out. */
-export function sessionIntent({hostId, attached, mosh, et, auto, local}: LiveIntent): SessionIntent {
-  return local ? {local:true} : ({
+export function sessionIntent({hostId, attached, mosh, et, auto, local, target}: LiveIntent): SessionIntent {
+  return local ? {local:true, ...(validLocalTarget(target) ? {target} : {})} : ({
     hostId,
     ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
     ...(!auto && et ? { et: publicEt(et) } : {}),

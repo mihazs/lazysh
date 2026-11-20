@@ -997,6 +997,291 @@ pub(crate) mod local {
         assert!(refuses(proxied(&second)).await);
         assert!(get(port).await.unwrap().ends_with("local"));
     }
+
+    /// A WSL session on a machine without WSL: `wsl.exe` is a script that checks the argument
+    /// shape, runs the command from the home directory and answers `wslpath`, and the share root
+    /// is `/`, so every Linux path of the "distribution" is a path of this machine.
+    #[cfg(unix)]
+    mod wsl {
+        use super::*;
+        use crate::local::Wsl;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn script(path: &Path, text: &str) -> PathBuf {
+            fs::write(path, text).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_owned()
+        }
+        /// Written once: executing a script that another test is still writing fails with
+        /// "text file busy". A session passes `WSL_LOG` and `WSL_DRIVE` in its environment.
+        fn fake_wsl() -> PathBuf {
+            static SCRIPT: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
+                std::sync::OnceLock::new();
+            SCRIPT
+                .get_or_init(|| {
+                    let dir = tempfile::tempdir().unwrap();
+                    let path = script(
+                        &dir.path().join("wsl.exe"),
+                        r#"#!/bin/sh
+{ for argument in "$@"; do printf '%s\n' "$argument"; done; echo --; } >> "${WSL_LOG:-/dev/null}"
+[ "$1 $2 $3 $4 $5" = '-d Ubuntu --cd ~ -e' ] || { echo "unexpected wsl.exe arguments: $*" >&2; exit 2; }
+shift 5
+cd "$HOME" || exit 3
+if [ "$1" = wslpath ]; then
+  [ "$2 $3" = '-u -a' ] || exit 4
+  printf '%s%s\n' "$WSL_DRIVE" "$(printf '%s' "$4" | cut -c3- | tr '\\' '/')"
+  exit 0
+fi
+exec "$@"
+"#,
+                    );
+                    (dir, path)
+                })
+                .1
+                .clone()
+        }
+        fn log(dir: &Path) -> String {
+            fs::read_to_string(dir.join("wsl.log")).unwrap_or_default()
+        }
+        /// The environment the fake `wsl.exe` of a session in `dir` reads.
+        fn environment(dir: &Path) -> Vec<(String, String)> {
+            vec![
+                ("WSL_LOG".into(), path(&dir.join("wsl.log"))),
+                ("WSL_DRIVE".into(), path(&dir.join("c"))),
+            ]
+        }
+        async fn session(root: &str) -> (tempfile::TempDir, App<MockRuntime>, String) {
+            let temp = tempfile::tempdir().unwrap();
+            let wsl = Wsl::with_root(fake_wsl(), "Ubuntu", PathBuf::from(root));
+            let (app, id) = app(temp.path()).await;
+            app.state::<LocalState>().bind_wsl(&id, wsl);
+            app.state::<LocalState>()
+                .set_test_env(environment(temp.path()));
+            (temp, app, id)
+        }
+        async fn host(app: &App<MockRuntime>, id: &str) -> Host {
+            Host::resolve(&app.state(), &app.state(), id, &lease())
+                .await
+                .unwrap()
+        }
+
+        #[tokio::test]
+        async fn every_command_runs_through_wsl_exe_from_the_home_directory_with_its_environment() {
+            let (temp, app, id) = session("/").await;
+            let host = host(&app, &id).await;
+            static ENVIRONMENT: [(&str, &str); 1] = [("LAZYSH_FROM_COMMAND", "a b; $(x)")];
+            let printed = Box::pin(host.run(
+                &lease(),
+                &Cmd::new(&ENVIRONMENT, &["printenv", "LAZYSH_FROM_COMMAND"]),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(printed, "a b; $(x)\n");
+            // No shell sits between lazysh and the program, so no argument is split or expanded.
+            let printed = Box::pin(host.run(
+                &lease(),
+                &Cmd::new(&[], &["printf", "%s|", "a b", "c;d", "$HOME", "`x`"]),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(printed, "a b|c;d|$HOME|`x`|");
+            // The argument list wsl.exe received, one argument per line.
+            assert!(
+                log(temp.path()).starts_with(
+                    "-d\nUbuntu\n--cd\n~\n-e\nenv\nLAZYSH_FROM_COMMAND=a b; $(x)\nprintenv\nLAZYSH_FROM_COMMAND\n--\n-d\nUbuntu\n--cd\n~\n-e\nprintf\n%s|\na b\n"
+                ),
+                "{}",
+                log(temp.path())
+            );
+            // The home directory is the distribution user's, reported as the command ran in it.
+            let home = Box::pin(host.home(&lease())).await.unwrap();
+            assert_eq!(
+                fs::canonicalize(home).unwrap(),
+                fs::canonicalize(crate::local::home_dir().unwrap()).unwrap()
+            );
+            // The Windows companion cannot serve a distribution.
+            let companion = Box::pin(host.companion(&lease(), "lazysh-agent snapshot".into()))
+                .await
+                .unwrap_err();
+            assert_eq!(companion.kind(), "remote_command_failed");
+            // Uploads and previews would act on Windows, not in the distribution.
+            for what in ["Attachments", "Previews"] {
+                let refused = host.refuse_in_wsl(what).unwrap_err();
+                assert_eq!(refused.kind(), "remote_command_failed");
+                assert!(refused.message().contains(what), "{}", refused.message());
+            }
+        }
+
+        #[tokio::test]
+        async fn files_and_a_repository_diff_are_read_inside_the_distribution() {
+            let (temp, app, id) = session("/").await;
+            let files = temp.path().join("my files & 100%");
+            fs::create_dir_all(files.join("folder")).unwrap();
+            fs::write(files.join("note.txt"), "hello 世界").unwrap();
+            let list = |directory: &Path| {
+                crate::ssh::list_directory(
+                    lease(),
+                    app.state(),
+                    app.state(),
+                    id.clone(),
+                    path(directory),
+                )
+            };
+            let names = ok(list(&files))
+                .await
+                .into_iter()
+                .map(|entry| (entry.name, entry.is_dir))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                [("folder".to_owned(), true), ("note.txt".to_owned(), false)]
+            );
+            let read = crate::ssh::read_file(
+                lease(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                path(&files.join("note.txt")),
+            );
+            assert_eq!(ok(read).await, "hello 世界");
+
+            let repository = temp.path().join("repo");
+            fs::create_dir(&repository).unwrap();
+            git(&repository, &["init", "-q"]);
+            git(&repository, &["config", "user.name", "Wsl Test"]);
+            git(
+                &repository,
+                &["config", "user.email", "wsl@example.invalid"],
+            );
+            fs::write(repository.join("tracked.txt"), "before\n").unwrap();
+            git(&repository, &["add", "--", "."]);
+            git(&repository, &["commit", "-qm", "first"]);
+            fs::write(repository.join("tracked.txt"), "after\n").unwrap();
+            let directory = path(&repository);
+            let status = serde_json::to_value(
+                ok(crate::repository::repository_status(
+                    app.state(),
+                    app.state(),
+                    id.clone(),
+                    directory.clone(),
+                    lease(),
+                ))
+                .await,
+            )
+            .unwrap();
+            assert_eq!(status["changes"][0]["path"], "tracked.txt");
+            assert_eq!(status["changes"][0]["worktree"], "M");
+            let diff = serde_json::to_value(
+                ok(crate::repository::repository_diff(
+                    app.state(),
+                    app.state(),
+                    id.clone(),
+                    status["path"].as_str().unwrap().to_owned(),
+                    "tracked.txt".to_owned(),
+                    false,
+                    lease(),
+                ))
+                .await,
+            )
+            .unwrap();
+            assert!(diff.to_string().contains("+after"), "{diff}");
+            // Git ran inside the distribution, not on this machine.
+            assert!(log(temp.path()).contains("-e\nenv\nGIT_OPTIONAL_LOCKS=0\n"));
+        }
+
+        #[tokio::test]
+        async fn only_this_distributions_paths_are_read_and_a_drive_path_is_translated_by_wslpath()
+        {
+            let (temp, app, id) = session("/").await;
+            let note = temp.path().join("c").join("data").join("note.txt");
+            fs::create_dir_all(note.parent().unwrap()).unwrap();
+            fs::write(&note, "from the drive").unwrap();
+            fs::write(temp.path().join("plain.txt"), "plain").unwrap();
+            let read = |file: String| {
+                crate::ssh::read_file(lease(), app.state(), app.state(), id.clone(), file)
+            };
+            let plain = path(&temp.path().join("plain.txt"));
+            assert_eq!(ok(read(plain.clone())).await, "plain");
+            let unc = format!(r"\\wsl.localhost\Ubuntu{}", plain.replace('/', r"\"));
+            assert_eq!(ok(read(unc)).await, "plain");
+            assert_eq!(ok(read(r"C:\data\note.txt".into())).await, "from the drive");
+            assert!(log(temp.path()).contains("-e\nwslpath\n-u\n-a\nC:\\data\\note.txt\n"));
+            let spawned = log(temp.path());
+
+            for refused in [
+                r"\\server\share\plain.txt".to_owned(),
+                r"\\wsl.localhost\Debian\tmp\plain.txt".to_owned(),
+                r"\\?\C:\Windows\win.ini".to_owned(),
+                r"\\.\pipe\lazysh".to_owned(),
+                format!("{}/../plain.txt", path(&temp.path().join("c"))),
+                r"C:\data\..\..\Windows\win.ini".to_owned(),
+                "plain.txt".to_owned(),
+            ] {
+                assert_eq!(
+                    kind(read(refused.clone())).await,
+                    "invalid_path",
+                    "{refused}"
+                );
+            }
+            // A directory for Git is a Linux path of the distribution.
+            let status = crate::repository::repository_status(
+                app.state(),
+                app.state(),
+                id.clone(),
+                r"C:\data".into(),
+                lease(),
+            );
+            assert_eq!(kind(status).await, "invalid_path");
+            // Refusals never reach wsl.exe.
+            assert_eq!(log(temp.path()), spawned);
+        }
+
+        #[tokio::test]
+        async fn a_link_resolves_to_a_path_of_the_distribution_and_never_outside_it() {
+            let temp = tempfile::tempdir().unwrap();
+            let share = temp.path().join("share");
+            fs::create_dir_all(share.join("home/me")).unwrap();
+            fs::write(share.join("home/me/target.txt"), "target").unwrap();
+            std::os::unix::fs::symlink(
+                share.join("home/me/target.txt"),
+                share.join("home/me/inside"),
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(temp.path(), share.join("home/me/outside")).unwrap();
+            let (app, id) = app(temp.path()).await;
+            let wsl = Wsl::with_root(fake_wsl(), "Ubuntu", share);
+            app.state::<LocalState>().bind_wsl(&id, wsl);
+            let host = host(&app, &id).await;
+            let stat = Box::pin(host.stat_file(&lease(), "/home/me/inside".into()))
+                .await
+                .unwrap();
+            assert_eq!(stat.link.as_deref(), Some("/home/me/target.txt"));
+            let stat = Box::pin(host.stat_file(&lease(), "/home/me/outside".into()))
+                .await
+                .unwrap_err();
+            assert_eq!(stat.kind(), "invalid_path");
+        }
+
+        #[tokio::test]
+        async fn a_distribution_reports_files_and_repository_only_when_git_starts_inside_it() {
+            let temp = tempfile::tempdir().unwrap();
+            let working = Wsl::with_root(fake_wsl(), "Ubuntu", PathBuf::from("/"));
+            let reported = serde_json::to_value(working.tools().await).unwrap();
+            assert_eq!(
+                reported,
+                serde_json::json!({"files": true, "repository": true, "companion": false, "attachments": false, "previews": false})
+            );
+            // `wsl.exe` fails when the distribution has no `git`.
+            let missing = script(&temp.path().join("no-git.exe"), "#!/bin/sh\nexit 1\n");
+            let reported = Wsl::with_root(missing, "Ubuntu", PathBuf::from("/"))
+                .tools()
+                .await;
+            assert_eq!(
+                serde_json::to_value(reported).unwrap(),
+                serde_json::json!({"files": false, "repository": false, "companion": false, "attachments": false, "previews": false})
+            );
+        }
+    }
 }
 
 /// Herdr is found on the PATH first and in its owner-checked user install directory last.
