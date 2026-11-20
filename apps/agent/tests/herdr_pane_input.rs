@@ -4,8 +4,6 @@
 #![cfg(target_os = "linux")]
 use serde_json::{json, Value};
 use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -17,6 +15,8 @@ use tokio::{
 };
 #[path = "support/binary.rs"]
 mod binary;
+#[path = "support/fake_herdr.rs"]
+mod fake_herdr;
 #[path = "support/pane_input_actor.rs"]
 mod pane_input_actor;
 use pane_input_actor::Actor;
@@ -125,17 +125,7 @@ async fn connection(
 }
 
 fn spawn_actor(directory: &Path, socket: &Path) -> Actor {
-    let sessions =
-        json!({"sessions":[{"name":"owned","running":true,"socket_path":socket}]}).to_string();
-    let herdr = directory.join("herdr");
-    fs::write(
-        &herdr,
-        format!(
-            "#!/bin/sh\n[ \"$*\" = 'session list --json' ] || exit 91\nprintf '%s' '{sessions}'\n"
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&herdr, fs::Permissions::from_mode(0o700)).unwrap();
+    fake_herdr::install(directory, "owned", socket);
     let mut command = Command::new(binary::path());
     command
         .env_clear()
