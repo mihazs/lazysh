@@ -1,7 +1,7 @@
 import {createRoot} from 'react-dom/client';
 import AgentPanel from '../../src/AgentPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../../src/access';
-import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inactiveBoardDisplay} from '../../src/test/agentBoardData';
+import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,notificationPolicy,inactiveBoardDisplay} from '../../src/test/agentBoardData';
 
 /** Real board with synthetic host records and deliberately held native decisions. */
 export function mountAgentBoard(host?:{key:string;label:string}){
@@ -17,6 +17,7 @@ export function mountAgentBoard(host?:{key:string;label:string}){
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports,...(update?{update}:{})};
     if(command==='agent_approvals')return {schemaVersion:1,requests:decided?[]:[approval]};
     if(command==='get_companion_settings')return companionSettings;
+    if(command==='get_notification_policy')return notificationPolicy;
     if(command==='update_companion_settings'){const {expectedRevision:_,...settings}=(args as {settings:typeof companionSettings & {expectedRevision:number}}).settings;return {...companionSettings,...settings,revision:8};}
     if(command==='get_host_browser_settings')return hostBrowser;
     if(command==='update_host_browser_settings'){const {hostBrowserEnabled}=(args as {settings:{hostBrowserEnabled:boolean}}).settings;hostBrowser={...hostBrowser,revision:hostBrowser.revision+1,hostBrowserEnabled};return hostBrowser;}

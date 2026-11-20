@@ -7349,6 +7349,8 @@ mod tests {
             "get_host_browser_settings",
             "update_host_browser_settings",
             "herdr_backend_select",
+            "get_notification_policy",
+            "update_notification_policy",
         ] {
             let policy = context.runtime_authority_mut();
             assert!(policy.resolve_access(command, "main", "main", &tauri::ipc::Origin::Local).is_some(), "the documented command must be admitted by the generated local-main policy: {command}");

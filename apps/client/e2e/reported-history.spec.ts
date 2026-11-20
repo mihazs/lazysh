@@ -1,12 +1,12 @@
 import {workspaceControl} from './fixtures/workspaceControl';
 import {connectHost} from './fixtures/connectHost';
 import {expect,test} from '@playwright/test';
-import {installNativeBridge} from './fixtures/nativeBridge';
+import {idleHostSettings,installNativeBridge} from './fixtures/nativeBridge';
 
 declare global {interface Window {reportedHistoryCalls:{command:string;args:Record<string,unknown>}[]}}
 test('reported Claude history prefills its exact SSH terminal and waits for explicit file Open with safe defaults',async({page},testInfo)=>{
   await installNativeBridge(page);
-  await page.addInitScript(()=>{
+  await page.addInitScript(hostSettings=>{
     window.reportedHistoryCalls=[];
     window.nativeFixtureInvoke=async(command,args)=>{
       window.reportedHistoryCalls.push({command,args});
@@ -17,8 +17,7 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
       if(command==='connect')return {sessionId:'ssh-history-exact'};
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-opaque-id',agent:'Claude Code',project:'/workspace',state:'working',updatedAt:'2026-10-24T19:30:00Z',summary:'Reported history fixture',paneId:'%3',eventCount:1},{sessionId:'codex-opaque-id',agent:'Codex',project:'/workspace',state:'done',updatedAt:'2026-10-24T19:20:00Z',summary:'Codex fixture without history',paneId:'%4',eventCount:1}]};
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
-      if(command==='get_companion_settings')return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
-      if(command==='get_host_browser_settings')return {schemaVersion:1,revision:0,hostBrowserEnabled:false};
+      if(command in hostSettings)return hostSettings[command as keyof typeof hostSettings];
       if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic fixture',epoch:'1/11111111-1111-4111-8111-111111111111',ticket:0};
       if(command==='agent_reported_history')return {schemaVersion:1,status:'available',sessionId:'claude-opaque-id',path:'/workspace/Claude 世界.jsonl ',reportedAt:'2026-10-24T19:30:00Z',paneId:'%3'};
       if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'record_stream',messages:[{id:'recorded',role:'assistant',blocks:[{type:'text',text:'Explicitly opened recorded history.'}]}],nextOffset:1,hasMore:false};
@@ -26,7 +25,7 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
       if(command.startsWith('plugin:event|') || ['cancel_credential_auth','resize','ack_output','disconnect'].includes(command))return;
       throw new Error(`Unexpected reported-history browser command: ${command}`);
     };
-  });
+  },idleHostSettings);
   await connectHost(page,'History host',testInfo.project.name==='phone');
   await (await workspaceControl(page,'Agents')).click();
   await page.getByRole('button',{name:'Reported agent activity',exact:true}).click();
