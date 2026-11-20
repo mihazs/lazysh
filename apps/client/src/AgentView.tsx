@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
-import ChatPanel, {type BoundConversation} from './ChatPanel';
+import ChatPanel, {type BoundConversation, type BoundRecords} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
@@ -13,7 +13,7 @@ import AgentHistory from './AgentHistory';
 import {publishAnswerGuard, publishTaskGuard, useComposerControl} from './agentDialogAnswer';
 import {hostScreen, herdrStillRuns, herdrStillWaits, screenRows, type HerdrAgentTarget} from './agentHerdrAnswer';
 import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
-import {conversationAgents, conversationSource} from './agentConversationSource';
+import {conversationAgents, conversationSource, recordsAgents} from './agentConversationSource';
 import {parseTerminalSnapshot, type TerminalInputLabels, type ZellijTarget} from './ChatTerminalInput';
 import {zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
@@ -50,7 +50,9 @@ const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true
 function storedImages() {
   try {return {...imageDefaults, ...JSON.parse(localStorage.getItem('lazysh.agentImages') ?? '{}')} as Record<BoundConversation['agent'], boolean>;} catch {return imageDefaults;}
 }
-type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: AgentSession} | {kind: 'bound'; row: AgentSession; conversation: BoundConversation};
+/** `partial` is an agent the view names but cannot follow as a conversation; `records` is what a records-only adapter wrote for that session, shown read-only. */
+type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: AgentSession; records?: BoundRecords} | {kind: 'bound'; row: AgentSession; conversation: BoundConversation};
+const sameSource = (left: BoundConversation | BoundRecords | undefined, right: BoundConversation | BoundRecords) => !!left && left.path === right.path && left.agent === right.agent && left.report?.sessionId === right.report?.sessionId && left.report?.paneId === right.report?.paneId;
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
@@ -124,16 +126,22 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
         const matching = pane === undefined ? [] : reports.filter(row => row.paneId === pane);
         const row = matching.length===1 ? matching[0] : undefined;
         const agent = row && conversationAgents[row.agent as keyof typeof conversationAgents];
-        let conversation:BoundConversation | undefined;
-        if (row && agent) {
+        const recordsAgent = row && recordsAgents[row.agent as keyof typeof recordsAgents];
+        let conversation:BoundConversation | undefined, records:BoundRecords | undefined;
+        if (row && (agent || recordsAgent)) {
           try {
-            const found = await conversationSource(invoke, sessionId, agent, row.sessionId);
+            const found = await conversationSource(invoke, sessionId, (agent ?? recordsAgent)!, row.sessionId);
             // The report's own pane is the evidence for OpenCode; Claude Code and Codex also name it in the reported history.
-            if (found && (found.paneId === undefined || found.paneId === pane)) conversation=Object.freeze({agent, path: found.path,...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}});
+            if (found && (found.paneId === undefined || found.paneId === pane)) {
+              const source = {path: found.path,...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}};
+              if (agent) conversation=Object.freeze({agent, ...source}); else if (recordsAgent) records=Object.freeze({agent: recordsAgent, ...source});
+            }
           } catch { /* A detected agent remains visible when its history is unavailable. */ }
         }
-        if (alive && access.current()) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
-          : {kind: 'bound', row, conversation: previous.kind === 'bound' && previous.conversation.path === conversation.path && previous.conversation.agent === conversation.agent && previous.conversation.report?.sessionId === conversation.report?.sessionId && previous.conversation.report?.paneId === conversation.report?.paneId ? previous.conversation : conversation});
+        if (alive && access.current()) setBinding(previous => !row ? {kind: 'none'}
+          : records ? {kind: 'partial', row, records: previous.kind === 'partial' && sameSource(previous.records, records) ? previous.records : records}
+          : !conversation ? {kind: 'partial', row}
+          : {kind: 'bound', row, conversation: previous.kind === 'bound' && sameSource(previous.conversation, conversation) ? previous.conversation : conversation});
       } catch {
         if (alive && access.current()) {setSessions([]);setBinding({kind:'none'});}
       } finally { flight = false; }
@@ -173,6 +181,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const row = selected ? selected.row : (binding.kind === 'bound' || binding.kind === 'partial' ? binding.row : undefined);
   const conversation=selected?.conversation ?? (binding.kind==='bound'?binding.conversation:undefined);
   const reader=!!conversation;
+  // A records-only adapter's records stay read-only: no composer, no dock and no header tools, which are for a conversation the view follows.
+  const records=!selected && binding.kind==='partial' ? binding.records : undefined;
   // The composer's bound input also answers the open dialog. Before every key the pane is read again, and nothing is sent
   // unless the same reported session still needs the user, so a dialog answered in the terminal first gets no stray key.
   const paneGuard = useCallback(async () => {
@@ -328,7 +338,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {infoOpen && reader && info?.info && <AgentInfoSheet info={info.info} onClose={()=>setInfoOpen(false)} onShowTerminal={onShowTerminal}/>}
     {(herdrSession ? !fresh && !manual && navigation.busy && !navigation.data?.loaded : binding.kind === 'finding') && !selected && <p role="status">{t('agentViewFinding')}</p>}
     {!reader && !herdrSession && binding.kind !== 'finding' && <div className="agent-view-fallback">
-      <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
+      <p>{binding.kind === 'partial' ? t(binding.records ? 'agentViewPartialRecords' : binding.row.agent in conversationAgents ? 'agentViewPartial' : 'agentViewPartialState', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
         {binding.kind === 'none' && <><StartButtons sessionId={sessionId}/>{startFolder}</>}
@@ -358,6 +368,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {reader && !selected && !zellijAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
       bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} reading={reading} onReading={changeReading} />}
+    {records && <ChatPanel key={JSON.stringify(records)} sessionId={sessionId} shown={shown && fresh} bound={records} onOpenCompanion={onOpenCompanion} allowStage={false} timeline onOpenTerminal={onShowTerminal} liveState={liveState}
+      onBoundInvalid={()=>setBinding(previous=>previous.kind==='partial' && previous.records===records?{kind:'partial',row:previous.row}:previous)} />}
     {modelAsked && <p role="status" className="agent-composer-note">{t('agentModelAsked')}</p>}
     {kept && reader && !selected?.history && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} holdSend={!!waiting && waiting!=='unknown'} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
