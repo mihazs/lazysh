@@ -18,6 +18,11 @@ case $(cat "$ASSETS/mode") in
   *) cp "$ASSETS/${url##*/}" "$out";;
 esac
 "#;
+/// Reports the architecture a case writes to `$ASSETS/arch`; every other call is the host's own `uname`.
+const UNAME: &str = r#"#!/bin/sh
+[ "$*" = -m ] && [ -f "$ASSETS/arch" ] && exec cat "$ASSETS/arch"
+exec /usr/bin/uname "$@"
+"#;
 pub(super) fn environment(directory: &Path) -> String {
     let bin = directory.join("bin");
     fs::create_dir(&bin).unwrap();
@@ -30,8 +35,9 @@ pub(super) fn environment(directory: &Path) -> String {
     )
     .unwrap();
     fs::write(bin.join("curl"), CURL).unwrap();
+    fs::write(bin.join("uname"), UNAME).unwrap();
     use std::os::unix::fs::PermissionsExt;
-    for name in ["lazysh-agent", "curl"] {
+    for name in ["lazysh-agent", "curl", "uname"] {
         fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o700)).unwrap();
     }
     fs::write(directory.join(".zshrc"), b"").unwrap();
@@ -181,6 +187,37 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
     host_update(&session, directory).await;
     update_command_route(&session, directory).await;
     shipped_update_command(&session, directory).await;
+}
+/// A host whose architecture has no published companion is refused by both routes before anything is fetched or written.
+/// The probe is asked once per connection, so this case owns its connection.
+pub(super) async fn unsupported_architecture(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    id: &str,
+    directory: &Path,
+) {
+    let session = app.state::<AppState>().session(id).await.unwrap();
+    let (binary, lease, state) = (
+        owned_agent_binary(),
+        access_lease(),
+        directory.join("state"),
+    );
+    let owned = crate::companion::Owned::new(&binary, env!("CARGO_PKG_VERSION"));
+    let legacy = fs::read(directory.join("bin/lazysh-agent")).unwrap();
+    keep_state(&state);
+    fs::write(directory.join("assets/arch"), "riscv64\n").unwrap();
+    both_routes_refuse(&owned, &session, &lease, "companion_install_unsupported").await;
+    assert_eq!((owned.downloads(), curl_calls(directory)), (0, 0));
+    assert!(!directory.join("data").exists());
+    assert_eq!(
+        fs::read(directory.join("bin/lazysh-agent")).unwrap(),
+        legacy
+    );
+    assert_state_kept(&state);
+    // The refusal changes nothing for the companion the host already has on its PATH.
+    let version = crate::companion::exec(&session, "lazysh-agent --version".into(), &lease)
+        .await
+        .unwrap();
+    assert_eq!(version.trim(), "lazysh-agent 1.0.0");
 }
 /// A finished device-route install releases its SFTP channel in the background; the next install starts after it.
 async fn settled(session: &Session) {

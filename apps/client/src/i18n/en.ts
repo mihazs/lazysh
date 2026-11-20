@@ -224,6 +224,7 @@ export const english = {
   companionCheckAvailable: "Host companion {{installed}} can be updated to {{latest}}.",
   companionCheckUpToDate: "Host companion {{installed}} is up to date.",
   companionCheckNewer: "Host companion {{installed}} is newer than the latest release, {{latest}}.",
+  companionInstallExplain: "Installs the latest stable companion for your user on this host. The host downloads it and checks its size and SHA-256 before anything runs, then the app checks the installed version. It goes to lazysh/companion/lazysh-agent in your user data folder (usually ~/.local/share on Linux, ~/Library/Application Support on macOS). Nothing uses sudo or changes your PATH, hooks or settings, and a newer companion is never replaced. Nothing is installed until you press the button.",
   companionInstallFallbackNote: "The host could not download the companion. You can download it on this device (about 9 to 12 MB of its data) and upload it to the host over SSH.",
   companionInstallFallbackButton: "Install through this device",
   companionInstallInvalid: "Invalid companion installation response.",
