@@ -68,6 +68,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.Pattern
+import kotlin.math.roundToInt
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
@@ -298,6 +299,36 @@ class NativeWorkspaceTest {
 
     private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String =
         requireNotNull(evaluateIfPresent(scenario, expression, timeoutMillis))
+
+    /** A screenshot of the frame the WebView has just committed, so the pixels show the page's latest DOM. */
+    private fun committedScreenshot(scenario: ActivityScenario<MainActivity>, requestId: Long): android.graphics.Bitmap {
+        if (android.os.Build.VERSION.SDK_INT < 29) throw AssertionError("Native capture requires frame commits")
+        val committed = CountDownLatch(1)
+        val frame = Runnable { committed.countDown() }
+        var observing = true
+        var tree: android.view.ViewTreeObserver? = null
+        scenario.onActivity { activity ->
+            val view = checkNotNull(webView(activity.window.decorView))
+            assertTrue("Native WebView must render frames", view.isAttachedToWindow && view.isHardwareAccelerated)
+            view.postVisualStateCallback(requestId, object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    if (observing && view.isAttachedToWindow) {
+                        tree = view.viewTreeObserver
+                        tree?.registerFrameCommitCallback(frame)
+                        view.invalidate()
+                    }
+                }
+            })
+        }
+        val submitted = try { committed.await(5, TimeUnit.SECONDS) } finally {
+            scenario.onActivity {
+                observing = false
+                tree?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(frame)
+            }
+        }
+        assertTrue("Native DOM must reach a committed frame", submitted)
+        return requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+    }
 
     /**
      * Phones hide the top bar in a connected session by default (the side menu replaces it). These suites drive the top bar's
@@ -1069,6 +1100,105 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
     }
 
+    /**
+     * The Android WebView composites `backdrop-filter` with its own renderer, which Playwright's Chromium and the Linux GUI's
+     * WebKitGTK never sample (#1723). For a dialog this reads its computed material, then lays a black and white underlay
+     * beneath it and measures the pixels the device shows across the underlay's edge: a translucent material lets through what
+     * its alpha leaves, and a blur turns the hard edge into a gradient. A dialog whose fallback is opaque (Preferences is a full
+     * page on a phone) must show neither. The default app theme is sampled; Playwright covers the others.
+     */
+    private fun assertCompositedMaterial(scenario: ActivityScenario<MainActivity>, name: String, dialog: String, glassWhen: String) {
+        val quoted = JSONObject.quote(dialog)
+        awaitDocument(scenario, "$name settled", "Boolean(document.querySelector($quoted)) && document.getAnimations().every(a=>a.effect?.getComputedTiming().iterations===Infinity||a.playState==='finished')")
+        val material = JSONObject(evaluate(scenario, """
+            (()=>{
+              const dialog=document.querySelector($quoted),backdrop=dialog.parentElement,bounds=dialog.getBoundingClientRect(),style=getComputedStyle(dialog);
+              const canvas=document.createElement('canvas').getContext('2d');canvas.fillStyle=style.backgroundColor;canvas.fillRect(0,0,1,1);
+              const filter=style.backdropFilter||style.getPropertyValue('-webkit-backdrop-filter');
+              const renderable=(CSS.supports('backdrop-filter','blur(1px)')||CSS.supports('-webkit-backdrop-filter','blur(1px)'))
+                &&CSS.supports('background','color-mix(in srgb, black 90%, transparent)')
+                &&!matchMedia('(prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active)').matches;
+              const centre=bounds.left+bounds.width/2;
+              // The underlay sits between the page and the dialog; hiding the content leaves only the dialog's own material.
+              const probe=document.createElement('div');probe.id='glass-probe';
+              probe.style.cssText='position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,#000 '+centre+'px,#fff '+centre+'px)';
+              backdrop.prepend(probe);backdrop.style.background='transparent';backdrop.style.animation='none';
+              for(const child of dialog.children)child.style.visibility='hidden';
+              return {glass:renderable&&$glassWhen,alpha:canvas.getImageData(0,0,1,1).data[3],blurred:filter.includes('blur('),filter,background:style.backgroundColor,
+                opacity:style.opacity,centre,row:bounds.top+bounds.height/2,width:bounds.width,viewport:innerWidth};
+            })()
+        """))
+        try {
+            val glass = material.getBoolean("glass")
+            val alpha = material.getInt("alpha")
+            assertEquals("$name opacity", "1", material.getString("opacity"))
+            assertTrue("$name must be ${if (glass) "translucent" else "opaque"}: $material", if (glass) alpha in 1..254 else alpha == 255)
+            assertEquals("$name backdrop blur: $material", glass, material.getBoolean("blurred"))
+            val origin = IntArray(2)
+            var scale = 0.0
+            scenario.onActivity { activity ->
+                val view = checkNotNull(webView(activity.window.decorView))
+                view.getLocationOnScreen(origin)
+                scale = view.width / material.getDouble("viewport")
+            }
+            fun capture(): List<Double> {
+                val shot = committedScreenshot(scenario, System.nanoTime())
+                try {
+                    return (-80..80).map { offset ->
+                        val pixel = shot.getPixel(
+                            (origin[0] + (material.getDouble("centre") + offset) * scale).roundToInt(),
+                            (origin[1] + material.getDouble("row") * scale).roundToInt())
+                        0.2126 * android.graphics.Color.red(pixel) + 0.7152 * android.graphics.Color.green(pixel) + 0.0722 * android.graphics.Color.blue(pixel)
+                    }
+                } finally { shot.recycle() }
+            }
+            // Plateaus well clear of the edge, then how many CSS pixels the edge takes to go from 10% to 90%.
+            fun shown(luma: List<Double>) = luma.takeLast(21).average() - luma.take(21).average()
+            fun transition(luma: List<Double>): Int {
+                val dark = luma.take(21).average()
+                val range = shown(luma)
+                return luma.count { it > dark + range * 0.1 && it < dark + range * 0.9 }
+            }
+            fun accepted(luma: List<Double>) = Math.abs(255.0 - alpha - shown(luma)) <= 8.0 && (if (glass) transition(luma) >= 15 else transition(luma) <= 3)
+            // The compositor presents a mutated page a frame or two after the frame commit, so a first capture can still
+            // be the page as it was. The material must hold in two captures in a row, at least a second after the underlay.
+            val laid = System.nanoTime()
+            var luma = capture()
+            var holds = 0
+            val deadline = laid + TimeUnit.SECONDS.toNanos(15)
+            while (true) {
+                holds = if (accepted(luma)) holds + 1 else 0
+                if (holds >= 2 && System.nanoTime() - laid >= TimeUnit.SECONDS.toNanos(1)) break
+                if (System.nanoTime() >= deadline) break
+                Thread.sleep(300)
+                luma = capture()
+            }
+            android.util.Log.i("lazysh-glass", "$name: $material shown=${shown(luma)} transition=${transition(luma)} scale=$scale")
+            assertEquals("$name: the underlay must show through by what the alpha leaves ($material)", 255.0 - alpha, shown(luma), 8.0)
+            assertTrue("$name: a ${if (glass) "blurred" else "solid"} edge took ${transition(luma)} CSS px ($material)", if (glass) transition(luma) >= 15 else transition(luma) <= 3)
+        } finally {
+            evaluate(scenario, """
+                (()=>{const dialog=document.querySelector($quoted),backdrop=dialog?.parentElement;
+                  document.getElementById('glass-probe')?.remove();backdrop?.style.removeProperty('background');backdrop?.style.removeProperty('animation');
+                  for(const child of dialog?.children??[])child.style.visibility='';return true;})()
+            """)
+        }
+    }
+
+    @Test fun webViewCompositesTheGlassMaterialOfItsDialogsOrKeepsTheOpaqueFallback() {
+        val scenario = NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario, "glass material workspace")
+        closeHostsDrawer(scenario, "hosts closed before glass material")
+        // The tools dialog is glass at every width. Preferences is only glass beside a sidebar: on a phone it is an opaque page.
+        openWorkspaceTools(scenario, System.nanoTime() + TimeUnit.SECONDS.toNanos(120))
+        try { assertCompositedMaterial(scenario, "Workspace tools", workspaceToolsDialog, "true") }
+        finally { onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Workspace tools']")).perform(webClick()) }
+        awaitDocument(scenario, "workspace tools closed", "!Boolean(document.querySelector(${JSONObject.quote(workspaceToolsDialog)}))")
+        openPreferences(scenario)
+        try { assertCompositedMaterial(scenario, "Preferences", "[role=dialog][aria-label='Preferences']", "matchMedia('(min-width: 601px)').matches") }
+        finally { closePreferences() }
+    }
+
     private fun openAppearance(scenario: ActivityScenario<MainActivity>, stage: String) {
         awaitUnlockedWorkspace(scenario, stage)
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
@@ -1710,18 +1840,46 @@ class NativeWorkspaceTest {
         onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.SLOW, point(from), point(to), Press.FINGER))
     }
 
-    private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
-        val menu = "[role=dialog][aria-label='Workspace tools']"
+    private val workspaceToolsDialog = "[role=dialog][aria-label='Workspace tools']"
+
+    /** A phone-width connected workspace, like a wide one, keeps Preferences in its tools menu. */
+    private fun openPreferences(scenario: ActivityScenario<MainActivity>) {
+        if (evaluate(scenario, workspaceElementVisible("button[aria-label='Preferences']")) == "true")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        else workspaceMenuAction(scenario, "Preferences")
+    }
+
+    /** An open hosts drawer makes the workspace inert, and an earlier case on the shared activity can leave it open. */
+    private fun closeHostsDrawer(scenario: ActivityScenario<MainActivity>, stage: String) {
+        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
+        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
+            awaitDocument(scenario, stage, "!" + workspaceElementVisible(closeHosts))
+        }
+    }
+
+    private fun openWorkspaceTools(scenario: ActivityScenario<MainActivity>, deadline: Long) {
         keepTopBar(scenario)
-        if (evaluate(scenario, workspaceElementVisible(menu)) != "true") {
+        if (evaluate(scenario, workspaceElementVisible(workspaceToolsDialog)) != "true") {
             awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"), deadline = deadline)
             val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
             trigger.perform(webScrollIntoView())
-            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline)
+            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline, observe = { remaining ->
+                evaluate(scenario, """
+                    (()=>{const bounds=document.querySelector('button.mobile-tools').getBoundingClientRect(),hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+                      return JSON.stringify({bounds:[bounds.left,bounds.top,bounds.right,bounds.bottom],viewport:[innerWidth,innerHeight],
+                        hit:hit&&(hit.tagName+'.'+hit.className+'['+(hit.getAttribute('aria-label')||'')+']'),inert:document.querySelector('main.workspace')?.inert});})()
+                """, remaining)
+            })
             trigger.perform(webClick())
         }
-        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
+        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(workspaceToolsDialog), deadline = deadline)
+    }
+
+    private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+        val menu = workspaceToolsDialog
+        openWorkspaceTools(scenario, deadline)
         // Tool groups are carousel pages: turn them with a real finger swipe until the action's page is shown.
         val pageOffset = """
             (()=>{const target=Array.from(document.querySelectorAll(${JSONObject.quote("$menu .workspace-tools-page button")}))
@@ -1795,11 +1953,7 @@ class NativeWorkspaceTest {
     }
 
     private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
-        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
-        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
-            awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
-        }
+        closeHostsDrawer(scenario, "hosts closed before owned disconnect")
         val disconnect = "button[aria-label='Disconnect $name']"
         if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
             selectOwnedConnection(scenario, name, requireMosh)
@@ -2818,32 +2972,7 @@ class NativeWorkspaceTest {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val directory = java.io.File(requireNotNull(instrumentation.targetContext.getExternalFilesDir(null)), "herdr-navigation")
             require(directory.mkdirs() || directory.isDirectory)
-            if (android.os.Build.VERSION.SDK_INT < 29) throw AssertionError("Owned navigation capture requires frame commits")
-            val committed = CountDownLatch(1)
-            val frame = Runnable { committed.countDown() }
-            var observing = true
-            var tree: android.view.ViewTreeObserver? = null
-            scenario.onActivity { activity ->
-                val view = checkNotNull(webView(activity.window.decorView))
-                assertTrue("Owned navigation WebView must render frames", view.isAttachedToWindow && view.isHardwareAccelerated)
-                view.postVisualStateCallback(capture.toLong(), object : WebView.VisualStateCallback() {
-                    override fun onComplete(requestId: Long) {
-                        if (observing && view.isAttachedToWindow) {
-                            tree = view.viewTreeObserver
-                            tree?.registerFrameCommitCallback(frame)
-                            view.invalidate()
-                        }
-                    }
-                })
-            }
-            val submitted = try { committed.await(5, TimeUnit.SECONDS) } finally {
-                scenario.onActivity {
-                    observing = false
-                    tree?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(frame)
-                }
-            }
-            assertTrue("Owned navigation DOM must reach a committed frame", submitted)
-            val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            val bitmap = committedScreenshot(scenario, capture.toLong())
             try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
             finally { bitmap.recycle() }
         }
@@ -4393,10 +4522,7 @@ class NativeWorkspaceTest {
         assertTrue("Notification shade must open", device.openNotification())
         assertFalse("Denied connection notification must stay out of the shade", device.hasObject(By.text(context.getString(R.string.session_notification_title))))
         assertTrue(device.pressBack())
-        // A phone-width connected workspace keeps Preferences in its tools menu.
-        if (evaluate(scenario, workspaceElementVisible("button[aria-label='Preferences']")) == "true")
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
-        else workspaceMenuAction(scenario, "Preferences")
+        openPreferences(scenario)
         preferencesCategory(scenario, "android-notifications")
         webButton("Open Android notification settings")
         assertTrue("Android notification settings must open", device.wait(Until.hasObject(By.pkg("com.android.settings")), 10_000))
