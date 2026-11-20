@@ -54,6 +54,8 @@ export async function openStdioCore(binary: string, {columns = 20, rows = 5, scr
     feed: bytes => state('feed', {data: Buffer.from(bytes).toString('base64')}),
     resize: size => state('resize', size),
     async input(data) { await request('input', {text: typeof data === 'string' ? data : new TextDecoder().decode(data)}); },
+    // shortcut: the harness encodes text only; give it a `key` method when a real-core key case exists.
+    async key() { throw new Error('The stdio harness has no key input.'); },
     setActive(active) { request('setActive', {active}).catch(noop); },
     subscribe(listener) {
       events.on('event', listener);
