@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { pinned } from '../dagger/src/images';
+import { pinned, RUST, UBUNTU } from '../dagger/src/images';
 import { parsePrototools, requireVersion } from '../dagger/src/prototools';
 import { project } from './support/gitFixture';
 
@@ -17,7 +17,7 @@ test('names the tool when .prototools does not pin it', () => {
 
 // Bumping bun or node in .prototools must be paired with a vetted digest in dagger/src/images.ts, or the Dagger toolchain stops building.
 test('every base image the toolchain asks for from .prototools has a pinned digest', () => {
-  for (const tag of [`node:${requireVersion(prototools, 'node')}-bookworm`, `oven/bun:${requireVersion(prototools, 'bun')}`]) {
+  for (const tag of [`node:${requireVersion(prototools, 'node')}-bookworm`, `oven/bun:${requireVersion(prototools, 'bun')}`, RUST, UBUNTU]) {
     expect(pinned(tag)).toMatch(new RegExp(`^${tag}@sha256:[0-9a-f]{64}$`));
   }
 });
