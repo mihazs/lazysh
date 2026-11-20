@@ -109,6 +109,7 @@
     "allow-zellij-agent-input",
     "allow-zellij-agent-screen",
     "allow-zellij-tabs",
+    "allow-zellij-panes",
     "allow-generate-identity",
     "allow-inspect-identity",
     "allow-has-credentials",
