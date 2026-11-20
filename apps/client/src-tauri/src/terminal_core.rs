@@ -26,7 +26,7 @@
 
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::SshEvent;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use tauri::ipc::Channel;
@@ -565,6 +565,39 @@ pub fn terminal_core_close(session_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// What `terminal_core_available` answers: whether this build can run a native terminal and, when it cannot, why. The
+/// client's registry records the reason as it is, so it says what is missing.
+#[derive(Debug, Serialize)]
+pub struct CoreAvailability {
+    available: bool,
+    reason: &'static str,
+}
+
+const NOT_BUILT: &str = "The native terminal core is not built into this app";
+
+fn availability(core: bool, host: bool) -> CoreAvailability {
+    let reason = match (core, host) {
+        (false, _) => NOT_BUILT,
+        (true, false) => "The native terminal surface exists on Android only",
+        (true, true) => "The native terminal core and its surface host are present",
+    };
+    CoreAvailability {
+        available: core && host,
+        reason,
+    }
+}
+
+/// The client registry's probe for the native backend: the core is compiled in (`native-terminal`) and the platform has
+/// a host to draw it on. Android is the only one so far (#1327); each other platform's host adds its target here. The
+/// GPU and surface probe is #1336. Allowed while locked: it reads this build, nothing of the user's.
+#[tauri::command]
+pub fn terminal_core_available() -> CoreAvailability {
+    availability(
+        cfg!(feature = "native-terminal"),
+        cfg!(target_os = "android"),
+    )
+}
+
 /// The real core, `lazysh-terminal-runtime` on libghostty-vt, which needs Zig 0.16.0 to build; without
 /// the `native-terminal` feature no build needs Zig and the commands report that.
 #[cfg(not(feature = "native-terminal"))]
@@ -576,7 +609,7 @@ mod native {
         _: crate::app_lock::AccessLease,
         _: tauri::ipc::Channel<crate::ssh::SshEvent>,
     ) -> Result<super::Factory, String> {
-        Err("The native terminal core is not built into this app".into())
+        Err(super::NOT_BUILT.into())
     }
 }
 
@@ -1611,6 +1644,41 @@ mod tests {
                 .unwrap();
             assert_eq!(error, "scrollback lines must be 100 to 20000", "{lines}");
         }
+    }
+
+    #[test]
+    fn the_core_is_available_only_with_both_the_core_and_a_surface_host() {
+        let answers = [(false, false), (false, true), (true, false), (true, true)]
+            .map(|(core, host)| availability(core, host));
+        assert_eq!(
+            answers.each_ref().map(|answer| answer.available),
+            [false, false, false, true]
+        );
+        // A missing core is reported before a missing host, and each reason names what is missing.
+        assert!(
+            answers[0].reason.contains("not built"),
+            "{}",
+            answers[0].reason
+        );
+        assert_eq!(answers[0].reason, answers[1].reason);
+        assert!(
+            answers[2].reason.contains("Android"),
+            "{}",
+            answers[2].reason
+        );
+    }
+
+    #[test]
+    fn this_build_answers_with_what_it_has_compiled_in() {
+        let answer = serde_json::to_value(terminal_core_available()).unwrap();
+        assert_eq!(
+            answer["available"],
+            cfg!(all(feature = "native-terminal", target_os = "android"))
+        );
+        assert!(!answer["reason"].as_str().unwrap().is_empty());
+        assert!(crate::app_lock::allowed_while_locked(
+            "terminal_core_available"
+        ));
     }
 
     #[cfg(not(feature = "native-terminal"))]

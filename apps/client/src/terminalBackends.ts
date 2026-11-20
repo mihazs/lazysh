@@ -1,5 +1,7 @@
 import {getPreferences} from './preferences';
-import {createBackendRegistry, type BackendPreference, type SelectOptions} from './terminalBackendRegistry';
+import {nativeCapabilities} from './nativeTerminalAdapter';
+import {createNativeTerminalAdapter, probeNativeCore} from './tauriNativeCoreBridge';
+import {createBackendRegistry, type BackendPreference, type BackendRegistration, type SelectOptions} from './terminalBackendRegistry';
 import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
 const registry = createBackendRegistry();
@@ -10,7 +12,19 @@ registry.register({
   probe: () => ({ok: true}),
   create: createXtermTerminalAdapter,
 });
-// The native backend registers here once its platform gate passes (docs/architecture/terminal-migration-plan.md).
+
+/** Native is registered behind its probe and Auto never picks it: a platform's own default flip sets `autoEligible` (docs/architecture/terminal-migration-plan.md). */
+export function registerNativeBackend(backends: Pick<typeof registry, 'register'>, probe: BackendRegistration['probe'] = probeNativeCore) {
+  backends.register({
+    id: 'native',
+    capabilities: nativeCapabilities,
+    autoEligible: false,
+    probe,
+    // shortcut: the opening's events Channel and bind() are dropped, so no transport attaches to this core yet; the session start takes them when it is wired, and replaces this.
+    create: async () => (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: getPreferences().scrollback})).adapter,
+  });
+}
+registerNativeBackend(registry);
 
 /** What `createTerminalAdapter` can select, so a test can hold each registration to the adapter contract. */
 export const registeredBackends = () => registry.registrations();

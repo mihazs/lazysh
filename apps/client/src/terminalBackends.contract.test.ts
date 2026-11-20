@@ -5,13 +5,13 @@ import type {TerminalBackendId} from './terminalAdapter';
 import {runTerminalAdapterContract, type ContractHarness} from './terminalAdapter.contract';
 import {capabilityCases, passedCases, runTerminalCapabilityContract, untestedCapabilities} from './terminalCapabilityTests';
 import {registeredBackends} from './terminalBackends';
-import {xtermContractHarness} from './xterm/contractHarness';
+import {nativeContractHarness, xtermContractHarness} from './xterm/contractHarness';
 import {xtermCapabilities} from './xtermTerminalAdapter';
 
 beforeAll(stubMatchMedia);
 
 /** How to host each backend here (jsdom). A backend that is registered without an entry fails, so none is registered unchecked. */
-const harnesses: Partial<Record<TerminalBackendId, ContractHarness>> = {xterm: xtermContractHarness};
+const harnesses: Partial<Record<TerminalBackendId, ContractHarness>> = {xterm: xtermContractHarness, native: nativeContractHarness};
 
 const everyCase = Object.values(capabilityCases).flat();
 

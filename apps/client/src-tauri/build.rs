@@ -40,6 +40,7 @@ fn main() {
         "terminal_core_resize",
         "terminal_core_set_active",
         "terminal_core_close",
+        "terminal_core_available",
         "local_disconnect",
         "app_icon_status",
         "set_app_icon",

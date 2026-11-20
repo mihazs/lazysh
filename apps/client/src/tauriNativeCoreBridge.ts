@@ -1,15 +1,16 @@
 /**
  * The NativeCoreBridge over the app's `terminal_core_*` Tauri commands (docs/architecture/terminal-adapter.md, "Native backend").
  * The transport feeds the core in Rust, so the bridge has no `feed` and no `resize`: it asks for state and sends input.
- * Commands belong to the renderer's access lease (a locked app is refused and told nothing); `terminal_core_close` alone is
- * allowed while locked, like a disconnect.
+ * Commands belong to the renderer's access lease (a locked app is refused and told nothing); `terminal_core_close` is allowed
+ * while locked, like a disconnect, and so is the probe's `terminal_core_available`, which reads the build and nothing of the user's.
  */
-import {Channel, invoke as unguardedInvoke} from '@tauri-apps/api/core';
+import {Channel, invoke as unguardedInvoke, isTauri} from '@tauri-apps/api/core';
 import {isAccessReady, protectedInvoke, sessionOutput, subscribeAccess} from './access';
 import type {SshEvent} from './bridge';
 import type {NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeTerminalAdapter, type NativeAdapterOptions} from './nativeTerminalAdapter';
 import {registerSessionOutput} from './pendingSessions';
+import type {BackendProbe} from './terminalBackendRegistry';
 
 const noop = () => {};
 const coreEvents: ReadonlySet<string> = new Set<NativeCoreEvent['type']>(['changed', 'title', 'bell', 'cwd', 'clipboard']);
@@ -46,6 +47,17 @@ const blank = ({columns, rows, scrollbackLines}: NativeTerminalOptions): NativeC
   },
   window: {first: 0, rows: []},
 });
+
+/**
+ * The native backend's probe: the app says whether this build has the core compiled in and a host to draw it on. Only an
+ * explicit yes passes, so no app, an app without the command or an unexpected answer is a refusal with a reason. The GPU and
+ * surface probe is #1336. A rejected command is the registry's to record.
+ */
+export async function probeNativeCore(): Promise<BackendProbe> {
+  if (!isTauri()) return {ok: false, reason: 'this is not the lazysh app'};
+  const answer = await unguardedInvoke<{available?: boolean; reason?: string} | null>('terminal_core_available');
+  return answer?.available === true ? {ok: true} : {ok: false, reason: answer?.reason || 'the app did not report a native terminal core'};
+}
 
 /**
  * Opens a native core for a session that is about to start and returns its adapter. The core is built when the transport

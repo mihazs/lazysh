@@ -30,11 +30,12 @@ it('gives a new session the engine chosen in Settings and records why, while an 
   expect(first.adapter.backend).toBe('xterm');
   expect(first.selection).toEqual({id: 'xterm', reason: 'automatic', fallbacks: []});
 
-  // Only xterm.js is registered: choosing Native cannot change the engine, and the session records that it was refused.
+  // This build has no native core: choosing Native cannot change the engine, and the session records the app's reason for refusing it.
+  mocks.invoke.mockImplementation(async (command: string) => command === 'terminal_core_available' ? {available: false, reason: 'The native terminal core is not built into this app'} : undefined);
   choose('native');
   const second = await connectAnother(user, 'second');
   expect(second.adapter.backend).toBe('xterm');
-  expect(second.selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'not registered'}]});
+  expect(second.selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'The native terminal core is not built into this app'}]});
 
   choose('xterm');
   const third = await connectAnother(user, 'third');
