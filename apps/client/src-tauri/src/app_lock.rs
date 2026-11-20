@@ -679,6 +679,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "local_ack"
             | "terminal_core_close"
             | "terminal_core_available"
+            | "native_terminal_probe"
             | "native_terminal_surface_remove"
             | "disconnect"
             | "local_disconnect"

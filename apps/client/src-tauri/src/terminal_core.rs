@@ -598,6 +598,76 @@ pub fn terminal_core_available() -> CoreAvailability {
     )
 }
 
+/// What `native_terminal_probe` answers: whether a native terminal can run on this device and, when it cannot, why,
+/// with what the answer cost. The client's registry shows the reason as it is.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeProbe {
+    available: bool,
+    reason: String,
+    elapsed_ms: u64,
+}
+
+/// What a probe may cost before the app answers that native cannot be offered. A GPU driver that takes longer to
+/// list its adapters and create a device would also delay the first frame of every session.
+const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The build and host check first (free), then the GPU: `gpu` names the adapter the renderer would run on, or says
+/// why there is none. It is not called for a build that could not run a native terminal anyway.
+fn probe(build: CoreAvailability, gpu: impl FnOnce() -> Result<String, String>) -> NativeProbe {
+    let started = std::time::Instant::now();
+    let (available, reason) = match build.available.then(gpu) {
+        None => (false, build.reason.into()),
+        Some(Ok(adapter)) => (true, format!("The native terminal can draw on {adapter}")),
+        Some(Err(why)) => (
+            false,
+            format!("The native terminal cannot draw on this device: {why}"),
+        ),
+    };
+    NativeProbe {
+        available,
+        reason,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    }
+}
+
+/// Runs `work` off the async runtime and answers within `budget`: a probe that is still running then is a refusal.
+/// The work is not cancelled (a driver call cannot be), so its answer still reaches whoever caches it.
+async fn within(
+    budget: std::time::Duration,
+    work: impl FnOnce() -> NativeProbe + Send + 'static,
+) -> NativeProbe {
+    let refused = |reason: String| NativeProbe {
+        available: false,
+        reason,
+        elapsed_ms: budget.as_millis() as u64,
+    };
+    match tokio::time::timeout(budget, tauri::async_runtime::spawn_blocking(work)).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(error)) => refused(format!("The native terminal probe failed: {error}")),
+        Err(_) => refused(format!(
+            "The native terminal probe took longer than {} ms",
+            budget.as_millis()
+        )),
+    }
+}
+
+/// The registry's second question, after `terminal_core_available` (#1336): can the renderer draw on this device?
+/// It asks for an adapter under the shipping policy, which refuses CPU rasterizers, and creates its device. Each
+/// platform's surface check joins here with its host. The answer is kept for the life of the process, so the cost is
+/// paid once; a probe over its budget answers "no" for now and the kept answer serves the next start of the registry.
+/// Allowed while locked: it reads the device, nothing of the user's.
+#[tauri::command]
+pub async fn native_terminal_probe() -> NativeProbe {
+    static ANSWER: std::sync::OnceLock<NativeProbe> = std::sync::OnceLock::new();
+    within(PROBE_BUDGET, || {
+        ANSWER
+            .get_or_init(|| probe(terminal_core_available(), native::gpu))
+            .clone()
+    })
+    .await
+}
+
 /// The real core, `lazysh-terminal-runtime` on libghostty-vt, which needs Zig 0.16.0 to build; without
 /// the `native-terminal` feature no build needs Zig and the commands report that.
 #[cfg(not(feature = "native-terminal"))]
@@ -609,6 +679,10 @@ mod native {
         _: crate::app_lock::AccessLease,
         _: tauri::ipc::Channel<crate::ssh::SshEvent>,
     ) -> Result<super::Factory, String> {
+        Err(super::NOT_BUILT.into())
+    }
+
+    pub(super) fn gpu() -> Result<String, String> {
         Err(super::NOT_BUILT.into())
     }
 }
@@ -624,6 +698,17 @@ mod native {
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
+
+    /// The adapter the shipping policy picks, as "name (backend)", or the renderer's reason for having none.
+    pub(super) fn gpu() -> Result<String, String> {
+        gpu_under(&lazysh_terminal_renderer_wgpu::Policy::for_platform())
+    }
+
+    fn gpu_under(policy: &lazysh_terminal_renderer_wgpu::Policy) -> Result<String, String> {
+        lazysh_terminal_renderer_wgpu::probe(policy)
+            .map(|adapter| format!("{} ({:?})", adapter.name, adapter.backend))
+            .map_err(|error| error.to_string())
+    }
 
     /// Replies and encoded input leave through the transport's input queue under the renderer's
     /// latest lease. A refusal (gated, queue full, session gone) drops a reply and fails an input
@@ -866,6 +951,23 @@ mod native {
     mod tests {
         use super::*;
         use std::time::{Duration, Instant};
+
+        /// The cost on this machine's own drivers, with CPU rasterizers allowed so that a runner without a GPU
+        /// still creates a device, the expensive half. The shipping policy refuses that adapter.
+        #[test]
+        fn the_real_gpu_probe_answers_within_the_budget_and_never_offers_a_software_rasterizer() {
+            let policy = lazysh_terminal_renderer_wgpu::Policy::for_platform();
+            let started = Instant::now();
+            let lenient = gpu_under(&policy.clone().with_software());
+            let cost = started.elapsed();
+            println!("native terminal GPU probe: {lenient:?} in {cost:?}");
+            assert!(cost < PROBE_BUDGET, "{cost:?}");
+            let strict = gpu();
+            match &strict {
+                Ok(adapter) => assert_eq!(lenient.as_ref(), Ok(adapter)),
+                Err(why) => assert!(why.contains("no hardware GPU") == lenient.is_ok(), "{why}"),
+            }
+        }
 
         /// A real core and what it wrote to the transport so far.
         struct Fixture {
@@ -1678,6 +1780,71 @@ mod tests {
         assert!(!answer["reason"].as_str().unwrap().is_empty());
         assert!(crate::app_lock::allowed_while_locked(
             "terminal_core_available"
+        ));
+    }
+
+    #[test]
+    fn the_probe_asks_the_gpu_only_of_a_build_that_could_run_native_and_carries_its_reason() {
+        let asked = std::cell::Cell::new(0);
+        let ask = |answer: Result<&str, &str>| {
+            asked.set(asked.get() + 1);
+            answer.map(String::from).map_err(String::from)
+        };
+        let missing = probe(availability(false, true), || ask(Ok("unused")));
+        assert_eq!((missing.available, asked.get()), (false, 0));
+        assert_eq!(missing.reason, NOT_BUILT);
+        let software = probe(availability(true, true), || {
+            ask(Err(
+                "renderer unsupported: no hardware GPU, only a software rasterizer",
+            ))
+        });
+        assert!(!software.available);
+        assert!(
+            software.reason.contains("no hardware GPU"),
+            "{}",
+            software.reason
+        );
+        let drawn = probe(availability(true, true), || ask(Ok("Radeon (Vulkan)")));
+        assert!(drawn.available);
+        assert!(drawn.reason.contains("Radeon (Vulkan)"), "{}", drawn.reason);
+        assert_eq!(asked.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_probe_over_its_budget_is_a_refusal_that_says_so_and_one_within_it_is_passed_on() {
+        let answer = NativeProbe {
+            available: true,
+            reason: "drawn".into(),
+            elapsed_ms: 3,
+        };
+        let kept = answer.clone();
+        assert_eq!(within(PROBE_BUDGET, move || kept).await, answer);
+        let budget = std::time::Duration::from_millis(20);
+        let late = within(budget, move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            answer
+        })
+        .await;
+        assert!(!late.available);
+        assert!(late.reason.contains("longer than 20 ms"), "{}", late.reason);
+    }
+
+    #[tokio::test]
+    async fn this_build_answers_the_probe_once_within_the_budget_and_repeats_the_same_answer() {
+        let started = std::time::Instant::now();
+        let first = native_terminal_probe().await;
+        assert!(started.elapsed() < PROBE_BUDGET, "{:?}", started.elapsed());
+        // Only an Android build with the core has a host to draw on, so every other build is refused with a reason.
+        if !cfg!(all(feature = "native-terminal", target_os = "android")) {
+            assert!(!first.available);
+        }
+        assert!(!first.reason.is_empty());
+        assert!(first.elapsed_ms < PROBE_BUDGET.as_millis() as u64);
+        assert_eq!(native_terminal_probe().await, first);
+        let answer = serde_json::to_value(&first).unwrap();
+        assert!(answer["elapsedMs"].is_u64(), "{answer}");
+        assert!(crate::app_lock::allowed_while_locked(
+            "native_terminal_probe"
         ));
     }
 

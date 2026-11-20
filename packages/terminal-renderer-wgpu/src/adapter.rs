@@ -206,9 +206,27 @@ pub(crate) fn select(
             });
         }
     }
-    Err(RenderError::Unsupported(
-        "no adapter the policy accepts could create a device",
-    ))
+    Err(RenderError::Unsupported(refusal(policy, &infos)))
+}
+
+/// Why the policy ends up with no adapter. A machine whose only adapters are CPU rasterizers the
+/// policy refuses is named apart: that is a device without a GPU, not a broken driver.
+pub fn refusal(policy: &Policy, adapters: &[AdapterInfo]) -> &'static str {
+    let software_only = ranked(policy, adapters).is_empty()
+        && adapters.iter().any(|info| {
+            info.device_type == DeviceType::Cpu && policy.backends.contains(&info.backend)
+        });
+    if software_only {
+        "no hardware GPU, only a software rasterizer"
+    } else {
+        "no adapter the policy accepts could create a device"
+    }
+}
+
+/// The check before a native terminal is offered (#1336): the adapter a renderer of this policy
+/// would run on, with its device created and dropped again, or why there is none.
+pub fn probe(policy: &Policy) -> Result<AdapterInfo, RenderError> {
+    select(policy, None, (1, 1)).map(|selected| selected.info)
 }
 
 /// How to present on `surface` with `adapter` (vsync, opaque); `None` when the adapter cannot.
@@ -331,6 +349,42 @@ mod tests {
             adapter(Backend::Gl, DeviceType::Cpu),
         ];
         assert!(ranked(&policy, &all).is_empty());
+    }
+
+    #[test]
+    fn a_machine_with_only_a_refused_software_rasterizer_is_told_it_has_no_hardware_gpu() {
+        let strict = Policy {
+            backends: vec![Backend::Vulkan],
+            allow_software: false,
+        };
+        let cpu = adapter(Backend::Vulkan, DeviceType::Cpu);
+        let gpu = adapter(Backend::Vulkan, DeviceType::IntegratedGpu);
+        assert!(refusal(&strict, std::slice::from_ref(&cpu)).contains("no hardware GPU"));
+        // A GPU that failed to create a device, no adapter at all, a rasterizer of a backend the
+        // policy does not list and an allowed rasterizer that failed are not "no hardware GPU".
+        let other = [adapter(Backend::Gl, DeviceType::Cpu)];
+        for (policy, adapters) in [
+            (&strict, &[cpu.clone(), gpu][..]),
+            (&strict, &[][..]),
+            (&strict, &other[..]),
+            (&strict.clone().with_software(), std::slice::from_ref(&cpu)),
+        ] {
+            assert!(refusal(policy, adapters).contains("could create a device"));
+        }
+    }
+
+    /// On this machine's real adapters: the CI runner has only Mesa's CPU rasterizers, a desktop a GPU.
+    #[test]
+    fn the_probe_refuses_a_machine_without_a_hardware_gpu_and_names_the_adapter_of_one_with() {
+        let strict = Policy::for_platform();
+        match probe(&strict.clone().with_software()) {
+            Ok(info) if info.device_type == DeviceType::Cpu => assert!(matches!(
+                probe(&strict),
+                Err(RenderError::Unsupported(why)) if why.contains("no hardware GPU")
+            )),
+            Ok(info) => assert_eq!(probe(&strict), Ok(info)),
+            Err(_) => assert!(probe(&strict).is_err()),
+        }
     }
 
     #[test]

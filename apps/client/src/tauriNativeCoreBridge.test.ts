@@ -198,9 +198,26 @@ describe('the native core over the Tauri commands', () => {
 describe('the native backend probe', () => {
   const asks = (answer: unknown) => { invoke.mockResolvedValueOnce(answer); return probeNativeCore(); };
 
-  it('passes only when the app says the core and its surface host are present', async () => {
-    expect(await asks({available: true, reason: 'The native terminal core and its surface host are present'})).toEqual({ok: true});
-    expect(invoke).toHaveBeenCalledWith('terminal_core_available');
+  it('passes only when the app says the core and its surface host are present and the device can draw it', async () => {
+    invoke.mockResolvedValueOnce({available: true, reason: 'The native terminal core and its surface host are present'});
+    expect(await asks({available: true, reason: 'The native terminal can draw on Radeon (Vulkan)', elapsedMs: 41})).toEqual({ok: true});
+    expect(commands()).toEqual(['terminal_core_available', 'native_terminal_probe']);
+  });
+
+  it('refuses a device whose GPU cannot draw the terminal with the reason the app gives', async () => {
+    const reason = 'The native terminal cannot draw on this device: renderer unsupported: no hardware GPU, only a software rasterizer';
+    invoke.mockResolvedValueOnce({available: true, reason: 'present'});
+    expect(await asks({available: false, reason, elapsedMs: 12})).toEqual({ok: false, reason});
+  });
+
+  it.each([undefined, null, {available: 'yes'}, {}])('refuses, with a reason, a device answer that is not an explicit yes (%j)', async answer => {
+    invoke.mockResolvedValueOnce({available: true, reason: 'present'});
+    expect(await asks(answer)).toEqual({ok: false, reason: 'the app did not report whether this device can draw a native terminal'});
+  });
+
+  it('does not probe the device of a build without the core', async () => {
+    await asks({available: false, reason: 'The native terminal core is not built into this app'});
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('carries the reason the app gives for a refusal', async () => {
