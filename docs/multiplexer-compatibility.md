@@ -152,7 +152,7 @@ implemented without full evidence, *part* means partial.
 | Split, zoom | yes | yes | yes | no → #1140 |
 | Resize | no → #1144 | impl → yes #1685 | yes | no → #1144 |
 | History | prefix+[ only → #1147 | no → #1147 | no → #1147 | no → #1147 |
-| OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
+| OSC 52 | impl; `set-clipboard` documented → yes #1699 | impl; default → yes #1699 | impl; default over SSH → yes #1699 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
 | Notification opens the pane | part → #1146 | part: the attached session's pane #1690 | part → #1146 | no → #1146 |

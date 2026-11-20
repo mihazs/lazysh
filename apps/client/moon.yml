@@ -37,6 +37,11 @@ tasks:
     type: test
     command: bun run test:e2e
     options: &local {cache: false}
+  # The tmux, Zellij and Herdr OSC 52 copy cases; native-linux-runtimes runs them with the pinned binaries.
+  test-e2e-multiplexers:
+    type: test
+    command: bun run test:e2e:multiplexers
+    options: *local
   test-install-browser:
     command: playwright install chromium
     options: *local
