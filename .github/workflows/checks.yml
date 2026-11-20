@@ -39,6 +39,7 @@ jobs:
       herdr: ${{ steps.paths.outputs.herdr }}
       terminal_runtime: ${{ steps.paths.outputs.terminal_runtime }}
       terminal_bridge: ${{ steps.paths.outputs.terminal_bridge }}
+      terminal_windows: ${{ steps.paths.outputs.terminal_windows }}
       linux: ${{ steps.paths.outputs.linux }}
       linux_runtimes: ${{ steps.paths.outputs.linux_runtimes }}
       desktop: ${{ steps.paths.outputs.desktop }}
@@ -57,6 +58,7 @@ jobs:
       terminal_perf: ${{ steps.paths.outputs.terminal_perf }}
       terminal_macos: ${{ steps.paths.outputs.terminal_macos }}
       linux_surface: ${{ steps.paths.outputs.linux_surface }}
+      terminal_ios: ${{ steps.paths.outputs.terminal_ios }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,6 +153,9 @@ jobs:
         working-directory: apps/client
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: native
+      # The kill switch (#1342): a production bundle built with LAZYSH_NATIVE_TERMINAL=off keeps every new session on xterm.js.
+      - run: bun run test:e2e:kill-switch
+        working-directory: apps/client
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
@@ -644,11 +649,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # macOS has no sha256sum or timeout, which the aliased steps below use.
-      - name: Install GNU coreutils for the checksum and timeout tools of the shared steps
+      - &macos-gnu-coreutils
+        name: Install GNU coreutils for the checksum and timeout tools of the shared steps
         run: |
           brew install coreutils
           echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
-      - name: Set task-owned external source, target and tool paths
+      - &macos-task-paths
+        name: Set task-owned external source, target and tool paths
         run: |
           printf '%s\n' \
             "HERDR_CI_ROOT=$RUNNER_TEMP/lazysh-herdr-native" \
@@ -656,7 +663,9 @@ jobs:
             "ZIG_LOCAL_CACHE_DIR=$RUNNER_TEMP/lazysh-herdr-native/zig-local" \
             "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TEMP/lazysh-herdr-native/zig-global" \
             "ZIG=$RUNNER_TEMP/lazysh-herdr-native/zig-aarch64-macos-0.16.0/zig" >> "$GITHUB_ENV"
-      - name: Copy the runtime, the renderer and the Herdr sources they build against
+      # terminal-ios copies the renderer too and does not build it: one step for both jobs.
+      - &macos-copy-sources
+        name: Copy the runtime, the renderer and the Herdr sources they build against
         run: |
           mkdir -p "$HERDR_CI_ROOT"
           cp -a packages/herdr-upstream packages/terminal-runtime packages/terminal-renderer-wgpu "$HERDR_CI_ROOT"
@@ -677,7 +686,8 @@ jobs:
       - *herdr-zig-packages
       - *herdr-zig-scrub
       - *pinned-download-cache
-      - name: Provision checksum-verified Zig 0.16.0 for Apple silicon outside the checkout
+      - &macos-zig-provision
+        name: Provision checksum-verified Zig 0.16.0 for Apple silicon outside the checkout
         # Official receipt: https://ziglang.org/download/index.json [0.16.0][aarch64-macos].shasum
         run: |
           sh .github/scripts/pinned-download.sh b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489 "$HERDR_CI_ROOT/zig-aarch64-macos-0.16.0.tar.xz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz
@@ -748,6 +758,187 @@ jobs:
           path: ${{ runner.temp }}/linux-surface
           if-no-files-found: warn
           retention-days: 7
+
+  # The terminal core and its wgpu renderer on Windows (#1332). A Linux host has no MSVC headers for
+  # libghostty-vt's Zig build, so this is the only place `x86_64-pc-windows-msvc` is built: Zig compiles the
+  # library against the runner's MSVC and Windows SDK (the file LIBGHOSTTY_VT_WINDOWS_LIBC names), then both
+  # crates run their own tests. The runner has no GPU: the renderer tests run on Direct3D 12 with WARP, the CPU
+  # adapter that ships with Windows, which the test policy accepts and the shipping policy refuses.
+  terminal-windows:
+    needs: changes
+    if: needs.changes.outputs.terminal_windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The runner's Git converts line endings on checkout; the Zig sources, fixtures and goldens must be the bytes Linux builds.
+      - name: Check out LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Set task-owned source, target and tool paths
+        run: |
+          root="$(cygpath -m "$RUNNER_TEMP")/lazysh-terminal-windows"
+          printf '%s\n' \
+            "HERDR_CI_ROOT=$root" \
+            "CARGO_TARGET_DIR=$root/target" \
+            "ZIG_LOCAL_CACHE_DIR=$root/zig-local" \
+            "ZIG_GLOBAL_CACHE_DIR=$root/zig-global" \
+            "ZIG=$root/zig-x86_64-windows-0.16.0/zig.exe" \
+            "LIBGHOSTTY_VT_WINDOWS_LIBC=$root/windows-libc.txt" \
+            "LAZYSH_CI_SCRIPTS=$(cygpath -m "$GITHUB_WORKSPACE")/.github/scripts" >> "$GITHUB_ENV"
+      - name: Copy the runtime, the renderer and the Herdr sources they build against
+        run: |
+          mkdir -p "$HERDR_CI_ROOT"
+          cp -a packages/herdr-upstream packages/terminal-runtime packages/terminal-renderer-wgpu "$HERDR_CI_ROOT/"
+          # The same shared fixtures herdr-native hands the runtime tests.
+          cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
+          cp -a apps/client/e2e/fixtures/platform-keys "$HERDR_CI_ROOT/platform-keys"
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - name: Restore the pinned Zig download
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lazysh-pinned-downloads
+          key: lazysh-pinned-downloads-${{ github.job }}-v1-zig68659eb5
+      - name: Provision checksum-verified Zig 0.16.0 outside the checkout
+        # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-windows].shasum
+        run: |
+          archive="$HERDR_CI_ROOT/zig-x86_64-windows-0.16.0.zip"
+          sh "$LAZYSH_CI_SCRIPTS/pinned-download.sh" 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip
+          printf '%s  %s\n' '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e' "$archive" | sha256sum --check --strict
+          pwsh -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$HERDR_CI_ROOT'"
+          "$ZIG" version
+          rustc +1.96.1 --version
+          cargo +1.96.1 --version
+      # Zig finds the Visual Studio C++ tools and the Windows SDK on this host and writes their directories
+      # (`include_dir`, `sys_include_dir`, `crt_dir`, `msvc_lib_dir`, `kernel32_lib_dir`) in the file build.rs
+      # forwards to `zig build --libc`; reading it back fails on a directory that does not exist.
+      # Zig 0.16.0 bundles Clang 21 and the runner's newest MSVC STL (14.52) stops any Clang older than 22 with
+      # STL1000, which fails the C++ half of libghostty-vt (simdutf, highway); the previous toolset (14.51) accepted it.
+      # Microsoft's switch for this is _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH. The Zig build takes no flags from
+      # here, so the libc file names a copy of the MSVC headers that defines it instead of the runner's own.
+      - name: Describe the runner's MSVC and Windows SDK headers for the Zig build
+        run: |
+          "$ZIG" libc > "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          msvc_include="$(sed -n 's/^sys_include_dir=//p' "$LIBGHOSTTY_VT_WINDOWS_LIBC" | tr -d '\r')"
+          cp -a "$(cygpath -u "$msvc_include")" "$HERDR_CI_ROOT/msvc-include"
+          chmod -R u+w "$HERDR_CI_ROOT/msvc-include"
+          sed -i '1i #define _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH' "$HERDR_CI_ROOT/msvc-include/yvals_core.h"
+          sed -i "s|^sys_include_dir=.*|sys_include_dir=$HERDR_CI_ROOT/msvc-include|" "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          cat "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          "$ZIG" libc "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+      - name: Build libghostty-vt for Windows and the runtime's tests
+        working-directory: ${{ runner.temp }}/lazysh-terminal-windows/terminal-runtime
+        run: sh "$LAZYSH_CI_SCRIPTS/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run
+      - name: Test the shared terminal runtime on Windows
+        working-directory: ${{ runner.temp }}/lazysh-terminal-windows/terminal-runtime
+        env:
+          LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-terminal-windows/mosh-resize-frames.json
+          LAZYSH_PLATFORM_KEYS_FIXTURES: ${{ runner.temp }}/lazysh-terminal-windows/platform-keys
+        run: cargo +1.96.1 test --locked
+      - name: Test the wgpu renderer on Direct3D 12 and WARP against the runtime and the reference renderer
+        working-directory: ${{ runner.temp }}/lazysh-terminal-windows/terminal-renderer-wgpu
+        run: |
+          cargo +1.96.1 test --locked
+          # Name the adapter the tests drew on in the log: Direct3D 12 on a hosted runner is WARP.
+          cargo +1.96.1 test --locked --test frames windows_draws_on_direct3d_12 -- --nocapture
+
+  # The terminal core on iOS (#1330). herdr-native builds libghostty-vt for Linux and Android only: the Apple SDK
+  # package of Ghostty's build needs a macOS host with Xcode. Here Zig builds it against the runner's iPhoneOS and
+  # iPhoneSimulator SDKs and the runtime crate is built for aarch64-apple-ios (linked, never run: no device) and
+  # aarch64-apple-ios-sim (every test runs inside a booted simulator through `simctl spawn`, the way the Mosh
+  # transport's iOS tests do). Nothing here says how a surface, input, IME, VoiceOver, a real device's CPU or its
+  # battery behave. It shares terminal-macos's setup steps, herdr-native's admitted archives and the caches by alias.
+  # Not a required check, so it runs on pushes to main only (native-changes.sh).
+  terminal-ios:
+    needs: changes
+    if: needs.changes.outputs.terminal_ios == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      # The app's minimum, which the iOS simulator job links Mosh with.
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    steps:
+      - uses: actions/checkout@v4
+      - *macos-gnu-coreutils
+      - *macos-task-paths
+      - *macos-copy-sources
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - *herdr-cargo-downloads
+      - *herdr-zig-packages
+      - *herdr-zig-scrub
+      - *pinned-download-cache
+      - name: Add the iOS targets, report the host and the SDKs, and require Apple silicon
+        run: |
+          rustup +1.96.1 target add aarch64-apple-ios aarch64-apple-ios-sim
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          xcrun simctl list runtimes available
+          host=$(rustc +1.96.1 -vV | sed -n 's/^host: //p')
+          [ "$host" = aarch64-apple-darwin ] || { echo "::error::the runner's Rust host is $host, expected aarch64-apple-darwin"; exit 1; }
+      - *macos-zig-provision
+      - *uucode-download
+      - *uucode-admission
+      - *highway-download
+      - *highway-admission
+      - *pixels-download
+      - *pixels-admission
+      # Each target builds its own libghostty-vt (the build script keeps one archive per target). The steps are
+      # independent and run on after a failure, so one run reports every iOS failure.
+      - name: Build libghostty-vt and link the runtime's tests for iOS devices
+        id: device-build
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run --target aarch64-apple-ios
+          cargo +1.96.1 clippy --locked --all-targets --target aarch64-apple-ios -- -D warnings
+      - name: Build libghostty-vt and link the runtime's tests for the iOS simulator
+        id: simulator-build
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run --target aarch64-apple-ios-sim
+          cargo +1.96.1 clippy --locked --all-targets --target aarch64-apple-ios-sim -- -D warnings
+      - name: Create and boot an isolated iOS simulator
+        id: simulator
+        if: ${{ !cancelled() && steps.simulator-build.outcome == 'success' }}
+        run: |
+          id=$(xcrun simctl create lazysh-terminal-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)
+          echo "LAZYSH_IOS_SIMULATOR_ID=$id" >> "$GITHUB_ENV"
+          xcrun simctl bootstatus "$id" -b
+      # `cargo test` hands each test executable to the runner, and `simctl spawn` runs it inside the simulator, which
+      # sees this host's file system. It passes on only the variables with the SIMCTL_CHILD_ prefix.
+      - name: Run every test of the runtime inside the iOS simulator
+        if: ${{ !cancelled() && steps.simulator.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        env:
+          SIMCTL_CHILD_LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-herdr-native/mosh-resize-frames.json
+          SIMCTL_CHILD_LAZYSH_PLATFORM_KEYS_FIXTURES: ${{ runner.temp }}/lazysh-herdr-native/platform-keys
+        timeout-minutes: 20
+        run: |
+          export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="xcrun simctl spawn --standalone $LAZYSH_IOS_SIMULATOR_ID"
+          cargo +1.96.1 test --locked --no-fail-fast --target aarch64-apple-ios-sim
+      # An executable built for macOS would link and pass on this host and say nothing about iOS. Cargo is told not to colour its output: CI sets CARGO_TERM_COLOR=always, which breaks the match.
+      - name: Require an iOS device build and an iOS simulator build, not a macOS one
+        if: ${{ !cancelled() && steps.device-build.outcome == 'success' && steps.simulator-build.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          for pair in aarch64-apple-ios:IOS aarch64-apple-ios-sim:IOSSIMULATOR; do
+            target=${pair%%:*} platform=${pair##*:}
+            executable=$(cargo +1.96.1 test --color never --locked --no-run --target "$target" --test keys 2>&1 | sed -n 's/^ *Executable tests\/keys.rs (\(.*\))$/\1/p')
+            [ -n "$executable" ] || { echo "::error::cargo named no executable for the keys test of $target"; exit 1; }
+            xcrun vtool -show-build "$executable" | tee "$RUNNER_TEMP/vtool-$target.txt"
+            grep -Eq "^ *platform $platform$" "$RUNNER_TEMP/vtool-$target.txt" || { echo "::error::the $target executable is not a $platform build"; exit 1; }
+          done
+      - name: Delete the simulator
+        if: ${{ always() && env.LAZYSH_IOS_SIMULATOR_ID != '' }}
+        run: xcrun simctl delete "$LAZYSH_IOS_SIMULATOR_ID"
 
   native-linux:
     needs: [changes, herdr-native]
@@ -1133,6 +1324,20 @@ jobs:
         run: |
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --ignored --exact "$CASE_NAME" | grep -Fx -- "$CASE_NAME: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --ignored --exact --test-threads=1 "$CASE_NAME"
+      # The kill switch (#1342): with LAZYSH_NATIVE_TERMINAL=off the app leaves the real core out even though the feature is on, and the
+      # bridge and surface commands say so. The guards fail the step if a rename leaves a case unlisted.
+      - name: Check that the kill switch removes the real core from a build with the feature on
+        env:
+          LAZYSH_NATIVE_TERMINAL: 'off'
+        run: |
+          guards=(
+            terminal_core::tests::without_the_real_core_the_commands_say_why
+            native_terminal_surface::tests::the_surface_is_refused_disabled_in_this_build
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --exact "${guards[@]}"
 
   native-desktop:
     needs: changes

@@ -6,7 +6,7 @@
 # consumers are uncertain it must select more jobs, never fewer.
 # Exception: a pull request never selects the jobs that are not required to merge (companion
 # candidates, macOS and Windows desktop, iOS simulator, Mosh, Herdr navigation, auxiliary
-# Android, ntfy, terminal core on macOS). They run on pushes to main, where main-verdict.yml reports their verdict.
+# Android, ntfy, terminal core on macOS and iOS). They run on pushes to main, where main-verdict.yml reports their verdict.
 # The terminal performance gate (terminal_perf) is report-only too, but a pull request that selects the terminal runtime area runs it.
 set -u
 
@@ -28,12 +28,12 @@ package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
     # The app's native-terminal bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt (native-terminal-bridge).
-    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
+    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge terminal_windows ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
     herdr-upstream/*) add herdr terminal_runtime ;;
     herdr-guard/*) add herdr ;;
     terminal-runtime/prototypes) add linux_surface ;; # a standalone prototype crate with its own lock file: only its own job builds it.
-    terminal-runtime/*) add terminal_runtime terminal_bridge ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
-    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge ;; # the app compiles it with the native-terminal feature.
+    terminal-runtime/*) add terminal_runtime terminal_bridge terminal_windows ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt. terminal-windows builds and tests it again on Windows.
+    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge terminal_windows ;; # the app compiles it with the native-terminal feature.
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
@@ -63,7 +63,7 @@ classify() {
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
       apps/client/src-tauri/src/apple_*) add client ios ;;
     # The terminal runtime replays this file in herdr-native; the client e2e suite reads it too.
-    apps/client/e2e/fixtures/mosh-resize-frames.json | apps/client/e2e/fixtures/platform-keys/*) add client terminal_runtime ;;
+    apps/client/e2e/fixtures/mosh-resize-frames.json | apps/client/e2e/fixtures/platform-keys/*) add client terminal_runtime terminal_windows ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
     apps/notification-service/*) add agent push relay ;;
@@ -127,6 +127,7 @@ for output in \
   "herdr=$herdr" \
   "terminal_runtime=$(flag any terminal_runtime)" \
   "terminal_bridge=$(flag any client terminal_bridge)" \
+  "terminal_windows=$(flag has terminal_windows)" \
   "linux=$linux" \
   "linux_runtimes=$linux_runtimes" \
   "desktop=$(flag any client agent)" \
@@ -141,7 +142,8 @@ for output in \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
   "terminal_macos=$(flag has terminal_runtime)" \
-  "linux_surface=$(flag any linux_surface)"; do
+  "linux_surface=$(flag any linux_surface)" \
+  "terminal_ios=$(flag has terminal_runtime)"; do
   # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
   name=${output%%=*}

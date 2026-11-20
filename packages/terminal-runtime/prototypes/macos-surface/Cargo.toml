@@ -1,0 +1,29 @@
+[package]
+name = "lazysh-macos-surface-poc"
+version = "0.0.0"
+edition = "2021"
+description = "Composition probe for a native terminal surface below the transparent WKWebView in wry's WryWebViewParent (#1333); not shipped"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Standalone, like the Linux prototype: AppKit crates must not reach the app's workspace or the runtime's lock file.
+[workspace]
+
+[lib]
+name = "surface_analysis"
+path = "src/analysis.rs"
+
+[[bin]]
+name = "surface-poc"
+path = "src/main.rs"
+
+# The versions the app ships (Cargo.lock at the repository root): tauri 2.12.5 uses wry 0.57.1 on tao 0.37.2.
+[target.'cfg(target_os = "macos")'.dependencies]
+tao = "=0.37.2"
+wry = "=0.57.1"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-metal = "0.3"
+objc2-quartz-core = "0.3"
+png = "0.17"

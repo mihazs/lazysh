@@ -1,4 +1,5 @@
 import type {TerminalAdapter, TerminalBackendId} from './terminalAdapter';
+import type {BackendSelection} from './terminalBackendRegistry';
 
 /**
  * The backend matrix of the terminal e2e specs: `LAZYSH_E2E_TERMINAL_BACKEND=xterm|native` makes every spec that takes its `test`
@@ -25,9 +26,29 @@ export function assertBackendUsed(used: TerminalBackendId, requested = requested
   if (requested && used !== requested) throw new BackendMismatchError(`${BACKEND_ENV}=${requested} but the terminal on screen is the ${used} backend: the app fell back or a fixture mounts ${used}, so this run says nothing about ${requested}.`);
 }
 
-/** The part of Playwright's `Page` that `onAdapter` uses; a Playwright `Page` is assignable to it. */
+/** A handle to a value in the page, as far as these helpers use Playwright's `JSHandle`. */
+type PageHandle<T> = {evaluate<R, A = void>(use: (value: T, arg: A) => R | Promise<R>, arg?: A): Promise<R>; jsonValue(): Promise<T>; dispose(): Promise<void>};
+
+/** The part of Playwright's `Page` that `onAdapter` and `terminalSelection` use; a Playwright `Page` is assignable to it. */
 export interface AdapterPage {
-  evaluateHandle(find: () => TerminalAdapter): Promise<{evaluate<R, A = void>(use: (adapter: TerminalAdapter, arg: A) => R | Promise<R>, arg?: A): Promise<R>; dispose(): Promise<void>}>;
+  evaluateHandle<T>(find: (part: SessionPart) => T, part: SessionPart): Promise<PageHandle<T>>;
+}
+
+type SessionPart = 'adapter' | 'selection';
+
+/** One member of the `session` the visible `TerminalPane` was given, found in React's fiber tree rather than through a hook in the product. Serialized into the page: it reaches only its argument. */
+function sessionPart(part: SessionPart): unknown {
+  type Fiber={memoizedProps?:{session?:Record<string,unknown>}|null;return:Fiber|null};
+  const canvas=[...document.querySelectorAll('.terminal-canvas')].find(node=>node.getClientRects().length>0);
+  const key=canvas&&Object.keys(canvas).find(name=>name.startsWith('__reactFiber$'));
+  for(let fiber=key?Reflect.get(canvas,key) as Fiber|null:null;fiber;fiber=fiber.return)if(fiber.memoizedProps?.session?.adapter)return fiber.memoizedProps.session[part];
+  throw new Error('No terminal is drawn on this page.');
+}
+
+/** The registry's record of the terminal on screen: its engine, why that engine, and which ones were refused on the way. */
+export async function terminalSelection(page:AdapterPage):Promise<BackendSelection> {
+  const selection=await page.evaluateHandle(sessionPart as (part:SessionPart)=>BackendSelection,'selection');
+  try{return await selection.jsonValue();}finally{await selection.dispose();}
 }
 
 /**
@@ -38,13 +59,7 @@ export interface AdapterPage {
  * (`LAZYSH_E2E_TERMINAL_BACKEND`), a terminal of another backend throws before `use` runs, so a silent fallback fails the spec.
  */
 export async function onAdapter<R,A=void>(page:AdapterPage,use:(adapter:TerminalAdapter,arg:A)=>R|Promise<R>,arg?:A):Promise<R> {
-  const adapter=await page.evaluateHandle(()=>{
-    type Fiber={memoizedProps?:{session?:{adapter?:unknown}}|null;return:Fiber|null};
-    const canvas=[...document.querySelectorAll('.terminal-canvas')].find(node=>node.getClientRects().length>0);
-    const key=canvas&&Object.keys(canvas).find(name=>name.startsWith('__reactFiber$'));
-    for(let fiber=key?Reflect.get(canvas,key) as Fiber|null:null;fiber;fiber=fiber.return)if(fiber.memoizedProps?.session?.adapter)return fiber.memoizedProps.session.adapter as TerminalAdapter;
-    throw new Error('No terminal is drawn on this page.');
-  });
+  const adapter=await page.evaluateHandle(sessionPart as (part:SessionPart)=>TerminalAdapter,'adapter');
   try{
     const requested=requestedBackend();
     if(requested)assertBackendUsed(await adapter.evaluate(terminal=>terminal.backend),requested);
