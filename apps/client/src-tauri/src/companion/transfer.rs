@@ -88,7 +88,13 @@ pub(super) struct Staging {
     cleanup_stage: CleanupStage,
 }
 impl Staging {
-    pub fn new(raw: RawSftpSession, unix: &resolve::Unix, selection: &release::Selection) -> Self {
+    /// `name` is the staged file's own name inside the private staging directory.
+    pub fn new(
+        raw: RawSftpSession,
+        unix: &resolve::Unix,
+        selection: &release::Selection,
+        name: &str,
+    ) -> Self {
         let directory = format!(
             "{}/.lazysh-install-{}",
             unix.home.trim_end_matches('/'),
@@ -96,7 +102,7 @@ impl Staging {
         );
         Self {
             raw,
-            path: format!("{directory}/lazysh-agent"),
+            path: format!("{directory}/{name}"),
             directory,
             uid: unix.uid,
             digest: selection.digest.clone(),

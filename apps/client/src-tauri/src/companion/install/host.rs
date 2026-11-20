@@ -482,7 +482,7 @@ impl Operation {
         work: &mut Work,
         publisher: &release::Publisher,
     ) -> Result<Installed> {
-        let (unix, selection) = self.resolve(work, publisher).await?;
+        let (unix, selection) = self.resolve(work, publisher, Subject::Companion).await?;
         reject_newer(&self.installed_version(&unix).await?, &selection.version)?;
         self.work_stage(&mut work.phase, Stage::Verifying);
         publisher.recheck(&selection).await?;
@@ -530,7 +530,9 @@ impl Operation {
     /// What is installed, whether it can update itself, and how it compares with the latest release.
     pub(super) async fn check(&self, publisher: &release::Publisher) -> Result<Checked> {
         let mut work = Work::default();
-        let (unix, latest) = self.resolve(&mut work, publisher).await?;
+        let (unix, latest) = self
+            .resolve(&mut work, publisher, Subject::Companion)
+            .await?;
         let installed = self.installed_version(&unix).await?;
         let capability = self.probe(&unix).await?;
         let current = installed
