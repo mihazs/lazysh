@@ -221,7 +221,8 @@ function nativeHerdrNavigationRow(label:string,context?:string){
   const row=/val row = "([^"\n]+herdr-navigation-row[^"\n]+)"/.exec(nativeWorkspaceSource);
   if(!condition||!row)throw new Error('Native Herdr row selector contract changed');
   const match=condition[context===undefined?1:2].replaceAll('$targetLabel',()=>label).replaceAll('$context',()=>context??'');
-  return 'xpath='+row[1].replace('$match',()=>match);
+  // The native row also filters by agent status; the web e2e selects by label only.
+  return 'xpath='+row[1].replace('$match',()=>match).replace('$state','');
 }
 
 function nativeHerdrNavigationReady(label:string,context?:string){
