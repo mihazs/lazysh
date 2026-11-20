@@ -1,5 +1,48 @@
 # @lazysh/client
 
+## 1.82.0
+
+### Minor Changes
+
+- feat(herdr): collapse completed agent groups by default ([#1772](https://github.com/mihazs/lazysh/pull/1772))
+
+  <details><summary>Details</summary>
+
+  Completed live Herdr agents are collapsed under Done by default, leaving other statuses visible. Expand Done to see its agents; searching temporarily reveals matching groups and refreshes retain your choice. Changed default: the Done group of live Herdr agents starts collapsed; it was expanded before.
+
+  </details>
+- feat(devices): touch an Android device on its video preview ([#1773](https://github.com/mihazs/lazysh/pull/1773))
+
+  <details><summary>Details</summary>
+
+  With **Enable device input** ticked, a tap or swipe on the video is mapped to the display's pixel size that **Verify Android video tools** reports and sent with that size to the host companion (`lazysh-agent devices android tap` and `swipe`). The companion reads the display size again and refuses the gesture with `DeviceDimensionsChanged` when it changed (a rotation or resize) or the point is outside it, so a gesture never lands on the wrong point; the refusal also stops the video. A 180-degree rotation that keeps the size is not detected. Needs the updated host companion; an older one keeps the video view-only. A real Waydroid Android 13 guest accepted and refused gestures as described; the published CI emulator has not run the new case yet. Changed default: the Android video preview is no longer always view-only.
+
+  </details>
+- feat(desktop): bundle lazysh-agent with the Linux and Windows packages and prove it in the release ([#1855](https://github.com/mihazs/lazysh/pull/1855))
+
+  <details><summary>Details</summary>
+
+  Ship the matching `lazysh-agent` companion with every desktop package and prove it in the release checks (#1666, part of #1132). The Linux Debian package (`/usr/bin/lazysh-agent`) and AppImage and the Windows installer (`lazysh-agent.exe` beside the app) now carry the very companion the release's companion job built and verified for that platform, so a fresh install has a local companion where the local arm looks first (beside the app, then the managed copy, then the `PATH`, unchanged). The desktop release builds download that artifact, bind its receipt to the commit and version, and stage it through a Tauri `bundle.externalBin` entry used by release builds only. The release job unpacks each package and refuses to publish one whose companion is missing, not executable or different from the published one; the installer acceptance also checks it after the install and after the same-version repair. The AppImage copy is compared with its `RUNPATH` section rewritten by linuxdeploy ignored. The installers grow by one companion executable (about 11 MB). No defaults change; remote companion resolution and installation are unchanged, and macOS packages, which stay deferred, have the check in place but unexercised.
+
+  </details>
+
+### Patch Changes
+
+- fix(account-usage): stop a stalled Windows credential store from holding the Cline quota check ([#1778](https://github.com/mihazs/lazysh/pull/1778))
+
+  <details><summary>Details</summary>
+
+  The Cline store is now read on its own thread with a 3 second deadline: a file on an unreachable share or a cloud placeholder that never finishes downloading is reported as "not signed in" instead of keeping the collection waiting, Windows is asked to cancel the pending read, and at most four such reads can be left behind. The opened file must also be a disk file, so a path replaced by a pipe or device is refused. Cancellation is best effort: it bounds how long the check waits and how many threads it can strand, not the Windows request itself. Linux and macOS are unchanged. Following the Cline profile environment variables on Windows is tracked in #1748 and stays unavailable. No defaults change.
+
+  </details>
+- test(android): let the owned tmux fixture forward a DCS-wrapped OSC 52 to its attached client ([#1807](https://github.com/mihazs/lazysh/pull/1807))
+
+  <details><summary>Details</summary>
+
+  The pinned server starts with `allow-passthrough on` (tmux 3.3 or later is now required) and the beta window is an interactive shell, so a test can print the sequence there. A host test attaches a real client and sees the unwrapped request. Test fixture only; no app behaviour changes (#1546).
+
+  </details>
+
 ## 1.81.0
 
 ### Minor Changes
