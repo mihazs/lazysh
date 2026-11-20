@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {liftCodexDialog} from './agentDialogLiftCodex';
-import {dialogScreen, onTmux} from './test/agentDialogScreens';
+import {dialogScreen, onTmux, runsOn} from './test/agentDialogScreens';
 
 /** Screens captured from Codex 0.167.0 in a real 100x40 tmux pane, cut to the rows from the history above the dialog to its footer. */
 const lift = (name: string, rows = dialogScreen(name)) => liftCodexDialog(rows);
@@ -20,6 +20,25 @@ describe('liftCodexDialog on recorded Codex screens', () => {
     expect(found.options[2].detail).toBe('GPT-6.1 Terra Codex model.');
     expect(found.highlighted).toBe(2);
     expect(found.hint).toEqual(['enter select · esc back']);
+  });
+
+  it.each(['codex-approval', 'codex-model', 'codex-permissions', 'codex-review', 'codex-effort', 'codex-ratelimit', 'codex-question', 'codex-question-narrow', 'codex-question-multi', 'codex-question-last'])(
+    'names the rows of the %s dialog, from its text to its footer, once on the screen', name => {
+      const found = dialog(name);
+      const screen = dialogScreen(name);
+      expect(found.rows.length).toBeGreaterThanOrEqual(4);
+      expect(found.rows[0].trim()).not.toBe('');
+      expect(runsOn(screen, found.rows)).toBe(1);
+      expect(runsOn(onTmux(screen), found.rows)).toBe(1);
+      // Moving the highlight changes a row of the block, so the host's comparison tells the dialogs apart from the one that was read.
+      expect(runsOn(screen.map(row => row.replace(/^( {0,2})› /, '$1  ')), found.rows)).toBe(0);
+    });
+
+  it('names the approval prompt from the question it asks to the footer, without the history above it', () => {
+    const {rows} = dialog('codex-approval');
+    expect(rows[0]).toBe('  Would you like to run the following command?');
+    expect(rows.at(-1)).toBe('  Press enter to confirm or esc to cancel');
+    expect(rows.join('\n')).not.toContain('Running touch note.txt');
   });
 
   it('joins a description that wraps under its option', () => {

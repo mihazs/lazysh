@@ -70,7 +70,8 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   latest.current = {dialog, terminal, control, guard, sessionId};
 
   /** Chooses one option, or cancels the dialog (no target), only while the screen still shows the dialog the person chose from. Moving the highlight
-   * comes first and is read back: Enter is pressed only once the dialog shows the chosen option highlighted. */
+   * comes first and is read back: Enter is pressed only once the dialog shows the chosen option highlighted. Each key carries the rows of the dialog
+   * as just read, and the host reads the pane again right before pressing it: a pane that no longer shows exactly that dialog gets nothing. */
   async function answer(target?: number) {
     const {dialog: before, terminal: screen, control: bound} = latest.current;
     if (!before || !screen || !bound?.ready || phase === 'sending') return;
@@ -78,22 +79,32 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
     const current = () => answerSequence.current === sequence && latest.current.terminal === screen && latest.current.guard === guard && latest.current.sessionId === sessionId && latest.current.dialog?.signature === before.signature;
     const finish = (next: Phase) => {if (current()) setPhase(next);};
     setPhase('sending');
-    const onScreen = () => {const now = readLift(screen, agent); return now.kind === 'dialog' && now.dialog.signature === before.signature && now.dialog.highlighted === before.highlighted;};
+    const dialogNow = () => {const now = readLift(screen, agent); return now.kind === 'dialog' && now.dialog.signature === before.signature && now.dialog.highlighted === before.highlighted ? now.dialog : undefined;};
+    const onScreen = () => !!dialogNow();
     // A list that scrolls as the highlight moves shows other rows, so the chosen option is found by what it says, not by its place.
     const chosen = target === undefined ? undefined : before.options[target];
     const twins = before.options.filter(option => option.label === chosen?.label && option.detail === chosen?.detail).length > 1;
-    const highlightsChosen = () => {const now = readLift(screen, agent); const row = now.kind === 'dialog' ? now.dialog.options[now.dialog.highlighted] : undefined;
-      return now.kind === 'dialog' && now.dialog.title === before.title && row?.label === chosen?.label && row?.detail === chosen?.detail && (!twins || now.dialog.highlighted === target);};
-    const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); await screen.readAgain?.(); if (test()) return true;} return false;};
+    // The dialog as the screen was read at the tap, and later as read back with the chosen option highlighted: what each key is sent to.
     await screen.readAgain?.();
-    if (!onScreen() || !await guard()) {finish('stale'); return;}
-    if (!current() || latest.current.control !== bound || !onScreen()) {finish('stale'); return;}
+    let tapped = dialogNow();
+    let confirmed = tapped ?? before;
+    const highlightsChosen = () => {const now = readLift(screen, agent); const row = now.kind === 'dialog' ? now.dialog.options[now.dialog.highlighted] : undefined;
+      const same = now.kind === 'dialog' && now.dialog.title === before.title && row?.label === chosen?.label && row?.detail === chosen?.detail && (!twins || now.dialog.highlighted === target);
+      if (same) confirmed = now.dialog;
+      return same;};
+    const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); await screen.readAgain?.(); if (test()) return true;} return false;};
+    // A key the host refused (the pane shows something else by now) changed nothing: say so if this screen has moved on too.
+    const refused = () => finish(onScreen() ? 'failed' : 'stale');
+    if (!tapped || !await guard()) {finish('stale'); return;}
+    tapped = dialogNow();
+    if (!current() || latest.current.control !== bound || !tapped) {finish('stale'); return;}
+    confirmed = tapped;
     const rows = target === undefined ? 0 : target - before.highlighted;
     if (rows !== 0) {
-      if (!await bound.answer({kind: 'pick', rows, enter: false})) {finish('failed'); return;}
+      if (!await bound.answer({kind: 'pick', rows, enter: false, seen: tapped.rows})) {refused(); return;}
       if (!await settles(highlightsChosen)) {finish('notMoved'); return;}
     }
-    if (!await bound.answer(target === undefined ? {kind: 'request_stop'} : {kind: 'pick', rows: 0, enter: true})) {finish('failed'); return;}
+    if (!await bound.answer(target === undefined ? {kind: 'dismiss', seen: confirmed.rows} : {kind: 'pick', rows: 0, enter: true, seen: confirmed.rows})) {refused(); return;}
     // The card is gone once the dialog closes; one that is still open says so.
     finish(await settles(() => !onScreen() && !highlightsChosen()) ? 'idle' : 'still');
   }

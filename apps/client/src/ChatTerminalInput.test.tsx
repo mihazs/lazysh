@@ -6,7 +6,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {applyAccessStatus,bindProtectedInvoke,captureAccess} from './access';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {t,uiI18n} from './i18n/core';
-import ChatTerminalInput,{parseTerminalBinding,parseTerminalCycle,parseTerminalDelivered,parseTerminalSnapshot,parseHerdrPrepared,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
+import ChatTerminalInput,{type TerminalControl,parseTerminalBinding,parseTerminalCycle,parseTerminalDelivered,parseTerminalSnapshot,parseHerdrPrepared,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
 
 import {herdrCandidate,herdrReceipt,herdrTarget,herdrPrepared,herdrBound,herdrChatReply} from './test/herdrChat';
 import {confirmChatTerminal as confirm} from './test/confirmChatTerminal';
@@ -54,6 +54,18 @@ it.each(['tmux_chat_invalid','tmux_chat_stale','tmux_chat_busy'])('retires UI au
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByRole('alert');
   expect(screen.queryByRole('button',{name:t('chatTerminalSend')})).toBeNull();expect(screen.queryByText(t('chatTerminalUncertain'))).toBeNull();
   expect(actions().filter(action=>action.kind==='bind')).toHaveLength(1);expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);expect(sent).not.toHaveBeenCalled();
+});
+it('keeps the binding and shows no failure when the host refuses a pick because the pane no longer shows its dialog',async()=>{
+  let control:TerminalControl|undefined;
+  fixture({onControl:value=>{control=value;}});await confirm();
+  const seen=['Select model','1. One','2. Two','Enter to select'];let refuse=true;
+  vi.mocked(invoke).mockImplementation((command,args)=>((args as {action:{kind:string}}).action.kind==='input' && refuse && !(refuse=false))?Promise.reject({kind:'tmux_chat_screen',message:'Native detail'}):nativeReply(command,args));
+  await act(async()=>{expect(await control!.answer({kind:'pick',rows:1,enter:false,seen})).toBe(false);});
+  // Nothing was written, so the destination stands: no alert, no release, and the refused pick consumed no operation number.
+  expect(screen.queryByRole('alert')).toBeNull();expect(control!.ready).toBe(true);
+  await act(async()=>{expect(await control!.answer({kind:'pick',rows:1,enter:false,seen})).toBe(true);});
+  expect(actions().filter(action=>action.kind==='input').map(action=>[action.operation,(action.input as {seen:string[]}).seen])).toEqual([[1,seen],[1,seen]]);
+  expect(actions().filter(action=>action.kind==='release')).toEqual([]);
 });
 it('keeps old-companion and key-shaped raw errors literal with manual fallback',async()=>{
   vi.mocked(invoke).mockRejectedValueOnce({message:'old companion: tmux_chat unavailable'});fixture();

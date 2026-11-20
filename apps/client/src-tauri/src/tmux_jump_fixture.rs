@@ -15,6 +15,8 @@ type Probe<T> = std::result::Result<T, String>;
 mod agent_session;
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
+#[path = "tmux_pick_fixture.rs"]
+mod pick_screen;
 #[path = "tmux_retirement_fixture.rs"]
 mod retirement;
 #[cfg(target_os = "linux")]
@@ -1463,6 +1465,15 @@ async fn malformed_stream_probe() {
 struct NamedServers<'a> {
     fixture: &'a Fixture,
     names: Vec<String>,
+}
+impl<'a> NamedServers<'a> {
+    /// The one owned tmux server, `chat-a`, that the Chat input fixtures drive.
+    fn chat_a(fixture: &'a Fixture) -> Self {
+        Self {
+            fixture,
+            names: vec!["chat-a".into()],
+        }
+    }
 }
 impl NamedServers<'_> {
     fn stop(&mut self) -> Vec<teardown::Stop> {

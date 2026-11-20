@@ -6,7 +6,7 @@ use std::path::Path;
 
 const AGENT: &str = include_str!("tmux_agent_session_agent.sh");
 
-fn lines(path: &Path) -> Vec<String> {
+pub(super) fn lines(path: &Path) -> Vec<String> {
     fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
@@ -14,7 +14,7 @@ fn lines(path: &Path) -> Vec<String> {
         .collect()
 }
 /// The pane process has written `count` log lines; waits for them, then returns them all.
-async fn log_until(path: &Path, count: usize) -> Vec<String> {
+pub(super) async fn log_until(path: &Path, count: usize) -> Vec<String> {
     timeout(BOUND, async {
         while lines(path).len() < count {
             tokio::time::sleep(Duration::from_millis(10)).await;

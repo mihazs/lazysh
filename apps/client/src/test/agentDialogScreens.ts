@@ -6,6 +6,11 @@ export const dialogScreen = (name: string) => readFileSync(`src/test/agentDialog
 export const onTmux = (rows: string[]) => [...rows, ...Array(39 - rows.length).fill(''), ' [work] 0:node*                                     "host" 12:34 12-Nov-26'];
 /** The /model picker with the highlight on option `to` (1 to 5), as the TUI redraws it after an arrow key. */
 export const modelScreen = (to: number) => onTmux(dialogScreen('model')).map(row => row.replace(/^ {2}❯ (\d)\./, '    $1.').replace(new RegExp(`^ {4}${to}\\.`), `  ❯ ${to}.`));
+/** How many times `block` is on `screen` as one run of rows, compared without trailing blanks: what the host asks of a pane before it presses a key. */
+export const runsOn = (screen: readonly string[], block: readonly string[]) => {
+  const rows = screen.map(row => row.trimEnd());
+  return rows.filter((_, start) => block.length > 0 && block.every((row, offset) => rows[start + offset] === row.trimEnd())).length;
+};
 /** A terminal whose screen a test controls; `set` redraws it like the agent's output would. */
 export function fakeTerminal(initial: string[]) {
   let rows = initial;
@@ -14,3 +19,5 @@ export function fakeTerminal(initial: string[]) {
     subscribe: listener => {const notify = () => listener({type: 'output'}); listeners.add(notify); return {dispose: () => {listeners.delete(notify);}};}};
   return {terminal, set: (next: string[], notify = true) => {rows = next; if (notify) listeners.forEach(listener => listener());}};
 }
+/** An input as the keys it presses: a `pick` or `dismiss` without the dialog rows it was read from. */
+export const withoutSeen = (input: object) => {const {seen, ...key} = input as {seen?: unknown}; return key;};

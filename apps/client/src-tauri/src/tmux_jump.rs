@@ -866,7 +866,11 @@ fn spawn_actor(
                 // Known local/negative-marker rejections consumed no input and
                 // leave the framed stream synchronized. Preserve navigation.
                 // A pane that went away was found by a complete read, before any navigation command was sent.
-                !(chat_request && matches!(error.kind(), "tmux_chat_invalid" | "tmux_chat_stale"))
+                !(chat_request
+                    && matches!(
+                        error.kind(),
+                        "tmux_chat_invalid" | "tmux_chat_stale" | "tmux_chat_screen"
+                    ))
                     && error.kind() != "tmux_pane_gone"
             });
             if lease.check().is_err() || *cancellation.borrow() {

@@ -12,6 +12,12 @@ const fixture = dialogScreen, model = modelScreen;
 const closed = fixture('model-closed');
 
 const answers: DialogAnswer[] = [];
+/** The keys sent, without the rows each pick names. */
+const keys = () => answers.map(body => body.kind === 'pick' ? {kind: body.kind, rows: body.rows, enter: body.enter} : body);
+/** The card is gone and the one key that went out is Enter on the highlighted row. */
+const closedByOneEnter = async () => {await waitFor(() => expect(screen.queryByRole('region')).toBeNull()); expect(keys()).toEqual([{kind: 'pick', rows: 0, enter: true}]);};
+/** The rows of the /model dialog as a card reads them: from its title to its footer. */
+const modelRows = (rows: string[]) => rows.slice(rows.findIndex(row => row.includes('Select model')), rows.findIndex(row => row.includes('Enter to set as default')) + 1).map(row => row.trimEnd());
 let screenOf: ReturnType<typeof fakeTerminal>;
 let ahead = 0;
 /** The bound input of a pane running the picker: arrow keys move the highlight on screen, Enter and Escape close it. */
@@ -64,7 +70,11 @@ it('moves the highlight, reads it back, and only then presses Enter, once', asyn
   fireEvent.click(option('Sonnet'));
   // The card goes with the dialog it answered.
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
-  expect(answers).toEqual([{kind: 'pick', rows: -1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  expect(keys()).toEqual([{kind: 'pick', rows: -1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  // Each key names the dialog it is sent to, for the host to compare with the pane just before pressing it: the dialog as it was
+  // tapped, then as read back with the chosen option highlighted.
+  expect(answers.map(body => body.kind === 'pick' ? body.seen : undefined)).toEqual([modelRows(model(5)), modelRows(model(4))]);
+  expect(modelRows(model(5))).not.toEqual(modelRows(model(4)));
 });
 
 it('presses Enter alone for the option that is already highlighted, and picks with a digit on a desktop keyboard', async () => {
@@ -76,7 +86,7 @@ it('presses Enter alone for the option that is already highlighted, and picks wi
     expect(option('Haiku').disabled).toBe(false);
     fireEvent.keyDown(window, {key: '5'});
     await act(async () => {await vi.advanceTimersByTimeAsync(0);});
-    expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]);
+    expect(keys()).toEqual([{kind: 'pick', rows: 0, enter: true}]);
   } finally {vi.useRealTimers();}
 });
 
@@ -86,7 +96,7 @@ it('presses no Enter when the dialog does not move to the chosen option', async 
   await waitFor(() => expect(option('Sonnet').disabled).toBe(false));
   fireEvent.click(option('Sonnet'));
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(t('agentPickerNotMoved')), {timeout: 8000});
-  expect(answers).toEqual([{kind: 'pick', rows: -1, enter: false}]);
+  expect(keys()).toEqual([{kind: 'pick', rows: -1, enter: false}]);
 }, 12000);
 
 it.each([
@@ -100,7 +110,20 @@ it.each([
   change(screenOf, guard);
   fireEvent.click(option('Sonnet'));
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(t('agentPickerStale')));
-  expect(answers).toEqual([]);
+  expect(keys()).toEqual([]);
+});
+
+it.each([
+  ['this screen still shows the dialog', undefined, 'agentPickerFailed'],
+  ['this screen has moved on too', () => screenOf.set(closed), 'agentPickerStale'],
+] as const)('says so, and presses no Enter, when the host refuses the move because the pane no longer shows the dialog and %s', async (_, redraw, note) => {
+  // The host read the pane again right before the key and found something else: it sent nothing and answers false.
+  bindTo(vi.fn(async (body: DialogAnswer) => {answers.push(body); redraw?.(); return false;}));
+  mount(model(5));
+  await waitFor(() => expect(option('Sonnet').disabled).toBe(false));
+  fireEvent.click(option('Sonnet'));
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(t(note)));
+  expect(keys()).toEqual([{kind: 'pick', rows: -1, enter: false}]);
 });
 
 it('finds the chosen option by what it says when the list scrolls as the highlight moves, then presses Enter', async () => {
@@ -119,14 +142,14 @@ it('finds the chosen option by what it says when the list scrolls as the highlig
   mount(list(0, 0));
   await chooseAndClose('Three');
   // Two rows down from "One"; the redrawn list shows other sessions, with "Three" highlighted, so Enter is pressed.
-  expect(answers).toEqual([{kind: 'pick', rows: 2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  expect(keys()).toEqual([{kind: 'pick', rows: 2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
 });
 
 it('refuses a tap that lands as the dialog appears', async () => {
   mount(model(5));
   expect(option('Sonnet').disabled).toBe(true);
   fireEvent.click(option('Sonnet'));
-  expect(answers).toEqual([]);
+  expect(keys()).toEqual([]);
 });
 
 it('cancels the dialog with Escape through the bound input', async () => {
@@ -134,7 +157,7 @@ it('cancels the dialog with Escape through the bound input', async () => {
   await waitFor(() => expect(screen.getByRole('button', {name: t('agentPickerCancel')}).hasAttribute('disabled')).toBe(false));
   expect(screen.getByRole('region').textContent).toContain('Is this a project you created or one you trust?');
   fireEvent.click(screen.getByRole('button', {name: t('agentPickerCancel')}));
-  await waitFor(() => expect(answers).toEqual([{kind: 'request_stop'}]));
+  await waitFor(() => expect(answers).toEqual([{kind: 'dismiss', seen: expect.arrayContaining([expect.stringContaining('Accessing workspace:')])}]));
 });
 
 it('shows the options read-only when the composer is not bound to this terminal, and says to answer in the terminal', async () => {
@@ -153,7 +176,7 @@ it('says the agent waits in the terminal for a dialog it cannot read exactly, an
   expect(screen.queryAllByRole('button').map(button => button.textContent)).toEqual([t('agentViewShowTerminal')]);
   fireEvent.click(screen.getByRole('button'));
   expect(onShowTerminal).toHaveBeenCalledOnce();
-  expect(answers).toEqual([]);
+  expect(keys()).toEqual([]);
 });
 
 it('shows nothing for an idle screen, and nothing for a dialog an approval or question card already answers', async () => {
@@ -195,7 +218,7 @@ it('answers a Codex approval prompt: moves the highlight to the chosen row, read
   expect(within(card).getByRole('heading', {name: 'Would you like to run the following command?'})).toBeTruthy();
   expect(card.textContent).toContain('$ touch note.txt');
   await chooseAndClose('No, and');
-  expect(answers).toEqual([{kind: 'pick', rows: 2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  expect(keys()).toEqual([{kind: 'pick', rows: 2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
 });
 
 it('reads each agent\'s own dialogs only: another agent\'s screen is never answerable', async () => {
@@ -214,7 +237,7 @@ it('reads each agent\'s own dialogs only: another agent\'s screen is never answe
 it('says a Codex dialog it cannot read waits in the terminal, even while Codex reports an approval', async () => {
   mount(onTmux(fixture('codex-resume').slice(1, 40)), {agent: 'Codex', waiting: 'approval'});
   expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
-  expect(answers).toEqual([]);
+  expect(keys()).toEqual([]);
 });
 
 it.each(['Grok Build','Gemini CLI','OpenCode'])('says an approval or plan decision of %s waits in the terminal and sends nothing',async agent => {
@@ -247,10 +270,10 @@ it('shows what a Codex option that keeps a permission rule keeps, and sends noth
   expect(confirm.textContent).toContain("Yes, and don't ask again for commands that start with `touch note.txt` (p)");
   fireEvent.click(within(confirm).getByRole('button', {name: t('agentPickerRememberCancel')}));
   expect(screen.queryByRole('region', {name: t('agentPickerRememberTitle')})).toBeNull();
-  expect(answers).toEqual([]);
+  expect(keys()).toEqual([]);
   fireEvent.click(option('Yes, and'));
   fireEvent.click(screen.getByRole('button', {name: t('agentPickerRememberApply')}));
-  await waitFor(() => expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]));
+  await waitFor(() => expect(keys()).toEqual([{kind: 'pick', rows: 0, enter: true}]));
 });
 
 /** Codex's question dialog as the TUI redraws it with the highlight on option `to` (1 to 3): the real captured screen with the marker moved. */
@@ -275,11 +298,11 @@ it('answers the questions Codex asks one after the other, with the arrows and En
   fireEvent.click(option('Green'));
   // The next question is its own dialog: the card shows it and waits for its own tap.
   await waitFor(() => expect(screen.getByRole('heading', {name: 'Which size?'})).toBeTruthy());
-  expect(answers).toEqual([{kind: 'pick', rows: 1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  expect(keys()).toEqual([{kind: 'pick', rows: 1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
   ahead = 0;
   await waitFor(() => expect(option('Small').disabled).toBe(false));
   fireEvent.click(option('Small'));
-  await waitFor(() => expect(answers.slice(2)).toEqual([{kind: 'pick', rows: 0, enter: true}]));
+  await waitFor(() => expect(keys().slice(2)).toEqual([{kind: 'pick', rows: 0, enter: true}]));
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
 }, 20000);
 
@@ -310,15 +333,14 @@ it('does not send a second answer while the first answer is still pending', asyn
   await waitFor(() => expect(option('Haiku').disabled).toBe(false));
   fireEvent.click(option('Haiku'));
   fireEvent.click(option('Haiku'));
-  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
-  expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]);
+  await closedByOneEnter();
 });
 
 it('says the notes box of a Codex question waits in the terminal and sends nothing', async () => {
   mount(onTmux(fixture('codex-question-notes')), {agent: 'Codex'});
   expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
   expect(screen.queryAllByRole('button').map(button => button.textContent)).not.toContain('Green');
-  expect(answers).toEqual([]);
+  expect(keys()).toEqual([]);
 });
 
 it('keeps a new answer pending when an older question finishes late', async () => {
@@ -382,6 +404,5 @@ it('releases a replaced guard without letting its result release the new answer'
   expect(option('Haiku').disabled).toBe(true);
   expect(answers).toEqual([]);
   await act(async () => {releaseNew(true);});
-  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
-  expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]);
+  await closedByOneEnter();
 });
