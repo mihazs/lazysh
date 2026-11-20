@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { pinned } from '../dagger/src/images';
-import { parsePrototools, requireVersion } from '../dagger/src/prototools';
+import { pinned } from '../.dagger/modules/ci/src/images';
+import { parsePrototools, requireVersion } from '../.dagger/modules/ci/src/prototools';
 import { project } from './support/gitFixture';
 
 const prototools = parsePrototools(await Bun.file(join(project, '.prototools')).text());

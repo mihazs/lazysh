@@ -50,16 +50,18 @@ Reading the numbers:
 
 Also learned:
 
-- Dagger 0.21.12 on a developer machine whose `docker` is podman-emulated provisions its engine and runs both functions: `client` in 38 s warm, `agent` in 2 min 55 s cold. The module's first `dagger init` took 27 s.
+- Dagger 0.21.12 on a developer machine whose `docker` is podman-emulated provisioned its engine and ran both functions: `client` in 38 s warm, `agent` in 2 min 55 s cold. The module's first `dagger init` took 27 s.
 - `moon` needs a VCS and a worktree's `.git` is a file that points outside the build context, so the module builds a one-commit repository inside the container. `moon ci -g` (affected selection) needs real history and the base ref, so CI must pass `.git` explicitly with a full-depth checkout for that case.
 - `bunx` is absent from the `oven/bun` binary copied into another image. Use `bun x`.
 - `DAGGER_NO_NAG=1` silences the Dagger Cloud trace prompt.
 - The state directory must be archived with `tar -p` as root. Running `chown` on it would change file ownership inside the container images stored there.
-- jscpd reports zero clones with the module committed: `dagger init` writes `dagger/.gitignore` for the generated `sdk/` (5.8 MB), and the hand-written module is far below the clone thresholds.
+- jscpd reports zero clones with the module committed. On 0.21 the generated `sdk/` (5.8 MB) was gitignored; on v1 the bindings are committed (5.3 MB) and listed in `.jscpd.json` as generated artifacts, with the hand-written `src/` still scanned.
 
 ## Decision
 
-1. **Adopt Dagger for the hosted-Linux checks, conditionally.** TypeScript SDK on Bun (the repository is Bun and TypeScript), Dagger 0.21.12 pinned exactly (the latest stable 0.21.x on 2026-11-19; the 1.0 beta is not used for required checks), `dagger/dagger-for-github@v8.4.1`.
+1. **Adopt Dagger for the hosted-Linux checks, conditionally, on Dagger 1.** The owner chose version 1 or later on 2026-11-20. The newest 1.x release is `v1.0.0-beta.28`; there is no stable 1.0 (the latest stable release is 0.21.12), so the epic pins that beta exactly (CLI archive by sha256, engine image by digest) and moves to the first stable 1.0 when it ships. TypeScript SDK (the repository is Bun and TypeScript), through the `typescript-sdk` module pinned at `v1.0.6` in `dagger.toml` (v1.0.7 fails to load on beta.28 with `unresolved type: SdkHelpersDangConfig`). The CLI is installed from its release archive with a pinned sha256 (`.github/scripts/pinned-download.sh`, as for every other pinned download) and the engine image is pinned by digest, so no third-party action is needed.
+   - **The v1 module model replaces the 0.21 one.** The module lives in `.dagger/modules/ci` and takes the project as a `Workspace`; the workspace is configured by `dagger.toml`, and `dagger.lock` pins every git ref and image it resolves. The SDK **commits** its generated bindings (`clients/`, `entrypoint/`, `__dagger.dispatch.ts`, 5.3 MB), so they are marked `linguist-generated` and listed explicitly in `.jscpd.json`; the hand-written `src/` stays under the duplicate scan.
+   - **The spike and cap measurements above ran on 0.21.12.** Engine behaviour that decides the conditions (cold start, state size, the GC cap) is expected to carry over, but each slice re-measures on the pinned v1 engine before it counts.
 2. **The engine is Docker on the hosted runner, state is persisted with `actions/cache`, and pull requests restore but never save.** Main saves, as the repository does for the Rust cache. The archive is made with `sudo tar --zstd -cpf`.
 3. **No Dagger Cloud.** The owner decided against it.
 4. **Conditions, checked by every migration slice and recorded in its pull request:**

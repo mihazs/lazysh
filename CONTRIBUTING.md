@@ -68,7 +68,7 @@ The tables are in the [moon task reference](docs/reference/moon-tasks.md) and th
 
 ### CI functions (Dagger)
 
-The `dagger/` module holds CI functions that run the same locally and in Actions (`dagger functions`, `dagger call workspace …`). It needs the Dagger CLI at the version in `dagger.json` and a Linux container runtime. See [Run CI functions locally with Dagger](docs/how-to/run-ci-locally-with-dagger.md) and [ADR 0006](docs/architecture/adr-0006-dagger-for-ci.md) for the conditions each migrated job must meet.
+The `.dagger/modules/ci` module (workspace config in `dagger.toml` and `dagger.lock`) holds CI functions that run the same locally and in Actions (`dagger functions`, `dagger call workspace …`). It needs the Dagger CLI v1.0.0-beta.28 and a Linux container runtime. See [Run CI functions locally with Dagger](docs/how-to/run-ci-locally-with-dagger.md) and [ADR 0006](docs/architecture/adr-0006-dagger-for-ci.md) for the conditions each migrated job must meet.
 
 ### Which CI jobs a pull request runs
 

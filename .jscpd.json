@@ -7,6 +7,9 @@
     "console"
   ],
   "ignore": [
+    ".dagger/modules/ci/clients/**",
+    ".dagger/modules/ci/entrypoint/**",
+    ".dagger/modules/ci/__dagger.dispatch.ts",
     "apps/client/src/font-licenses/NotoSansMonoCJK-OFL.txt",
     "fdroid/build/**",
     "fdroid/logs/**",
