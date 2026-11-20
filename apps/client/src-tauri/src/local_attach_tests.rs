@@ -207,6 +207,7 @@ mod runtime {
             lease.clone(),
             None,
             Some(entry(value).unwrap()),
+            None,
             80,
             24,
             channel,
@@ -247,6 +248,25 @@ mod runtime {
         })
         .await;
         desktop::disconnect(&state, &connected.session_id);
+    }
+
+    #[tokio::test]
+    async fn a_multiplexer_session_attaches_on_the_default_shell_only() {
+        let (channel, _rx) = events();
+        let error = desktop::connect(
+            &LocalState::default(),
+            access_lease(),
+            None,
+            Some(entry(json!({"kind":"tmux","name":"work"})).unwrap()),
+            Some("pwsh"),
+            80,
+            24,
+            channel,
+        )
+        .await
+        .err()
+        .expect("a target other than the default refuses an attach");
+        assert!(error.contains("own shell"), "{error}");
     }
 
     #[tokio::test]
@@ -331,6 +351,7 @@ mod runtime {
             access_lease(),
             None,
             Some(entry(json!({"kind":"tmux","name":"absent","tmuxServer":server})).unwrap()),
+            None,
             80,
             24,
             channel,

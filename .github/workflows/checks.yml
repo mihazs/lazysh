@@ -1729,7 +1729,12 @@ jobs:
             'host::tests::local::local_previews_proxy_http_report_discovery_and_stop_with_the_session: test' \
             'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' \
             'host::tests::local::local_uploads_create_private_distinct_files_and_never_replace_one: test' \
-            'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' | diff -u - <(printf '%s\n' "$actual")
+            'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' \
+            'host::tests::local::wsl::a_distribution_reports_files_and_repository_only_when_git_starts_inside_it: test' \
+            'host::tests::local::wsl::a_link_resolves_to_a_path_of_the_distribution_and_never_outside_it: test' \
+            'host::tests::local::wsl::every_command_runs_through_wsl_exe_from_the_home_directory_with_its_environment: test' \
+            'host::tests::local::wsl::files_and_a_repository_diff_are_read_inside_the_distribution: test' \
+            'host::tests::local::wsl::only_this_distributions_paths_are_read_and_a_drive_path_is_translated_by_wslpath: test' | diff -u - <(printf '%s\n' "$actual")
           bunx moon run client-native:test-local
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
