@@ -217,7 +217,7 @@ pub(super) async fn unsupported_architecture(
     let version = crate::companion::exec(&session, "lazysh-agent --version".into(), &lease)
         .await
         .unwrap();
-    assert_eq!(version.trim(), "owned-legacy-unchanged");
+    assert_eq!(version.trim(), "lazysh-agent 1.0.0");
 }
 /// A finished device-route install releases its SFTP channel in the background; the next install starts after it.
 async fn settled(session: &Session) {
