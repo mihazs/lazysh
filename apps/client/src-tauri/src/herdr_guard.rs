@@ -335,9 +335,6 @@ async fn rpc<T: Serialize>(
         return Err(Fault::Unavailable);
     }
     let deadline = tokio::time::Instant::now() + DEADLINE;
-    // The connection's captured Herdr, never another one, runs every owned RPC.
-    let command = crate::herdr_backend::resolve_cached(handle, &command(name, false))
-        .map_err(|_| Fault::Unavailable)?;
     let body = Zeroizing::new(
         serde_json::to_vec(&Request {
             id: "guard",
@@ -374,6 +371,9 @@ async fn ssh_exchange(
     deadline: tokio::time::Instant,
     reply: &mut Option<&mut oneshot::Sender<Result<Reply>>>,
 ) -> WireOutcome<WireResult> {
+    // The connection's captured Herdr, never another one, runs every owned RPC.
+    let command = crate::herdr_backend::resolve_cached(handle, &command(name, false))
+        .map_err(|_| Fault::Unavailable)?;
     let mut channel = tokio::select! { biased;
         _ = cancel.changed() => return Err(Fault::Unavailable),
         _ = abandoned(reply) => return Err(Fault::Stale),
