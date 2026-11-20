@@ -1,6 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
+pub mod auto_update;
 pub mod browser;
 pub mod desktop_lock;
 pub mod devices;
@@ -82,6 +83,7 @@ fn wait_for_storage_until(deadline: Instant) -> bool {
 
 pub const MAX_INPUT: usize = 256 * 1024;
 const RETENTION_SECONDS: f64 = 7.0 * 86400.0;
+const ACTIVE_TURN_SECONDS: i64 = 10 * 60;
 const HOOK_EVENTS: [&str; 8] = [
     "UserPromptSubmit",
     "PreToolUse",
@@ -257,6 +259,9 @@ pub struct SessionSummary {
 pub struct Snapshot {
     pub schema_version: u8,
     pub sessions: Vec<SessionSummary>,
+    /// Present only when an app newer than this companion asked: what happens to this companion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<auto_update::Update>,
 }
 
 fn text(value: &str, maximum: usize) -> Result<()> {
@@ -646,6 +651,8 @@ fn lock_store_bootstrap(
 const WAITING_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_waiting (
     agent TEXT NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL, since REAL NOT NULL,
     PRIMARY KEY (agent,session_id));";
+const EVICTED_WORKING_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS evicted_working (
+    id INTEGER PRIMARY KEY CHECK (id = 1), updated_at REAL NOT NULL);";
 
 // Additive like `session_waiting`: a companion that predates it never reads or writes this table.
 const PANE_SERVER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_pane_server (
@@ -660,6 +667,7 @@ fn apply_schema(
         reported_history::SCHEMA,
         hooks::AIDER_HEALTH_SCHEMA,
         WAITING_SCHEMA,
+        EVICTED_WORKING_SCHEMA,
         kimi_code::SCHEMA,
         PANE_SERVER_SCHEMA,
     ] {
@@ -816,12 +824,17 @@ fn write_event(
 
 /// Drop sessions past retention or the count cap, then the waits and observations of dropped sessions.
 fn apply_retention(transaction: &rusqlite::Transaction<'_>, now: f64) -> Result<()> {
+    // Age pruning must not erase malformed timestamp evidence before the updater sees it.
+    transaction.execute("INSERT INTO evicted_working SELECT 1,?1 WHERE EXISTS(SELECT 1 FROM sessions WHERE typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799) ON CONFLICT(id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)",[now]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
     transaction
         .execute(
             "DELETE FROM sessions WHERE updated_at < ?1",
             [now - RETENTION_SECONDS],
         )
         .map_err(|e| storage_failure(StoragePhase::RetentionAge, e.into()))?;
+    // Remember an evicted recent working report until its active-turn window expires.
+    transaction.execute("INSERT INTO evicted_working SELECT 1,MAX(CASE WHEN typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 THEN ?2 ELSE updated_at END) FROM sessions WHERE (typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR (state NOT IN ('done','needs_attention') AND updated_at > ?1)) AND rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100) HAVING COUNT(*) > 0 ON CONFLICT(id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)",[now - ACTIVE_TURN_SECONDS as f64,now]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+    // Keep the board’s newest-100 ordering; the sentinel keeps evicted active evidence separately.
     transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
     for table in ["session_waiting", "session_pane_server"] {
         transaction
@@ -1024,12 +1037,20 @@ impl Store {
             .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;
         Ok(())
     }
+    /// Check all retained sessions without the display snapshot's row limit.
+    pub(crate) fn has_working_since(&self, cutoff: DateTime<Utc>) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR (state NOT IN ('done','needs_attention') AND updated_at > ?1) UNION ALL SELECT 1 FROM evicted_working WHERE typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR updated_at > ?1)",
+            [cutoff.timestamp_micros() as f64 / 1_000_000.0],
+            |row| row.get(0),
+        )?)
+    }
     pub fn snapshot(&mut self, limit: u8, now: DateTime<Utc>) -> Result<Snapshot> {
         if !(1..=100).contains(&limit) {
             return Err(Error::InvalidArgument);
         }
         self.connection.execute(
-            "DELETE FROM sessions WHERE updated_at < ?1",
+            "DELETE FROM sessions WHERE typeof(state) = 'text' AND state IN ('working','done','needs_attention') AND typeof(updated_at) IN ('real','integer') AND updated_at BETWEEN -62135596800 AND 253402300799 AND updated_at < ?1",
             [now.timestamp_micros() as f64 / 1_000_000.0 - RETENTION_SECONDS],
         )?;
         let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since,server FROM sessions LEFT JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
@@ -1078,6 +1099,7 @@ impl Store {
         Ok(Snapshot {
             schema_version: 1,
             sessions,
+            update: None,
         })
     }
 }
@@ -1570,6 +1592,208 @@ mod tests {
         }
     }
 
+    #[test]
+    fn recent_working_query_checks_all_stored_rows_and_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let seconds = now.timestamp_micros() as f64 / 1_000_000.0;
+        assert!(!store.has_working_since(now).unwrap());
+        store.connection.execute(
+            "INSERT INTO sessions VALUES ('Test','working','/work','working','Working',NULL,?1,1)",
+            [seconds],
+        ).unwrap();
+        for i in 0..101 {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO sessions VALUES ('Test',?1,'/work','done','Done',NULL,?2,1)",
+                    params![format!("done-{i}"), seconds + 1.0],
+                )
+                .unwrap();
+        }
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+        assert!(!store.has_working_since(now).unwrap());
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET state='future' WHERE session_id='working'",
+                [],
+            )
+            .unwrap();
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+    }
+    #[test]
+    fn invalid_session_timestamps_defer_even_after_retention_evicts_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        for id in ["bad-time", "bad-state", "bad-finite", "bad-unknown"] {
+            store.ingest(&fixture_event(id), now).unwrap();
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET updated_at=?1 WHERE session_id='bad-time'",
+                [f64::NEG_INFINITY],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET state=x'ff', updated_at=1 WHERE session_id='bad-state'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET updated_at=-8900000000000 WHERE session_id='bad-finite'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET state='future', updated_at=1 WHERE session_id='bad-unknown'",
+                [],
+            )
+            .unwrap();
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::minutes(10))
+            .unwrap());
+        let _ = store.snapshot(100, now);
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id IN ('bad-state','bad-finite','bad-unknown')",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            3
+        );
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::minutes(10))
+            .unwrap());
+        let mut event = fixture_event("next");
+        event.state = SessionState::Done;
+        for i in 0..101 {
+            event.session_id = format!("later-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::microseconds(i))
+                .unwrap();
+        }
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::minutes(10))
+            .unwrap());
+    }
+
+    #[test]
+    fn active_query_rejects_timestamps_outside_safe_calendar_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let mut event = fixture_event("bound");
+        event.state = SessionState::Done;
+        store.ingest(&event, now).unwrap();
+        for (time, invalid) in [
+            (-62_135_596_800_i64, false),
+            (-62_135_596_801, true),
+            (253_402_300_799, false),
+            (253_402_300_800, true),
+        ] {
+            store
+                .connection
+                .execute(
+                    "UPDATE sessions SET updated_at=?1 WHERE session_id='bound'",
+                    [time],
+                )
+                .unwrap();
+            assert_eq!(
+                store
+                    .has_working_since(now - chrono::TimeDelta::minutes(10))
+                    .unwrap(),
+                invalid,
+                "{time}"
+            );
+        }
+    }
+
+    #[test]
+    fn retention_records_recent_working_sessions_evicted_by_newer_done_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let mut event = fixture_event("working");
+        store.ingest(&event, now).unwrap();
+        event.state = SessionState::Done;
+        for i in 0..101 {
+            event.session_id = format!("done-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::seconds(1))
+                .unwrap();
+        }
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+        assert_eq!(store.snapshot(100, now).unwrap().sessions.len(), 100);
+        assert!(!store
+            .has_working_since(now + chrono::TimeDelta::seconds(1))
+            .unwrap());
+        event.session_id = "later".into();
+        store
+            .ingest(&event, now + chrono::TimeDelta::minutes(11))
+            .unwrap();
+        assert!(!store
+            .has_working_since(now + chrono::TimeDelta::seconds(1))
+            .unwrap());
+    }
+    #[test]
+    fn evicted_working_session_defers_until_its_report_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let mut event = fixture_event("initial");
+        for i in 0..102 {
+            event.session_id = format!("session-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::microseconds(i))
+                .unwrap();
+        }
+        event.state = SessionState::NeedsAttention;
+        event.waiting = Some(Waiting::Unknown);
+        event.session_id = "new-attention".into();
+        store
+            .ingest(&event, now + chrono::TimeDelta::milliseconds(500))
+            .unwrap();
+        assert!(store
+            .snapshot(100, now)
+            .unwrap()
+            .sessions
+            .iter()
+            .any(|session| session.event.session_id == "new-attention"));
+        event.state = SessionState::Done;
+        event.waiting = None;
+        for i in 2..102 {
+            event.session_id = format!("session-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::seconds(1))
+                .unwrap();
+        }
+        assert_eq!(store.snapshot(100, now).unwrap().sessions.len(), 100);
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+        assert!(!store
+            .has_working_since(now + chrono::TimeDelta::seconds(1))
+            .unwrap());
+    }
     #[test]
     fn retention_runs_on_ingest_and_snapshot() {
         let dir = tempfile::tempdir().unwrap();
