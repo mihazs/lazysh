@@ -212,7 +212,7 @@ async fn start_mosh(app: &App, parent: &str, events: Channel<SshEvent>) -> (Stri
         serde_json::from_value(serde_json::json!({"portMin":port,"portMax":port})).unwrap();
     let (id, session) = attached(
         app,
-        connect_mosh(
+        connect_mosh_inner(
             access_lease(),
             app.state(),
             parent.into(),
@@ -221,6 +221,7 @@ async fn start_mosh(app: &App, parent: &str, events: Channel<SshEvent>) -> (Stri
             80,
             24,
             events,
+            None,
         ),
     )
     .await;
@@ -339,7 +340,8 @@ async fn check_et(app: &App, parent: &str, directory: &std::path::Path) {
     let (core, prepared) = ChecksumCore::prepared();
     let (events, data_messages) = data_counting_events();
     terminal_core::offer(&events, Box::new(move || Ok(prepared)));
-    let connecting = crate::et::connect_et(
+    let connecting = crate::et::connect_et_inner(
+        None,
         access_lease(),
         app.state(),
         parent.into(),
