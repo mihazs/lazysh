@@ -1214,6 +1214,7 @@ jobs:
             terminal_core::native::tests::colour_queries_get_the_apps_theme_and_a_theme_change_changes_the_next_answer
             terminal_core::native::tests::a_theme_that_is_not_a_set_of_hex_colours_opens_no_core_and_changes_nothing
             terminal_core::native::tests::a_mosh_session_follows_the_sizes_of_its_frames_and_a_plain_one_does_not
+            terminal_core::native::tests::a_released_real_core_hands_over_its_screen_cursor_and_modes_and_no_byte_is_lost
             local::tests::the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader
           )
           for case_name in "${guards[@]}"; do
