@@ -219,6 +219,11 @@ enum Command {
         #[arg(long)]
         reported_history: bool,
     },
+    /// Print a Grok Build hooks fragment for `~/.grok/hooks/`; never changes settings.
+    GrokConfig {
+        #[arg(long)]
+        reported_history: bool,
+    },
     /// Print a standalone Droid hooks.json fragment; never changes settings.
     DroidConfig,
     /// Print Kimi TOML hooks; never changes settings. The default is legacy Kimi CLI 1.52; `--dialect kimi-code-2.4`
@@ -639,6 +644,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             lazysh_agent::reported_history::gemini_config()
         } else {
             lazysh_agent::hooks::gemini_config()
+        }),
+        Command::GrokConfig { reported_history } => Some(if reported_history {
+            lazysh_agent::reported_history::grok_config()
+        } else {
+            lazysh_agent::hooks::grok_config()
         }),
         Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
         Command::KimiConfig { dialect } => Some(match dialect {

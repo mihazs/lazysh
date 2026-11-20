@@ -217,6 +217,25 @@ it('says a Codex dialog it cannot read waits in the terminal, even while Codex r
   expect(answers).toEqual([]);
 });
 
+it.each(['Grok Build','Gemini CLI','OpenCode'])('says an approval or plan decision of %s waits in the terminal and sends nothing',async agent => {
+  for (const waiting of ['approval','plan'] as const) {
+    const {onShowTerminal} = mount(closed, {agent, waiting});
+    expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+    fireEvent.click(screen.getByRole('button', {name: t('agentViewShowTerminal')}));
+    expect(onShowTerminal).toHaveBeenCalledTimes(1);
+    cleanup();
+  }
+  expect(answers).toEqual([]);
+});
+
+it('keeps quiet for an agent that reports no approval, and for Claude Code, whose approval has its own card', () => {
+  mount(closed, {agent: 'Grok Build'});
+  expect(screen.queryByRole('status')).toBeNull();
+  cleanup();
+  mount(closed, {agent: 'Claude Code', waiting: 'approval'});
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
 it('shows what a Codex option that keeps a permission rule keeps, and sends nothing until it is confirmed', async () => {
   bind(false);
   const control = vi.fn(async (body: DialogAnswer) => {answers.push(body); screenOf.set(onTmux([])); return true;});

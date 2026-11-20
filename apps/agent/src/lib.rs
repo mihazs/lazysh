@@ -137,6 +137,7 @@ pub enum Agent {
     Codex,
     Opencode,
     Gemini,
+    Grok,
     Droid,
     Kimi,
     /// Kimi Code 2.4 approval requests only; reads through `kimi_code::read`, not `normalize`.
@@ -293,6 +294,7 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
     if !payload.is_object() {
         return Err(Error::InvalidEvent);
     }
+    let agent = hooks::reporting_agent(agent, payload);
     let event = match agent {
         // Its approvals need the correlation ledger, which a stateless event cannot carry.
         Agent::KimiCode => return Err(Error::InvalidArgument),
@@ -302,16 +304,19 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Opencode | Agent::Cursor | Agent::Amp | Agent::Cline => match match agent {
-            Agent::Opencode => hooks::opencode_event(payload, pane),
-            Agent::Cursor => hooks::cursor_event(payload, pane),
-            Agent::Amp => hooks::amp_event(payload, pane),
-            Agent::Cline => hooks::cline_event(payload, pane),
-            _ => unreachable!(),
-        }? {
-            Some(event) => event,
-            None => return Ok(None),
-        },
+        Agent::Opencode | Agent::Cursor | Agent::Amp | Agent::Cline | Agent::Grok => {
+            match match agent {
+                Agent::Opencode => hooks::opencode_event(payload, pane),
+                Agent::Cursor => hooks::cursor_event(payload, pane),
+                Agent::Amp => hooks::amp_event(payload, pane),
+                Agent::Cline => hooks::cline_event(payload, pane),
+                Agent::Grok => hooks::grok_event(payload, pane),
+                _ => unreachable!(),
+            }? {
+                Some(event) => event,
+                None => return Ok(None),
+            }
+        }
         Agent::Claude
         | Agent::Codex
         | Agent::Gemini

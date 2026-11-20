@@ -898,6 +898,53 @@ Compaction references do not replace visible transcript history with a summary. 
 
 Evidence is official `xai-org/grok-build` commit `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` (`SOURCE_REV` `559751fdcec02d413e4c57c8832ab275e4f44980`), inspected 2026-10-25: the [disk envelope and fixtures](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L721), [actual JSONL writer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs#L634), and [xAI extension definitions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/extensions/notification.rs#L517). Its lockfile pins ACP 0.10.4 with schema 0.11.4. [Synthetic fixture provenance](../apps/agent/tests/fixtures/grok-acp/README.md) records checksums and type anchors. These source contracts do not prove equivalence to the previously inspected Grok 1.0.70 artifact or every installed release. No provider CLI, account data or real user transcript was executed/accessed. Full Grok conversation/runtime compatibility remains [issue #5](https://github.com/mihazs/lazysh/issues/5) work.
 
+#### Grok Build in the Agent view
+
+The Agent view follows the Grok Build session of a tmux pane when a hook of that session names the pane. Grok Build runs
+hooks from `~/.grok/hooks/*.json` (and, unless disabled, from `~/.claude/settings.json`) with the event as JSON on stdin; its
+input carries `session_id`, `cwd`, Claude's PascalCase `hook_event_name` and, once the file exists, `transcript_path`, the
+session's `updates.jsonl`. Print the fragment, review it and save it as `~/.grok/hooks/lazysh.json` (the companion never
+writes Grok's configuration; managed setup for Grok is [#1843](https://github.com/mihazs/lazysh/issues/1843)):
+
+```sh
+lazysh-agent grok-config --reported-history
+```
+
+The fragment runs `lazysh-agent ingest --agent grok --reported-history` on `UserPromptSubmit`, `PostToolUse`,
+`PostToolUseFailure`, `Notification`, `Stop`, `StopFailure`, `StopCancelled`, `SessionEnd` and, with the opt-in, `SessionStart`.
+`PreToolUse`, the one event that can deny a tool call, is deliberately not installed. Without `--reported-history` the same
+events report only the state, and the Agent view shows the agent by name with **Show terminal**. The reported-history
+database keeps the session id, the file path and the pane for seven days, as for Claude Code, and none of the prompt, the
+tool input or the tool result.
+
+What the companion accepts, so that the binding is evidence and not a guess:
+
+- The pane is `TMUX_PANE` (or Zellij's pane identity) of the process the hook ran in. Nothing is inferred from the newest file
+  of a folder or from the processes of the pane.
+- Any top-level event that names an absolute `transcript_path` reports it, because the file may not exist when `SessionStart`
+  fires. An event without one reports nothing; it does not mark the session ambiguous. Two different paths for one session
+  id still make it ambiguous until the retention ends, as for every agent.
+- An event that carries `subagentType` belongs to a sub-agent and is ignored, so a child never becomes a session of the pane.
+- States: a prompt or a tool event is **working**, `Stop` and `StopCancelled` are **done** ("Turn finished", "Turn
+  interrupted"), `StopFailure` is **needs attention** ("Turn failed"), `SessionEnd` is **done**, and only a
+  `permission_prompt` notification is **needs attention** waiting for an approval (`idle_prompt` follows every finished turn
+  and is ignored). The Agent view then says the agent waits for an approval in the terminal and holds the draft; it answers
+  no Grok Build dialog, offers no Stop key and no `@` or `/` suggestions, because no key profile was checked on a real Grok
+  Build.
+- Grok Build also runs the Claude Code hook file. Its input is the only one with the camelCase `hookEventName`, so an
+  `ingest --agent claude` call carrying it is reported as **Grok Build**, never as a Claude Code session whose transcript
+  would be read as Claude's.
+
+The Agent view reads the reported file with `--view conversation` and polls it about every two seconds: turns, thinking,
+tool calls with their output and status (the ACP tool title is the card's name, so every tool is an ordinary tool card) and
+the plan card. The log records no model, usage, sub-agent or background-job shape that was verified, so the header has no
+pills for it. The reconstruction limits above apply: a session past 10,000 records or 16 MiB shows the error and leaves the
+terminal ([#1844](https://github.com/mihazs/lazysh/issues/1844)). Verified against synthetic fixtures built from the pinned source (`apps/agent/tests/grok_hooks.rs` drives the real
+executable from a hook report to the conversation and the state) and the pinned hook event definitions
+(`xai-grok-hooks/src/event.rs` and `xai-grok-shell/src/session/compaction.rs`, `get_transcript_path`, same commit). No real
+Grok Build binary or account was available: the real-agent runtime case remains open on
+[#1842](https://github.com/mihazs/lazysh/issues/1842).
+
 Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx moon run agent:test-rust agent:test-hooks`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
 
 Companion distribution checks reuse the existing CLI, settings and WAL owners with
