@@ -50,9 +50,11 @@ impl Watch {
             lines,
         }
     }
+    /// Any frame, a heartbeat included, within the 20 s of silence after which the app calls the channel
+    /// dead. A heartbeat can be late by one projection, and the 17 MiB one takes 3 to 6 s in a debug build.
     fn next(&self) -> Value {
         self.lines
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(20))
             .expect("a frame")
     }
     /// The next frame of `kind`; heartbeats and other frames on the way do not extend the wait.

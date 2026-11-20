@@ -398,15 +398,22 @@ pub fn run(
                 }
             }
         }
-        if quiet.elapsed() >= HEARTBEAT {
-            write_frame(out, &json!({"type":"heartbeat"}))?;
-            quiet = Instant::now();
-        }
-        if !matches!(
-            closed.recv_timeout(interval.max(watcher.cost * 3)),
-            Err(RecvTimeoutError::Timeout)
-        ) {
-            return Ok(());
+        // The wait after a slow projection can outlast several heartbeats, so they are sent during it.
+        let check = Instant::now() + interval.max(watcher.cost * 3);
+        loop {
+            if quiet.elapsed() >= HEARTBEAT {
+                write_frame(out, &json!({"type":"heartbeat"}))?;
+                quiet = Instant::now();
+            }
+            let wait = check
+                .saturating_duration_since(Instant::now())
+                .min(HEARTBEAT.saturating_sub(quiet.elapsed()));
+            if !matches!(closed.recv_timeout(wait), Err(RecvTimeoutError::Timeout)) {
+                return Ok(());
+            }
+            if Instant::now() >= check {
+                break;
+            }
         }
     }
 }
@@ -693,6 +700,19 @@ mod tests {
         assert!(watch.poll().unwrap().is_empty());
     }
 
+    /// Keeps what `run` writes; the closure sees the earlier output and the bytes about to join it.
+    struct Tap<F>(Vec<u8>, F);
+    impl<F: FnMut(&[u8], &[u8]) -> std::io::Result<()>> Write for Tap<F> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            (self.1)(&self.0, bytes)?;
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn an_unreadable_source_ends_at_once_and_a_stuck_one_after_the_retry_budget() {
         let directory = tempfile::tempdir().unwrap();
@@ -705,21 +725,16 @@ mod tests {
         assert!(lines.lines().next().unwrap().contains("\"hello\""));
         assert!(lines.lines().last().unwrap().contains("\"end\""));
         // The file turns unreadable right after the first frames went out.
-        struct Corrupting(Vec<u8>, PathBuf);
-        impl Write for Corrupting {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                if self.0.contains(&b'\n') {
-                    fs::write(&self.1, "{ not json\n")?;
-                }
-                self.0.extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
         let (_directory, path) = fixture(&chain(2));
-        let mut out = Corrupting(Vec::new(), path.clone());
+        let mut out = Tap(
+            Vec::new(),
+            |written: &[u8], _: &[u8]| -> std::io::Result<()> {
+                if written.contains(&b'\n') {
+                    fs::write(&path, "{ not json\n")?;
+                }
+                Ok(())
+            },
+        );
         assert!(run(
             watcher(&path, 50),
             Duration::from_millis(1),
@@ -738,6 +753,30 @@ mod tests {
             lines.last().unwrap(),
             &json!({"type":"end","reason":"InvalidEvent"})
         );
+    }
+
+    #[test]
+    fn a_heartbeat_is_sent_on_time_during_the_wait_that_follows_a_slow_projection() {
+        let (_directory, path) = fixture(&chain(2));
+        let mut watch = watcher(&path, 50);
+        watch.poll().unwrap();
+        // An unchanged file is not projected again, so the cost of a 10 s projection stays: a 30 s wait.
+        watch.cost = Duration::from_secs(10);
+        let (close, closed) = std::sync::mpsc::channel();
+        // Ends the watch at the first heartbeat, as a client closing the channel would.
+        let mut out = Tap(
+            Vec::new(),
+            |_: &[u8], frame: &[u8]| -> std::io::Result<()> {
+                if frame.starts_with(br#"{"type":"heartbeat"}"#) {
+                    let _ = close.send(());
+                }
+                Ok(())
+            },
+        );
+        let started = Instant::now();
+        run(watch, Duration::from_millis(1), &mut out, &closed).unwrap();
+        let waited = started.elapsed();
+        assert!(waited >= HEARTBEAT && waited < HEARTBEAT * 3, "{waited:?}");
     }
 
     #[test]
