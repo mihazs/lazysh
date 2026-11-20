@@ -10,6 +10,8 @@ type App = tauri::App<tauri::test::MockRuntime>;
 
 const PNG_V1: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-historical";
 const PNG_V2: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-working-tree\0\xff";
+/// The EBML signature that starts every WebM file.
+const WEBM_HEADER: &[u8] = b"\x1a\x45\xdf\xa3\x9fB\x86\x81\x01";
 
 fn json<T: Serialize>(value: T) -> Value {
     serde_json::to_value(value).unwrap()
@@ -247,6 +249,64 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
     assert_eq!(working["data"], json(PNG_V2));
     let committed = picture(Some(image["oid"].as_str().unwrap().into())).await;
     assert_eq!(committed["data"], json(PNG_V1));
+
+    // Video and audio previews read the working tree over SFTP, check the signature, and refuse a
+    // file that is not the requested kind, is too large or is a link.
+    let page = b"<!doctype html><script>parent.pwned=1</script>".to_vec();
+    let mut huge = WEBM_HEADER.to_vec();
+    huge.resize(8 * 1024 * 1024 + 1, 0);
+    for (name, bytes) in [
+        ("clip.webm", WEBM_HEADER.to_vec()),
+        ("page.mp4", page),
+        ("huge.webm", huge),
+    ] {
+        fs::write(repo.join(name), bytes).unwrap();
+    }
+    std::os::unix::fs::symlink("clip.webm", repo.join("link.webm")).unwrap();
+    let clip = |name: &'static str, kind: crate::media::MediaKind| {
+        let path = path.clone();
+        async move {
+            Box::pin(crate::media::file_media(
+                app.state(),
+                app.state(),
+                id.into(),
+                path,
+                name.into(),
+                kind,
+                access_lease(),
+            ))
+            .await
+            .map(|clip| json(clip.into_inner().unwrap()))
+            .map_err(|error| error.into_inner().unwrap().kind())
+        }
+    };
+    use crate::media::MediaKind::{Audio, Video};
+    let played = clip("clip.webm", Video).await.unwrap();
+    assert_eq!(played["mime"], "video/webm");
+    assert_eq!(
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            played["data"].as_str().unwrap()
+        )
+        .unwrap(),
+        WEBM_HEADER
+    );
+    assert_eq!(
+        clip("clip.webm", Audio).await.unwrap_err(),
+        "media_mislabeled"
+    );
+    assert_eq!(
+        clip("page.mp4", Video).await.unwrap_err(),
+        "media_mislabeled"
+    );
+    assert_eq!(
+        clip("huge.webm", Video).await.unwrap_err(),
+        "media_too_large"
+    );
+    assert_eq!(
+        clip("link.webm", Video).await.unwrap_err(),
+        "invalid_repository"
+    );
 
     // Files opens Markdown as text over the same SFTP channel.
     assert_eq!(

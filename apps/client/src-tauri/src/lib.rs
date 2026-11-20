@@ -30,6 +30,7 @@ mod identities;
 mod keep_awake;
 mod links;
 mod local;
+mod media;
 mod mosh;
 mod multiplexer;
 #[cfg(desktop)]
@@ -301,6 +302,8 @@ pub fn run() {
                 repository::repository_tree,
                 repository::repository_blob,
                 repository::repository_image,
+                media::file_media,
+                media::media_playback,
                 repository::repository_diff,
                 multiplexer::multiplexer_tree,
                 tmux_jump::tmux_jump_snapshot,

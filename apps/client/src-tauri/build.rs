@@ -156,6 +156,8 @@ fn main() {
         "repository_tree",
         "repository_blob",
         "repository_image",
+        "file_media",
+        "media_playback",
         "repository_diff",
         "multiplexer_tree",
         "tmux_jump_snapshot",

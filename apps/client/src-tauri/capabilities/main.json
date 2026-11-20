@@ -122,6 +122,8 @@
     "allow-repository-tree",
     "allow-repository-blob",
     "allow-repository-image",
+    "allow-file-media",
+    "allow-media-playback",
     "allow-repository-diff",
     "allow-start-preview",
     "allow-stop-preview",
