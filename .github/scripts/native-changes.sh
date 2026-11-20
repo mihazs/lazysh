@@ -81,7 +81,7 @@ classify() {
     # workflow and tests/regression-check.test.ts runs in test:hooks.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/regression-check.test.ts | tests/native-changes.test.ts | \
-      tests/pinned-download.test.ts | tests/speech-fixtures.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
+      tests/pinned-download.test.ts | tests/herdr-release.test.ts | tests/speech-fixtures.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
       tests/waydroid-lane.test.ts | \
       .github/workflows/main-verdict.yml | .github/workflows/conventional-commits.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
