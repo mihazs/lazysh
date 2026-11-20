@@ -177,7 +177,7 @@ test.each([
   ['the owned SSH fixture the Appium suite reuses', ['tests/support/sshFixture.ts'], { ...clientRun, ...androidRun }],
   ['iOS project', ['apps/client/src-tauri/apple/project.yml.hbs'], iosRun],
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
-  ['Herdr', ['packages/herdr-guard/client.rs'], herdrRun],
+  ['Herdr', ['packages/herdr-guard/client.rs', 'tests/herdr-notices.test.ts', '.github/herdr-notices/reviewed.json'], herdrRun],
   // The app bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt with the native-terminal feature.
   ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1 }],
   ['the terminal renderer, which the app compiles with the same feature', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1 }],
