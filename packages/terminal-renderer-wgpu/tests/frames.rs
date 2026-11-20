@@ -111,7 +111,7 @@ fn a_repaint_clears_once_and_is_one_pass() {
 /// Distinct glyphs forever through a 28-slot atlas: memory stays what it was after the first frame.
 #[test]
 fn memory_has_an_upper_bound_under_glyph_churn() {
-    let tiny = target(30, 6).with_atlas_side(64);
+    let tiny = target(30, 6).with_atlas_side(64).with_color_atlas_side(64);
     let mut rt = runtime(30, 6, b"");
     let mut r = WgpuRenderer::create(tiny, Appearance::default()).unwrap();
     r.apply(&rt.snapshot().unwrap()).unwrap();

@@ -1,0 +1,21 @@
+host load average at start: 3.21 6.03 8.09 5/2818 856835
+adapter: Ok(AdapterInfo { name: "AMD Radeon RX 5500 XT (RADV NAVI14)", backend: Vulkan, device_type: DiscreteGpu, driver: "radv Mesa 26.2.6-arch3.1" })
+
+Cold start: build the library of five faces, create the renderer and draw one frame of ASCII
+
+| library + renderer ms | first frame ms | text ms in that frame | glyph misses |
+|---|---|---|---|
+| 15.62 | 3.24 | 0.24 | 37 |
+
+Per workload (80x24, display scale 2: 16x32 px cells); dots = the layout's reference glyphs, fonts = real fonts
+
+| workload | glyphs | frames | glyph hits | glyph misses | hit rate % | atlas upload KiB | text ms total | us per miss | us per frame | wall ms per frame |
+|---|---|---|---|---|---|---|---|---|---|---|
+| plain text | dots | 64 | 100685 | 36 | 99.96 | 18.0 | 0.00 | 0.0 | 0.0 | 1.092 |
+| plain text | fonts | 64 | 100685 | 36 | 99.96 | 18.0 | 0.21 | 5.8 | 3.3 | 1.151 |
+| ANSI + truecolor | dots | 64 | 27986 | 21 | 99.93 | 10.5 | 0.00 | 0.0 | 0.0 | 4.008 |
+| ANSI + truecolor | fonts | 64 | 27986 | 21 | 99.93 | 10.5 | 0.14 | 6.8 | 2.2 | 4.169 |
+| full-screen redraw | dots | 64 | 3222 | 21 | 99.35 | 10.5 | 0.00 | 0.0 | 0.0 | 1.168 |
+| full-screen redraw | fonts | 64 | 3222 | 21 | 99.35 | 10.5 | 0.14 | 6.7 | 2.2 | 1.030 |
+| CJK/emoji/combining | dots | 64 | 1139 | 28 | 97.60 | 22.5 | 0.00 | 0.0 | 0.0 | 4.051 |
+| CJK/emoji/combining | fonts | 64 | 1139 | 28 | 97.60 | 40.5 | 2.23 | 79.6 | 34.8 | 4.014 |
