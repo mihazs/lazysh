@@ -193,7 +193,10 @@ enum Tool {
 }
 trait Runner {
     fn output(&mut self, tool: Tool, args: &[String], limit: usize) -> Result<Vec<u8>>;
-    fn launch(&mut self, tool: Tool, args: &[String]) -> Result<()>;
+    /// Starts `tool` and waits up to `wait` for it to exit: `Ok(true)` when it exited successfully,
+    /// `Ok(false)` when it is still running, in which case the host SDK keeps carrying out the
+    /// request after this process exits.
+    fn launch(&mut self, tool: Tool, args: &[String], wait: Duration) -> Result<bool>;
 }
 struct SdkRunner {
     cancelled: Arc<AtomicBool>,
@@ -331,41 +334,43 @@ impl Runner for SdkRunner {
             SDK_TIMEOUT,
         )
     }
-    fn launch(&mut self, tool: Tool, args: &[String]) -> Result<()> {
-        if self.cancelled.load(Ordering::Relaxed) {
+    fn launch(&mut self, tool: Tool, args: &[String], wait: Duration) -> Result<bool> {
+        launch_command(Self::command(tool, args), wait, &self.cancelled)
+    }
+}
+fn launch_command(mut command: Command, wait: Duration, cancelled: &AtomicBool) -> Result<bool> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(Error::Device("DeviceCancelled"));
+    }
+    prepare(&mut command);
+    command.stdout(Stdio::null());
+    let mut child = OwnedChild(Some(
+        command
+            .spawn()
+            .map_err(|_| Error::Device("SdkUnavailable"))?,
+    ));
+    let started = Instant::now();
+    while started.elapsed() < wait {
+        if cancelled.load(Ordering::Relaxed) {
             return Err(Error::Device("DeviceCancelled"));
         }
-        let mut command = Self::command(tool, args);
-        prepare(&mut command);
-        command.stdout(Stdio::null());
-        let mut child = OwnedChild(Some(
-            command
-                .spawn()
-                .map_err(|_| Error::Device("SdkUnavailable"))?,
-        ));
-        let started = Instant::now();
-        while started.elapsed() < Duration::from_millis(500) {
-            if self.cancelled.load(Ordering::Relaxed) {
-                return Err(Error::Device("DeviceCancelled"));
-            }
-            if let Some(status) = child
-                .0
-                .as_mut()
-                .ok_or(Error::Device("SdkCommandFailed"))?
-                .try_wait()?
-            {
-                return if status.success() {
-                    child.0.take();
-                    Ok(())
-                } else {
-                    Err(Error::Device("SdkCommandFailed"))
-                };
-            }
-            thread::sleep(Duration::from_millis(10));
+        if let Some(status) = child
+            .0
+            .as_mut()
+            .ok_or(Error::Device("SdkCommandFailed"))?
+            .try_wait()?
+        {
+            return if status.success() {
+                child.0.take();
+                Ok(true)
+            } else {
+                Err(Error::Device("SdkCommandFailed"))
+            };
         }
-        child.0.take(); // The host SDK owns the explicitly started emulator after acknowledgement.
-        Ok(())
+        thread::sleep(Duration::from_millis(10));
     }
+    child.0.take(); // The host SDK owns the request (a started emulator, a Simulator state change) after acknowledgement.
+    Ok(false)
 }
 
 pub(crate) fn cancellation_signal() -> Result<Arc<AtomicBool>> {
@@ -509,13 +514,22 @@ fn inventory(runner: &mut impl Runner, platform: Platform) -> Result<Value> {
             }
         }
         Platform::Ios => {
-            let output = runner.output(
-                Tool::Simctl,
-                &args(&["list", "devices", "--json"]),
-                MAX_SDK_TEXT,
-            )?;
-            let output: Value =
-                serde_json::from_slice(&output).map_err(|_| Error::Device("InvalidDeviceList"))?;
+            let list = args(&["list", "devices", "--json"]);
+            let mut output = runner.output(Tool::Simctl, &list, MAX_SDK_TEXT);
+            // The first `list` after CoreSimulatorService was idle, or while it shuts a Simulator down, can
+            // pass the limit although the service is making progress; once warm it answers in about a second.
+            if matches!(output, Err(Error::Device("DeviceTimeout"))) {
+                output = runner.output(Tool::Simctl, &list, MAX_SDK_TEXT);
+            }
+            let output: Value = match output {
+                Ok(output) => serde_json::from_slice(&output)
+                    .map_err(|_| Error::Device("InvalidDeviceList"))?,
+                Err(Error::Device("DeviceTimeout")) => {
+                    warnings.push("iOS Simulator discovery is slow: CoreSimulatorService may still be starting, or a Simulator is booting or shutting down. Find devices again in a moment");
+                    json!({"devices": {}})
+                }
+                Err(error) => return Err(error),
+            };
             for (runtime, entries) in output["devices"]
                 .as_object()
                 .ok_or(Error::Device("InvalidDeviceList"))?
@@ -710,10 +724,12 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
             {
                 return Err(Error::Device("DeviceNotFound"));
             }
-            runner.launch(Tool::Emulator, &args(&["-avd", id, "-no-window"]))?;
-            return Ok(
-                json!({"schemaVersion":1,"platform":platform,"id":id,"operation":operation,"status":"requested"}),
-            );
+            runner.launch(
+                Tool::Emulator,
+                &args(&["-avd", id, "-no-window"]),
+                Duration::from_millis(500),
+            )?;
+            return Ok(lifecycle(platform, id, operation, "requested"));
         }
         DeviceCommand::Boot { .. } => args(&["boot", id]),
         DeviceCommand::Shutdown { .. } if platform == Platform::Android => {
@@ -724,23 +740,29 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
             args(&["-s", id, "reboot"])
         }
         DeviceCommand::Reboot { .. } => {
-            runner.output(Tool::Simctl, &args(&["shutdown", id]), MAX_SDK_TEXT)?;
+            if !simctl_request(runner, &args(&["shutdown", id]))? {
+                // A boot sent now would be refused while the Simulator is still shutting down.
+                return Ok(lifecycle(platform, id, operation, "shutting_down"));
+            }
             args(&["boot", id])
         }
         _ => return Err(Error::InvalidArgument),
     };
-    runner.output(
-        if platform == Platform::Android {
-            Tool::Adb
-        } else {
-            Tool::Simctl
-        },
-        &arguments,
-        MAX_SDK_TEXT,
-    )?;
-    Ok(
-        json!({"schemaVersion":1,"platform":platform,"id":id,"operation":operation,"status":"requested"}),
-    )
+    if platform == Platform::Android {
+        runner.output(Tool::Adb, &arguments, MAX_SDK_TEXT)?;
+    } else {
+        simctl_request(runner, &arguments)?;
+    }
+    Ok(lifecycle(platform, id, operation, "requested"))
+}
+fn lifecycle(platform: Platform, id: &str, operation: &str, status: &str) -> Value {
+    json!({"schemaVersion":1,"platform":platform,"id":id,"operation":operation,"status":status})
+}
+/// `simctl boot` and `shutdown` return once CoreSimulatorService has the request, which took 7 to
+/// 66 s on a loaded Mac. A request still running after the usual SDK limit is handed to the host
+/// instead of failing: the Simulator reaches its new state and discovery confirms it.
+fn simctl_request(runner: &mut impl Runner, arguments: &[String]) -> Result<bool> {
+    runner.launch(Tool::Simctl, arguments, SDK_TIMEOUT)
 }
 /// Send one `adb` input command to the device and answer that it was requested.
 fn adb_requested(

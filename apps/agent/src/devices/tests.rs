@@ -7,6 +7,8 @@ struct FakeRunner {
     calls: Vec<(Tool, Vec<String>)>,
     outputs: VecDeque<Result<Vec<u8>>>,
     launches: Vec<(Tool, Vec<String>)>,
+    /// What each `launch` answers, in order; a launch finishing within its wait when empty.
+    launch_results: VecDeque<Result<bool>>,
     ios_png: Option<Vec<u8>>,
 }
 impl FakeRunner {
@@ -15,6 +17,7 @@ impl FakeRunner {
             calls: Vec::new(),
             outputs: outputs.into(),
             launches: Vec::new(),
+            launch_results: VecDeque::new(),
             ios_png: None,
         }
     }
@@ -33,9 +36,9 @@ impl Runner for FakeRunner {
         }
         Ok(output)
     }
-    fn launch(&mut self, tool: Tool, args: &[String]) -> Result<()> {
+    fn launch(&mut self, tool: Tool, args: &[String], _: Duration) -> Result<bool> {
         self.launches.push((tool, args.to_vec()));
-        Ok(())
+        self.launch_results.pop_front().unwrap_or(Ok(true))
     }
 }
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -425,24 +428,117 @@ fn boot_only_launches_a_discovered_avd_and_does_not_claim_completed_boot() {
     assert!(runner.launches.is_empty());
 }
 
-#[test]
-fn ios_reboot_orders_shutdown_then_boot_for_the_exact_uuid() {
-    let mut runner = FakeRunner::new(vec![Ok(Vec::new()), Ok(Vec::new())]);
+fn ios_lifecycle(runner: &mut FakeRunner, operation: &str) -> Result<Value> {
+    let (platform, id) = (Platform::Ios, UUID.into());
     execute(
-        &mut runner,
-        DeviceCommand::Reboot {
-            platform: Platform::Ios,
-            id: UUID.into(),
+        runner,
+        match operation {
+            "boot" => DeviceCommand::Boot { platform, id },
+            "shutdown" => DeviceCommand::Shutdown { platform, id },
+            _ => DeviceCommand::Reboot { platform, id },
         },
     )
-    .unwrap();
-    assert_eq!(
-        runner.calls,
-        vec![
-            (Tool::Simctl, args(&["shutdown", UUID])),
-            (Tool::Simctl, args(&["boot", UUID]))
-        ]
+}
+fn launched(runner: &FakeRunner, commands: &[&str]) {
+    let expected: Vec<_> = commands
+        .iter()
+        .map(|command| (Tool::Simctl, args(&[command, UUID])))
+        .collect();
+    assert_eq!(runner.launches, expected);
+    assert!(
+        runner.calls.is_empty(),
+        "lifecycle requests are launched, not read"
     );
+}
+
+#[test]
+fn ios_reboot_orders_shutdown_then_boot_for_the_exact_uuid() {
+    let mut runner = FakeRunner::new(vec![]);
+    let result = ios_lifecycle(&mut runner, "reboot").unwrap();
+    assert_eq!(result["status"], "requested");
+    launched(&runner, &["shutdown", "boot"]);
+}
+
+#[test]
+fn ios_lifecycle_request_still_running_after_the_limit_is_requested_not_a_timeout() {
+    for operation in ["boot", "shutdown"] {
+        let mut runner = FakeRunner::new(vec![]);
+        runner.launch_results.push_back(Ok(false));
+        let result = ios_lifecycle(&mut runner, operation).unwrap();
+        assert_eq!(result["status"], "requested", "{operation}");
+        assert_eq!(result["operation"], operation);
+        launched(&runner, &[operation]);
+    }
+    let mut runner = FakeRunner::new(vec![]);
+    runner
+        .launch_results
+        .push_back(Err(Error::Device("SdkCommandFailed")));
+    assert!(matches!(
+        ios_lifecycle(&mut runner, "shutdown"),
+        Err(Error::Device("SdkCommandFailed"))
+    ));
+}
+
+#[test]
+fn ios_reboot_whose_shutdown_outlasts_the_limit_reports_shutting_down_and_sends_no_boot() {
+    let mut runner = FakeRunner::new(vec![]);
+    runner.launch_results.push_back(Ok(false));
+    let result = ios_lifecycle(&mut runner, "reboot").unwrap();
+    assert_eq!(result["status"], "shutting_down");
+    assert_eq!(result["operation"], "reboot");
+    launched(&runner, &["shutdown"]);
+    // A slow boot after a finished shutdown is still a reboot that was requested.
+    let mut runner = FakeRunner::new(vec![]);
+    runner.launch_results.extend([Ok(true), Ok(false)]);
+    assert_eq!(
+        ios_lifecycle(&mut runner, "reboot").unwrap()["status"],
+        "requested"
+    );
+    launched(&runner, &["shutdown", "boot"]);
+    // A refused shutdown is a failure and no boot follows it.
+    let mut runner = FakeRunner::new(vec![]);
+    runner
+        .launch_results
+        .push_back(Err(Error::Device("SdkCommandFailed")));
+    assert!(ios_lifecycle(&mut runner, "reboot").is_err());
+    launched(&runner, &["shutdown"]);
+}
+
+fn ios_listing() -> Vec<u8> {
+    json!({"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-0":[{"udid":UUID,"name":"iPhone 17","state":"Shutdown","isAvailable":true}]}})
+        .to_string()
+        .into_bytes()
+}
+fn list_ios(outputs: Vec<Result<Vec<u8>>>) -> (Result<Value>, usize) {
+    let mut runner = FakeRunner::new(outputs);
+    let result = execute(
+        &mut runner,
+        DeviceCommand::List {
+            platform: Platform::Ios,
+        },
+    );
+    (result, runner.calls.len())
+}
+
+#[test]
+fn ios_discovery_that_times_out_once_is_retried_and_twice_is_reported_as_slow() {
+    let timeout = || Err(Error::Device("DeviceTimeout"));
+    let (result, calls) = list_ios(vec![timeout(), Ok(ios_listing())]);
+    let inventory = result.unwrap();
+    assert_eq!(
+        (calls, inventory["devices"][0]["id"].as_str()),
+        (2, Some(UUID))
+    );
+    assert!(inventory["warnings"].as_array().unwrap().is_empty());
+    let (result, calls) = list_ios(vec![timeout(), timeout()]);
+    let inventory = result.unwrap();
+    assert_eq!(calls, 2);
+    assert!(inventory["devices"].as_array().unwrap().is_empty());
+    assert!(inventory["warnings"][0].as_str().unwrap().contains("slow"));
+    // Only a timeout is retried: a refused command is still a failure.
+    let (result, calls) = list_ios(vec![Err(Error::Device("SdkCommandFailed"))]);
+    assert!(matches!(result, Err(Error::Device("SdkCommandFailed"))));
+    assert_eq!(calls, 1);
 }
 
 #[test]
@@ -780,6 +876,35 @@ fn bounded_subprocesses_enforce_output_timeout_and_mid_run_cancellation() {
     ));
 }
 #[test]
+fn launched_commands_report_exit_failure_or_stay_running_for_the_host_to_finish() {
+    let cancelled = AtomicBool::new(false);
+    let wait = Duration::from_secs(5);
+    assert!(launch_command(fixture("output"), wait, &cancelled).unwrap());
+    assert!(matches!(
+        launch_command(fixture("fail"), wait, &cancelled),
+        Err(Error::Device("SdkCommandFailed"))
+    ));
+    // Past its wait a command is neither killed nor reported as a timeout: it finishes on its own.
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("finished");
+    let mut command = fixture("marker");
+    command.env("LAZYSH_DEVICE_FIXTURE_MARKER", &marker);
+    let started = Instant::now();
+    assert!(!launch_command(command, Duration::from_millis(100), &cancelled).unwrap());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(!marker.exists());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !marker.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(marker.exists(), "the handed-over command was killed");
+    cancelled.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        launch_command(fixture("output"), wait, &cancelled),
+        Err(Error::Device("DeviceCancelled"))
+    ));
+}
+#[test]
 #[ignore = "Rust subprocess fixture exercised by bounded_subprocesses test"]
 fn sdk_fixture_process() {
     match std::env::var("LAZYSH_DEVICE_FIXTURE_MODE").as_deref() {
@@ -790,6 +915,15 @@ fn sdk_fixture_process() {
             thread::sleep(Duration::from_secs(30));
         }
         Ok("wait") => thread::sleep(Duration::from_secs(30)),
+        Ok("fail") => std::process::exit(3),
+        Ok("marker") => {
+            thread::sleep(Duration::from_millis(600));
+            std::fs::write(
+                std::env::var("LAZYSH_DEVICE_FIXTURE_MARKER").unwrap(),
+                b"done",
+            )
+            .unwrap();
+        }
         _ => {}
     }
 }
