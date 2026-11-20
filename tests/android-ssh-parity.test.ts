@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
@@ -188,6 +188,25 @@ test('etserver terminals are counted only from its own start lines',()=>{
   expect(etTerminalCount('Creating server\nWaiting for initial packet...\n')).toBe(0);
   expect(etTerminalCount('Waiting for initial packet...\nRUNNING TERMINAL\nGot keep alive\nRUNNING TERMINAL\n')).toBe(2);
 });
+
+test.skipIf(!parity || !process.env.LAZYSH_TEST_AGENT_BIN)('owned agent sshd lists devices from exactly the SDK it is given',async()=>{
+  const binary=process.env.LAZYSH_TEST_AGENT_BIN!;
+  await expect(SshFixture.start(undefined,{agent:{binary,sdk:'/sdk with space'}})).rejects.toThrow('Unsupported owned Android SDK path');
+  const sdk=await mkdtemp(join(tmpdir(),'lazysh-parity-sdk-'));
+  const fixture=await (async()=>{
+    // A stand-in adb that reports one running emulator, as the real one does for the job's owned AVD.
+    await mkdir(join(sdk,'platform-tools'));
+    await writeFile(join(sdk,'platform-tools/adb'),"#!/bin/sh\nprintf 'List of devices attached\\nemulator-5580\\tdevice product:sdk model:Owned_Emulator transport_id:1\\n'\n",{mode:0o700});
+    return SshFixture.start(undefined,{log:true,shellSeconds:10,agent:{binary,sdk}});
+  })();
+  try {
+    const client=await fixture.client(true,'lazysh-agent devices list --platform android');
+    client.child.stdin!.end();
+    const inventory=JSON.parse(await client.finish('owned device inventory',10_000));
+    expect(inventory.devices).toEqual([{id:'emulator-5580',name:'Owned Emulator',state:'running',kind:'emulator',
+      capabilities:{screenshot:true,tap:true,swipe:true,key:true,boot:false,shutdown:true,reboot:true}}]);
+  } finally {await fixture.stop();await rm(sdk,{recursive:true,force:true});}
+},40_000);
 
 test('parity report counts only every expected native case passing exactly once',()=>{
   const row=(name:string,body='')=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1">${body}</testcase>`;
