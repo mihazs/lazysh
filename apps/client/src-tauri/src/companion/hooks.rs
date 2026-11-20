@@ -156,12 +156,15 @@ async fn execute_command(
 ) -> Result<serde_json::Value> {
     let text = match host {
         Host::Remote(session) => {
-            let unix = resolve::detect(session, access).await?.ok_or_else(|| {
-                error(
-                    "companion_install_unsupported",
-                    "Hook setup requires an identified Unix SSH shell",
-                )
-            })?;
+            let unix = resolve::detect(session, access)
+                .await?
+                .and_then(resolve::Host::unix)
+                .ok_or_else(|| {
+                    error(
+                        "companion_install_unsupported",
+                        "Hook setup requires an identified Unix SSH shell",
+                    )
+                })?;
             ssh::exec_for_access(session, unix.command(command)?, access).await?
         }
         // The companion itself says what this platform supports (templates only on Windows).
