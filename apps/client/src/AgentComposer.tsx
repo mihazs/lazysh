@@ -106,7 +106,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
   const bytes=draftLimit(labels?.backend??'tmux',true);
-  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
+  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !attach.busy;
   const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
   // Escape is not known to interrupt Grok Build, so the view offers it no key beyond the guarded send.
@@ -149,8 +149,25 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   function stageDraft() {
     window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
   }
+  // A touch keyboard can keep the last word as an open composition that neither Send nor a compositionend ends: leaving the
+  // field ends it, as a tap elsewhere does (#1840). Send then waits for the render that holds the committed draft.
+  const submitAfterComposition=useRef<string|undefined>(undefined);
+  const submissionTarget=JSON.stringify([key,proofKey,stock,zellij,source,labels?.backend]);
+  function endComposition() {
+    if(!composing.current)return false;
+    const element=field.current;
+    element?.blur();
+    // A WebView may end it on blur without a compositionend.
+    if(composing.current){composing.current=false;setCompositionActive(false);attach.compose.end(element?.value ?? draft);}
+    return true;
+  }
+  useEffect(()=>{
+    const pending=submitAfterComposition.current;
+    if(pending && (!shown || pending!==submissionTarget || !access.current())){submitAfterComposition.current=undefined;return;}
+    if(pending && !composing.current){submitAfterComposition.current=undefined;submit();}
+  });
   function submit() {
-    if(composing.current)return;
+    if(endComposition()){submitAfterComposition.current=submissionTarget;return;}
     if(sendable){
       setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text)});
       control!.send();return;
@@ -213,7 +230,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
         }}/>
       <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
       {modeSwitch.button}
-      {stoppable && <button type="button" className="icon-button agent-composer-stop" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
+      {stoppable && <button type="button" className="icon-button agent-composer-stop" data-armed={stopArmed || undefined} disabled={control!.busy || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{endComposition();if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}>{control?.busy ? <LoaderCircle size={18} aria-hidden="true"/> : <SendHorizontal size={18} aria-hidden="true"/>}</button>}
     </form>
     {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock} zellij={zellij}
