@@ -10,6 +10,16 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.87.0] - 2026-11-20
+
+### New
+
+- **terminal:** add the one-time notice that the terminal engine changed and where to switch back ([#2211](https://github.com/mihazs/lazysh/pull/2211))
+
+### Fixed
+
+- **release:** publish releases again by admitting the Google Android APK that carries the Parakeet runtime ([#2213](https://github.com/mihazs/lazysh/pull/2213))
+
 ## [1.86.0] - 2026-11-20
 
 ### New
