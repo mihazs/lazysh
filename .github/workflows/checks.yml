@@ -123,11 +123,13 @@ jobs:
       - name: Build, type-check and test the client
         if: github.event_name != 'pull_request'
         run: bunx moon run client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -c 1
-      - name: Resolve the locked Playwright version
+      - &playwright-version
+        name: Resolve the locked Playwright version
         id: playwright
         working-directory: apps/client
         run: echo "version=$(bun -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
-      - name: Restore Playwright browsers for the locked version
+      - &playwright-browsers
+        name: Restore Playwright browsers for the locked version
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -136,7 +138,8 @@ jobs:
       # tmux feeds e2e/tmux-clipboard.spec.ts; with CI set that spec fails instead of skipping without it.
       - run: sudo sh .github/scripts/apt-install.sh tmux
       # Still installs the system dependencies; a cached browser only skips its download.
-      - run: bunx playwright install --with-deps chromium
+      - &playwright-chromium
+        run: bunx playwright install --with-deps chromium
         working-directory: apps/client
       # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
       # for xterm.js through the developer override, and a terminal of another backend fails them.
@@ -1143,6 +1146,10 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-agent --lib herdr:: -- --list | grep -Fx 'herdr::tests::real_named_pipe_carries_the_focus_request_and_reports_a_missing_pipe: test'
           cargo test --locked -p lazysh-agent --lib herdr::
+      # The OSC 52 handler is client code (xterm parser, bounded decoding, consent), so Windows runs its unit tests; no job runs a Windows client against a real multiplexer (#1747).
+      - name: Exercise the client OSC 52 handler
+        if: runner.os == 'Windows'
+        run: bun run --cwd apps/client test:osc52
       - name: Exercise the remote Herdr user-install admission script with Darwin stat
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
@@ -1735,6 +1742,17 @@ jobs:
           # A renamed case must not turn the local-session cases into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ | grep -c ': test$' | grep -Fx 2
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
+      # Pinned tmux (apt 3.4), Zellij 0.45.1 and the same-run stock Herdr drive a browser against lazysh's real terminal pane.
+      - *playwright-version
+      - *playwright-browsers
+      - *playwright-chromium
+      - name: Exercise tmux, Zellij and Herdr copies reaching the device clipboard through OSC 52 consent
+        if: ${{ !cancelled() }}
+        run: |
+          # With CI set a missing binary fails these cases instead of skipping them; a renamed case must not turn the step into a zero-test pass.
+          test -x "$LAZYSH_TEST_ZELLIJ" && test -x "$LAZYSH_TEST_HERDR"
+          bun run --cwd apps/client test:e2e:multiplexers --list | grep -Fx 'Total: 6 tests in 2 files'
+          bunx moon run client:test-e2e-multiplexers
       - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:
