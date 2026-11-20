@@ -116,7 +116,30 @@ async fn companion_json(
         &host.companion(access, command).await?,
     )?)
 }
-
+/// `companion_json` under the access lease, for the commands that only build a command line.
+async fn run_companion(
+    access: &AccessLease,
+    state: &AppState,
+    local: &LocalState,
+    session_id: &str,
+    command: Result<String>,
+) -> Protected<serde_json::Value> {
+    access
+        .run(companion_json(state, local, access, session_id, command))
+        .await
+}
+/// An Android companion subcommand that takes the device and nothing else.
+async fn android_read(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    session_id: String,
+    id: String,
+    action: &str,
+) -> Protected<serde_json::Value> {
+    let command = android_command(&id, action);
+    run_companion(&access, &state, &local, &session_id, command).await
+}
 #[tauri::command]
 pub async fn android_device_probe(
     access: AccessLease,
@@ -125,15 +148,7 @@ pub async fn android_device_probe(
     session_id: String,
     id: String,
 ) -> Protected<serde_json::Value> {
-    access
-        .run(companion_json(
-            &state,
-            &local,
-            &access,
-            &session_id,
-            android_command(&id, "probe"),
-        ))
-        .await
+    android_read(access, state, local, session_id, id, "probe").await
 }
 #[tauri::command]
 pub async fn android_ui_tree(
@@ -143,15 +158,7 @@ pub async fn android_ui_tree(
     session_id: String,
     id: String,
 ) -> Protected<serde_json::Value> {
-    access
-        .run(companion_json(
-            &state,
-            &local,
-            &access,
-            &session_id,
-            android_command(&id, "ui tree"),
-        ))
-        .await
+    android_read(access, state, local, session_id, id, "ui tree").await
 }
 /// The identity of a node as `android_ui_tree` listed it.
 #[derive(serde::Deserialize)]
@@ -199,15 +206,14 @@ pub async fn android_ui_action(
     node: UiNode,
     kind: String,
 ) -> Protected<serde_json::Value> {
-    access
-        .run(companion_json(
-            &state,
-            &local,
-            &access,
-            &session_id,
-            ui_action_command(&id, &node, &kind),
-        ))
-        .await
+    run_companion(
+        &access,
+        &state,
+        &local,
+        &session_id,
+        ui_action_command(&id, &node, &kind),
+    )
+    .await
 }
 #[tauri::command]
 pub async fn ios_device_probe(
@@ -218,15 +224,14 @@ pub async fn ios_device_probe(
     id: String,
     socket: String,
 ) -> Protected<serde_json::Value> {
-    access
-        .run(companion_json(
-            &state,
-            &local,
-            &access,
-            &session_id,
-            companion_command(&id, &socket, "probe"),
-        ))
-        .await
+    run_companion(
+        &access,
+        &state,
+        &local,
+        &session_id,
+        companion_command(&id, &socket, "probe"),
+    )
+    .await
 }
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Native-injected lease plus the existing typed IPC fields.
@@ -279,15 +284,14 @@ pub async fn android_device_action(
     height: u32,
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
-    access
-        .run(companion_json(
-            &state,
-            &local,
-            &access,
-            &session_id,
-            android_gesture_command(&id, width, height, &action),
-        ))
-        .await
+    run_companion(
+        &access,
+        &state,
+        &local,
+        &session_id,
+        android_gesture_command(&id, width, height, &action),
+    )
+    .await
 }
 #[tauri::command]
 pub async fn list_devices(
@@ -408,15 +412,14 @@ pub async fn device_action(
     id: String,
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
-    access
-        .run(companion_json(
-            &state,
-            &local,
-            &access,
-            &session_id,
-            action_command(&device_platform, &id, action),
-        ))
-        .await
+    run_companion(
+        &access,
+        &state,
+        &local,
+        &session_id,
+        action_command(&device_platform, &id, action),
+    )
+    .await
 }
 #[cfg(test)]
 mod tests {
