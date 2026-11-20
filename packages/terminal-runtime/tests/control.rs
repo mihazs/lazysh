@@ -335,3 +335,58 @@ fn nothing_leaves_while_the_host_refuses_and_nothing_is_lost_by_it() {
         ]
     );
 }
+
+/// What a snapshot must bring back: the visible text, the cursor, the modes, and (through a second snapshot) the
+/// styles and the mouse encoding.
+fn restored(program: &[u8]) -> lazysh_terminal_runtime::TerminalRuntime {
+    let mut rt = runtime(20, 5);
+    feed(&mut rt, program);
+    let snapshot = rt.ansi_snapshot().unwrap();
+    let mut fresh = runtime(20, 5);
+    feed(&mut fresh, snapshot.as_bytes());
+    assert_eq!(fresh.viewport_text().unwrap(), rt.viewport_text().unwrap());
+    let (state, expected) = (
+        fresh.control_snapshot(5).unwrap().state,
+        rt.control_snapshot(5).unwrap().state,
+    );
+    assert_eq!(
+        (state.cursor, state.modes),
+        (expected.cursor, expected.modes)
+    );
+    assert_eq!(fresh.modes().unwrap(), rt.modes().unwrap());
+    assert_eq!(fresh.ansi_snapshot().unwrap(), snapshot);
+    fresh
+}
+
+#[test]
+fn an_ansi_snapshot_rebuilds_the_visible_screen_cursor_and_modes_without_the_scrollback() {
+    // Forty rows on five: history above a full screen, a coloured word, the cursor left mid-row and hidden,
+    // bracketed paste, application cursor keys, focus reports and drag tracking in the SGR encoding.
+    let mut program: Vec<u8> = (0..40)
+        .flat_map(|i| format!("row {i}\r\n").into_bytes())
+        .collect();
+    program.extend(b"\x1b[1;31mred\x1b[0m plain\x1b[3;4H\x1b[?25l\x1b[?2004h\x1b[?1h\x1b[?1004h\x1b[?1002h\x1b[?1006h");
+    let mut fresh = restored(&program);
+    let state = fresh.control_snapshot(5).unwrap().state;
+    assert_eq!((state.cursor.x, state.cursor.y), (3, 2));
+    assert!(state.modes.bracketed_paste && state.modes.application_cursor_keys);
+    assert_eq!(
+        state.modes.mouse_tracking,
+        lazysh_terminal_runtime::MouseTracking::Drag
+    );
+    assert_eq!(
+        fresh.scrollback_rows().unwrap(),
+        0,
+        "the history is not carried over"
+    );
+
+    // A full-screen program: the alternate screen, its text and its cursor, and plain click tracking.
+    let mut fresh =
+        restored(b"shell\r\n\x1b[?1049h\x1b[2;3Heditor\x1b[5;1H-- INSERT --\x1b[4;7H\x1b[?1000h");
+    let state = fresh.control_snapshot(5).unwrap().state;
+    assert!(state.modes.alternate_screen && !state.modes.bracketed_paste);
+    assert_eq!((state.cursor.x, state.cursor.y), (6, 3));
+    // Leaving it shows a blank shell screen: the screen the program was not on is not carried over.
+    feed(&mut fresh, b"\x1b[?1049l");
+    assert_eq!(fresh.viewport_text().unwrap().trim(), "");
+}

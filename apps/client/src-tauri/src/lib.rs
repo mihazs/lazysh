@@ -208,6 +208,8 @@ pub fn run() {
                 terminal_core::terminal_core_open,
                 terminal_core::terminal_core_input,
                 terminal_core::terminal_core_text,
+                terminal_core::terminal_core_ansi_snapshot,
+                terminal_core::terminal_core_release,
                 terminal_core::terminal_core_snapshot,
                 terminal_core::terminal_core_scroll,
                 terminal_core::terminal_core_resize,
