@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.89.1] - 2026-11-20
+
+### Under the hood
+
+- **android:** cover tmux copy mode and copying a line in the Android tmux acceptance case ([#1881](https://github.com/mihazs/lazysh/pull/1881))
+
 ## [1.89.0] - 2026-11-20
 
 ### New

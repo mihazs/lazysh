@@ -1,5 +1,9 @@
 # @lazysh/transcription-service
 
+## 1.89.1
+
+No changes in this release.
+
 ## 1.89.0
 
 No changes in this release.
