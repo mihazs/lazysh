@@ -323,3 +323,11 @@ it.each([['pt-BR','Verificar atualizações'],['es','Buscar actualizaciones']])(
   fireEvent.click(screen.getByRole('button',{name:label}));await act(async()=>{});
   expect(check).toHaveBeenCalledOnce();
 });
+it.each([['en','Nothing is installed until you press the button.'],['pt-BR','Nada é instalado até você usar o botão.'],['es','No se instala nada hasta que uses el botón.']])('explains the destination before any action and installs nothing on its own in %s',async(language,sentence)=>{
+  await uiI18n.changeLanguage(language);
+  render(<CompanionInstallPanel sessionId={`explain-${language}`} onInstalled={vi.fn()}/>);
+  const note=document.querySelector('details.companion-install > p.agent-note')!.textContent!;
+  expect(note).toContain('lazysh/companion/lazysh-agent');
+  expect(note).toContain(sentence);
+  expect(install).not.toHaveBeenCalled();expect(fromDevice).not.toHaveBeenCalled();
+});

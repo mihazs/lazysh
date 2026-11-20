@@ -175,6 +175,10 @@ mod tests {
             "'sh' is not recognized",
             "{\"schemaVersion\":1}",
             &linux.replace("Linux", "MINGW64_NT"),
+            // Only the architectures with a published companion are accepted.
+            &linux.replace("x86_64", "riscv64"),
+            &linux.replace("x86_64", "armv7l"),
+            &linux.replace("x86_64", "i686"),
             &linux.replace("/home/owned", "/home/../owned"),
             &format!("banner\n{linux}"),
         ] {
