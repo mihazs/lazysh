@@ -1,5 +1,31 @@
 # @lazysh/agent
 
+## 1.88.0
+
+### Minor Changes
+
+- feat(companion): admit the managed Windows companion namespace by owner, DACL and reparse point ([#1901](https://github.com/mihazs/lazysh/pull/1901))
+
+  <details><summary>Details</summary>
+
+  Admit the managed Windows companion namespace by owner, DACL and reparse point before `lazysh-agent update` and `installation` use it (#1724, part of #490). `%LOCALAPPDATA%\lazysh\companion` and `lazysh-agent.exe` are checked from the local application data folder down: a link, junction or other reparse point, a directory another account can change, an executable another account owns or can access, and an executable that is no regular file exit 27 (`unsafeInstallLocation`) from `update`, and fail `installation inspect` and `install` with `InstallUnsafeNamespace` or `InstallUnsafeFile`, before anything is created, run or replaced. On Windows, `installation inspect` now also reports the `destination` and the `existing` executable; Windows installation stays unsupported. Changed default: a Windows host whose managed namespace another account can change, which `update` used to accept, now exits 27 and has to be corrected by the user.
+
+  </details>
+
+### Patch Changes
+
+- fix(ios): send taps, swipes and button presses to an iOS Simulator through idb ([#1912](https://github.com/mihazs/lazysh/pull/1912))
+
+  <details><summary>Details</summary>
+
+  idb 1.7.8 rejects a top-level `tap`, `swipe` or `button` (`invalid choice`) because they are `idb ui` subcommands, so no input ever reached a Simulator (#1731, part of #19). The optional idb controls now run `idb ui tap`, `idb ui swipe` and `idb ui button`.
+
+  A real run on a hosted macOS runner (Xcode 26.6, an iOS 26.5 Simulator, idb 1.7.8) verified the companion identity in screen points, a continuous video preview, a tap at a point read from the Simulator's own accessibility frame, an edge swipe, Home and the hardware buttons, and shutdown and boot by UUID. The new non-required `ios-idb-acceptance` workflow repeats that run; the versions and limits are in [the device acceptance record](docs/reference/devices-acceptance.md#ios-simulator-idb-acceptance).
+
+  `simctl shutdown` can outlast the companion's ten-second command limit (7 to 66 seconds, tracked in #1911), and `idb ui describe-all` fails on the home screen, so no iOS accessibility tree is added. Needs the updated host companion on the Mac. No defaults change.
+
+  </details>
+
 ## 1.87.1
 
 No changes in this release.
