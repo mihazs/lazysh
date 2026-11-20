@@ -318,15 +318,19 @@ type View =
   | "devices"
   | "apple";
 type LocalTool='files'|'repository'|'attachments'|'previews'|'companion';
-type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:Partial<Record<LocalTool,boolean>>&{companionSource?:string|null}}[]};
+type LocalCapability={available:boolean;reason:string;targets?:{id:string;label?:string;tools?:Partial<Record<LocalTool,boolean>>&{companionSource?:string|null}}[]};
 const localViewTools:Partial<Record<View,LocalTool>>={files:'files',diff:'repository',attachments:'attachments',preview:'previews',agents:'companion',chat:'companion',apple:'companion'};
-/** A local session offers its terminal tools plus the host tools its default target reports. */
-function localTools(capability:LocalCapability) {return capability.targets?.find(target=>target.id==='default')?.tools;}
-function localTool(capability:LocalCapability,tool:LocalTool) {return localTools(capability)?.[tool];}
-function localView(capability:LocalCapability,id:View) {
+/** A local session offers its terminal tools plus the host tools its own target reports. */
+function localTools(capability:LocalCapability,target='default') {return capability.targets?.find(item=>item.id===target)?.tools;}
+function localTool(capability:LocalCapability,tool:LocalTool,target='default') {return localTools(capability,target)?.[tool];}
+function localView(capability:LocalCapability,id:View,target='default') {
   if(id==='terminal' || id==='voice' || id==='usage')return true;
   const tool=localViewTools[id];
-  return !!tool && localTool(capability,tool)===true;
+  return !!tool && localTool(capability,tool,target)===true;
+}
+function localDestination(capability:LocalCapability,id:string) {
+  const label=capability.targets?.find(item=>item.id===id)?.label;
+  return id==='default' || !label ? t("appThisDeviceLocalShell") : t("appThisDeviceTarget",{target:label});
 }
 const views = () => [
   { id: "terminal" as const, label: t("appTerminal"), Icon: TerminalSquare },
@@ -1199,6 +1203,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const shell=useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState<LocalCapability>({available:false,reason:t("appCheckingLocalTerminalSupport")});
+  const [localTarget, setLocalTarget] = useState('default');
   const [openingLocal, setOpeningLocal] = useState(false);
   const localOpening = useRef(false);
   const [appleUsage, setAppleUsage] = useState<Record<string,AppleUsageReport>>({});
@@ -1371,7 +1376,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function openTerminalAttachments(session: LiveSession, target?: 'composer') {
     if(!mounted.current || !lease.current() || currentView.current.activeId!==session.id
       || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
-      || (session.local && !localView(localCapability,'attachments')) || !session.connected || session.disposed || closingSessions.current.has(session.id)
+      || (session.local && !localView(localCapability,'attachments',session.target)) || !session.connected || session.disposed || closingSessions.current.has(session.id)
       || !sessionsRef.current.includes(session))return;
     visitView('attachments');
     setComposerAttachment(target==='composer' ? session.id : null);
@@ -1481,9 +1486,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationState=useRef(navigation);navigationState.current=navigation;
   const remoteActive=!!active?.connected && !active.local;
   /** The Agents board, transcripts and usage run through the companion: the host's for a remote session, this device's for a local one that has it. */
-  const companionActive=!!active?.connected && (!active.local || localView(localCapability,'agents'));
+  const companionActive=!!active?.connected && (!active.local || localView(localCapability,'agents',active.target));
   /** The inbox follows every connected session that has a companion; one poll serves all sessions of a host key. */
-  const inboxSessions=sessions.filter(session=>!session.local || localView(localCapability,'agents'));
+  const inboxSessions=sessions.filter(session=>!session.local || localView(localCapability,'agents',session.target));
   const inboxSessionsRef=useRef(inboxSessions);inboxSessionsRef.current=inboxSessions;
   /** Every connected remote host, for the Agents board that merges them. */
   const boardHosts=sessions.filter(session=>session.connected && !session.local).map(session=>({sessionId:session.id,hostKey:session.hostId,hostLabel:hosts.find(host=>host.id===session.hostId)?.name ?? session.destination}));
@@ -1492,7 +1497,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationEntry=navigation[activeId??'']??{mode:agentsFirst?'agents' as const:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
-  const sessionViews=active ? views().filter(({id})=>!active.local || localView(localCapability,id)) : [];
+  const sessionViews=active ? views().filter(({id})=>!active.local || localView(localCapability,id,active.target)) : [];
   const voiceReady=sessionViews.some(tool=>tool.id==='voice');
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
@@ -1702,7 +1707,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     else setLocalCapability({available:false,reason:t("appLocalTerminalsRequireTheNativeDesktopApp")});
     return()=>{alive=false;};
   },[]);
-  useEffect(()=>{if(active?.local && !localView(localCapability,view))setView('terminal');},[active?.id,active?.local,view,localCapability]);
+  useEffect(()=>{if(active?.local && !localView(localCapability,view,active.target))setView('terminal');},[active?.id,active?.local,active?.target,view,localCapability]);
   const launchBusy=!!fileRecovery || openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || pickerInFlight || (!wideSidebar && sidebar)
     || pushSettings || preferences || sync || sharing || mobileTools || about || inbox || restoring
     || (view==='sessions' && muxLaunch?.sessionId===activeId);
@@ -1716,10 +1721,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     localOpening.current=true;setOpeningLocal(true);setError('');
     let pending:Prepared|undefined;
     const ownership = new PendingSessions();
+    // A launch from the command line always opens the default shell.
+    const target=launchReceipt ? 'default' : localTarget;
     try {
-      pending=await prepareSession(localHostKey(), t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);
-      pending.session.local=true;
-      const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt).catch(error=>{throw captureLaunchError(error);}) : api.connectLocal(pending.onEvent));
+      pending=await prepareSession(localHostKey(), t("appLocalTerminal"), localDestination(localCapability,target),lease);
+      pending.session.local=true;pending.session.target=target;
+      const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt).catch(error=>{throw captureLaunchError(error);}) : api.connectLocal(pending.onEvent,undefined,target));
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
       if(!mounted.current){await ownership.close(result.sessionId);disposeTerminal(pending.session);return;}
@@ -1798,8 +1805,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         let pending:Prepared|undefined;
         try {
           if(!localCapability.available)throw new Error(localCapability.reason);
-          pending=await prepareSession(localHostKey(), t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);pending.session.local=true;
-          const result=await api.connectLocal(pending.onEvent);pending.establish(result.sessionId);
+          const target=intent.target??'default';
+          pending=await prepareSession(localHostKey(), t("appLocalTerminal"), localDestination(localCapability,target),lease);pending.session.local=true;pending.session.target=target;
+          const result=await api.connectLocal(pending.onEvent,undefined,target);pending.establish(result.sessionId);
           restoringSessions.current.add(result.sessionId);
           if(!mounted.current)throw new Error(t("appLocalRestorationCancelled"));
           restored.push(pending.session);
@@ -2278,6 +2286,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           title={localCapability.reason} onClick={()=>void openLocalTerminal()}>
           <TerminalSquare size={15}/><span>{openingLocal?t("appOpeningLocalTerminal"):t("appOpenLocalTerminal")}</span>
         </button>
+        {(localCapability.targets?.length??0)>1 && <select className="local-target" aria-label={t("appLocalTerminalTarget")} value={localTarget} disabled={openingLocal}
+          onChange={event=>setLocalTarget(event.target.value)}>
+          {localCapability.targets?.map(target=><option key={target.id} value={target.id}>{target.label??target.id}</option>)}
+        </select>}
         <div className="sidebar-heading">
           <span>{t("appHOSTS")}</span>
           <button
@@ -2564,7 +2576,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     reportError={setError}
                     onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}
-                    onOpenAttachments={(!session.local || localView(localCapability,'attachments')) && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
+                    onOpenAttachments={(!session.local || localView(localCapability,'attachments',session.target)) && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
                     notice={connectionNotice(session)}
                   />
                 ))}
@@ -2591,10 +2603,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     terminalInput={terminalInputFor(active,muxTools[active.id])}
                   />
                 )}
-                {active.connected && (!active.local || localView(localCapability,'preview')) && view === "preview" && (
+                {active.connected && (!active.local || localView(localCapability,'preview',active.target)) && view === "preview" && (
                   <PreviewPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && (!active.local || localView(localCapability,'attachments')) && view === "attachments" && (
+                {active.connected && (!active.local || localView(localCapability,'attachments',active.target)) && view === "attachments" && (
                   <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} {...composerAttachment===active.id ? {onAttach:addComposerAttachment,attachTarget:'composer' as const} : {}} onRestoreFileTransfer={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{const host=hosts.find(host=>host.id===active.hostId);if(host)setFileRecovery({sessionId:active.id,host,restored});}:undefined} />
                 )}
                 {active.connected && view === "voice" && (
@@ -2603,10 +2615,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.connected && !active.local && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && (!active.local || localView(localCapability,'files')) && view === "files" && (
+                {active.connected && (!active.local || localView(localCapability,'files',active.target)) && view === "files" && (
                   <FilesPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && (!active.local || localView(localCapability,'diff')) && view === "diff" && (
+                {active.connected && (!active.local || localView(localCapability,'diff',active.target)) && view === "diff" && (
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
                 {companionActive && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>showNavigation('agents')} /></div>}

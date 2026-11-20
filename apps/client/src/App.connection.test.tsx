@@ -560,7 +560,7 @@ it('opens an explicit local terminal without SSH authentication and hides remote
   await user.click(await screen.findByRole('button',{name:'Open local terminal'}));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
   expect(mocks.api.connectLocal).toHaveBeenCalledTimes(1);expect(mocks.api.connect).not.toHaveBeenCalled();
-  expect(mocks.api.connectLocal).toHaveBeenCalledWith(expect.any(Function));
+  expect(mocks.api.connectLocal).toHaveBeenCalledWith(expect.any(Function),undefined,'default');
   expect(screen.getByText(/Local PTY/)).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Files'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Agents'})).toBeNull();
@@ -590,7 +590,7 @@ it('restores local intention through a fresh local PTY without a host lookup or 
   await waitFor(()=>expect((screen.getByRole('button',{name:'Open local terminal'}) as HTMLButtonElement).disabled).toBe(false));
   await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
   expect(await screen.findByText(/Local PTY/)).toBeTruthy();expect(mocks.api.connectLocal).toHaveBeenCalledTimes(1);
-  expect(mocks.api.connectLocal).toHaveBeenCalledWith(expect.any(Function));
+  expect(mocks.api.connectLocal).toHaveBeenCalledWith(expect.any(Function),undefined,'default');
   expect(mocks.api.connect).not.toHaveBeenCalled();
 });
 

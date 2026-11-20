@@ -113,6 +113,7 @@ input[type="search"] {
 .navigation-connections > .search-button:hover:not(:disabled) { background: var(--theme-hover); }
 .navigation-connections > .search-button kbd { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--theme-hover); color: var(--theme-muted); }
 .navigation-connections > .search-button:disabled { background: transparent; min-height: 36px; padding-inline: 16px; font-size: 12px; opacity: .7; }
+.navigation-connections > .local-target { min-height: 36px; margin: -2px 0 8px; padding: 0 12px; border: 1px solid transparent; font-size: 13px; color: var(--theme-muted); }
 .navigation-connections > .sidebar-heading, .workspace-navigation-content > .sidebar-heading { margin: 14px 4px 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
 .navigation-connections > .sidebar-heading .icon-button { width: 36px; height: 36px; color: var(--accent); }
 /* One shrinkable track: a long unbreakable host name ellipsises instead of widening the row past its clipped list. */

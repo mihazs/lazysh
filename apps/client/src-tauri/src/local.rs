@@ -7,6 +7,13 @@ type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 use serde::Serialize;
 use tauri::{ipc::Channel, State};
 
+#[cfg(desktop)]
+mod targets;
+#[cfg(desktop)]
+mod wsl;
+#[cfg(desktop)]
+pub(crate) use wsl::{Located, Wsl};
+
 #[derive(Serialize)]
 pub struct Capability {
     available: bool,
@@ -17,12 +24,12 @@ pub struct Capability {
 #[derive(Serialize)]
 #[cfg_attr(not(desktop), allow(dead_code))]
 pub struct Target {
-    id: &'static str,
+    id: String,
     label: String,
     kind: &'static str,
     tools: Tools,
 }
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(desktop), allow(dead_code))]
 pub struct Tools {
@@ -36,31 +43,48 @@ pub struct Tools {
     #[cfg(desktop)]
     companion_source: Option<crate::companion::local::Source>,
 }
+/// The login shell (`%ComSpec%` on Windows): what **Open local terminal** starts.
+#[cfg(desktop)]
+const DEFAULT_TARGET: &str = "default";
 #[tauri::command]
 pub async fn local_capability() -> Capability {
     #[cfg(desktop)]
     {
         let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
         let companion_source = crate::companion::local::source().await;
+        let tools = Tools {
+            files: true,
+            repository: crate::host::local_program("git").await,
+            companion: companion_source.is_some(),
+            companion_source,
+            // Uploads write files and previews connect to loopback ports from this device.
+            attachments: true,
+            previews: true,
+        };
+        let mut targets = vec![Target {
+            id: DEFAULT_TARGET.into(),
+            label: std::path::Path::new(&shell)
+                .file_stem()
+                .map_or(shell.clone(), |name| name.to_string_lossy().into_owned()),
+            kind: if cfg!(windows) { "windows" } else { "posix" },
+            tools: tools.clone(),
+        }];
+        // A distribution reports the host tools that start inside it; every other shell shares this device's.
+        let detected = targets::detect(true).await;
+        targets.extend(
+            futures_util::future::join_all(detected.iter().map(|found| async {
+                let tools = match found.wsl() {
+                    Some(wsl) => wsl.tools().await,
+                    None => tools.clone(),
+                };
+                found.target(tools)
+            }))
+            .await,
+        );
         Capability {
             available: true,
             reason: "Local shell runs on this desktop device.",
-            targets: vec![Target {
-                id: "default",
-                label: std::path::Path::new(&shell)
-                    .file_stem()
-                    .map_or(shell.clone(), |name| name.to_string_lossy().into_owned()),
-                kind: if cfg!(windows) { "windows" } else { "posix" },
-                tools: Tools {
-                    files: true,
-                    repository: crate::host::local_program("git").await,
-                    companion: companion_source.is_some(),
-                    companion_source,
-                    // Uploads write files and previews connect to loopback ports from this device.
-                    attachments: true,
-                    previews: true,
-                },
-            }],
+            targets,
         }
     }
     #[cfg(not(desktop))]
@@ -103,6 +127,7 @@ pub async fn local_connect(
     launch: State<'_, crate::desktop_launch::LaunchState>,
     launch_receipt: Option<String>,
     attach: Option<crate::multiplexer::Entry>,
+    target: Option<String>,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
@@ -115,11 +140,30 @@ pub async fn local_connect(
                     Some(receipt) => Some(launch.claim(&receipt, &lease)?),
                     None => None,
                 };
-                desktop::connect(&state, lease.clone(), directory, attach, cols, rows, events).await
+                desktop::connect(
+                    &state,
+                    lease.clone(),
+                    directory,
+                    attach,
+                    target.as_deref(),
+                    cols,
+                    rows,
+                    events,
+                )
+                .await
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             {
-                let _ = (state, launch, launch_receipt, attach, cols, rows, events);
+                let _ = (
+                    state,
+                    launch,
+                    launch_receipt,
+                    attach,
+                    target,
+                    cols,
+                    rows,
+                    events,
+                );
                 Err("Local terminals require the desktop app".into())
             }
         })
@@ -208,13 +252,22 @@ pub(crate) fn usage_session(
 ) -> Result<tokio::sync::watch::Receiver<bool>, String> {
     #[cfg(desktop)]
     {
-        desktop::usage_session(state, id, lease)
+        desktop::host_session(state, id, lease).map(|(cancel, _)| cancel)
     }
     #[cfg(not(desktop))]
     {
         let _ = (state, id, lease);
         Err("Local terminals are unavailable".into())
     }
+}
+/// The close signal of an adopted local terminal and the WSL distribution its host tools run in.
+#[cfg(desktop)]
+pub(crate) fn host_session(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<(tokio::sync::watch::Receiver<bool>, Option<Wsl>), String> {
+    desktop::host_session(state, id, lease)
 }
 /// The tmux navigation binding of an adopted local terminal and its close signal.
 pub(crate) fn tmux_binding(
@@ -267,6 +320,7 @@ pub(crate) async fn adopted_test_session(state: &LocalState, lease: AccessLease)
     let connected = desktop::connect(
         state,
         lease.clone(),
+        None,
         None,
         None,
         80,
@@ -383,6 +437,8 @@ mod desktop {
         wake: UnixStream,
         renderer_gone: watch::Sender<bool>,
         bindings: crate::bindings::Bindings,
+        /// The distribution of a WSL target, set once before the renderer can adopt the session.
+        wsl: std::sync::OnceLock<Wsl>,
     }
     impl Session {
         /// Return `bytes` of consumed output credit (a forged or repeated credit is refused).
@@ -536,6 +592,11 @@ mod desktop {
         #[cfg(test)]
         pub(crate) fn test_env(&self) -> Vec<(String, String)> {
             self.0.test_env.lock().unwrap().clone()
+        }
+        /// Runs the host tools of session `id` in `wsl`, as a connected WSL target does.
+        #[cfg(test)]
+        pub(crate) fn bind_wsl(&self, id: &str, wsl: Wsl) {
+            let _ = self.0.session(id).unwrap().wsl.set(wsl);
         }
         pub(super) fn clone_inner(&self) -> Arc<Inner> {
             self.0.clone()
@@ -705,21 +766,39 @@ mod desktop {
         let writer = master.take_writer().map_err(|e| e.to_string())?;
         Ok((process, reader, writer))
     }
+    /// Starts the default shell, or the detected target the renderer chose by id.
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         state: &LocalState,
         creation: AccessLease,
         directory: Option<std::path::PathBuf>,
         attach: Option<crate::multiplexer::Entry>,
+        target: Option<&str>,
         cols: u32,
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
         let Some(entry) = attach else {
-            let command = shell_command(directory)?;
-            return start_with_access(state, creation, command, cols, rows, events).await;
+            let found = match target.filter(|id| *id != DEFAULT_TARGET) {
+                Some(id) => Some(targets::resolve(id).await?),
+                None => None,
+            };
+            let command = match &found {
+                None => shell_command(directory)?,
+                Some(found) => target_command(found, directory)?,
+            };
+            let connected = start_with_access(state, creation, command, cols, rows, events).await?;
+            if let Some(wsl) = found.and_then(|found| found.wsl()) {
+                // Before the renderer can adopt the session, so its host tools run in the distribution.
+                let _ = state.0.session(&connected.session_id)?.wsl.set(wsl);
+            }
+            return Ok(connected);
         };
         if directory.is_some() {
             return Err("Choose a folder or a multiplexer session, not both".into());
+        }
+        if target.is_some_and(|id| id != DEFAULT_TARGET) {
+            return Err("Multiplexer sessions attach on this device's own shell".into());
         }
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut command = attach_command(&entry).await?;
@@ -761,11 +840,34 @@ mod desktop {
         }
         Ok(command)
     }
+    fn target_command(
+        found: &targets::Found,
+        directory: Option<std::path::PathBuf>,
+    ) -> Result<CommandBuilder, String> {
+        let start = start_directory(directory.clone())?;
+        let mut command = CommandBuilder::new(found.program());
+        // Only a WSL target takes the folder as an argument; it starts in `~` without one.
+        command.args(found.arguments(directory.and(start.as_deref())));
+        command.env("TERM", "xterm-256color");
+        if let Some(start) = start {
+            command.cwd(start);
+        }
+        Ok(command)
+    }
     pub(super) fn shell_command(
         directory: Option<std::path::PathBuf>,
     ) -> Result<CommandBuilder, String> {
         let mut command = CommandBuilder::new_default_prog();
         command.env("TERM", "xterm-256color");
+        if let Some(directory) = start_directory(directory)? {
+            command.cwd(directory);
+        }
+        Ok(command)
+    }
+    /// Where a local shell starts: the validated `directory`, else the home directory.
+    fn start_directory(
+        directory: Option<std::path::PathBuf>,
+    ) -> Result<Option<std::path::PathBuf>, String> {
         if let Some(directory) = directory {
             #[cfg(windows)]
             let directory = {
@@ -788,11 +890,9 @@ mod desktop {
                 }
                 compatible.to_owned()
             };
-            command.cwd(directory);
-        } else if let Some(home) = super::home_dir() {
-            command.cwd(home);
+            return Ok(Some(directory));
         }
-        Ok(command)
+        Ok(super::home_dir())
     }
     #[cfg(test)]
     pub(super) async fn start(
@@ -920,6 +1020,7 @@ mod desktop {
             wake,
             renderer_gone: watch::channel(false).0,
             bindings: crate::bindings::Bindings::default(),
+            wsl: std::sync::OnceLock::new(),
         });
         let id = format!("local:{}", uuid::Uuid::new_v4());
         let registration = session
@@ -1187,12 +1288,14 @@ mod desktop {
             })
             .map_err(String::from)?
     }
-    pub(super) fn usage_session(
+    pub(super) fn host_session(
         state: &LocalState,
         id: &str,
         lease: &AccessLease,
-    ) -> Result<watch::Receiver<bool>, String> {
-        live_session(state, id, lease, |session| Ok(session.cancel.subscribe()))
+    ) -> Result<(watch::Receiver<bool>, Option<Wsl>), String> {
+        live_session(state, id, lease, |session| {
+            Ok((session.cancel.subscribe(), session.wsl.get().cloned()))
+        })
     }
     #[cfg(all(test, unix))]
     pub(super) fn display_identity(
@@ -1423,7 +1526,14 @@ mod tests {
         rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
         needle: &str,
     ) -> String {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        until_within(rx, needle, Duration::from_secs(5)).await
+    }
+    pub(super) async fn until_within(
+        rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+        needle: &str,
+        deadline: Duration,
+    ) -> String {
+        tokio::time::timeout(deadline, async {
             let mut bytes = Vec::new();
             loop {
                 let event = rx.recv().await.expect("local event stream ended");
@@ -2601,7 +2711,7 @@ mod tests {
     async fn windows_conpty_executes_utf8_resizes_and_closes() {
         let state = LocalState::default();
         let (event, mut rx) = events();
-        let connected = desktop::connect(&state, access_lease(), None, None, 80, 24, event)
+        let connected = desktop::connect(&state, access_lease(), None, None, None, 80, 24, event)
             .await
             .expect("ConPTY startup failed on this Windows runner");
         let pid = desktop::process_id(&state, &connected.session_id);
@@ -2631,6 +2741,213 @@ mod tests {
             !String::from_utf8_lossy(&processes.stdout).contains(&format!(",\"{pid}\",")),
             "owned ConPTY shell survived disconnect"
         );
+    }
+    /// Opens `target` as a real local terminal, runs `input` and waits for `needle`.
+    async fn run_in_target(target: &str, input: &str, needle: &str) -> String {
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let connected = desktop::connect(
+            &state,
+            access_lease(),
+            None,
+            None,
+            Some(target),
+            100,
+            30,
+            event,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("target {target} did not start: {error}"));
+        desktop::write(&state, &connected.session_id, input.into(), access_lease()).unwrap();
+        // Shell startup, profiles included, is slower than the 5 seconds a bare shell needs.
+        let output = until_within(&mut rx, needle, Duration::from_secs(60)).await;
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
+        output
+    }
+    #[tokio::test]
+    async fn a_target_that_was_not_detected_is_refused_before_any_process_starts() {
+        let state = LocalState::default();
+        let slots = state.available_slots();
+        for target in [
+            "wsl:definitely-not-installed",
+            "../x",
+            "C:\\Windows\\System32\\cmd.exe",
+            "",
+        ] {
+            let (event, _rx) = events();
+            let error = desktop::connect(
+                &state,
+                access_lease(),
+                None,
+                None,
+                Some(target),
+                80,
+                24,
+                event,
+            )
+            .await
+            .err()
+            .expect("an undetected target must be refused");
+            assert!(error.contains("not available"), "{target:?}: {error}");
+        }
+        assert_eq!(state.available_slots(), slots);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn linux_offers_the_login_shell_as_its_only_target_and_opens_it_by_id() {
+        let capability = local_capability().await;
+        let ids: Vec<_> = capability
+            .targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .collect();
+        assert_eq!(ids, ["default"]);
+        assert_eq!(capability.targets[0].kind, "posix");
+        let output =
+            run_in_target("default", "printf '__TARGET_%s__\\n' ok\n", "__TARGET_ok__").await;
+        assert!(output.contains("__TARGET_ok__"));
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_lists_cmd_first_then_every_installed_powershell() {
+        let capability = local_capability().await;
+        let targets: Vec<_> = capability
+            .targets
+            .iter()
+            .map(|target| (target.id.as_str(), target.label.as_str()))
+            .collect();
+        assert_eq!(targets[0].0, "default");
+        assert!(targets[0].1.eq_ignore_ascii_case("cmd"), "{targets:?}");
+        // Windows PowerShell ships with Windows; PowerShell 7 is listed when its pwsh.exe is installed.
+        assert!(
+            targets.contains(&("powershell", "Windows PowerShell")),
+            "{targets:?}"
+        );
+        let pwsh_installed = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .any(|directory| directory.join("pwsh.exe").is_file());
+        assert_eq!(
+            targets.iter().any(|(id, _)| *id == "pwsh"),
+            pwsh_installed,
+            "{targets:?}"
+        );
+        assert!(capability
+            .targets
+            .iter()
+            .all(|target| target.kind == "windows"));
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn every_detected_powershell_prints_its_version_in_conpty() {
+        for target in targets::detect(false)
+            .await
+            .iter()
+            .filter(|found| found.is_powershell())
+        {
+            let output = run_in_target(target.id(), "$PSVersionTable.PSVersion\r\n", "Major").await;
+            assert!(output.contains("Major"), "{}: {output}", target.id());
+        }
+    }
+    /// Needs a WSL distribution, which hosted Windows runners lack: run it where one is installed.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "needs a WSL distribution"]
+    async fn real_wsl_target_runs_a_linux_shell_in_the_chosen_distribution() {
+        let distro = targets::detect(true)
+            .await
+            .into_iter()
+            .find(|found| found.is_wsl())
+            .expect("no WSL distribution is installed");
+        let output =
+            run_in_target(distro.id(), "echo __WSL_$(uname -s)__\n", "__WSL_Linux__").await;
+        assert!(output.contains("__WSL_Linux__"));
+    }
+    /// Starts a real WSL target and runs its host tools: makes a repository in the distribution,
+    /// reads a file through `\\wsl.localhost\<distro>\` and shows a diff. Needs a distribution
+    /// with `git`, which hosted Windows runners lack; it compiles everywhere and runs only there.
+    #[tokio::test]
+    #[ignore = "needs a WSL distribution with git"]
+    async fn real_wsl_target_reads_a_file_and_shows_a_diff_through_the_host_context() {
+        use crate::host::{Cmd, Host};
+        async fn run(
+            host: &Host,
+            lease: &AccessLease,
+            argv: &[&str],
+        ) -> crate::ssh::Result<String> {
+            host.run(lease, &Cmd::new(&[], argv)).await
+        }
+        let distro = targets::detect(true)
+            .await
+            .into_iter()
+            .find(|found| found.is_wsl())
+            .expect("no WSL distribution is installed");
+        let state = LocalState::default();
+        let lease = access_lease();
+        let (event, _rx) = events();
+        let connected = desktop::connect(
+            &state,
+            lease.clone(),
+            None,
+            None,
+            Some(distro.id()),
+            100,
+            30,
+            event,
+        )
+        .await
+        .unwrap();
+        desktop::adopt(&state, &connected.session_id, &lease).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let app = crate::ssh::AppState::new(temp.path().join("state")).unwrap();
+        let host = Host::resolve(&app, &state, &connected.session_id, &lease)
+            .await
+            .unwrap();
+        let home = host.home(&lease).await.unwrap();
+        assert!(home.starts_with('/'), "{home}");
+        let work = format!("{home}/lazysh-wsl-{}", uuid::Uuid::new_v4());
+        run(&host, &lease, &["mkdir", &work]).await.unwrap();
+        let write = |text: &str| format!("printf '{text}\\n' > '{work}/a.txt'");
+        run(&host, &lease, &["sh", "-c", &write("before")])
+            .await
+            .unwrap();
+        run(&host, &lease, &["git", "-C", &work, "init", "-q"])
+            .await
+            .unwrap();
+        run(&host, &lease, &["git", "-C", &work, "add", "--", "a.txt"])
+            .await
+            .unwrap();
+        run(
+            &host,
+            &lease,
+            &[
+                "git",
+                "-C",
+                &work,
+                "-c",
+                "user.name=Lazysh Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                "first",
+            ],
+        )
+        .await
+        .unwrap();
+        run(&host, &lease, &["sh", "-c", &write("after")])
+            .await
+            .unwrap();
+        let read = host.read_text(&lease, format!("{work}/a.txt")).await;
+        let diff = run(
+            &host,
+            &lease,
+            &["git", "-C", &work, "diff", "--no-ext-diff"],
+        )
+        .await;
+        let _ = run(&host, &lease, &["rm", "-rf", &work]).await;
+        desktop::disconnect(&state, &connected.session_id);
+        assert_eq!(read.unwrap(), "after\n");
+        assert!(diff.unwrap().contains("+after"));
     }
     #[cfg(unix)]
     #[tokio::test]
