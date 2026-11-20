@@ -118,6 +118,15 @@ test('an oversized native package is refused at staging and no receipt is writte
   await expect(stagePackages(identity, 'windows-x64', 'unsigned', [source], directory)).rejects.toThrow('oversized');
   expect(await Bun.file(join(directory, 'receipt.json')).exists()).toBe(false);
 }));
+// #2212: bytes of the release arm64 Google APK measured in #1819, which links ONNX Runtime and sherpa-onnx into that flavor only.
+test('the Google APK with the Parakeet runtime stages, and a FOSS APK of that size is still refused', () => fixture(async root => {
+  const source = join(root, 'app-universal-release.apk');
+  await Bun.write(source, 'x');
+  await truncate(source, 54_082_206);
+  const receipt = await stagePackages(identity, 'android-google-arm64', 'signed', [source], join(root, 'google'));
+  expect(receipt.files[0].bytes).toBe(54_082_206);
+  await expect(stagePackages(identity, 'android-foss-arm64', 'signed', [source], join(root, 'foss'))).rejects.toThrow('oversized');
+}));
 
 test('Java signing properties preserve separators, whitespace, controls and surrogate pairs', () => {
   const original = ' 🔐=a:b\\c\n\r\t#! é ';

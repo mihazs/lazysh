@@ -38,7 +38,8 @@ export const packageBudgetsMiB: { [T in ArtifactTarget]?: { [extension: string]:
   // Desktop packages bundle their platform's companion: the 1.5x ceiling plus that companion's own ceiling, until a release measures them.
   'linux-x64': { deb: 51, AppImage: 161 },
   'windows-x64': { exe: 28 },
-  'android-google-arm64': { apk: 47 },
+  // 1.5x the 54,082,206-byte Google APK measured with the Parakeet runtime linked (#1819); the FOSS flavor does not link it.
+  'android-google-arm64': { apk: 78 },
   'android-foss-arm64': { apk: 47 },
   'linux-agent-x64': { bin: 18 },
   'linux-agent-arm64': { bin: 15 },

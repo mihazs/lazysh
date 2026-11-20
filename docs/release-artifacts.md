@@ -153,7 +153,7 @@ files, read from the GitHub release assets on 2026-11-14.
 |Package|v0.23.0|v1.4.1|v1.30.1|v1.62.0|Ceiling|Growth v1.4.1 to v1.62.0|
 |---|---:|---:|---:|---:|---:|---:|
 |Android FOSS APK (arm64)|29.3|29.8|30.2|30.8|47|+3.4%|
-|Android Google APK (arm64)|29.5|30.0|30.7|31.3|47|+4.2%|
+|Android Google APK (arm64)|29.5|30.0|30.7|31.3|78|+4.2%|
 |Linux AppImage (x64)|91.8|94.4|94.6|95.0|143|+0.7%|
 |Linux deb (x64)|18.4|21.2|21.5|21.9|33|+3.2%|
 |Windows installer (x64)|5.2|7.1|7.3|7.6|12|+6.8%|
@@ -176,6 +176,16 @@ so a release cannot publish a stray debug build or an unstripped binary that dou
 package. A real dependency or asset that needs more room raises its ceiling in the same
 change, with a new measurement in this table. The ceilings are guard rails against
 accidents, not a statement of the size users should expect.
+
+The Android Google APK is the one ceiling raised since: the Parakeet runtime (ONNX
+Runtime and sherpa-onnx, linked into the Google flavor only by
+[#1819](https://github.com/mihazs/lazysh/pull/1819)) grew the release arm64 APK built
+for that change to 54,082,206 bytes (51.6 MiB; `liblazysh_lib.so` went from 20,962,712
+to 42,219,808 bytes), so its ceiling is 1.5 times that, 78 MiB
+([#2212](https://github.com/mihazs/lazysh/issues/2212)). The model is downloaded on
+demand and is not in the APK. That figure is the pull request's build, not a published
+asset: remeasure it from the first release that ships the runtime. The FOSS APK does
+not link the runtime and keeps 47 MiB.
 
 Not measured here, and not claimed: installed size on a device or desktop, download size
 over a store or delta update, per-ABI Android splits (the published APKs are arm64
