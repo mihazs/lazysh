@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.83.1
+
+### Patch Changes
+
+- feat(terminal): register the native backend behind a probe that no release build passes ([#2164](https://github.com/mihazs/lazysh/pull/2164))
+
+  <details><summary>Details</summary>
+
+  Register the native terminal backend in the engine registry behind a probe, the developer override and recorded reasons (#1309, part of #1302). The new `terminal_core_available` command says whether this build has the native core compiled in and a platform host to draw it on (Android only so far); the Native choice and the developer override `lazysh.terminal.backend=native` select the native engine only when it says yes, and otherwise the session uses xterm.js and records the reason. Auto still picks xterm.js, and a screen reader still refuses the native engine. No release build passes the probe, so nothing changes for users; no default changes.
+
+  </details>
+- test(terminal): Hold Herdr's navigation-cell detection to both terminal backends ([#2189](https://github.com/mihazs/lazysh/pull/2189))
+
+  <details><summary>Details</summary>
+
+  Part of #1318 and #1302. `herdrNavigationCells.test.ts` now runs each case over the xterm.js adapter and over the native terminal adapter on the stand-in core, on the same bytes, so the right-trimmed, bounded window of rows the native adapter reads gives the same switch-button, switcher and on-screen answers as xterm.js. Test-only: no behaviour, engine or default changes, and xterm.js stays the only registered engine.
+
+  </details>
+
 ## 1.83.0
 
 ### Patch Changes

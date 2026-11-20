@@ -10,6 +10,16 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.83.1] - 2026-11-20
+
+### New
+
+- **terminal:** register the native backend behind a probe that no release build passes ([#2164](https://github.com/mihazs/lazysh/pull/2164))
+
+### Under the hood
+
+- **terminal:** Hold Herdr's navigation-cell detection to both terminal backends ([#2189](https://github.com/mihazs/lazysh/pull/2189))
+
 ## [1.83.0] - 2026-11-20
 
 ### Improved
