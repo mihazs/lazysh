@@ -49,7 +49,11 @@ async function openSession(page:Page) {
 test.describe('phone, connected session',()=>{
   // A fresh phone: nothing is stored, so the defaults apply. 415x900 is the reference phone of the gesture work.
   test.use({viewport:{width:415,height:900},storageState:{cookies:[],origins:[]}});
-  test.beforeEach(({},testInfo)=>{test.skip(testInfo.project.name!=='phone','The side menu is the phone layout.');});
+  test.beforeEach(async({page},testInfo)=>{
+    test.skip(testInfo.project.name!=='phone','The side menu is the phone layout.');
+    // The first-run gesture tour would open over the session, so this fresh device has seen it (gesture-tour.spec.ts covers it).
+    await page.addInitScript(()=>localStorage.setItem('lazysh.gestureTour.v1','999'));
+  });
 
   test('the connection list keeps the top bar; a session drops it and the hamburger',async({page})=>{
     await page.goto('/');
