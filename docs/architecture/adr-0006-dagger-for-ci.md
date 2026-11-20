@@ -1,6 +1,6 @@
 # ADR 0006: Dagger for the hosted-Linux CI checks, with measured conditions
 
-- Status: **Accepted, conditional**, 2026-11-19. The conditions below are checked by every migration slice, and a slice that misses them is reverted to YAML.
+- Status: **Accepted, conditional**, 2026-11-19, and **amended** the same day by the engine-cap experiments of [#2174](https://github.com/mihazs/lazysh/issues/2174) (see "Cap experiments" and decision 7). The conditions below are checked by every migration slice, and a slice that misses them is reverted to YAML.
 - Decision makers: repository maintainer. Tracking: [#2172](https://github.com/mihazs/lazysh/issues/2172), slice 1 of epic [#2171](https://github.com/mihazs/lazysh/issues/2171).
 - Related: [CONTRIBUTING: which CI jobs a pull request runs](../../CONTRIBUTING.md#which-ci-jobs-a-pull-request-runs) · [release tag gate](../release-tag-gate.md) · [release artifacts](../release-artifacts.md)
 
@@ -16,7 +16,7 @@ A throwaway workflow (branch `ci/dagger-spike`, commit `5a2b7a4f`, never merged)
 
 - `client`: `bunx moon run client:build client:check` (Node 24, Bun 1.3.14).
 - `agent`: `bunx moon run '#companion:check-rust' '#companion:lint' '#companion:format-check'` (`rust:1-bookworm`).
-- Dagger engine: the engine image run with `docker run -d --privileged -v /tmp/dagger-state:/var/lib/dagger`, reached through `_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://dagger-engine`, driven by `dagger/dagger-for-github@v8.4.1`.
+- Dagger engine: the engine image run with `docker run -d --privileged -v /tmp/dagger-state:/var/lib/dagger`, reached through `_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://dagger-engine`, driven by the CLI installed from its release archive with a pinned sha256 (`.github/scripts/pinned-download.sh`, as for every other pinned download) and the engine image pinned by digest, so no third-party action is needed. `dagger.json` stays the one place the version is chosen.
 - State persistence: after the run the engine is stopped and `/var/lib/dagger` is archived with `sudo tar --zstd -cpf`, then stored with `actions/cache`; the next run extracts it with `sudo tar --zstd -xpf` before starting the engine.
 - Each run passed a changing `--nonce` so the source-dependent steps re-ran, as they do when a pull request changes the source. Only the engine layer cache and the Dagger cache volumes (Bun install, Cargo registry, `target`) could help.
 
@@ -57,18 +57,40 @@ Also learned:
 - The state directory must be archived with `tar -p` as root. Running `chown` on it would change file ownership inside the container images stored there.
 - jscpd reports zero clones with the module committed: `dagger init` writes `dagger/.gitignore` for the generated `sdk/` (5.8 MB), and the hand-written module is far below the clone thresholds.
 
+## Cap experiments
+
+Condition 4.2 below asks for an engine state of at most 2 GiB. [#2174](https://github.com/mihazs/lazysh/issues/2174) tested whether a garbage-collection cap can deliver that without losing the warm speed. The engine ran with `/etc/dagger/engine.json` `{"gc":{"maxUsedSpace":…,"reservedSpace":…,"minFreeSpace":"1GB","sweepSize":"50%"}}` and `dagger core engine local-cache prune --use-default-policy` before the state was archived. Warm numbers are the `dagger call` step, in seconds; the uncapped numbers are from the spike above.
+
+| Run | Cap (max / reserved) | Function | Archive | Warm `dagger call` |
+| --- | --- | --- | --- | --- |
+| [44632222345](https://github.com/mihazs/lazysh/actions/runs/44632222345) (spike) | none | `client` | 2.0 GiB | 42 · 29 · 26 |
+| | none | `agent` | 2.9 GiB | 17 · 18 · 21 |
+| [44635664652](https://github.com/mihazs/lazysh/actions/runs/44635664652) | 2 GB / 1500 MB | `client` | 1003 MiB | 52 · 66 |
+| | 2 GB / 1500 MB | `agent` | 1309 MiB | 164 · 197 |
+| [44637871647](https://github.com/mihazs/lazysh/actions/runs/44637871647), with `CARGO_INCREMENTAL=0` | 2 GB / 1500 MB | `client` | 1003 MiB | 49 · 48 |
+| | 2 GB / 1500 MB | `agent` | 1310 MiB | 157 · 234 |
+| | 3 GB / 2500 MB | `agent` | 1310 MiB | 219 · 159 |
+
+What it shows:
+
+- The cap works for size: archives fall from 2.0 and 2.9 GiB to 1.0 and 1.3 GiB, and the prune takes 3 to 25 s.
+- It costs the Rust jobs their warm speed. A warm `agent` call goes from about 20 s to 160 to 230 s, as slow as a cold run, because the prune evicts the Cargo `target` cache volume. `CARGO_INCREMENTAL=0` (which `Swatinem/rust-cache` sets in the native job) and a 3 GB cap change nothing. The archive stays 1310 MiB at both caps, so the cap is not what limits the retained set.
+- `client` keeps its warm benefit: 48 to 66 s against 26 to 42 s uncapped, inside condition 4.1 against the real job (634 to 1897 s).
+- The repository already refuses to restore `target/` for release builds (`.github/actions/cargo-registry`), and the Rust jobs use `Swatinem/rust-cache`, which prunes workspace-crate artifacts instead of keeping a whole `target` tree.
+
 ## Decision
 
 1. **Adopt Dagger for the hosted-Linux checks, conditionally.** TypeScript SDK on Bun (the repository is Bun and TypeScript), Dagger 0.21.12 pinned exactly (the latest stable 0.21.x on 2026-11-19; the 1.0 beta is not used for required checks), `dagger/dagger-for-github@v8.4.1`.
-2. **The engine is Docker on the hosted runner, state is persisted with `actions/cache`, and pull requests restore but never save.** Main saves, as the repository does for the Rust cache. The archive is made with `sudo tar --zstd -cpf`.
+2. **The engine is Docker on the hosted runner, state is persisted with `actions/cache`, and pull requests restore but never save.** Main saves, as the repository does for the Rust cache. The archive is made with `sudo tar --zstd -cpf`. The engine runs with a GC policy (`maxUsedSpace` 2 GB, `reservedSpace` 1500 MB) and is pruned to it before archiving. One state exists per ISO week, saved by the first main push of that week, so at most the current and the previous week's entries are alive.
 3. **No Dagger Cloud.** The owner decided against it.
 4. **Conditions, checked by every migration slice and recorded in its pull request:**
    1. Warm wall-clock of the migrated job is within +10 % of the median of the same job on `main` over the last six green runs, measured on at least three warm runs.
    2. The persisted engine state is at most 2 GiB compressed across all functions together (one shared state, pruned to the cache volumes and the pinned base images), so the repository's cache total does not grow past what it is today. Slice [#2174](https://github.com/mihazs/lazysh/issues/2174) proves a pruning method or this ADR is superseded.
    3. A deliberately failing check turns the job red.
-   A slice that fails a condition moves that job back to YAML and says why in its issue. If #2174 cannot meet condition 2, the epic stops.
+   A slice that fails a condition moves that job back to YAML and says why in its issue. Outcome of #2174: condition 2 holds for the cache-light jobs and not for jobs whose cost is a Cargo `target` tree (decision 7).
 5. **Every migrated job keeps its name.** The required checks are a hard-coded list in the local PR driver, not in the repository ruleset ([#2183](https://github.com/mihazs/lazysh/issues/2183)).
 6. **Base images are pinned by digest and downloads by sha256**, as the repository does today.
+7. **Jobs whose cost is a Cargo `target` tree stay in YAML with `Swatinem/rust-cache`:** `agent`, `herdr-native`, `native-android`, `native-terminal-bridge`, `native-linux`, `native-linux-surface` and `native-linux-runtimes`. They fail condition 4.1 (capped, warm Rust is as slow as cold) or condition 4.2 (uncapped, the state is 2.9 GiB). Dagger covers the cache-light jobs (`client`, the `release-tools` test step, `verdict-client`) and gives every contributor local reproducibility through the shared toolchain. A Rust function may still exist for local use, but CI does not call it.
 
 ## Non-goals
 
@@ -79,10 +101,12 @@ Also learned:
 - **Do not adopt Dagger.** Cheaper and faster per job, but keeps CI unreproducible locally. Rejected because the measured warm overhead is small against real job lengths.
 - **Dagger Cloud or remote engines.** Would remove the cold-engine cost and the cache budget problem, but needs a new secret and an external service. Rejected by the owner.
 - **A self-hosted runner with a resident engine.** Would remove the fixed cost entirely. Not adopted: the repository has no self-hosted runner and runner-provider experiments were reverted (#1805, #1814, #1856).
-- **Persist only Dagger cache volumes, not the whole engine state.** A smaller state, but not yet shown to be possible; it is what condition 4.2 asks #2174 to prove.
+- **Persist only Dagger cache volumes, not the whole engine state.** Tried through the GC cap: the prune evicts the Cargo target volume as well, so the Rust jobs lose their warm speed (see "Cap experiments").
 - **A Go or Python module.** Rejected: a second toolchain for contributors.
 
 ## Delivery
 
 1. This ADR (docs only), closing [#2172](https://github.com/mihazs/lazysh/issues/2172).
-2. [#2173](https://github.com/mihazs/lazysh/issues/2173) scaffolds the module and [#2174](https://github.com/mihazs/lazysh/issues/2174) adds the setup action and proves the state pruning; then [#2175](https://github.com/mihazs/lazysh/issues/2175), [#2176](https://github.com/mihazs/lazysh/issues/2176) and [#2178](https://github.com/mihazs/lazysh/issues/2178), then [#2177](https://github.com/mihazs/lazysh/issues/2177); the rest of epic [#2171](https://github.com/mihazs/lazysh/issues/2171) follows.
+2. [#2173](https://github.com/mihazs/lazysh/issues/2173) scaffolds the module and [#2174](https://github.com/mihazs/lazysh/issues/2174) adds the setup action, the CI check and this amendment.
+3. [#2175](https://github.com/mihazs/lazysh/issues/2175) runs `client` through Dagger, [#2177](https://github.com/mihazs/lazysh/issues/2177) shares its function with `verdict-client` and the `release-tools` test step, and [#2183](https://github.com/mihazs/lazysh/issues/2183) and [#2184](https://github.com/mihazs/lazysh/issues/2184) stay open.
+4. Closed as not planned under decision 7, with a pointer here: [#2176](https://github.com/mihazs/lazysh/issues/2176), [#2178](https://github.com/mihazs/lazysh/issues/2178), [#2179](https://github.com/mihazs/lazysh/issues/2179), [#2180](https://github.com/mihazs/lazysh/issues/2180), [#2181](https://github.com/mihazs/lazysh/issues/2181) and [#2182](https://github.com/mihazs/lazysh/issues/2182). A future cache or runner change (a resident engine, a larger cache budget) can reopen them.

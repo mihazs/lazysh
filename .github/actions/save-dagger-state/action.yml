@@ -1,0 +1,18 @@
+name: Save the Dagger engine state
+description: On a push to main that did not restore this week's exact state, prune the engine to its GC policy and save it for pull requests to restore (ADR 0006); run with if always() after setup-dagger
+runs:
+  using: composite
+  steps:
+    - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.DAGGER_STATE_HIT != 'true'
+      shell: bash
+      run: |
+        dagger core engine local-cache prune --use-default-policy
+        docker stop -t 30 dagger-engine > /dev/null
+        sudo tar --zstd -cpf "$RUNNER_TEMP/dagger-state.tar.zst" -C "$RUNNER_TEMP/dagger-state" .
+        sudo chown "$USER" "$RUNNER_TEMP/dagger-state.tar.zst"
+        ls -l "$RUNNER_TEMP/dagger-state.tar.zst"
+    - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.DAGGER_STATE_HIT != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/dagger-state.tar.zst
+        key: ${{ env.DAGGER_STATE_KEY }}

@@ -1,0 +1,54 @@
+name: Set up the pinned Dagger engine
+description: Install the pinned Dagger CLI, restore the engine state main saved and start the engine on it (ADR 0006); pair with save-dagger-state
+runs:
+  using: composite
+  steps:
+    # dagger.json is the one place the version is chosen. Its CLI archive checksum and engine image digest are vetted here; a bump without them fails loudly.
+    - id: pin
+      shell: bash
+      run: |
+        version=$(jq -r .engineVersion dagger.json)
+        case "$version" in
+          v0.21.12) sha=1c8a2949b461c488506e5e668d6e3a0ff3b90ad588fb151f9a8fe77845bc9d7f digest=sha256:b4a1a7b7b663e0da98d7f4c675762d40d78d7e507a5756c4f1015a0e1dd6380a ;;
+          *) echo "::error::dagger.json pins engine $version: record its CLI sha256 and engine image digest in .github/actions/setup-dagger/action.yml"; exit 1 ;;
+        esac
+        test "$(uname -m)" = x86_64 || { echo "::error::the pinned Dagger CLI checksum is for linux amd64"; exit 1; }
+        archive="$RUNNER_TEMP/dagger_${version}_linux_amd64.tar.gz"
+        sh .github/scripts/pinned-download.sh "$sha" "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --retry 3 --retry-delay 5 "https://github.com/dagger/dagger/releases/download/$version/dagger_${version}_linux_amd64.tar.gz"
+        printf '%s  %s\n' "$sha" "$archive" | sha256sum --check --strict
+        mkdir -p "$RUNNER_TEMP/dagger-bin"
+        tar -xzf "$archive" -C "$RUNNER_TEMP/dagger-bin" dagger
+        echo "$RUNNER_TEMP/dagger-bin" >> "$GITHUB_PATH"
+        {
+          echo "version=$version"
+          echo "digest=$digest"
+          # One state per ISO week: main saves it once, pull requests only restore it, so at most the current and last week's entries exist.
+          echo "key=dagger-engine-$version-$(date -u +%G-W%V)"
+        } >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/dagger-state.tar.zst
+        key: ${{ steps.pin.outputs.key }}
+        restore-keys: dagger-engine-${{ steps.pin.outputs.version }}-
+    # Run as root and keep ownership: the state holds container image layers, so it is extracted and archived with sudo tar -p and never chowned.
+    - shell: bash
+      env:
+        VERSION: ${{ steps.pin.outputs.version }}
+        DIGEST: ${{ steps.pin.outputs.digest }}
+        STATE_KEY: ${{ steps.pin.outputs.key }}
+        STATE_HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        state="$RUNNER_TEMP/dagger-state"
+        mkdir -p "$state"
+        if [ -f "$RUNNER_TEMP/dagger-state.tar.zst" ]; then sudo tar --zstd -xpf "$RUNNER_TEMP/dagger-state.tar.zst" -C "$state"; fi
+        # Bounds the saved state (ADR 0006): the repository's cache budget is shared with every other job.
+        printf '{"gc":{"maxUsedSpace":"2GB","reservedSpace":"1500MB","minFreeSpace":"1GB","sweepSize":"50%%"}}\n' > "$RUNNER_TEMP/engine.json"
+        docker run -d --name dagger-engine --privileged -v "$state":/var/lib/dagger -v "$RUNNER_TEMP/engine.json":/etc/dagger/engine.json:ro "registry.dagger.io/engine:$VERSION@$DIGEST" > /dev/null
+        timeout 90 sh -c 'until docker logs dagger-engine 2>&1 | grep -qi "running server"; do sleep 1; done' || { docker logs dagger-engine | tail -20; exit 1; }
+        {
+          echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://dagger-engine"
+          echo "DAGGER_NO_NAG=1"
+          echo "DAGGER_STATE_KEY=$STATE_KEY"
+          echo "DAGGER_STATE_HIT=$STATE_HIT"
+        } >> "$GITHUB_ENV"

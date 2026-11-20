@@ -1,0 +1,36 @@
+name: dagger
+# Checks that the Dagger module builds and its toolchain matches .prototools. Runs only when something it covers changes, and on main it seeds the engine state that pull requests restore (ADR 0006).
+on:
+  pull_request:
+    paths: &paths
+      - dagger.json
+      - dagger/**
+      - .prototools
+      - bun.lock
+      - .github/actions/setup-dagger/**
+      - .github/actions/save-dagger-state/**
+      - .github/workflows/dagger.yml
+  push:
+    branches: [main]
+    paths: *paths
+permissions:
+  contents: read
+concurrency:
+  group: dagger-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  dagger-module:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-dagger
+      - name: List the module's functions
+        run: dagger functions
+      - name: The toolchain provides the Bun that .prototools pins
+        run: |
+          want=$(sed -n 's/^bun = "\(.*\)"$/\1/p' .prototools)
+          got=$(dagger call toolchain with-exec --args=bun,--version stdout)
+          test "$got" = "$want" || { echo "::error::toolchain bun is '$got', .prototools pins '$want'"; exit 1; }
+      - if: always()
+        uses: ./.github/actions/save-dagger-state

@@ -84,6 +84,7 @@ classify() {
       tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
       tests/waydroid-lane.test.ts | \
       dagger.json | dagger/* | tests/dagger-module.test.ts | \
+      .github/workflows/dagger.yml | .github/actions/setup-dagger/* | .github/actions/save-dagger-state/* | \
       .github/workflows/main-verdict.yml | .github/workflows/conventional-commits.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
     *.md) add docs ;;
