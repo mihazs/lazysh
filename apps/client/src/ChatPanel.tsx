@@ -203,6 +203,19 @@ export function groupTurns(messages: Message[]): Turn[] {
   return turns;
 }
 
+/** A turn's work as the runs to fold and, between them, what the agent said: a long autonomous turn stays a readable
+ * conversation instead of one "Ran 83 commands" row that only grows as earlier pages load. */
+export function foldWork(activity: Message[]): (Message | Message[])[] {
+  const parts: (Message | Message[])[] = [];
+  for (const message of activity) {
+    const said = message.role === 'assistant' && message.blocks.some(block => block.type === 'text' && !block.card && block.text?.trim())
+      && message.blocks.every(block => (block.type === 'text' && !block.card) || block.type === 'thinking');
+    const run = parts.at(-1);
+    if (said) parts.push(message); else if (Array.isArray(run)) run.push(message); else parts.push([message]);
+  }
+  return parts;
+}
+
 /** The timeline keeps the latest plan in one chip above the composer, so a plan block is not drawn in its turn. */
 const isPlanBlock = (block: Block) => block.card?.kind === 'plan';
 /** The timeline folds all thinking of a turn into one row, so a thinking block is not drawn in its message. */
@@ -630,6 +643,17 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const readSlice = (slice: WindowRequest) => void read(false, false, false, slice);
   const loadOlder = () => {const first = messagesRef.current[0]; if (first) readSlice({kind: 'before', id: first.id});};
   const loadNewer = () => {const last = messagesRef.current.at(-1); if (last) readSlice({kind: 'after', id: last.id});};
+  // A newest page that folds into a few rows does not overflow the list, so no scroll ever asks for the page before it:
+  // earlier pages are read until the view is full. One attempt per first message, so a host that cannot page is asked once.
+  const filledFrom = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const list = messageList.current, first = messages[0]?.id;
+    if (!list || !first || busy || !history.older || history.newer || opened?.view !== 'conversation' || filledFrom.current === first) return;
+    if (!list.clientHeight || list.scrollHeight > list.clientHeight) return;
+    filledFrom.current = first;
+    if (atLatestRef.current) scrollTo.current = 'bottom';
+    loadOlder();
+  }, [messages,busy,history.older,history.newer,opened,shown,visible]);
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
   useEffect(() => {if (shown && bound && path===bound.path && !opened && !error) void read(true);}, [shown, bound, path, opened, error, completed]);
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
@@ -905,7 +929,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             // Only the last turn can still wait for its question.
             const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];
             const folded = turn.activity.filter(message => !pending.includes(message));
-            return <>{folded.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary({...turn, activity: folded})}</summary>{folded.map(renderMessage)}</details>}{pending.map(renderMessage)}</>;
+            // The turn's duration goes on its last folded run.
+            const parts = foldWork(folded), timed = parts.findLast(part => Array.isArray(part));
+            return <>{parts.map(part => Array.isArray(part) ? <details key={part[0].id} className="agent-turn-activity"><summary>{activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})}</summary>{part.map(renderMessage)}</details> : renderMessage(part))}{pending.map(renderMessage)}</>;
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
