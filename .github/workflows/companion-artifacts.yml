@@ -147,6 +147,14 @@ jobs:
       - name: Replace, keep and roll back a running companion on Windows
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         run: cargo test --locked --package lazysh-agent --features update-test-endpoint --test update_stub
+      - name: Refuse unsafe Windows companion namespaces with the exact prepared executable
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        env:
+          LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked --package lazysh-agent --test windows_admission -- --list | grep -Fx 'an_unsafe_namespace_is_refused_before_anything_changes_and_an_admitted_one_passes: test'
+          cargo test --locked --package lazysh-agent --test windows_admission
       - name: Native host harness runs CLI, WAL and installation owners against the exact prepared executable
         if: runner.os != 'Windows'
         env:

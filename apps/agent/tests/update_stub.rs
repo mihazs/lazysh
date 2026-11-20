@@ -3,8 +3,10 @@
 //! platform: the installed image is held open by a live process while it is updated and rolled back.
 //! The binary under test is built with the `update-test-endpoint` seam.
 use std::{
-    fs,
+    fs, io,
+    path::Path,
     process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 #[path = "support/update_fixture.rs"]
 #[allow(dead_code)]
@@ -18,23 +20,30 @@ const NEW: &str = "99.0.0";
 
 /// Runs `hold` from `path`: a live process whose image is that file.
 fn running(path: &std::path::Path) -> Child {
+    spawn_hold(path).unwrap()
+}
+
+// A script another test thread just wrote can be briefly busy to exec while a sibling's fork still
+// holds its write descriptor; the updater's own process runner retries the same way.
+fn spawn_hold(path: &Path) -> io::Result<Child> {
+    let deadline = Instant::now() + Duration::from_secs(1);
     let mut command = Command::new(path);
     command
         .arg("hold")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // A script another test thread just wrote can be briefly busy to exec while a sibling's fork still
-    // holds its write descriptor; the updater's own process runner retries the same way.
-    (0..5)
-        .find_map(|attempt| match command.spawn() {
-            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 4 => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                None
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
             }
-            result => Some(result.unwrap()),
-        })
-        .unwrap()
+            result => return result,
+        }
+    }
 }
 fn alive(child: &mut Child) -> bool {
     child.try_wait().unwrap().is_none()
@@ -52,6 +61,42 @@ fn host() -> (tempfile::TempDir, Fixture, Vec<u8>, Vec<u8>) {
 }
 fn dir_names(fixture: &Fixture) -> Vec<String> {
     fixture::listing(&fixture.managed())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn starting_a_busy_stub_retries_only_until_it_can_run() {
+    let scratch = tempfile::tempdir().unwrap();
+    let binary = scratch.path().join("stub");
+    fs::write(&binary, stub::build(scratch.path(), OLD, false)).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let writer = fs::OpenOptions::new().write(true).open(&binary).unwrap();
+    assert_eq!(
+        Command::new(&binary).spawn().unwrap_err().kind(),
+        io::ErrorKind::ExecutableFileBusy
+    );
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        drop(writer);
+    });
+    let mut child = spawn_hold(&binary).unwrap();
+    release.join().unwrap();
+    assert!(alive(&mut child));
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let _writer = fs::OpenOptions::new().write(true).open(&binary).unwrap();
+    assert_eq!(
+        spawn_hold(&binary).unwrap_err().kind(),
+        io::ErrorKind::ExecutableFileBusy
+    );
+    assert_eq!(
+        spawn_hold(&scratch.path().join("missing"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
 }
 
 #[test]

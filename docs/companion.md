@@ -1116,34 +1116,67 @@ remove the installed destination. Installation does not update PATH, hooks,
 settings, database contents or running agents.
 
 Windows inspect returns `supported: false` and
-`reason: "windowsInstallerUnsupported"`; install rejects before filesystem
-inspection or mutation. Windows binary downloads and normal CLI/storage checks
-remain supported. Busy-executable replacement and a Windows OpenSSH shell
-adapter remain tracked in issue #490; the complete in-app installer remains
-issue #476.
+`reason: "windowsInstallerUnsupported"`, plus the `destination`
+(`%LOCALAPPDATA%\lazysh\companion\lazysh-agent.exe`) and the `existing`
+executable (`{"state":"missing"}`, or `state: "present"` with its `sha256` and
+`bytes`, as on Linux and macOS) once the managed namespace is admitted (below).
+Install admits the namespace first, then answers `windowsInstallerUnsupported`;
+neither creates anything. Windows binary downloads and normal CLI/storage checks
+remain supported. The installer fixture, app and OpenSSH shell adapter slices of
+issue #490 and the complete in-app installer (issue #476) are still open, so
+Windows stays unsupported.
 
-Issue #490 starts with the check Windows installation will rely on, which no
-installer command uses yet (the Windows Parakeet model storage does, see
-[Parakeet dictation](voice-parakeet.md)): `lazysh_common::windows_acl` decides
-from an object's owner SID and DACL whether it is private to the current user.
-The owner must be that user, the administrators group or the system. A file or
-directory is admitted as **no foreign change** when no other account holds an allowed right
-that writes data, appends, writes attributes or extended attributes, deletes the
-object or a child, or changes its DACL or owner (an executable others may still
-read and run), and as **private** when no other account holds any allowed right. A directory
+### Windows namespace admission
+
+`lazysh_common::windows_acl` decides from an object's owner SID and DACL whether
+it is private to the current user. The owner must be that user, the
+administrators group or the system. A file or directory is admitted as **no
+foreign change** when no other account holds an allowed right that writes data,
+appends, writes attributes or extended attributes, deletes the object or a child,
+or changes its DACL or owner (an executable others may still read and run), and
+as **private** when no other account holds any allowed right. A directory
 that only leads to private data, such as a drive root or a shared parent, is
 admitted as **no foreign replace**: others may read it and add entries beside the
 existing ones, but none may delete or rename it or its entries, or change its
 DACL or owner. `admit_chain` applies it to every directory from the volume root
 (which is not read: it cannot be replaced) down to a leaf, and the leaf's own
-requirement to the leaf.
-Deny entries and inherit-only entries are ignored, a NULL DACL is refused, and
-the system, administrators and `OWNER RIGHTS` entries never count as foreign.
-Reading a path first refuses symbolic links, junctions and every other reparse
-point. The decision is a pure function over the owner and the entries, tested on
-every platform; the Windows reader and the decisions on real files and `icacls`
-grants run in the hosted Windows desktop job. No Windows host was available to
-the author, so that job is the first execution of the reader.
+requirement to the leaf; the Windows Parakeet model storage uses it (see
+[Parakeet dictation](voice-parakeet.md)). Deny entries and
+inherit-only entries are ignored, a NULL DACL is refused, and the system,
+administrators and `OWNER RIGHTS` entries never count as foreign. Reading a path
+first refuses symbolic links, junctions and every other reparse point. The
+decision is a pure function over the owner and the entries, tested on every
+platform; the Windows reader and the decisions on real files and `icacls` grants
+run in the hosted Windows desktop job.
+
+`lazysh-agent installation inspect`, `installation install` and `update` use it
+on the managed namespace before they report, run, create or replace anything:
+
+| Component, from the top | Admitted when |
+| --- | --- |
+| The local application data folder, `lazysh` and `companion` | each one that exists is a real directory (no link, junction or other reparse point) and is **no foreign change** |
+| `lazysh-agent.exe` | it exists as a regular file (no link or reparse point) and is **private** |
+
+A component that does not exist yet admits as absent, and nothing below it is
+read. A path that cannot be read is refused, never taken for absent. `update`
+refuses an unadmitted namespace with exit 27 (`unsafeInstallLocation`) and
+`installation` with `InstallUnsafeNamespace` (a directory) or `InstallUnsafeFile`
+(the executable), in each case before anything changes. `update --check` and
+`--status` run a managed `lazysh-agent.exe` for its version only when that file
+and its directory are **no foreign change**; otherwise its version is reported as
+unknown and `update` itself refuses.
+
+Not verified: the check and the later use are separate steps on paths, so an
+administrator or the current user itself can still change the namespace between
+them (another account cannot, which is what admission establishes); folders above
+the local application data folder are checked for reparse points only, not for
+owner or DACL; hard links to the executable, alternate data streams, integrity
+labels and the ACLs of the lock file and the kept previous copy are not
+inspected; the filesystem is required to be local but not NTFS. The decision on
+real owners, grants, junctions and non-regular executables runs natively with the
+prepared `lazysh-agent.exe` in the hosted Windows job of `companion-artifacts`
+(`apps/agent/tests/windows_admission.rs`); no developer machine with Windows was
+available to the author.
 
 ## Listening ports for sign-in callbacks
 
