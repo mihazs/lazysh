@@ -63,6 +63,16 @@ export function validateSshParityReport(text:string) {
 type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture;preview?:SshFixture;files?:SshFixture;devices?:SshFixture};
 type PreviewFacts={requests:number;iframeLoads:number};
 export type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
+/** A control channel that answers only requests carrying `nonce`, each with the closed reply of one named action. */
+export function nonceControl(nonce:string,actions:Record<string,()=>Record<string,unknown>|Promise<Record<string,unknown>>>):Control {
+  return {reply:async request=>{
+    if(!request || typeof request!=='object')throw new Error('request');
+    const {nonce:owner,action}=request as Record<string,unknown>;
+    if(owner!==nonce)throw new Error('nonce');
+    if(typeof action!=='string' || !Object.hasOwn(actions,action))throw new Error('action');
+    return actions[action]();
+  }};
+}
 /**
  * The instrumentation's only host channel. Requests carry the case nonce and one closed
  * action; replies are closed facts. `rotate` points the pinned device port at a second sshd.
@@ -115,7 +125,7 @@ export async function listen(control:Control) {
       let request:unknown;
       try{request=JSON.parse(buffer.slice(0,end));}catch{request=undefined;}
       control.reply(request).then(value=>({ok:true,...value}),(error:unknown)=>({ok:false,error:error instanceof Error && /^[a-z]{1,16}$/.test(error.message)?error.message:'failed'}))
-        .then(reply=>socket.end(JSON.stringify(reply)+'\n'));
+        .then(reply=>{socket.end(JSON.stringify(reply)+'\n');socket.resume();});
     });
   });
   await new Promise<void>((resolve_,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve_);});

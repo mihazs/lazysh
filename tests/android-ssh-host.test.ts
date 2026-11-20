@@ -7,6 +7,7 @@ import {HerdrFixture,herdrPanelRows,herdrTools} from './support/androidHerdr';
 import {prepareAgentBoardHooks} from './support/androidAgentBoard';
 import {TmuxFixture} from './support/androidTmux';
 import {ZellijFixture} from './support/androidZellij';
+import {androidForceStopRestoreAcceptance} from './support/androidForceStopRestore';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {observeAndroidUploadRecovery,UPLOAD_RECOVERY_QUIET_MS} from './support/androidUploadRecovery';
@@ -475,6 +476,11 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Androi
   await ownedAndroidAcceptance('Herdr',owned,()=>androidSshAcceptance(undefined,owned,false,false,false,true));
 },610_000);
 
+// The same job and fixture: one saved-credential host and two instrumentation processes with a host force-stop between them.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Android app restores the same stock Herdr display only on click after a force-stop and relaunch',async()=>{
+  await androidForceStopRestoreAcceptance('herdr');
+},1_200_000);
+
 // Separate CI owner: only the pinned tmux fixture and packaged UI decide this verdict.
 test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
   // The source-built companion lets the case open a synthetic transcript and send confirmed Chat input to the displayed pane.
@@ -571,6 +577,43 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
   } finally {await owned.stop();}
 },30_000);
 
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr restore observation counts the real display client and admits only the typed bytes',async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),undefined,true);
+  let client:OwnedProcess|undefined;
+  const until=async(stage:string,ready:()=>Promise<boolean>|boolean)=>{
+    const deadline=performance.now()+15_000;
+    while(!await ready()){if(performance.now()>=deadline)throw new Error(`Owned Herdr restore probe stage unavailable: ${stage}`);await Bun.sleep(50);}
+  };
+  try {
+    const token=`RESTORE_${owned.ssh.nonce}`;
+    expect(await owned.observeRestore(token)).toEqual({clients:0,typed:false});
+    client=await owned.ssh.client();
+    await until('prompt',()=>client!.stdout.includes(owned.ssh.prompt));
+    // The remote pty has no window size and Herdr refuses to attach to a zero-sized terminal.
+    client.child.stdin!.write('stty rows 40 cols 100; exec herdr --session owned-guard\n');
+    await until('attached',async()=>(await owned.observeRestore(token)).clients===1);
+    expect(await owned.observeRestore(token)).toEqual({clients:1,typed:false});
+    // Input sent before Herdr has painted its first display is not delivered to the pane.
+    await until('painted',()=>client!.stdout.includes(owned.metadata().navigation!.source.marker));
+    // A paste can arrive in pieces: a leading part of the typed bytes is progress, not a failure.
+    client.child.stdin!.write(token);
+    await until('first part',async()=>(await readFile(owned.bytes).catch(()=>Buffer.alloc(0))).length>0);
+    expect((await owned.observeRestore(token)).typed).toBe(false);
+    client.child.stdin!.write('\r');
+    await until('typed',async()=>(await owned.observeRestore(token)).typed);
+    expect(await owned.restoreBytesHold(token)).toBe(true);
+    // A byte nobody typed through the app is a failure, not a count.
+    client.child.stdin!.write('x');
+    await until('stray byte',()=>owned.observeRestore(token).then(()=>false,error=>/Owned receiver bytes differ/.test(String(error))));
+    expect(await owned.restoreBytesHold(token)).toBe(false);
+    await client.stop();client=undefined;
+    await until('detached',async()=>await owned.displayClients()===0);
+  } finally {
+    try{await client?.stop();}catch{/* Keep the original verdict. */}
+    await owned.stop();
+  }
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},60_000);
 
 test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery',async()=>{
   const source=process.env.LAZYSH_TEST_RECEIVER_BIN!;
