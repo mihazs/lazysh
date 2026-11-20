@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCopyModeVerified,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
 import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -9,6 +9,12 @@ import {connect,createServer} from 'node:net';
 
 /** Runs one tmux command against the owned fixture's server over its SSH, as the app's own action does. */
 const hostTmux=(owned:TmuxFixture)=>async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux window action',5000);
+
+/** Polls a host condition every 25 ms and fails the test after five seconds. */
+const wait=async(predicate:()=>boolean|Promise<boolean>)=>{
+  const deadline=performance.now()+5000;
+  while(!await predicate()){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+};
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
   const row=(index:number,name:string,active:number,dead=0)=>`@${index+1}|${index}|${name}|${active}|%${index}|${100+index}|${dead}`;
@@ -27,6 +33,8 @@ test('tmux host readback admits only the owned two-window topology and display c
   for(const invalid of ['0\n','12a\n','1\n'.repeat(9),'/dev/pts/1\n'])expect(()=>tmuxClientCount(invalid)).toThrow('Owned tmux client readback invalid');
   expect(tmuxAttachHistoryVerified([0,1,0,1,0])).toBe(true);
   for(const history of [[0,1,0],[0,1,0,1],[0,1,2,1,0],[1,0,1,0],[0,1,0,1,0,1,0]])expect(tmuxAttachHistoryVerified(history)).toBe(false);
+  expect(tmuxCopyModeVerified([0,1,0])).toBe(true);
+  for(const history of [[],[0],[0,1],[1,0],[0,1,0,1],[0,2,0]])expect(tmuxCopyModeVerified(history)).toBe(false);
 });
 
 test('tmux window readback follows only the one added window and refuses a touched original',()=>{
@@ -149,10 +157,6 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   try {
     expect(owned.metadata().windows.map(({index,name})=>[index,name])).toEqual([[0,'alpha'],[1,'beta']]);
     await expect(owned.verifyDetachedAndReattached()).rejects.toThrow('Owned tmux attach, detach and reattach were not observed');
-    const wait=async(predicate:()=>boolean|Promise<boolean>)=>{
-      const deadline=performance.now()+5000;
-      while(!await predicate()){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
-    };
     const clients=async(count:number)=>wait(async()=>{await owned.observe();return owned.diagnostic().history.at(-1)===count;});
     const attach=async(marker:string)=>{
       const shell=await owned.ssh.client();
@@ -263,6 +267,34 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   }
 },60_000);
 
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires a copy-mode copy of the first pane line, which the attached client receives over OSC 52',async()=>{
+  const owned=await TmuxFixture.start();
+  let client:OwnedProcess|undefined;
+  try {
+    const [alpha]=owned.metadata().windows;
+    await expect(owned.verifyCopied()).rejects.toThrow('Owned tmux copy mode was not entered and left');
+    client=await owned.ssh.client();
+    await wait(()=>client!.stdout.includes(owned.ssh.prompt));
+    // The app requests an xterm-256color terminal; the shortcut's prefix and `[` enter copy mode in the active pane.
+    client.child.stdin!.write("export TERM=xterm-256color; exec tmux -u -L default attach-session -t '=owned-tmux'\n");
+    await wait(()=>client!.stdout.includes(alpha.marker));
+    client.child.stdin!.write('\x02[');
+    await wait(async()=>{await owned.observe();return client!.stdout.includes('[0/0]');});
+    await expect(owned.verifyCopied()).rejects.toThrow('Owned tmux copy mode was not entered and left');
+    // The cursor starts below the marker; k moves onto it, V selects the line and Enter copies it and leaves copy mode.
+    // Like the app's key presses, one at a time: a burst in one read is not a keystroke sequence to every tmux release.
+    for(const key of ['k','V','\r']){client.child.stdin!.write(key);await Bun.sleep(150);}
+    const copy=()=>/\x1b\]52;[a-z]*;([A-Za-z0-9+/=]+)(?:\x07|\x1b\\)/.exec(client!.stdout)?.[1];
+    await wait(()=>copy()!==undefined);
+    // A selected line carries its newline.
+    expect(Buffer.from(copy()!,'base64').toString()).toBe(`${alpha.marker}\n`);
+    await wait(async()=>{try{await owned.verifyCopied();return true;}catch{return false;}});
+  } finally {
+    await client?.stop();
+    await owned.stop();
+  }
+},60_000);
+
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux teardown detaches a running control-mode client through the server before retiring SSH',async()=>{
   const owned=await TmuxFixture.start();
   // Like the app's Jump binding, this control client is still attached and draining when teardown starts.
@@ -362,10 +394,6 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   const [alpha,beta]=owned.metadata().windows;
   let client:OwnedProcess|undefined;
   try {
-    const wait=async(predicate:()=>boolean)=>{
-      const deadline=performance.now()+5000;
-      while(!predicate()){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
-    };
     client=await owned.ssh.client();
     await wait(()=>client!.stdout.includes(owned.ssh.prompt));
     client.child.stdin!.write("exec tmux -u -L default attach-session -t '=owned-tmux'\n");
