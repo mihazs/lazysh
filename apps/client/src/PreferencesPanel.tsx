@@ -34,7 +34,8 @@ const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):
 const usageItemLabels={follow:"preferencesUsageFollow",fixed:"preferencesUsageFixed",hidden:"preferencesUsageHidden"} as const satisfies Record<UsageBarMode,UiKey>;
 
 /** `pages` adds host-owned entries (connections, security, other surfaces) into the shared sections. */
-export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[]}={}) {
+/** `terminalEngine` is the engine line of the session on screen (which engine and why), when there is one. */
+export default function PreferencesPanel({pages=[],footer,usageAccounts=[],terminalEngine}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[];terminalEngine?:string}={}) {
   useUi();
   const preferences = usePreferences();
   const topBar = useShowTopBar();
@@ -108,6 +109,7 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
 
 </>},
 {id:"terminal",section:"terminal",title:t("preferencesCategoryTerminal"),value:`${t(cursorLabels[preferences.cursorStyle])} · ${t("settingsHistoryLinesValue",{value:formatNumber(preferences.scrollback)})}`,content:<>
+    {terminalEngine && <p className="terminal-engine-line" role="note">{t("terminalEngineOfSession",{engine:terminalEngine})}</p>}
 
     <h3 className="settings-group-title">{t("settingsGroupCursorAndHistory")}</h3>
     <fieldset className="cursor-picker"><legend>{t("preferencesCursor")}</legend><div>{(["bar", "block", "underline"] as const).map(value => <label key={value}><input type="radio" name="cursor-style" value={value} checked={preferences.cursorStyle === value} onChange={() => update({cursorStyle: value})} /><span>{t(cursorLabels[value])}</span></label>)}</div></fieldset>
