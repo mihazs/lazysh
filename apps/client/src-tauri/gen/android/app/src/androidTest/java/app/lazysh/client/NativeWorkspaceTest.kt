@@ -3073,6 +3073,76 @@ class NativeWorkspaceTest {
         sessionView(scenario, "Terminal")
     }
 
+    /**
+     * tmux copy mode through the packaged UI. The prefix shortcut "Copy mode" enters it on the displayed pane; native keys
+     * then move onto the marker line, select it and copy it. tmux answers with an OSC 52 write, which the terminal holds for
+     * consent, so the line reaches the system clipboard only after a real tap on Allow. The host proves the pane's copy mode
+     * and the buffer tmux copied.
+     */
+    private fun verifyTmuxCopyMode(scenario: ActivityScenario<MainActivity>, marker: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        fun copied(): String? {
+            val text = AtomicReference<String?>()
+            instrumentation.runOnMainSync { text.set(clipboard.primaryClip?.getItemAt(0)?.coerceToText(instrumentation.targetContext)?.toString()) }
+            return text.get()
+        }
+        // A selected line carries its newline.
+        val line = "$marker\n"
+        val screenHasIndicator = terminalScreenContains("[0/0]")
+        /** A real finger tap at the middle of the one matching element, hit-tested so a covering view cannot take it. */
+        fun tap(elements: String) {
+            val css = JSONArray(evaluate(scenario, """
+                (()=>{const matches=$elements;if(matches.length!==1||matches[0].disabled)throw Error('Owned enabled tap target required');
+                  const rect=matches[0].getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+                  if(!matches[0].contains(document.elementFromPoint(x,y)))throw Error('Owned tap hit target required');
+                  return [x,y,innerWidth];})()
+            """))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2); view.getLocationOnScreen(origin)
+                val scale = view.width / css.getDouble(2)
+                floatArrayOf((origin[0] + css.getDouble(0) * scale).toFloat(), (origin[1] + css.getDouble(1) * scale).toFloat())
+            }, Press.FINGER))
+        }
+        sessionView(scenario, "Sessions")
+        val region = "section[aria-label='tmux prefix shortcuts']"
+        val ready = "Array.from(document.querySelectorAll(${JSONObject.quote("$region button")})).filter(x=>x.textContent.trim()==='Copy mode' && !x.disabled).length===1"
+        awaitDocument(scenario, "tmux Copy mode shortcut ready", ready)
+        onWebView().withElement(findElement(Locator.XPATH, "//section[@aria-label='tmux prefix shortcuts']//button[normalize-space(.)='Copy mode']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "tmux Copy mode shortcut sent", "$ready && !document.querySelector(${JSONObject.quote("$region [role=alert]")})")
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "tmux copy mode shows its position indicator", screenHasIndicator)
+        // The attached display is the visible pane; the SSH tab's terminal below it stays mounted. A finger taps it to focus
+        // its input; the hidden input itself is not manipulable.
+        tap("Array.from(document.querySelectorAll('.terminal-pane')).filter(p=>p.style.display!=='none').map(p=>p.querySelector('.xterm-screen'))")
+        awaitDocument(scenario, "tmux terminal input focused", "document.activeElement===Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none')?.querySelector('.xterm-helper-textarea')")
+        // The cursor starts below the marker: k moves onto it, V selects the line and Enter copies it and leaves copy mode.
+        // One key at a time with a pause, as a finger types: the host check showed tmux 3.4 not copying when the three keys arrived in one write.
+        fun press(key: EspressoKey) {
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(key))
+            Thread.sleep(150)
+        }
+        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_K).build())
+        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_V).withShiftPressed(true).build())
+        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_ENTER).build())
+        awaitDocument(scenario, "tmux copy leaves copy mode", "!($screenHasIndicator)")
+        awaitDocument(scenario, "tmux copy reaches the remote clipboard request",
+            "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')==='Remote clipboard request' && x.textContent.includes(${JSONObject.quote(marker)}))")
+        assertTrue("The copied line must not reach the clipboard before Allow", copied() != line)
+        // navigator.clipboard.writeText needs the user activation of a real touch, which a scripted click does not give.
+        closeSoftKeyboard()
+        tap("Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Allow this copy')")
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (copied() != line) {
+            assertTrue("Allow did not write the copied tmux line to the system clipboard", System.nanoTime() < deadline)
+            Thread.sleep(100)
+        }
+        // SystemUI previews a copied clip over the bottom-left for a few seconds; wait it out before the next tap.
+        awaitClipboardPreviewGone(System.nanoTime())
+        println("lazysh tmux: copy mode entered from its shortcut, a line copied and the system clipboard written after Allow")
+    }
+
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
@@ -3288,6 +3358,9 @@ class NativeWorkspaceTest {
             visible(alpha, beta, "attached tmux shows its current window")
             agentViewBack()
             visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            // Copy mode first: it needs the marker line right above the cursor, before Chat input adds lines to this pane.
+            verifyTmuxCopyMode(scenario, alpha.getString("marker"))
+            visible(alpha, beta, "tmux copy mode leaves the displayed window in place")
             // Chat input returns to the pane this display shows (alpha), and the host reads that pane back by id.
             tmux.optJSONObject("chat")?.let { verifyOwnedTmuxChat(scenario, it, alpha, server, label) }
             visible(alpha, beta, "Chat input leaves the displayed tmux window in place")
@@ -3308,7 +3381,7 @@ class NativeWorkspaceTest {
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, a created, renamed and closed window, split, zoom, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
