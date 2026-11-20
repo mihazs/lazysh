@@ -1,4 +1,5 @@
 import type {AutoOptions, EtOptions, MoshOptions, MultiplexerKind} from "./bridge";
+import {isTmuxFamily} from "./multiplexerFamily";
 export type SessionAttachment = {kind: MultiplexerKind; name: string; restoreName?: string | null; tmuxServer?: string};
 export type SessionIntent = {
   hostId?: string;
@@ -45,12 +46,12 @@ export function readWorkspace(): SessionIntent[] {
         (!item.et || validEt(item.et)) &&
         (!item.mosh || validMosh(item.mosh)) &&
         (!item.attached ||
-          (["tmux", "herdr", "zellij"].includes(item.attached.kind) &&
+          (["tmux", "rmux", "herdr", "zellij"].includes(item.attached.kind) &&
             typeof item.attached.name === "string" &&
             item.attached.name.length > 0 &&
             item.attached.name.length <= 200 &&
-            (item.attached.kind !== 'tmux' || validTmuxName(item.attached.name)) &&
-            (item.attached.tmuxServer === undefined || (item.attached.kind === 'tmux' && validTmuxServer(item.attached.tmuxServer)))))),
+            (!isTmuxFamily(item.attached.kind) || validTmuxName(item.attached.name)) &&
+            (item.attached.tmuxServer === undefined || (isTmuxFamily(item.attached.kind) && validTmuxServer(item.attached.tmuxServer)))))),
     );
   } catch {
     return [];
@@ -59,8 +60,8 @@ export function readWorkspace(): SessionIntent[] {
 type LiveIntent = SessionIntent & {attached?: SessionAttachment};
 function restorableAttachment({attached}: LiveIntent) {
   return !attached || (attached.restoreName !== null &&
-    (attached.kind !== 'tmux' || validTmuxName(attached.restoreName ?? attached.name)) &&
-    (attached.tmuxServer === undefined || (attached.kind === 'tmux' && validTmuxServer(attached.tmuxServer))));
+    (!isTmuxFamily(attached.kind) || validTmuxName(attached.restoreName ?? attached.name)) &&
+    (attached.tmuxServer === undefined || (isTmuxFamily(attached.kind) && validTmuxServer(attached.tmuxServer))));
 }
 /** The saved connection intention of one live session; terminal content and credentials stay out. */
 export function sessionIntent({hostId, attached, mosh, et, auto, local}: LiveIntent): SessionIntent {
