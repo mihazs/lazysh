@@ -166,8 +166,8 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.XDG_RUNTIME_DIR)throw new Error('Owned Zellij fixture required');
     return new OwnedProcess(join(this.directory,'bin','zellij'),args,this.directory,this.environment).finish('owned Zellij observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;agentBinary?:string;tmux?:boolean|string;zellijBinary?:string;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean;acceptEnv?:boolean}={}) {
-    if((options.password!==undefined || options.log || options.sftp || options.acceptEnv) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.zellijBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;agentBinary?:string;tmux?:boolean|string;zellijBinary?:string;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean;acceptEnv?:boolean;agent?:{binary:string;sdk:string}}={}) {
+    if((options.password!==undefined || options.log || options.sftp || options.acceptEnv || options.agent) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.zellijBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password, log, SFTP and agent fixtures must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     // The companion reads Chat transcripts for a tmux display; it is only ever added beside the pinned tmux.
     if(options.agentBinary!==undefined && !options.tmuxBinary)throw new Error('Owned agent binary requires the pinned tmux fixture');
@@ -233,6 +233,12 @@ export class SshFixture {
         const zellij=join(directory,'config','zellij');await mkdir(join(zellij,'layouts'),{recursive:true,mode:0o700});
         await writeFile(join(zellij,'layouts','plain.kdl'),'layout { pane; }\n',{mode:0o600});
         await writeFile(join(zellij,'config.kdl'),'show_release_notes false\nshow_startup_tips false\ndefault_layout "plain"\n',{mode:0o600});
+      }
+      // The host's installed Android SDK and the current companion, as `lazysh-agent devices` finds them over an exec channel.
+      if(options.agent) {
+        if(!/^\/[^\s"\\]+$/.test(options.agent.sdk))throw new Error('Unsupported owned Android SDK path');
+        environment=await privateEnvironment(directory,await installOwnedBinary(directory,'lazysh-agent',options.agent.binary)+':/usr/bin:/bin',[]);
+        environment.ANDROID_HOME=options.agent.sdk;
       }
       if(options.moshBinary)environment!.PATH=await installOwnedBinary(directory,'mosh-server',options.moshBinary)+':/usr/bin:/bin';
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';

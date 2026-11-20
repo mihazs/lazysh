@@ -26,12 +26,13 @@ export const sshParityCases=[
   'ownedSshForcedEternalTerminalThroughRealUi',
   'ownedSshMoshCustomServerPathAndPortRangeThroughRealUi',
   'ownedSshClientEnvironmentThroughRealUi',
+  'ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
-type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files';
-/** The password sshds every case shares; the preview and files sshds run commands and are started apart. */
+type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files'|'devices';
+/** The password sshds every case shares; the preview, files and devices sshds run commands and are started apart. */
 const servers:readonly ParityServer[]=['primary','bastion','rotated'];
-const observed:readonly ParityServer[]=[...servers,'preview','files'];
+const observed:readonly ParityServer[]=[...servers,'preview','files','devices'];
 
 /** Closed facts from an owned sshd DEBUG1 log; no raw log text leaves this function. */
 export function sshdLogFacts(text:string) {
@@ -59,7 +60,7 @@ export function validateSshParityReport(text:string) {
   return names.length;
 }
 
-type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture;preview?:SshFixture;files?:SshFixture};
+type Fixtures={primary:SshFixture;bastion:SshFixture;rotated:SshFixture;preview?:SshFixture;files?:SshFixture;devices?:SshFixture};
 type PreviewFacts={requests:number;iframeLoads:number};
 export type Control={reply:(request:unknown)=>Promise<Record<string,unknown>>};
 /**
@@ -215,11 +216,14 @@ export const etBinary=(name:'ET_SERVER_BIN'|'ET_TERMINAL_BIN')=>{
 };
 
 /**
- * Owned emulator only. Starts a password-enabled primary sshd, a password bastion and a
- * second-key sshd for rotation, then runs the parity cases with the host control channel. The password sshds admit `LANG LC_*` like a stock Debian server.
+ * Owned emulator only. Starts a password-enabled primary sshd, a password bastion, a
+ * second-key sshd for rotation and key-only sshds for the preview and device cases, then runs
+ * the parity cases with the host control channel. The password sshds admit `LANG LC_*` like a stock Debian server.
  */
 export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'../..')) {
   const {serial,adb,device}=ownedEmulator('SSH parity acceptance');
+  const agent=process.env.LAZYSH_TEST_AGENT_BIN,sdk=process.env.ANDROID_HOME;
+  if(!agent || !sdk)throw new Error('The owned device case needs LAZYSH_TEST_AGENT_BIN and ANDROID_HOME');
   const password=randomBytes(16).toString('hex'),passphrase=randomBytes(12).toString('hex');
   const started:SshFixture[]=[];
   const reverses:number[]=[];
@@ -238,6 +242,8 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     // Mosh's UDP cannot ride `adb reverse`; the emulator reaches the host loopback as 10.0.2.2.
     const mosh=await startOwnedMosh();
     started.push(mosh.ssh);
+    // The companion and SDK below answer `lazysh-agent devices ...` for the owned emulator, which this host's adb server lists.
+    started.push(fixtures.devices=await SshFixture.start(undefined,{log:true,shellSeconds:300,agent:{binary:agent,sdk}}));
     const nonce=fixtures.primary.nonce;
     const proof=`PREVIEW_${nonce}`;
     listener=await previewListener(proof);
@@ -252,7 +258,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
     };
     const channel=await listen(parityControl(fixtures,nonce,()=>reverse(pinned.port,fixtures.rotated.port,true),listener,et.sessions,mosh.facts));
     control=channel.server;
-    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,fixtures.files.port,channel.port,transport.port,et.port])await reverse(port,port);
+    for(const port of [fixtures.primary.port,fixtures.bastion.port,fixtures.preview.port,fixtures.files.port,fixtures.devices.port,channel.port,transport.port,et.port])await reverse(port,port);
     await reverse(pinned.port,fixtures.primary.port);
     keyboard=await ownedSoftwareKeyboard(adb,serial,5000,'aosp-latin');
     remote=`/data/local/tmp/lazysh-ui-ssh-${nonce}`;
@@ -264,7 +270,7 @@ export async function androidSshParityAcceptance(root=resolve(import.meta.dir,'.
       privateKey:fixtures.primary.privateKey,encryptedKey:await encryptedIdentity(fixtures.primary,passphrase),userFingerprint,
       challenge:fixtures.primary.challenge,expected:fixtures.primary.expected,
       primary:server(fixtures.primary),bastion:server(fixtures.bastion),preview:{...server(fixtures.preview),privateKey:fixtures.preview.privateKey,listener:listener.port,proof},files:{...server(fixtures.files),privateKey:fixtures.files.privateKey,...files},transport:{...server(transport),privateKey:transport.privateKey},et:{port:et.port,terminal:etTerminal},
-      mosh:{...server(mosh.ssh),privateKey:mosh.ssh.privateKey,host:'10.0.2.2',serverPath:mosh.wrapper,udpPort:mosh.udpPort},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
+      mosh:{...server(mosh.ssh),privateKey:mosh.ssh.privateKey,host:'10.0.2.2',serverPath:mosh.wrapper,udpPort:mosh.udpPort},devices:{...server(fixtures.devices),privateKey:fixtures.devices.privateKey,serial},rotation:{port:pinned.port,fingerprint:fixtures.rotated.fingerprint}}),{mode:0o600});
     if((await stat(data)).size>16*1024)throw new Error('Owned Android parity fixture exceeds native bound');
     await device(['push',data,`${remote}/fixture.json`]);
     await device(['shell','chmod','600',`${remote}/fixture.json`]);

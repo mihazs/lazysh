@@ -46,4 +46,27 @@ each), and about eight video frames a second from the moment Settings opened. No
 Android emulator run and no iOS video was observed. Waydroid's `screencap` output and `adb features`
 list need the reading fixes of [#1859](https://github.com/mihazs/lazysh/pull/1859).
 
+## Device panel on the owned emulator
+
+The `native-android-ssh-parity` job also drives the real app through the Device panel. The case
+`ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi` connects to an owned key-only OpenSSH
+daemon that has the current `lazysh-agent` and the job's Android SDK (`ANDROID_HOME`) in its
+environment, opens Devices, chooses **Find devices** and requires `emulator-5580` in the list as
+running. After selecting it, the panel must offer Capture screen, input, reboot and shutdown but
+not boot. **Capture screen** must then show a JPEG that the WebView decodes, with the shape of
+the emulator's own display and more than a flat colour. The host's `adb` server lists the same
+emulator that runs the app, which is why this case reads the panel and presses nothing else.
+
+Decision on the lifecycle half of #1730: it is a documented limit, not a second owned AVD.
+Reboot and Shutdown from the panel would end the emulator that runs the app and the job's own
+verdict, and Boot only applies to a stopped AVD. A second AVD in the job would double the
+emulator memory (`ram-size: 3072M`) and boot allowance (`emulator-boot-timeout: 300`) the
+30-minute job already reserves, for a case that would still only exercise `adb` and `emulator`
+commands the host Cargo cases already check by exact arguments. The case never enables input
+for the same reason: a tap would land on the app under test.
+
+The case does not cover video, touch calibration, latency, battery use, a physical device or an
+iOS Simulator. A synthetic inventory in Vitest or Playwright does not establish this case's
+result.
+
 For setup and usage, see [devices](../devices.md). Return to the [documentation map](../README.md).
