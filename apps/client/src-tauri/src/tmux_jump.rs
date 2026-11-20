@@ -15,6 +15,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub(crate) mod chat;
 
 const LIMIT: usize = 1024 * 1024;
+/// One row per pane. Names and titles are quoted, control characters are replaced and the pane's title and command are cut to 64 columns,
+/// so no program can break the framing or the row budget. tmux's default pane title is the host name: it is not a title.
+const TREE: &str = "list-panes -a -F '#{session_id}|#{q;s/#{l:[[:cntrl:]]}/?/:session_name}|#{window_id}|#{window_index}|#{q;s/#{l:[[:cntrl:]]}/?/:window_name}|#{m/r:[[:cntrl:]],#{session_name}}|#{window_zoomed_flag}|#{pane_id}|#{pane_index}|#{?#{==:#{pane_title},#{host}},,#{=64;q;s/#{l:[[:cntrl:]]}/?/:pane_title}}|#{=64;q;s/#{l:[[:cntrl:]]}/?/:pane_current_command}|#{pane_active}'";
 const ROWS: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(3);
 /// tmux before 3.8 never releases a control client whose stdout closes while
@@ -84,8 +87,40 @@ struct Request {
     _permit: Option<chat::Permit>,
 }
 enum Action {
-    Navigation(Option<(String, String, String)>),
+    Navigation(Option<Target>),
     Chat(chat::Action),
+}
+/// What a Jump To row chose: a window, or one exact pane of it. `generation` is the server epoch of the snapshot the row came from.
+#[derive(Clone, Debug)]
+pub(crate) struct Target {
+    generation: String,
+    session: String,
+    window: String,
+    pane: Option<String>,
+}
+impl Target {
+    pub(crate) fn new(
+        generation: String,
+        session: String,
+        window: String,
+        pane: Option<String>,
+    ) -> Self {
+        Self {
+            generation,
+            session,
+            window,
+            pane,
+        }
+    }
+    fn valid(&self) -> bool {
+        self.generation.len() == 36
+            && id(&self.session, b'$')
+            && id(&self.window, b'@')
+            && self.pane.as_deref().is_none_or(|pane| id(pane, b'%'))
+    }
+}
+fn stale() -> SshError {
+    SshError::new("tmux_stale", "Refresh this tmux view before navigating")
 }
 enum Reply {
     Navigation(Snapshot),
@@ -96,12 +131,25 @@ enum Reply {
 pub struct Current {
     session_id: String,
     window_id: String,
+    pane_id: String,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct Pane {
+    id: String,
+    index: u32,
+    /// Empty while the pane still has tmux's default title, the host name.
+    title: String,
+    command: String,
+    active: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Window {
     id: String,
     index: u32,
     name: String,
+    /// A zoomed window shows only its active pane.
+    zoomed: bool,
+    panes: Vec<Pane>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Session {
@@ -411,49 +459,76 @@ impl Control {
         self.block(budget).await
     }
     async fn current(&mut self, budget: &mut usize) -> Result<Option<Current>> {
-        let rows=self.command("list-clients -F '#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{client_control_mode}'",budget).await?;
+        let rows=self.command("list-clients -F '#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{client_control_mode}|#{pane_id}'",budget).await?;
         let mut found = None;
         for row in rows {
             let f = row.split('|').collect::<Vec<_>>();
-            if f.len() != 5 {
+            if f.len() != 6 {
                 return Err(protocol());
             }
             if f[0] == self.identity.pid.to_string() && f[1] == self.identity.tty && f[4] == "0" {
-                if found.is_some() || !id(f[2], b'$') || !id(f[3], b'@') {
+                if found.is_some() || !id(f[2], b'$') || !id(f[3], b'@') || !id(f[5], b'%') {
                     return Err(protocol());
                 }
                 found = Some(Current {
                     session_id: f[2].into(),
                     window_id: f[3].into(),
+                    pane_id: f[5].into(),
                 });
             }
         }
         Ok(found)
     }
     async fn snapshot(&mut self, budget: &mut usize) -> Result<Snapshot> {
-        // q quotes delimiters/backslashes; control characters are visibly
-        // replaced BEFORE tmux's control stream can turn them into framing.
-        let rows=self.command("list-windows -a -F '#{session_id}|#{q;s/#{l:[[:cntrl:]]}/?/:session_name}|#{window_id}|#{window_index}|#{q;s/#{l:[[:cntrl:]]}/?/:window_name}|#{m/r:[[:cntrl:]],#{session_name}}'",budget).await?;
-        let sessions = parse_tree(&rows)?;
-        let current = self.current(budget).await?.ok_or_else(unavailable)?;
-        if !sessions.iter().any(|s| {
-            s.id == current.session_id && s.windows.iter().any(|w| w.id == current.window_id)
-        }) {
-            return Err(unavailable());
+        // A window or pane can open between the tree and the client reads; the next read then lists it.
+        for _ in 0..3 {
+            let rows = self.command(TREE, budget).await?;
+            let sessions = parse_tree(&rows)?;
+            let current = self.current(budget).await?.ok_or_else(unavailable)?;
+            if sessions
+                .iter()
+                .filter(|s| s.id == current.session_id)
+                .flat_map(|s| &s.windows)
+                .filter(|w| w.id == current.window_id)
+                .any(|w| w.panes.iter().any(|p| p.id == current.pane_id))
+            {
+                return Ok(Snapshot {
+                    generation: self.generation.clone(),
+                    current,
+                    sessions,
+                });
+            }
         }
-        Ok(Snapshot {
-            generation: self.generation.clone(),
-            current,
-            sessions,
-        })
+        Err(unavailable())
     }
-    async fn jump(&mut self, session: &str, window: &str, budget: &mut usize) -> Result<()> {
+    async fn jump(&mut self, target: &Target, budget: &mut usize) -> Result<()> {
         let guard = self.identity.guard();
         let marker = format!("LAZYSH_JUMP_{}", uuid::Uuid::new_v4().simple());
+        let window = format!("{}:{}", target.session, target.window);
+        let destination = match &target.pane {
+            None => window,
+            Some(pane) => {
+                // A pane that closed or moved since the snapshot is a stale row; it must not retire the stream.
+                let filter = ssh::quote(&format!("#{{==:#{{pane_id}},{pane}}}"));
+                let rows = self
+                    .command(
+                        &format!("list-panes -a -f {filter} -F '#{{session_id}}|#{{window_id}}'"),
+                        budget,
+                    )
+                    .await?;
+                if !rows.contains(&format!("{}|{}", target.session, target.window)) {
+                    return Err(SshError::new(
+                        "tmux_pane_gone",
+                        "That tmux pane is no longer in that window; refresh the view",
+                    ));
+                }
+                format!("{window}.{pane}")
+            }
+        };
         let action = format!(
             "switch-client -E -c {} -t {}",
             ssh::quote(&self.identity.tty),
-            ssh::quote(&format!("{session}:{window}"))
+            ssh::quote(&destination)
         );
         self.marked_command(&guard, &action, &marker, budget)
             .await?
@@ -577,48 +652,82 @@ fn fields(row: &str) -> Result<Vec<String>> {
     }
     Ok(out)
 }
+fn flag(value: &str) -> Result<bool> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(protocol()),
+    }
+}
 fn parse_tree(rows: &[String]) -> Result<Vec<Session>> {
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for row in rows {
         let f = fields(row)?;
-        if f.len() != 6
+        if f.len() != 12
             || !id(&f[0], b'$')
             || !id(&f[2], b'@')
-            || f[1].len() > 1024
-            || f[4].len() > 1024
-            || !matches!(f[5].as_str(), "0" | "1")
+            || !id(&f[7], b'%')
+            || [&f[1], &f[4], &f[9], &f[10]].iter().any(|v| v.len() > 1024)
         {
             return Err(protocol());
         }
         let index = f[3].parse::<u32>().map_err(|_| protocol())?;
-        let restore_name = (f[5] == "0"
+        let restore_name = (!flag(&f[5])?
             && !f[1].is_empty()
             && f[1].len() <= 200
             && !f[1].chars().any(char::is_control))
         .then(|| f[1].clone());
+        let zoomed = flag(&f[6])?;
+        let pane = Pane {
+            id: f[7].clone(),
+            index: f[8].parse::<u32>().map_err(|_| protocol())?,
+            title: f[9].clone(),
+            command: f[10].clone(),
+            active: flag(&f[11])?,
+        };
         let entry = sessions.entry(f[0].clone()).or_insert_with(|| Session {
             id: f[0].clone(),
             name: f[1].clone(),
             restore_name: restore_name.clone(),
             windows: Vec::new(),
         });
-        if entry.name != f[1]
-            || entry.restore_name != restore_name
-            || entry
-                .windows
-                .iter()
-                .any(|w| w.id == f[2] || w.index == index)
-        {
+        if entry.name != f[1] || entry.restore_name != restore_name {
             return Err(protocol());
         }
-        entry.windows.push(Window {
-            id: f[2].clone(),
-            index,
-            name: f[4].clone(),
-        });
+        // Every pane of a window repeats the window's fields; they must agree.
+        match entry.windows.iter_mut().find(|w| w.id == f[2]) {
+            Some(window) => {
+                if window.index != index
+                    || window.name != f[4]
+                    || window.zoomed != zoomed
+                    || window
+                        .panes
+                        .iter()
+                        .any(|p| p.id == pane.id || p.index == pane.index)
+                {
+                    return Err(protocol());
+                }
+                window.panes.push(pane);
+            }
+            None => {
+                if entry.windows.iter().any(|w| w.index == index) {
+                    return Err(protocol());
+                }
+                entry.windows.push(Window {
+                    id: f[2].clone(),
+                    index,
+                    name: f[4].clone(),
+                    zoomed,
+                    panes: vec![pane],
+                });
+            }
+        }
     }
     for s in sessions.values_mut() {
         s.windows.sort_by_key(|w| w.index);
+        for w in &mut s.windows {
+            w.panes.sort_by_key(|p| p.index);
+        }
     }
     Ok(sessions.into_values().collect())
 }
@@ -741,16 +850,12 @@ fn spawn_actor(
                     }
                     Action::Navigation(target) => target,
                 };
-                if let Some((generation, session, window)) = target {
-                    if generation != control.generation || !id(&session, b'$') || !id(&window, b'@')
-                    {
-                        return Err(SshError::new(
-                            "tmux_stale",
-                            "Refresh this tmux view before navigating",
-                        ));
+                if let Some(target) = target {
+                    if target.generation != control.generation || !target.valid() {
+                        return Err(stale());
                     }
                     control.chat = None;
-                    control.jump(&session, &window, &mut budget).await?;
+                    control.jump(&target, &mut budget).await?;
                 }
                 control.snapshot(&mut budget).await.map(Reply::Navigation)
             };
@@ -760,7 +865,9 @@ fn spawn_actor(
             let failed = result.as_ref().is_err_and(|error| {
                 // Known local/negative-marker rejections consumed no input and
                 // leave the framed stream synchronized. Preserve navigation.
+                // A pane that went away was found by a complete read, before any navigation command was sent.
                 !(chat_request && matches!(error.kind(), "tmux_chat_invalid" | "tmux_chat_stale"))
+                    && error.kind() != "tmux_pane_gone"
             });
             if lease.check().is_err() || *cancellation.borrow() {
                 break;
@@ -796,7 +903,7 @@ pub(crate) async fn request(
     state: &AppState,
     local: &crate::local::LocalState,
     session_id: &str,
-    target: Option<(String, String, String)>,
+    target: Option<Target>,
 ) -> Result<Snapshot> {
     lease.check()?;
     let (binding, mut cancel) = if session_id.starts_with("local:") {
@@ -826,21 +933,13 @@ impl Binding {
         &self,
         lease: &AccessLease,
         cancel: &mut watch::Receiver<bool>,
-        target: Option<(String, String, String)>,
+        target: Option<Target>,
     ) -> Result<Snapshot> {
         if *cancel.borrow() {
             return Err(unavailable());
         }
-        if target
-            .as_ref()
-            .is_some_and(|(generation, session, window)| {
-                generation.len() != 36 || !id(session, b'$') || !id(window, b'@')
-            })
-        {
-            return Err(SshError::new(
-                "tmux_stale",
-                "Refresh this tmux view before navigating",
-            ));
+        if target.as_ref().is_some_and(|target| !target.valid()) {
+            return Err(stale());
         }
         match self
             .call_action(lease, cancel, Action::Navigation(target), None)
@@ -1022,6 +1121,7 @@ pub async fn tmux_jump_snapshot(
         .await
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease and states plus the typed IPC fields.
 pub async fn tmux_jump(
     lease: AccessLease,
     state: State<'_, AppState>,
@@ -1030,6 +1130,7 @@ pub async fn tmux_jump(
     generation: String,
     target_session_id: String,
     window_id: String,
+    pane_id: Option<String>,
 ) -> AccessResult<Snapshot> {
     lease
         .run(request(
@@ -1037,7 +1138,12 @@ pub async fn tmux_jump(
             &state,
             &local,
             &session_id,
-            Some((generation, target_session_id, window_id)),
+            Some(Target::new(
+                generation,
+                target_session_id,
+                window_id,
+                pane_id,
+            )),
         ))
         .await
 }
@@ -1071,9 +1177,20 @@ mod tests {
             );
         }
     }
+    /// A `TREE` row: the session and window fields, then one pane `index|title|command|active`.
+    fn row(
+        session: &str,
+        cntrl: &str,
+        window: &str,
+        zoomed: &str,
+        pane: &str,
+        rest: &str,
+    ) -> String {
+        format!("$0|{session}|@0|0|{window}|{cntrl}|{zoomed}|{pane}|{rest}")
+    }
     #[test]
     fn oversized_labels_never_become_restoration_names() {
-        let rows = vec![format!("$0|{}|@0|0|shell|0", "a".repeat(201))];
+        let rows = vec![row(&"a".repeat(201), "0", "shell", "0", "%0", "0|||1")];
         let tree = parse_tree(&rows).unwrap();
         assert!(tree[0].restore_name.is_none());
         for (label, flag, restorable) in [
@@ -1082,7 +1199,7 @@ mod tests {
             ("é".repeat(100), "0", true),
             ("é".repeat(101), "0", false),
         ] {
-            let tree = parse_tree(&[format!("$0|{label}|@0|0|shell|{flag}")]).unwrap();
+            let tree = parse_tree(&[row(&label, flag, "shell", "0", "%0", "0|||1")]).unwrap();
             assert_eq!(tree[0].restore_name.is_some(), restorable);
             if restorable {
                 assert_eq!(tree[0].restore_name.as_deref(), Some(label.as_str()));
@@ -1101,13 +1218,103 @@ mod tests {
     }
     #[test]
     fn tree_quotes_do_not_create_rows_or_execute_formats() {
-        let tree = parse_tree(&[r"$0|a\|b\ \#{session_name}|@1|2|x\\y\;\'\$|0".into()]).unwrap();
+        let tree = parse_tree(&[row(
+            r"a\|b\ \#{session_name}",
+            "0",
+            r"x\\y\;\'\$",
+            "0",
+            "%1",
+            r"0|vi\|m\ \#{pane_id}|so\;rt|1",
+        )])
+        .unwrap();
         assert_eq!(tree[0].name, "a|b #{session_name}");
         assert_eq!(tree[0].windows[0].name, "x\\y;'$");
+        assert_eq!(tree[0].windows[0].panes[0].title, "vi|m #{pane_id}");
+        assert_eq!(tree[0].windows[0].panes[0].command, "so;rt");
         assert!(parse_tree(&["$0|a|@1|0|line\n%end 1 2 3".into()]).is_err());
-        assert!(parse_tree(&["$0|a|@1|0|x|0".into(), "$0|b|@2|1|y|0".into()]).is_err());
+        let other_window = "$0|a|@2|1|y|0|0|%2|0|||1";
+        let named_other = "$0|b|@2|1|y|0|0|%2|0|||1";
+        let first = "$0|a|@1|0|x|0|0|%1|0|||1".to_owned();
+        assert!(parse_tree(&[first.clone(), other_window.into()]).is_ok());
+        assert!(parse_tree(&[first, named_other.into()]).is_err());
         assert!(!id("$", b'$'));
         assert!(!id("@1; kill-server", b'@'));
+        assert!(!id("%1; kill-server", b'%'));
+    }
+    #[test]
+    fn panes_group_under_their_window_in_pane_order_and_zoom_marks_the_window() {
+        let rows = |zoomed: &str| {
+            [
+                format!("$0|work|@1|0|agent|0|{zoomed}|%7|1|vim|vim|0"),
+                format!("$0|work|@1|0|agent|0|{zoomed}|%4|0||node|1"),
+                "$0|work|@2|1|logs|0|0|%5|0|tail|tail|1".to_owned(),
+            ]
+        };
+        for (zoomed, expected) in [("0", false), ("1", true)] {
+            let tree = parse_tree(&rows(zoomed)).unwrap();
+            let json = serde_json::to_value(&tree).unwrap();
+            let windows = &json[0]["windows"];
+            assert_eq!(windows[0]["zoomed"], expected);
+            assert_eq!(windows[1]["zoomed"], false);
+            let ids = |window: &serde_json::Value| {
+                window["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|pane| pane["id"].as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&windows[0]), ["%4", "%7"]);
+            assert_eq!(ids(&windows[1]), ["%5"]);
+            // The default title is blank; the command and the active pane are kept.
+            assert_eq!(windows[0]["panes"][0]["title"], "");
+            assert_eq!(windows[0]["panes"][0]["command"], "node");
+            assert_eq!(windows[0]["panes"][0]["active"], true);
+            assert_eq!(windows[0]["panes"][1]["active"], false);
+        }
+    }
+    #[test]
+    fn rows_that_disagree_about_a_window_or_repeat_a_pane_retire_the_tree() {
+        let head = "$0|work|@1|0|agent|0|0";
+        for rows in [
+            // The window renamed, zoomed or reindexed between two panes of one listing.
+            ["$0|work|@1|0|other|0|0|%2|1|||0"],
+            ["$0|work|@1|0|agent|0|1|%2|1|||0"],
+            ["$0|work|@1|3|agent|0|0|%2|1|||0"],
+            // The same pane or pane index twice, a pane that is not an id, a flag that is not 0 or 1.
+            ["$0|work|@1|0|agent|0|0|%1|1|||0"],
+            ["$0|work|@1|0|agent|0|0|%2|0|||0"],
+            ["$0|work|@1|0|agent|0|0|2|1|||0"],
+            ["$0|work|@1|0|agent|0|0|%2|1|||2"],
+            ["$0|work|@1|0|agent|0|0|%2|1||0"],
+        ] {
+            let all = [format!("{head}|%1|0|||1"), rows[0].into()];
+            assert_eq!(
+                parse_tree(&all).expect_err(rows[0]).kind(),
+                "tmux_protocol",
+                "{}",
+                rows[0]
+            );
+        }
+        let title = "t".repeat(1025);
+        assert!(parse_tree(&[format!("{head}|%1|0|{title}||1")]).is_err());
+    }
+    #[test]
+    fn a_pane_target_needs_a_pane_id_and_a_window_target_needs_none() {
+        let generation = "g".repeat(36);
+        let target = |pane: Option<&str>| {
+            Target::new(
+                generation.clone(),
+                "$1".into(),
+                "@2".into(),
+                pane.map(Into::into),
+            )
+        };
+        assert!(target(None).valid());
+        assert!(target(Some("%3")).valid());
+        for pane in ["3", "%", "%3; kill-server", "@3", ""] {
+            assert!(!target(Some(pane)).valid(), "{pane}");
+        }
     }
     #[test]
     fn strict_block_and_notification_framing() {

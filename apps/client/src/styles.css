@@ -973,6 +973,10 @@ button svg {
   font-size: 11px;
   margin-top: 6px;
 }
+/* A pane row is indented under its window row and tighter, so a window with several panes stays readable. */
+.mux-pane-row {
+  padding: 8px 5px 8px 24px;
+}
 .upload-confirm {
   padding: 16px 18px;
   border-bottom: 1px solid var(--theme-border, #34472a);
