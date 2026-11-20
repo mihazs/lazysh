@@ -5733,6 +5733,67 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** This device's own display in pixels: the shape a host screenshot of this same device must have. */
+    @Suppress("DEPRECATION")
+    private fun realDisplaySize(): Point = Point().also {
+        InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.hardware.display.DisplayManager::class.java)
+            .getDisplay(Display.DEFAULT_DISPLAY).getRealSize(it)
+    }
+
+    // The host's adb server lists this very emulator, so the panel's Reboot, Shutdown and Boot controls (which would end the
+    // app under test) are checked for presence only and never pressed; input stays off. Lifecycle commands need a second
+    // owned AVD and stay with the host Cargo cases (docs/reference/devices-acceptance.md).
+    @Test fun ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi() {
+        val name = "Parity devices"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val devices = parity.fixture.getJSONObject("devices")
+            val serial = devices.getString("serial")
+            require(Regex("emulator-[0-9]{4,5}").matches(serial)) { "The owned device case needs an emulator serial" }
+            val panel = "section[aria-label='Host devices']"
+            val owned = "$panel select option[value='$serial']"
+            fun clickDeviceButton(label: String) = onWebView().withElement(findElement(Locator.XPATH,
+                "//section[@aria-label='Host devices']//button[normalize-space(text())='$label']")).perform(webScrollIntoView()).perform(webClick())
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("devices"))
+            openOwnedConnect(scenario, name)
+            // A new host connects with Auto, which tries Mosh first, and the runner has mosh-server; this case drives SSH exec channels.
+            chooseOwnedTransport(scenario, parity, "ssh")
+            chooseOwnedPrivateKey(scenario, devices.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("devices"), "127.0.0.1:${parity.port("devices")}")
+            proveOwnedShell(scenario, parity, parity.prompt("devices"), "DEVICES")
+            sessionView(scenario, "Devices")
+            awaitDocument(scenario, "device panel", present(panel))
+            clickDeviceButton("Find devices")
+            awaitDocument(scenario, "the owned emulator is listed as running", "document.querySelector(${JSONObject.quote(owned)})?.textContent.endsWith(' · running')===true")
+            assertEquals("The inventory must list the owned emulator once", "1", evaluate(scenario, "document.querySelectorAll(${JSONObject.quote(owned)}).length"))
+            selectNativeOption(scenario, parity.nonce, "$panel select:has(option[value='$serial'])", serial)
+            // An emulator offers capture, input, reboot and shutdown but not boot, which belongs to a stopped AVD.
+            val offered = JSONObject(evaluate(scenario, """(()=>{
+                const buttons=Array.from(document.querySelectorAll(${JSONObject.quote("$panel button")})),named=text=>buttons.find(item=>item.textContent.trim()===text);
+                return {capture:named('Capture screen')?.disabled===false,input:document.querySelector(${JSONObject.quote("$panel input[type=checkbox]")})?.disabled===false,
+                  reboot:Boolean(named('reboot')),shutdown:Boolean(named('shutdown')),boot:Boolean(named('boot'))};})()"""))
+            for ((control, expected) in listOf("capture" to true, "input" to true, "reboot" to true, "shutdown" to true, "boot" to false))
+                assertEquals("Offered $control for $serial: $offered", expected, offered.getBoolean(control))
+            clickDeviceButton("Capture screen")
+            awaitDocument(scenario, "captured frame decoded by the WebView", """(()=>{const image=document.querySelector(${JSONObject.quote("$panel img.device-frame")});
+                return Boolean(image) && image.complete && image.naturalWidth>0 && image.src.startsWith('data:image/jpeg;base64,');})()""")
+            val frame = JSONObject(evaluate(scenario, """(()=>{
+                const image=document.querySelector(${JSONObject.quote("$panel img.device-frame")}),canvas=document.createElement('canvas');
+                canvas.width=32;canvas.height=32;const context=canvas.getContext('2d');context.drawImage(image,0,0,32,32);
+                const pixels=context.getImageData(0,0,32,32).data,colors=new Set();
+                for(let index=0;index<pixels.length;index+=4)colors.add((pixels[index]>>4)<<8|(pixels[index+1]>>4)<<4|pixels[index+2]>>4);
+                return {width:image.naturalWidth,height:image.naturalHeight,colors:colors.size};})()"""))
+            val real = realDisplaySize()
+            assertTrue("The frame must have the shape of this emulator's own ${real.x}x${real.y} screen: $frame",
+                Math.abs(frame.getInt("width").toDouble() / frame.getInt("height") - real.x.toDouble() / real.y) < 0.02)
+            assertTrue("The frame must show a screen, not one flat colour: $frame", frame.getInt("colors") >= 4)
+            assertEquals("The panel must show no error", "false", evaluate(scenario, present("$panel [role=alert]")))
+            println("lazysh parity: the Device panel listed $serial as running and showed a ${frame.getInt("width")}x${frame.getInt("height")} frame of the ${real.x}x${real.y} screen")
+            sessionView(scenario, "Terminal")
+            endOwnedConnection(scenario, name)
+        }
+    }
+
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
         val fixture = "Instrumentation ${UUID.randomUUID()}"
         val selector = "button[aria-label='Connect to $fixture']"

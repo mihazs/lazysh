@@ -1314,8 +1314,9 @@ jobs:
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'ssh-parity'
       # The tmux owner needs only the companion binary: it reads the synthetic transcript the Chat case opens.
-      - name: Build the real companion for the owned tmux Chat case
-        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
+      # The owned device case runs `lazysh-agent devices ...` over its own sshd; no receiver or companion install is needed.
+      - name: Build the real companion for the owned tmux Chat and device cases
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux' || env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" >> "$GITHUB_ENV"
@@ -1466,8 +1467,9 @@ jobs:
           retention-days: 3
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
-  # forced-ET parity cases (#985) and the browser preview forward and teardown case (#994) on the
-  # emulator; separate so their verdict is attributable.
+  # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the
+  # Device panel inventory and capture case (#1730) on the emulator; separate so their verdict is
+  # attributable.
   native-android-ssh-parity:
     needs: changes
     if: needs.changes.outputs.android == 'true'
