@@ -2048,7 +2048,7 @@ const translations = {
   devicesVerifyAndroid: ["Verificar ferramentas de vídeo do Android", "Verificar herramientas de vídeo de Android"],
   devicesStopVideo: ["Parar prévia de vídeo", "Detener vista previa de vídeo"],
   devicesStartVideo: ["Iniciar prévia de vídeo", "Iniciar vista previa de vídeo"],
-  devicesAndroidHint: ["Somente visualização, por até três minutos. Exige FFmpeg instalado no servidor. Capture uma nova tela após parar para ativar a entrada.", "Solo visualización, hasta tres minutos. Requiere FFmpeg instalado en el servidor. Captura una pantalla nueva después de detenerlo para activar la entrada."],
+  devicesAndroidHint: ["Por até três minutos. Exige FFmpeg instalado no servidor. O toque no vídeo funciona enquanto a tela mantiver o tamanho; girá-la ou redimensioná-la interrompe o vídeo. Capture uma nova tela após parar para ativar a entrada.", "Hasta tres minutos. Requiere FFmpeg instalado en el servidor. El toque en el vídeo funciona mientras la pantalla conserve su tamaño; girarla o redimensionarla detiene el vídeo. Captura una pantalla nueva después de detenerlo para activar la entrada."],
   devicesSocket: ["Socket do companion idb", "Socket del companion idb"],
   devicesVerifyIos: ["Verificar companion iOS", "Verificar companion de iOS"],
   devicesIosHint: ["Exige idb instalado e um socket existente acessível somente à sua conta no servidor.", "Requiere idb instalado y un socket existente accesible solo para tu cuenta en el servidor."],

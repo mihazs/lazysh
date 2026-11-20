@@ -39,6 +39,69 @@ pub enum DeviceKey {
     VolumeUp,
     VolumeDown,
 }
+/// A pointer gesture with the display size its coordinates were mapped from.
+#[derive(Subcommand, Debug)]
+pub enum Gesture {
+    Tap {
+        #[arg(long)]
+        x: u32,
+        #[arg(long)]
+        y: u32,
+        #[arg(long)]
+        width: u32,
+        #[arg(long)]
+        height: u32,
+    },
+    Swipe {
+        #[arg(long)]
+        x: u32,
+        #[arg(long)]
+        y: u32,
+        #[arg(long)]
+        to_x: u32,
+        #[arg(long)]
+        to_y: u32,
+        #[arg(long)]
+        width: u32,
+        #[arg(long)]
+        height: u32,
+        #[arg(long,default_value_t=300,value_parser=clap::value_parser!(u16).range(1..=10000))]
+        duration_ms: u16,
+    },
+}
+impl Gesture {
+    fn mapped_size(&self) -> (u32, u32) {
+        match *self {
+            Self::Tap { width, height, .. } | Self::Swipe { width, height, .. } => (width, height),
+        }
+    }
+    /// Refuses a gesture mapped from another size than the device's current one, or outside it,
+    /// instead of touching the wrong point after a rotation or resize.
+    fn check(&self, width: u32, height: u32) -> Result<()> {
+        let points = match *self {
+            Self::Tap { x, y, .. } => vec![(x, y)],
+            Self::Swipe {
+                x,
+                y,
+                to_x,
+                to_y,
+                duration_ms,
+                ..
+            } => {
+                if !(1..=10000).contains(&duration_ms) {
+                    return Err(Error::InvalidArgument);
+                }
+                vec![(x, y), (to_x, to_y)]
+            }
+        };
+        if self.mapped_size() != (width, height)
+            || points.iter().any(|&(x, y)| x >= width || y >= height)
+        {
+            return Err(Error::Device("DeviceDimensionsChanged"));
+        }
+        Ok(())
+    }
+}
 #[derive(Subcommand, Debug)]
 pub enum DeviceCommand {
     Android {
@@ -613,15 +676,7 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
         return Err(Error::InvalidArgument);
     }
     let arguments = match command {
-        DeviceCommand::Tap { x, y, .. } => args(&[
-            "-s",
-            id,
-            "shell",
-            "input",
-            "tap",
-            &x.to_string(),
-            &y.to_string(),
-        ]),
+        DeviceCommand::Tap { x, y, .. } => tap_args(id, x, y),
         DeviceCommand::Swipe {
             x,
             y,
@@ -629,18 +684,7 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
             to_y,
             duration_ms,
             ..
-        } => args(&[
-            "-s",
-            id,
-            "shell",
-            "input",
-            "swipe",
-            &x.to_string(),
-            &y.to_string(),
-            &to_x.to_string(),
-            &to_y.to_string(),
-            &duration_ms.to_string(),
-        ]),
+        } => swipe_args(id, [x, y, to_x, to_y], duration_ms),
         DeviceCommand::Key { key, .. } => args(&[
             "-s",
             id,
@@ -698,6 +742,43 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
         json!({"schemaVersion":1,"platform":platform,"id":id,"operation":operation,"status":"requested"}),
     )
 }
+/// Send one `adb` input command to the device and answer that it was requested.
+fn adb_requested(
+    runner: &mut impl Runner,
+    id: &str,
+    operation: &str,
+    arguments: &[String],
+) -> Result<Value> {
+    runner.output(Tool::Adb, arguments, MAX_SDK_TEXT)?;
+    Ok(
+        json!({"schemaVersion":1,"platform":"android","id":id,"operation":operation,"status":"requested"}),
+    )
+}
+fn tap_args(id: &str, x: u32, y: u32) -> Vec<String> {
+    args(&[
+        "-s",
+        id,
+        "shell",
+        "input",
+        "tap",
+        &x.to_string(),
+        &y.to_string(),
+    ])
+}
+fn swipe_args(id: &str, [x, y, to_x, to_y]: [u32; 4], duration_ms: u16) -> Vec<String> {
+    args(&[
+        "-s",
+        id,
+        "shell",
+        "input",
+        "swipe",
+        &x.to_string(),
+        &y.to_string(),
+        &to_x.to_string(),
+        &to_y.to_string(),
+        &duration_ms.to_string(),
+    ])
+}
 fn coordinates(values: &[u32]) -> Result<()> {
     if values.iter().any(|value| *value > 16383) {
         Err(Error::InvalidArgument)
@@ -723,7 +804,8 @@ fn screencap(runner: &mut impl Runner, id: &str) -> Result<Vec<u8>> {
     bytes.drain(..start);
     Ok(bytes)
 }
-fn frame(platform: Platform, id: &str, png: &[u8]) -> Result<Value> {
+/// Validates a PNG header and returns its bounded pixel size without decoding the image.
+fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
     if png.len() > MAX_PNG
         || png.len() < 24
         || png[..8] != *b"\x89PNG\r\n\x1a\n"
@@ -749,6 +831,10 @@ fn frame(platform: Platform, id: &str, png: &[u8]) -> Result<Value> {
     {
         return Err(Error::Device("InvalidDeviceImage"));
     }
+    Ok((width, height))
+}
+fn frame(platform: Platform, id: &str, png: &[u8]) -> Result<Value> {
+    let (width, height) = png_dimensions(png)?;
     let mut reader = image::ImageReader::with_format(Cursor::new(png), image::ImageFormat::Png);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(8192);

@@ -357,9 +357,10 @@ exit "$SDK_EXIT"
   // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
   expect(stdout).toBe(`android error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
   if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity','appium'].includes(owner)?'':'Unknown Android runtime owner\n');
-  // The video case runs only after the screenshot case has passed.
+  // The first failing case stops the run: the cases after it are not started.
   const sdkCases = ['devices::tests::android_owned_emulator_inventory_and_screenshot',
-    ...(sdk === 0 ? ['devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change'] : [])];
+    'devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change',
+    'devices::tests::android_owned_emulator_video_gestures_follow_the_display_size'].slice(0, sdk === 0 ? 3 : 1);
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
