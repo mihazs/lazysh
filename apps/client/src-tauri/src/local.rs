@@ -879,16 +879,37 @@ mod desktop {
         }
         Ok(connected)
     }
+    /// The program an attach starts. Unix leaves the name to the PTY, which searches the login
+    /// PATH. Native Windows has no tmux; it finds Zellij and Herdr itself, so that a missing one
+    /// is named instead of ending in a bare `CreateProcess` failure.
+    pub(super) fn attach_program(
+        program: &str,
+        windows: bool,
+        path: &std::ffi::OsStr,
+        pathext: Option<&std::ffi::OsStr>,
+    ) -> Result<std::ffi::OsString, String> {
+        if !windows {
+            return Ok(program.into());
+        }
+        if program == "tmux" {
+            return Err("tmux has no native Windows build; use a WSL target for tmux".into());
+        }
+        crate::native_program::resolve(path, pathext, program)
+            .map(std::path::PathBuf::into_os_string)
+            .ok_or_else(|| {
+                format!("{program} was not found on the PATH; install its Windows build")
+            })
+    }
     /// The PTY command that attaches `entry` directly: a typed argv, never a shell string.
     async fn attach_command(entry: &crate::multiplexer::Entry) -> Result<CommandBuilder, String> {
-        // tmux has no native Windows build, and native Zellij and Herdr need their own slice.
-        if cfg!(windows) {
-            return Err(
-                "Multiplexer sessions in local terminals are not available on Windows yet".into(),
-            );
-        }
         let argv = entry.argv().map_err(|error| error.message().to_owned())?;
-        let mut command = CommandBuilder::new(&argv[0]);
+        let program = attach_program(
+            &argv[0],
+            cfg!(windows),
+            &std::env::var_os("PATH").unwrap_or_default(),
+            std::env::var_os("PATHEXT").as_deref(),
+        )?;
+        let mut command = CommandBuilder::new(program);
         command.args(&argv[1..]);
         command.env("TERM", "xterm-256color");
         // A lazysh started inside a multiplexer must not hit its nested-session refusal.

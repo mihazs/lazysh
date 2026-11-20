@@ -90,6 +90,40 @@ fn an_attach_entry_refuses_unknown_fields_and_invalid_targets() {
     }
 }
 
+/// What a native Windows attach starts, decided on any host: the platform and search paths are
+/// arguments, so a Linux run exercises the Windows rules against real files.
+#[test]
+fn a_windows_attach_runs_the_found_program_and_never_tmux() {
+    use super::desktop::attach_program;
+    use std::ffi::OsStr;
+
+    let directory = tempfile::tempdir().unwrap();
+    for file in ["zellij.exe", "herdr.com", "tmux.exe"] {
+        std::fs::write(directory.path().join(file), b"").unwrap();
+    }
+    let path = directory.path().as_os_str();
+    let pathext = Some(OsStr::new(".COM;.EXE;.BAT"));
+    let start = |program: &str| attach_program(program, true, path, pathext);
+    assert_eq!(
+        start("zellij").unwrap(),
+        directory.path().join("zellij.exe").into_os_string()
+    );
+    assert_eq!(
+        start("herdr").unwrap(),
+        directory.path().join("herdr.com").into_os_string()
+    );
+    // A tmux build on the PATH (MSYS2, Cygwin) is not a supported native target.
+    assert!(start("tmux").unwrap_err().contains("WSL"));
+    let empty = tempfile::tempdir().unwrap();
+    let missing = attach_program("zellij", true, empty.path().as_os_str(), pathext);
+    assert!(missing.unwrap_err().starts_with("zellij was not found"));
+    // Elsewhere the PTY searches the login PATH itself.
+    assert_eq!(
+        attach_program("tmux", false, empty.path().as_os_str(), None).unwrap(),
+        OsStr::new("tmux")
+    );
+}
+
 #[cfg(unix)]
 mod runtime {
     use super::{
