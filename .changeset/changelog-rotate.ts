@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { ownedWorkspaces } from './bun-lock';
 import { changelogSection, classifyLegacy, groupMarkdown, parseEntries, renderEntry } from './changelog-model.mjs';
 
 const unreleased = /^## \[Unreleased\]\s*$/m;
@@ -29,9 +30,9 @@ export const classified = (items: Item[]) => items.map(item => ({ type: item.hin
 
 /**
  * The root changelog with a new `## [version] - date` section below `## [Unreleased]`: the version's entries from the
- * client changelog plus the hand-written bullets still under `[Unreleased]`, which is left without bullets.
+ * package changelogs plus the hand-written bullets still under `[Unreleased]`, which is left without bullets.
  */
-export function rotate(root: string, clientSection: string, version: string, date: string) {
+export function rotate(root: string, packageSection: string, version: string, date: string) {
   const [head, after] = root.split(unreleased);
   if (after === undefined) throw new Error('CHANGELOG.md has no "## [Unreleased]" section');
   if (root.includes(`## [${version}]`)) throw new Error(`CHANGELOG.md already has a section for ${version}`);
@@ -41,16 +42,29 @@ export function rotate(root: string, clientSection: string, version: string, dat
   // similar fragments of one pull request (same headline, same link, same opening) are one. Details live in the package
   // changelog and the GitHub release. Moved bullets stay verbatim, as written.
   const seen = new Set<string>();
-  const generated = parseEntries(clientSection).map(entry => ({ type: entry.type, text: renderEntry({ ...entry, details: '' }, true) }))
+  const generated = parseEntries(packageSection).map(entry => ({ type: entry.type, text: renderEntry({ ...entry, details: '' }, true) }))
     .filter(({ text }) => !seen.has(text) && seen.add(text));
   const section = `## [${version}] - ${date}\n\n${groupMarkdown([...generated, ...classified(items)], '###') || 'No user-facing changes.'}\n\n`;
   return `${head}## [Unreleased]\n\n${rest ? `${rest}\n\n` : ''}${section}${end < 0 ? '' : after.slice(end)}`;
 }
 
+/**
+ * The `## <version>` body of every owned package changelog under `root`, the client's first ('' when it has none). A fragment
+ * that targets another package is only in that package's changelog, and the packages are versioned together.
+ */
+export async function packageSections(root: string, version: string) {
+  const paths = ['apps/client', ...Object.keys(ownedWorkspaces).filter(path => path !== 'apps/client')];
+  const sections = await Promise.all(paths.map(async path => {
+    const file = Bun.file(join(root, path, 'CHANGELOG.md'));
+    return await file.exists() ? changelogSection(await file.text(), version) ?? '' : '';
+  }));
+  return [sections[0], ...sections.slice(1).filter(section => section.trim())];
+}
+
 if (import.meta.main) {
   const [version, date = new Date().toISOString().slice(0, 10)] = process.argv.slice(2);
-  const section = changelogSection(await Bun.file('apps/client/CHANGELOG.md').text(), version ?? '');
-  if (!section?.trim()) throw new Error(`apps/client/CHANGELOG.md has no section for ${version}`);
+  const sections = await packageSections(process.cwd(), version ?? '');
+  if (!sections[0].trim()) throw new Error(`apps/client/CHANGELOG.md has no section for ${version}`);
   const path = join(process.cwd(), 'CHANGELOG.md');
-  await Bun.write(path, rotate(await Bun.file(path).text(), section, version, date));
+  await Bun.write(path, rotate(await Bun.file(path).text(), sections.join('\n'), version, date));
 }

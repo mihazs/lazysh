@@ -3,7 +3,8 @@ import { createReadStream } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { verifyRelease } from './bun-lock';
-import { changelogSection, parseEntries, renderGrouped } from './changelog-model.mjs';
+import { parseEntries, renderGrouped } from './changelog-model.mjs';
+import { packageSections } from './changelog-rotate';
 
 export const companionTargets = {
   'linux-agent-x64': { triple: 'x86_64-unknown-linux-musl', os: 'linux', arch: 'x64' },
@@ -216,11 +217,12 @@ export function publishedTagVersions(root: string) {
 
 export async function releaseNotes(root: string, version: string, initial = false, published: string[] = []) {
   const changelog = await Bun.file(join(root, 'apps/client/CHANGELOG.md')).text();
-  const section = changelogSection(changelog, version);
-  requireArtifact(section?.trim(), 'missing version changelog');
+  const sections = await packageSections(root, version);
+  const section = sections[0];
+  requireArtifact(section.trim(), 'missing version changelog');
   // A prepared version whose publication never happened still shipped to users through this release.
   const skipped = skippedVersions(changelog, version, published);
-  const entries = [section, ...skipped.map(item => changelogSection(changelog, item) ?? '')].flatMap(parseEntries);
+  const entries = [sections, ...await Promise.all(skipped.map(item => packageSections(root, item)))].flat().flatMap(parseEntries);
   const included = [...skipped].reverse();
   let notes = [included.length ? `Includes the unpublished version${included.length > 1 ? 's' : ''} ${
     [included.slice(0, -1).join(', '), included.at(-1)].filter(Boolean).join(' and ')}.` : '', renderGrouped(entries, '##') || section.trim()]

@@ -129,7 +129,12 @@ export function groupMarkdown(items, level = '###') {
   }).join('\n\n');
 }
 
-export const renderGrouped = (entries, level) => groupMarkdown(entries.map(entry => ({ type: entry.type, text: renderEntry(entry, true) })), level);
+/** Grouped release notes; a fragment that names several packages is in each of their changelogs and is listed once. */
+export function renderGrouped(entries, level) {
+  const seen = new Set();
+  return groupMarkdown(entries.map(entry => ({ type: entry.type, text: renderEntry(entry, true) }))
+    .filter(({ text }) => !seen.has(text) && seen.add(text)), level);
+}
 
 /** The body of `## <version>` in a Changesets package changelog, or undefined. */
 export const changelogSection = (changelog, version) =>

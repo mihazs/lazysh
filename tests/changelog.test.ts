@@ -186,3 +186,28 @@ test('rotating a release moves the Unreleased bullets into its section, classifi
   expect(() => rotate(rotated, section, '1.1.0', '2026-02-03')).toThrow('already has a section');
   expect(() => rotate('# Changelog\n', section, '1.1.0', '2026-02-03')).toThrow('no "## [Unreleased]"');
 });
+
+test('an entry that is only in another package changelog reaches the release notes and the root changelog once', async () => {
+  const root = await scratch();
+  const shared = '- 1111111: feat(agents): Switch a session ([#5](https://github.com/mihazs/lazysh/pull/5))\n';
+  const companion = '- 2222222: feat(companion): Stream agent status ([#7](https://github.com/mihazs/lazysh/pull/7))\n';
+  const skipped = '- 3333333: fix(ios): Run idb ui subcommands\n';
+  const files = {
+    'apps/client/CHANGELOG.md': `# @lazysh/client\n\n## 1.1.0\n\n### Minor Changes\n\n${shared}\n## 1.0.1\n\n### Patch Changes\n\n- Updated dependencies\n\n## 1.0.0\n\n- Older.\n`,
+    'apps/agent/CHANGELOG.md': `# @lazysh/agent\n\n## 1.1.0\n\n### Minor Changes\n\n${shared}${companion}\n## 1.0.1\n\n### Patch Changes\n\n${skipped}\n## 1.0.0\n\n- feat: Older companion.\n\n## 0.9.0\n\n- feat: Only the companion has this version.\n`,
+    'docs/install-and-update.md': '# Install\n\n## Current native acceptance status\n\nPhone acceptance is pending.\n',
+    'CHANGELOG.md': rootChangelog,
+  };
+  for (const [path, text] of Object.entries(files)) await Bun.write(join(root, path), text);
+  const count = (text: string, part: string) => text.split(part).length - 1;
+  const notes = await releaseNotes(root, '1.1.0', false, ['1.0.0']);
+  expect(notes).toContain('Includes the unpublished version 1.0.1.');
+  for (const line of ['**agents:** Switch a session', '**companion:** Stream agent status', '**ios:** Run idb ui subcommands']) expect(count(notes, line)).toBe(1);
+  expect(notes).not.toContain('Older companion');
+  await expect(releaseNotes(root, '0.9.0')).rejects.toThrow('missing version changelog');
+  const rotated = Bun.spawnSync(['bun', join(source, '.changeset/changelog-rotate.ts'), '1.1.0', '2026-02-03'], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+  expect(rotated.exitCode).toBe(0);
+  const section = changelogSection((await Bun.file(join(root, 'CHANGELOG.md')).text()).replace('## [1.1.0] - 2026-02-03', '## 1.1.0'), '1.1.0')!;
+  for (const line of ['**agents:** Switch a session', '**companion:** Stream agent status']) expect(count(section, line)).toBe(1);
+  expect(section).not.toContain('idb ui');
+});
