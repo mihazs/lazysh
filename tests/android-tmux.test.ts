@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCommandFailure,tmuxDefaultAttachVerified,tmuxDefaultDirectory,tmuxDefaultName,tmuxDefaultSession,tmuxDisplayClients,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSessionRows,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
 import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -76,6 +76,29 @@ test('the companion joins only the pinned tmux fixture and only by an absolute p
   await expect(TmuxFixture.start('/usr/bin/tmux','lazysh-agent')).rejects.toThrow('Explicit current-source companion required');
 });
 
+test('tmux session readback admits the original and at most one default session, once created, and refuses a touched original',()=>{
+  const original={sessionId:'$0',name:'owned-tmux'},base='$0|owned-tmux|2',created=`${base}\n$1|${tmuxDefaultName}|1`;
+  const fold=(text:string,seen?:Parameters<typeof tmuxDefaultSession>[2])=>tmuxDefaultSession(tmuxSessionRows(text),original,seen);
+  let seen=fold(base);
+  expect(seen).toBeUndefined();
+  seen=fold(created,seen);
+  expect(seen).toEqual({sessionId:'$1'});
+  // The original's windows belong to the window lifecycle: a third window there is not a session change.
+  expect(fold(created.replace('|2','|3'),seen)).toEqual(seen);
+  // A second session of the same name, a killed and recreated one, or one that vanished is not the one the app created.
+  for(const text of [`${created}\n$2|${tmuxDefaultName}|1`,created.replace('$1','$2'),base])expect(()=>fold(text,seen)).toThrow('Owned tmux default session topology changed');
+  expect(()=>fold(created.replace('|1','|2'))).toThrow('Owned tmux default session topology changed');
+  expect(()=>fold(`${created}\n$2|other|1`)).toThrow('Owned tmux default session topology changed');
+  // An altered original: renamed, replaced under its name, or gone.
+  for(const text of [created.replace('owned-tmux','renamed'),created.replace('$0|owned-tmux','$5|owned-tmux'),`$1|${tmuxDefaultName}|1`])expect(()=>fold(text)).toThrow('Owned tmux original session changed');
+  for(const invalid of ['','private text','$1|bad name|1',`$1|${'x'.repeat(33)}|1`,`${created}|private`])expect(()=>tmuxSessionRows(invalid)).toThrow('Owned tmux session topology changed');
+  // The default's first sighting may already be attached: the app creates the session a moment before it attaches.
+  for(const history of [[0,1,0,1,0],[1,0,1,0]])expect(tmuxDefaultAttachVerified(history)).toBe(true);
+  for(const history of [[],[0],[0,1],[0,1,0],[0,1,0,1],[0,1,0,1,0,1,0],[1,0,1],[0,0,1,0,1,0]])expect(tmuxDefaultAttachVerified(history)).toBe(false);
+  expect(()=>tmuxDefaultDirectory('/tmp/owned\n','/tmp/owned')).not.toThrow();
+  for(const text of ['','/tmp/other\n','/tmp/owned\n/tmp/owned\n','/tmp/owned/extra\n'])expect(()=>tmuxDefaultDirectory(text,'/tmp/owned')).toThrow('Owned tmux default session directory changed');
+});
+
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
   const server=(exitCode:number|null,signalCode:NodeJS.Signals|null)=>({child:{exitCode,signalCode}});
   const evidence={serverAtStop:'live' as const,clients:1,processes:{live:1,inSsh:1},detached:'all' as const,straysRetired:0,sockets:4,shutdown:'deadline' as const,exitMs:10000};
@@ -141,6 +164,19 @@ test('lost-connection report counts only its case passing exactly once',()=>{
     expect(()=>validateLostConnectionReport(report(rows))).toThrow();
 });
 
+const wait=async(predicate:()=>boolean|Promise<boolean>)=>{
+  const deadline=performance.now()+5000;
+  while(!await predicate()){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+};
+/** An interactive display client attached to `target` through the fixture's SSH, once `marker` shows on its screen. */
+const attachDisplay=async(owned:TmuxFixture,target:string,marker='')=>{
+  const shell=await owned.ssh.client();
+  await wait(()=>shell.stdout.includes(owned.ssh.prompt));
+  shell.child.stdin!.write(`exec tmux -u -L default attach-session -t '=${target}'\n`);
+  await wait(()=>shell.stdout.includes(marker));
+  return shell;
+};
+
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned namespaced tmux survives a real SSH detach and reattaches the original panes',async()=>{
   const owned=await TmuxFixture.start();
@@ -149,18 +185,8 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   try {
     expect(owned.metadata().windows.map(({index,name})=>[index,name])).toEqual([[0,'alpha'],[1,'beta']]);
     await expect(owned.verifyDetachedAndReattached()).rejects.toThrow('Owned tmux attach, detach and reattach were not observed');
-    const wait=async(predicate:()=>boolean|Promise<boolean>)=>{
-      const deadline=performance.now()+5000;
-      while(!await predicate()){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
-    };
     const clients=async(count:number)=>wait(async()=>{await owned.observe();return owned.diagnostic().history.at(-1)===count;});
-    const attach=async(marker:string)=>{
-      const shell=await owned.ssh.client();
-      await wait(()=>shell.stdout.includes(owned.ssh.prompt));
-      shell.child.stdin!.write("exec tmux -u -L default attach-session -t '=owned-tmux'\n");
-      await wait(()=>shell.stdout.includes(marker));
-      return shell;
-    };
+    const attach=(marker:string)=>attachDisplay(owned,'owned-tmux',marker);
     client=await attach(alpha.marker);await clients(1);
     client.child.stdin!.write('\x02d');
     await client.finish('owned tmux prefix detach',5000);
@@ -172,7 +198,7 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await wait(()=>client!.stdout.includes(beta.marker));
     await client.stop();
     await owned.verifyDetachedAndReattached();
-    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],windows:2,server:{state:'running',exit:null,signal:'none'}});
+    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],defaultHistory:[],windows:2,server:{state:'running',exit:null,signal:'none'}});
     // A still-attached control-mode client, like the app's Jump binding, whose reader no
     // longer drains its output must not break teardown: retiring SSH ends it first.
     client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -t '=owned-tmux'");
@@ -192,6 +218,40 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
   expect(await listening(owned.ssh.port)).toBe(false);
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the saved default session created once, attached, detached and attached again',async()=>{
+  const owned=await TmuxFixture.start();
+  let client:OwnedProcess|undefined;
+  try {
+    const tmux=async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux default session action',5000);
+    const clients=(count:number)=>wait(async()=>{await owned.observe();return owned.diagnostic().defaultHistory.at(-1)===count;});
+    const create=`new-session -d -s '${tmuxDefaultName}' -c .`;
+    const notObserved='Owned tmux default session create, attach, detach and reattach were not observed';
+    // Nothing happened yet, then a session that was created but never attached: neither is the app's final state.
+    await expect(owned.verifyDefaultSession()).rejects.toThrow(notObserved);
+    // The exact command the saved default's preflight sends when its session is missing, from the login directory like the app's.
+    await tmux(create);
+    await owned.observe();
+    await expect(owned.verifyDefaultSession()).rejects.toThrow(notObserved);
+    client=await attachDisplay(owned,tmuxDefaultName);await clients(1);
+    client.child.stdin!.write('\x02d');
+    await client.finish('owned tmux prefix detach',5000);
+    await clients(0);
+    client=await attachDisplay(owned,tmuxDefaultName);await clients(1);
+    await client.stop();
+    await owned.verifyDefaultSession();
+    // The original session was never attached or touched, and the default's metadata names the session the app must create.
+    expect(owned.diagnostic()).toMatchObject({history:[0],defaultHistory:[0,1,0,1,0],windows:2});
+    expect(owned.metadata().defaultName).toBe(tmuxDefaultName);
+    // A session killed and created again under the same name is a second creation, not the one the app attached.
+    await tmux(`kill-session -t '=${tmuxDefaultName}'`);
+    await tmux(create);
+    await expect(owned.observe()).rejects.toThrow('Owned tmux default session topology changed');
+  } finally {
+    await client?.stop();
+    await owned.stop();
+  }
 },60_000);
 
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the app-style create, rename and close of one added window',async()=>{

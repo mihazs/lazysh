@@ -82,6 +82,43 @@ export function tmuxChatDeliveredOnce(captures:readonly {paneId:string;text:stri
   const holders=captures.filter(item=>item.text.includes(draft));
   if(holders.length!==1 || holders[0].paneId!==expected || holders[0].text.split(draft).length!==2)throw new Error('Owned tmux Chat input did not reach exactly the original pane once');
 }
+/** The session the host's saved Default multiplexer must create, absent on the owned server; tmux refuses `:` and `.` in a name. */
+export const tmuxDefaultName='my-work';
+const sessionRow=/^(\$[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})\|([0-9]{1,3})$/;
+/** Parses one bounded `list-sessions` readback. */
+export function tmuxSessionRows(text:string) {
+  const lines=text.trim().split('\n');
+  if(text.length>1024 || lines.length>8)throw new Error('Owned tmux session topology changed');
+  return lines.map(line=>{
+    const row=sessionRow.exec(line);
+    if(!row)throw new Error('Owned tmux session topology changed');
+    return {sessionId:row[1],name:row[2],windows:Number(row[3])};
+  });
+}
+/** The one session beyond the original that the saved default creates, by tmux's own id. */
+export type TmuxDefaultSession={sessionId:string};
+/**
+ * Folds one session readback. The original keeps its id and name (its windows belong to the window lifecycle); at most one other session
+ * exists, only under the default name with its one window; and once seen it keeps its id, so a second creation under that name
+ * (a killed and recreated session, or a second row) is a changed topology, as is a vanished one.
+ */
+export function tmuxDefaultSession(rows:ReturnType<typeof tmuxSessionRows>,original:{sessionId:string;name:string},seen?:TmuxDefaultSession):TmuxDefaultSession|undefined {
+  const kept=rows.filter(row=>row.sessionId===original.sessionId);
+  if(kept.length!==1 || kept[0].name!==original.name)throw new Error('Owned tmux original session changed');
+  const extra=rows.filter(row=>row.sessionId!==original.sessionId);
+  if(extra.length>1 || extra.some(row=>row.name!==tmuxDefaultName || row.windows!==1) || (seen && seen.sessionId!==extra[0]?.sessionId))
+    throw new Error('Owned tmux default session topology changed');
+  return extra[0] && {sessionId:extra[0].sessionId};
+}
+/** The default session's attach history from its first sighting (the app creates it a moment before it attaches): attach, detach, reattach and final detach. */
+export function tmuxDefaultAttachVerified(history:readonly number[]) {
+  const attached=history[0]===0?history.slice(1):history;
+  return attached.length===4 && [1,0,1,0].every((count,index)=>attached[index]===count);
+}
+/** The default session's one pane started in the login directory the saved default's `-c .` resolves to. */
+export function tmuxDefaultDirectory(text:string,directory:string) {
+  if(text.length>512 || text.trim()!==directory)throw new Error('Owned tmux default session directory changed');
+}
 
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
   'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown','Owned tmux server exited uncleanly',
@@ -130,6 +167,9 @@ export class TmuxFixture {
   private lifecycle:TmuxWindowLifecycle|undefined;
   private extraPanes=0;
   private chat:OwnedChat|undefined;
+  private sessionId='';
+  private defaultSession:TmuxDefaultSession|undefined;
+  private defaultHistory:number[]=[];
   private constructor(readonly ssh:SshFixture) {}
   /** With an `agent` companion the fixture also owns a synthetic Claude transcript, so the app can open it and send Chat input. */
   static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string) {
@@ -161,6 +201,8 @@ export class TmuxFixture {
       }
       const pid=Number((await owned.run(['display-message','-p','-t',`=${owned.name}`,'#{pid}'])).trim());
       owned.serverPid=Number.isSafeInteger(pid) && pid>0?await identity(pid):undefined;
+      owned.sessionId=tmuxSessionRows(await owned.sessions()).find(row=>row.name===owned.name)?.sessionId??'';
+      if(!owned.sessionId)throw new Error('Owned tmux topology changed');
       let ancestor=owned.serverPid,admitted=false;
       for(let depth=0;ancestor && depth<4 && !admitted;depth++) {admitted=ancestor.parent===owned.server.child.pid;ancestor=await identity(ancestor.parent);}
       if(!admitted)throw new Error('Owned tmux server is not the namespaced fixture server');
@@ -208,6 +250,7 @@ export class TmuxFixture {
     }
     return found;
   }
+  private sessions() {return this.run(['list-sessions','-F','#{session_id}|#{session_name}|#{session_windows}']);}
   private panes() {return this.run(['list-panes','-s','-t',`=${this.name}`,'-F','#{window_id}|#{window_index}|#{window_name}|#{window_active}|#{pane_id}|#{pane_pid}|#{pane_dead}']);}
   private async alive(saved:OwnedPid|undefined) {
     const current=saved && await identity(saved.pid);
@@ -223,10 +266,18 @@ export class TmuxFixture {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
       this.history.push(count);
     }
+    this.defaultSession=tmuxDefaultSession(tmuxSessionRows(await this.sessions()),{sessionId:this.sessionId,name:this.name},this.defaultSession);
+    if(this.defaultSession) {
+      const clients=tmuxDisplayClients(await this.run(['list-clients','-t',`=${tmuxDefaultName}`,'-F','#{client_control_mode}']));
+      if(this.defaultHistory.at(-1)!==clients) {
+        if(this.defaultHistory.length>=8)throw new Error('Owned tmux default attach history exceeded');
+        this.defaultHistory.push(clients);
+      }
+    }
     return count;
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
-  diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
+  diagnostic() {return {schemaVersion:1,history:[...this.history],defaultHistory:[...this.defaultHistory],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
   async verifyDetachedAndReattached() {
     const deadline=performance.now()+5000;
     while(true) {
@@ -235,7 +286,6 @@ export class TmuxFixture {
       await delay(25);
     }
     if(!tmuxAttachHistoryVerified(this.history))throw new Error('Owned tmux attach, detach and reattach were not observed');
-    if((await this.run(['list-sessions','-F','#{session_name}'])).trim()!==this.name)throw new Error('Owned tmux sessions changed');
     const rows=tmuxPaneRows(await this.panes(),this.extraPanes);
     if(rows.filter(value=>value.name==='alpha').length!==1)throw new Error('Owned tmux remote state differs');
     for(const window of this.windows) {
@@ -283,9 +333,20 @@ export class TmuxFixture {
     for(const window of this.windows)captures.push({paneId:window.paneId,text:await this.run(['capture-pane','-p','-J','-t',window.paneId])});
     tmuxChatDeliveredOnce(captures,chat.draft,alpha.paneId);
   }
+  /** The app's saved default created the one missing session in the login directory, attached it, and after a disconnect attached that same session again. */
+  async verifyDefaultSession() {
+    const deadline=performance.now()+5000;
+    while(true) {
+      await this.observe();
+      if(this.defaultHistory.at(-1)===0 || performance.now()>=deadline)break;
+      await delay(25);
+    }
+    if(!this.defaultSession || !tmuxDefaultAttachVerified(this.defaultHistory))throw new Error('Owned tmux default session create, attach, detach and reattach were not observed');
+    tmuxDefaultDirectory(await this.run(['list-panes','-s','-t',`=${tmuxDefaultName}`,'-F','#{pane_current_path}']),this.ssh.directory);
+  }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames],...(this.chat?{chat:this.chat}:{})};
+    return {name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames],defaultName:tmuxDefaultName,...(this.chat?{chat:this.chat}:{})};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */

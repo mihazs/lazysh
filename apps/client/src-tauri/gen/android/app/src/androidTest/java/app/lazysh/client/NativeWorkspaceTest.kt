@@ -3403,6 +3403,65 @@ class NativeWorkspaceTest {
         }
     }
 
+    // The saved create-if-missing default (#1764): a second saved host of the same owned sshd whose Default multiplexer is tmux, named for a
+    // session the owned server lacks. Connecting through the real host editor and connect flow must create and show that session, and after
+    // its connection ends, connecting again must attach the same one. The host independently proves one session created once in the login
+    // directory, attached, detached and attached again, with the original session and panes untouched. Saving the host copies the first host's
+    // pin for the same address and port, so no second fingerprint review follows.
+    private fun verifyOwnedTmuxDefault(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, parent: String, label: String) {
+        val session = fixture.getJSONObject("tmux").getString("defaultName")
+        // tmux's status line names the session in its first ten columns: `[` + name + `]`.
+        require(Regex("[A-Za-z0-9_-]{1,7}").matches(session) && session != fixture.getJSONObject("tmux").getString("name")) { "Owned tmux default session name required" }
+        val host = "$parent default"
+        val child = "$host / $session"
+        fun connect(stage: String) {
+            openOwnedConnect(scenario, host)
+            awaitDocument(scenario, "saved tmux default and SSH transport reach authentication $stage", """
+                (()=>{const transport=document.querySelector("[role=dialog] select:has(option[value='ssh'])");
+                  return transport?.value==='ssh' && Array.from(document.querySelectorAll('[role=dialog] .security-note'))
+                    .some(x=>x.textContent.includes(${JSONObject.quote("Enter tmux session $session directly after connecting.")}));})()
+            """)
+            chooseOwnedPrivateKey(scenario, fixture.getString("privateKey"), label)
+            submitOwnedConnect(scenario)
+            awaitDocument(scenario, "saved tmux default attached $stage", """
+                (()=>{const tabs=Array.from(document.querySelectorAll('.session-tabs [role=tab]'));
+                  const mine=tabs.filter(x=>x.textContent.trim()===${JSONObject.quote(child)});
+                  return tabs.length===2 && mine.length===1 && mine[0].getAttribute('aria-selected')==='true';})()
+            """)
+            sessionView(scenario, "Terminal")
+            // tmux's own status line names the session the display is attached to.
+            awaitDocument(scenario, "saved tmux default shows its session $stage", """
+                (()=>{const pane=Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none');
+                  return pane?.querySelector('.xterm-screen')?.textContent.includes(${JSONObject.quote("[$session]")})===true;})()
+            """)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            revealOwnedHosts(scenario)
+            addOwnedHost(scenario, host, "127.0.0.1", fixture.getString("username"), fixture.getInt("port")) {
+                selectNativeOption(scenario, fixture.getString("nonce"), "[role=dialog] select:has(option[value='tmux'])", "tmux")
+                typeInto(scenario, "[role=dialog] input[maxlength='200']", session)
+                selectNativeOption(scenario, fixture.getString("nonce"), "[role=dialog] select:has(option[value='ssh'])", "ssh")
+            }
+            connect("when the session is missing")
+            endOwnedConnection(scenario, child)
+            connect("again after its connection ended")
+            endOwnedConnection(scenario, child)
+            println("lazysh tmux default: the saved create-if-missing default created and showed its session, then attached the same one again")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                dismissOwnedAuthentication(scenario)
+                if (evaluate(scenario, present("button[aria-label='Disconnect $child']")) == "true") endOwnedConnection(scenario, child)
+                if (evaluate(scenario, present("button[aria-label='Connect to $host']")) == "true") deleteOwnedHost(scenario, host)
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
+
     private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -4780,6 +4839,7 @@ class NativeWorkspaceTest {
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
             } else if (requireTmux) {
                 verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label)
+                verifyOwnedTmuxDefault(scenario, fixture, name, label)
             } else if (requireZellij) {
                 verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)
             } else if (requireDpad) {
