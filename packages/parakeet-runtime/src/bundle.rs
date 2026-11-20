@@ -79,7 +79,7 @@ fn prepare(
     let directory = builder.tempdir_in(&parent).map_err(|_| Error::Storage)?;
     crate::storage::created_directory(directory.path())?;
     let mut snapshot = NamedTempFile::new_in(directory.path()).map_err(|_| Error::Storage)?;
-    crate::storage::created_file(snapshot.as_file())?;
+    crate::storage::created_file(snapshot.as_file(), snapshot.path())?;
     let mut digest = Sha256::new();
     let mut count = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -158,10 +158,9 @@ fn prepare(
             return Err(Error::InvalidBundle);
         }
         let options = lazysh_common::fs::private_create_new();
-        let mut file = options
-            .open(directory.path().join(name))
-            .map_err(|_| Error::Storage)?;
-        crate::storage::created_file(&file)?;
+        let destination = directory.path().join(name);
+        let mut file = options.open(&destination).map_err(|_| Error::Storage)?;
+        crate::storage::created_file(&file, &destination)?;
         let mut digest = Sha256::new();
         let mut copied = 0_u64;
         loop {
@@ -196,10 +195,10 @@ fn prepare(
     Ok(VerifiedBundle { directory })
 }
 
-#[cfg(all(test, unix, not(target_os = "ios")))]
+#[cfg(all(test, any(unix, windows), not(target_os = "ios")))]
 mod tests;
 
-#[cfg(all(test, any(windows, target_os = "ios")))]
+#[cfg(all(test, target_os = "ios"))]
 mod unsupported_acl_tests {
     use super::*;
     #[test]

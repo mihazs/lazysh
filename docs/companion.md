@@ -1073,14 +1073,21 @@ remain supported. Busy-executable replacement and a Windows OpenSSH shell
 adapter remain tracked in issue #490; the complete in-app installer remains
 issue #476.
 
-Issue #490 starts with the check Windows installation will rely on, which is not
-used by any command yet: `lazysh_common::windows_acl` decides from an object's
-owner SID and DACL whether it is private to the current user. The owner must be
-that user, the administrators group or the system. A file or directory is
-admitted as **no foreign change** when no other account holds an allowed right
+Issue #490 starts with the check Windows installation will rely on, which no
+installer command uses yet (the Windows Parakeet model storage does, see
+[Parakeet dictation](voice-parakeet.md)): `lazysh_common::windows_acl` decides
+from an object's owner SID and DACL whether it is private to the current user.
+The owner must be that user, the administrators group or the system. A file or
+directory is admitted as **no foreign change** when no other account holds an allowed right
 that writes data, appends, writes attributes or extended attributes, deletes the
 object or a child, or changes its DACL or owner (an executable others may still
-read and run), and as **private** when no other account holds any allowed right.
+read and run), and as **private** when no other account holds any allowed right. A directory
+that only leads to private data, such as a drive root or a shared parent, is
+admitted as **no foreign replace**: others may read it and add entries beside the
+existing ones, but none may delete or rename it or its entries, or change its
+DACL or owner. `admit_chain` applies it to every directory from the volume root
+(which is not read: it cannot be replaced) down to a leaf, and the leaf's own
+requirement to the leaf.
 Deny entries and inherit-only entries are ignored, a NULL DACL is refused, and
 the system, administrators and `OWNER RIGHTS` entries never count as foreign.
 Reading a path first refuses symbolic links, junctions and every other reparse

@@ -77,7 +77,8 @@ fn main() {
         fs::copy(&path, output.join(destination)).expect("copy static archive");
         // Preserve the archive identity on ELF so final consumers can isolate
         // ORT's private protobuf symbols from system protobuf shared libraries.
-        if target == "linux" && name == "onnxruntime" {
+        // The MSVC ORT archive is hundreds of MiB: bundling it would copy it into every rlib and staticlib.
+        if matches!(target.as_str(), "linux" | "windows") && name == "onnxruntime" {
             println!("cargo:rustc-link-lib=static:-bundle={name}");
         } else {
             println!("cargo:rustc-link-lib=static={name}");
@@ -99,7 +100,15 @@ fn main() {
                 println!("cargo:rustc-link-lib=dylib={name}");
             }
         }
-        "windows" => {}
+        // What the static ORT archive and the sherpa-onnx sources reference beyond the libraries Rust links itself.
+        "windows" => {
+            for name in [
+                "advapi32", "cfgmgr32", "dbghelp", "dxgi", "ole32", "oleaut32", "pdh", "setupapi",
+                "shell32", "shlwapi", "user32", "version", "wbemuuid", "ws2_32",
+            ] {
+                println!("cargo:rustc-link-lib=dylib={name}");
+            }
+        }
         _ => panic!("Parakeet CPU runtime is unsupported on this target"),
     }
     println!(

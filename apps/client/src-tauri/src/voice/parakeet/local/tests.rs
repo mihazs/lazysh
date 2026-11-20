@@ -1,12 +1,11 @@
 use super::*;
 use crate::app_lock::AccessState;
-use std::os::unix::fs::PermissionsExt;
+use lazysh_common::test_support::{expose, link_directory, private_tempdir};
 fn fixture() -> (tempfile::TempDir, Arc<Manager>, AccessState) {
     fixture_with_peak_disk(PEAK_DISK_BYTES)
 }
 fn fixture_with_peak_disk(peak_disk: u64) -> (tempfile::TempDir, Arc<Manager>, AccessState) {
-    let directory = tempfile::tempdir().unwrap();
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let directory = private_tempdir();
     let manager = Manager::with_peak_disk(
         directory.path().join("parakeet"),
         Arc::new(AtomicBool::new(false)),
@@ -175,8 +174,9 @@ fn one_cache_owner_and_exact_owned_partial_cleanup() {
     .is_err());
     let part = manager.cache.root.join(format!("{}.part", id()));
     let unrelated = manager.cache.root.join("unrelated.part");
+    // Owner-only like the manager's own partial downloads: the default umask would leave the file unowned storage.
+    drop(create_partial(&part).unwrap());
     fs::write(&part, b"interrupted owned download").unwrap();
-    fs::set_permissions(&part, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&unrelated, b"not our UUID").unwrap();
     drop(manager);
     let recovered = Manager::new(
@@ -191,12 +191,10 @@ fn one_cache_owner_and_exact_owned_partial_cleanup() {
 
 #[test]
 fn cache_rejects_links_and_publication_never_overwrites() {
-    use std::os::unix::fs::symlink;
-    let directory = tempfile::tempdir().unwrap();
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let directory = private_tempdir();
     let target = directory.path().join("target");
     fs::create_dir(&target).unwrap();
-    symlink(&target, directory.path().join("parakeet")).unwrap();
+    link_directory(&directory.path().join("parakeet"), &target);
     assert!(Manager::new(
         directory.path().join("parakeet"),
         Arc::new(AtomicBool::new(false))
@@ -207,30 +205,55 @@ fn cache_rejects_links_and_publication_never_overwrites() {
     let destination = directory.path().join("installed");
     fs::write(&source, b"new").unwrap();
     fs::write(&destination, b"original").unwrap();
-    assert!(publish(&source, &destination).is_err());
+    assert!(platform::publish(&source, &destination).is_err());
     assert_eq!(fs::read(&destination).unwrap(), b"original");
     fs::remove_file(&destination).unwrap();
-    publish(&source, &destination).unwrap();
+    platform::publish(&source, &destination).unwrap();
     assert!(!source.exists());
     assert_eq!(fs::read(destination).unwrap(), b"new");
 }
 
 #[test]
+#[cfg(unix)]
 fn android_platform_identities_and_own_group_extend_the_ancestor_allowlist() {
     let app = (10123, 10123);
     // Linux: root or this user owns the ancestor, and only a root sticky directory may be writable.
-    assert!(trusted_ancestor((0, 0, 0o755), app, false));
-    assert!(trusted_ancestor((10123, 10123, 0o700), app, false));
-    assert!(trusted_ancestor((0, 0, 0o1777), app, false));
-    assert!(!trusted_ancestor((10123, 10123, 0o1777), app, false));
-    assert!(!trusted_ancestor((10123, 10123, 0o771), app, false));
-    assert!(!trusted_ancestor((1000, 1000, 0o771), app, false));
-    assert!(!trusted_ancestor((10124, 10124, 0o700), app, true));
+    assert!(platform::trusted_ancestor((0, 0, 0o755), app, false));
+    assert!(platform::trusted_ancestor(
+        (10123, 10123, 0o700),
+        app,
+        false
+    ));
+    assert!(platform::trusted_ancestor((0, 0, 0o1777), app, false));
+    assert!(!platform::trusted_ancestor(
+        (10123, 10123, 0o1777),
+        app,
+        false
+    ));
+    assert!(!platform::trusted_ancestor(
+        (10123, 10123, 0o771),
+        app,
+        false
+    ));
+    assert!(!platform::trusted_ancestor((1000, 1000, 0o771), app, false));
+    assert!(!platform::trusted_ancestor(
+        (10124, 10124, 0o700),
+        app,
+        true
+    ));
     // Android: /data is system-owned and files/ is group-writable by the app's own group.
-    assert!(trusted_ancestor((1000, 1000, 0o771), app, true));
-    assert!(trusted_ancestor((10123, 10123, 0o771), app, true));
-    assert!(!trusted_ancestor((10123, 10124, 0o771), app, true));
-    assert!(!trusted_ancestor((10123, 10123, 0o777), app, true));
+    assert!(platform::trusted_ancestor((1000, 1000, 0o771), app, true));
+    assert!(platform::trusted_ancestor((10123, 10123, 0o771), app, true));
+    assert!(!platform::trusted_ancestor(
+        (10123, 10124, 0o771),
+        app,
+        true
+    ));
+    assert!(!platform::trusted_ancestor(
+        (10123, 10123, 0o777),
+        app,
+        true
+    ));
 }
 
 #[test]
@@ -259,6 +282,21 @@ async fn install_refuses_for_lack_of_storage_before_any_download_or_file() {
         "only the stable cache lock remains"
     );
     assert!(!manager.status().busy);
+}
+
+#[test]
+fn a_cache_or_parent_other_accounts_can_modify_is_refused() {
+    let directory = private_tempdir();
+    let fresh = || Arc::new(AtomicBool::new(false));
+    let root = directory.path().join("parakeet");
+    drop(Manager::new(root.clone(), fresh()).unwrap());
+    expose(&root);
+    assert!(Manager::new(root, fresh()).is_err());
+    let shared = directory.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    expose(&shared);
+    assert!(Manager::new(shared.join("parakeet"), fresh()).is_err());
+    assert!(!shared.join("parakeet").exists());
 }
 
 #[test]
@@ -345,13 +383,7 @@ async fn server(
 }
 fn partial(manager: &Arc<Manager>, work: &mut Work) -> (PathBuf, File) {
     let path = manager.cache.root.join(format!("{}.part", work.id));
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .unwrap();
+    let file = create_partial(&path).unwrap();
     work.partial = Some(path.clone());
     (path, file)
 }

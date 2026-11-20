@@ -1,4 +1,4 @@
-//! One local model (Linux x86_64 and the Android Google build) and one owned synchronous worker. Cancellation stops delivery, not native CPU work.
+//! One local model (Linux or Windows x86_64 and the Android Google build) and one owned synchronous worker. Cancellation stops delivery, not native CPU work.
 use super::{Protected, Result, VoiceState};
 use crate::app_lock::AccessLease;
 use serde::Serialize;
@@ -81,7 +81,7 @@ impl ParakeetState {
         #[cfg(not(parakeet_local))]
         {
             Status::unavailable(
-                "Parakeet is available only on Linux x86_64 and in the Google build of the Android app."
+                "Parakeet is available only on Linux and Windows x86_64 and in the Google build of the Android app."
                     .into(),
             )
         }
