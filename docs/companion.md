@@ -1197,7 +1197,13 @@ this connection has that agent and session ID, the pane shows that report's
 lifecycle state instead: Working, Needs attention (a permission request or
 attention notification) or Done. Workspace and tab summaries stay Herdr's own.
 Without that exact match the pane stays Unknown. Live states do not establish
-approval, input or transcript authority. Search the live Herdr section by agent, project or pane. Discovery stops
+approval, input or transcript authority. Live agents are grouped by status with a count on each group heading. The
+heading is a button that expands or collapses its group; Done starts collapsed so
+finished agents do not crowd out ongoing work, and every other group, including
+Unknown, starts expanded. Your choice for a group is kept while the list refreshes
+and while you move between sessions. Searching reveals every matching group and
+pauses the group buttons until the search is cleared.
+Search the live Herdr section by agent, project or pane. Discovery stops
 while the Agents view is hidden. Failed reads remove the previous live results;
 check the terminal when a status cannot be read.
 
