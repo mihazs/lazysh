@@ -68,10 +68,16 @@ it('moves the highlight, reads it back, and only then presses Enter, once', asyn
 });
 
 it('presses Enter alone for the option that is already highlighted, and picks with a digit on a desktop keyboard', async () => {
-  mount(model(5));
-  await waitFor(() => expect(option('Haiku').disabled).toBe(false));
-  fireEvent.keyDown(window, {key: '5'});
-  await waitFor(() => expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]));
+  vi.useFakeTimers();
+  try {
+    mount(model(5));
+    // The digits are heard by an effect that runs after the render that enables the options: act() runs it, and waitFor can return before it.
+    await act(async () => {await vi.advanceTimersByTimeAsync(400);});
+    expect(option('Haiku').disabled).toBe(false);
+    fireEvent.keyDown(window, {key: '5'});
+    await act(async () => {await vi.advanceTimersByTimeAsync(0);});
+    expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]);
+  } finally {vi.useRealTimers();}
 });
 
 it('presses no Enter when the dialog does not move to the chosen option', async () => {
