@@ -194,6 +194,8 @@ export interface TerminalAdapter {
   screenReaderMirrored?(): Disposable;
   /** Wraps around the buffer; `from` is the previous hit's row. */
   search(query: string, direction: 1 | -1, from?: number): TerminalSearchHit | undefined;
+  /** Present when the backend must ask for the answer: `search` over every row it holds, where the synchronous one reads only the rows it has at hand. */
+  searchBuffer?(query: string, direction: 1 | -1, from?: number): Promise<TerminalSearchHit | undefined>;
 
   /** The cursor's row in the live screen (0 is its first row) and column. */
   cursor(): {x: number; y: number};

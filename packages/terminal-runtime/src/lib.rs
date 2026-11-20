@@ -46,10 +46,10 @@ pub use render::{
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
 pub use runtime::{
-    control_window, scrollback_bytes_for_lines, Config, ControlCursor, ControlEvent, ControlModes,
-    ControlSnapshot, ControlState, Error, Events, Geometry, Modes, MouseTracking, RowWindow,
-    ScrollAction, TerminalRuntime, Viewport, CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX,
-    MAX_READ_ROWS,
+    control_window, scrollback_bytes_for_lines, Config, ControlAnswer, ControlCursor, ControlEvent,
+    ControlModes, ControlQuery, ControlSnapshot, ControlState, Error, Events, Geometry, Modes,
+    MouseTracking, RowWindow, ScrollAction, TerminalRuntime, Viewport, CONTROL_WINDOW_DEFAULT,
+    CONTROL_WINDOW_MAX, MAX_READ_ROWS,
 };
 pub use selection::{CellPos, CellRange, Direction, SearchHit, MAX_QUERY_BYTES};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};

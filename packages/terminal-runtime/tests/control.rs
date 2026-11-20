@@ -7,11 +7,12 @@ mod replay;
 mod support;
 
 use lazysh_terminal_runtime::{
-    control_window, ControlEvent, Doorbell, Hooks, Hub, HubConfig, Offer, ScrollAction, Session,
+    control_window, CellPos, CellRange, ControlEvent, ControlQuery, Doorbell, Hooks, Hub,
+    HubConfig, Offer, ScrollAction, Selection, SelectionKind, Session, TerminalRuntime,
     CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX, MAX_READ_ROWS,
 };
 use replay::*;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use support::*;
@@ -334,4 +335,152 @@ fn nothing_leaves_while_the_host_refuses_and_nothing_is_lost_by_it() {
             ControlEvent::Changed
         ]
     );
+}
+
+/// One query in the JSON the client sends, answered in the JSON it receives.
+fn ask(rt: &TerminalRuntime, query: Value) -> Value {
+    let query: ControlQuery = serde_json::from_value(query).unwrap();
+    serde_json::to_value(rt.control_query(query).unwrap()).unwrap()
+}
+
+/// A fixture's `[x, y]` as the adapter's cell.
+fn cell(at: &Value) -> Value {
+    json!({"x": at[0], "y": at[1]})
+}
+
+fn range(start: &Value, end: &Value) -> Value {
+    json!({"start": cell(start), "end": cell(end)})
+}
+
+#[test]
+fn the_buffer_queries_answer_the_client_as_the_xterm_backend_does() {
+    for case in fixture_cases("selection") {
+        let (rt, id) = (replay(&case), &case["id"]);
+        let each = |key: &str| case[key].as_array().unwrap().iter();
+        for s in each("selections") {
+            let query = json!({"kind": "selectionText", "range": range(&s["start"], &s["end"])});
+            assert_eq!(ask(&rt, query), s["text"], "{id}: {s}");
+        }
+        for w in each("words") {
+            assert_eq!(
+                ask(&rt, json!({"kind": "wordAt", "cell": cell(&w["at"])})),
+                range(&w["range"][0], &w["range"][1]),
+                "{id}: {w}"
+            );
+        }
+        for q in each("searches") {
+            let direction = if q["direction"] == 1 {
+                "forward"
+            } else {
+                "backward"
+            };
+            let query = json!({"kind": "search", "query": q["query"], "direction": direction, "from": q["from"]});
+            assert_eq!(ask(&rt, query), q["hit"], "{id}: {q}");
+        }
+        let all = ask(&rt, json!({"kind": "bufferRange"}));
+        assert_eq!(
+            ask(&rt, json!({"kind": "selectionText", "range": all})),
+            case["all"],
+            "{id}: select all"
+        );
+        assert_eq!(
+            ask(&rt, json!({"kind": "copyScreen"})),
+            case["screen"],
+            "{id}: copy screen"
+        );
+    }
+}
+
+#[test]
+fn a_line_query_answers_the_whole_wrapped_line_and_a_malformed_query_is_refused() {
+    let mut rt = runtime(10, 5);
+    feed(&mut rt, b"first\r\n0123456789ABCDEFGHIJklm\r\nlast");
+    assert_eq!(
+        ask(&rt, json!({"kind": "lineAt", "row": 2})),
+        json!({"start": {"x": 0, "y": 1}, "end": {"x": 9, "y": 3}})
+    );
+    for refused in [
+        json!({"kind": "cells"}),
+        json!({"kind": "wordAt", "cell": {"x": -1, "y": 0}}),
+        json!({"kind": "search", "query": "a", "direction": "sideways"}),
+    ] {
+        assert!(
+            serde_json::from_value::<ControlQuery>(refused.clone()).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn osc52_writes_reach_the_reader_as_the_consent_policy_offers_them() {
+    for case in fixture_cases("osc52") {
+        let (id, data) = (case["id"].as_str().unwrap(), case["data"].as_str().unwrap());
+        let mut rt = runtime(20, 3);
+        feed(&mut rt, format!("\x1b]52;{data}\x07").as_bytes());
+        // Where libghostty-vt decides before the policy runs, the fixture records the core's answer.
+        let text = if case["core"].is_object() {
+            &case["core"]["text"]
+        } else {
+            &case["text"]
+        };
+        let expected: Vec<_> = text
+            .as_str()
+            .map(|text| ControlEvent::Clipboard { text: text.into() })
+            .into_iter()
+            .collect();
+        assert_eq!(rt.take_control_events(), expected, "{id}");
+    }
+}
+
+#[test]
+fn a_session_holds_the_selection_and_its_view_draws_the_visible_part() {
+    let hub = Hub::new(HubConfig::default());
+    let (fixture, changes) = session_watched(&hub, "selected", config(10, 4, 64 * 1024));
+    let session = &fixture.session;
+    let output = numbered_lines(20);
+    fixture.send(&output);
+    fixture.settle(output.len() as u64);
+    assert_eq!(session.selection_overlay().unwrap(), None);
+    let top = session.with(|rt| rt.viewport().unwrap().top).unwrap();
+    let cells = |x, y| CellPos { x, y };
+    let linear = |anchor, head| {
+        Some(Selection {
+            kind: SelectionKind::Linear,
+            anchor,
+            head,
+        })
+    };
+    session.set_active(true);
+    let before = changes.load(SeqCst);
+    // From the row above the screen to the middle of its second row, past the last column.
+    session.set_selection(Some(CellRange {
+        start: cells(3, top - 1),
+        end: cells(99, top + 1),
+    }));
+    assert_eq!(changes.load(SeqCst), before + 1, "the view is woken");
+    assert_eq!(session.selection_overlay().unwrap(), linear((0, 0), (9, 1)));
+    // The reader scrolls two rows back: the highlight stays on its rows.
+    session
+        .with(|rt| rt.control_scroll(ScrollAction::Lines { delta: -2 }, 8))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.selection_overlay().unwrap(), linear((3, 1), (9, 3)));
+    session
+        .with(|rt| rt.control_scroll(ScrollAction::ToTop, 8))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.selection_overlay().unwrap(), None, "out of view");
+    session.set_selection(Some(CellRange {
+        start: cells(4, 2),
+        end: cells(1, 2),
+    }));
+    assert_eq!(session.selection_overlay().unwrap(), None, "ends first");
+    session.set_selection(Some(CellRange {
+        start: cells(2, 1),
+        end: cells(5, 30),
+    }));
+    assert_eq!(session.selection_overlay().unwrap(), linear((2, 1), (9, 3)));
+    session.set_selection(None);
+    assert_eq!(session.selection_overlay().unwrap(), None);
+    session.close();
 }

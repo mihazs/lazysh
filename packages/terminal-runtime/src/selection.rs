@@ -2,26 +2,30 @@
 //! backend answers with `select`/`getSelection`, `terminalWordAt`, `selectAll` and the find box,
 //! answered from the core's state so React never needs a cell mirror. Every call takes its range as
 //! an argument and answers with text or a range, never cells: the host owns the selection itself
-//! (the Renderer API's `Overlay::selection` is host state "changed without the core"), so the core
-//! keeps none and there is nothing to invalidate when output scrolls the rows under it.
+//! (the Renderer API's `Overlay::selection` is host state "changed without the core"), so the VT
+//! state keeps none and there is nothing to invalidate when output scrolls the rows under it. The
+//! range a reader chose is held by its [`Session`](crate::Session), where the renderer host reads
+//! it as an overlay ([`TerminalRuntime::selection_overlay`]).
 //!
 //! Rows are absolute (scrollback first, as [`TerminalRuntime::read_rows`]); a range's end is
 //! inclusive, like the adapter's `TerminalRange`.
 //!
 //! [#1320]: https://github.com/mihazs/lazysh/issues/1320
 
+use crate::render::{Selection, SelectionKind};
 use crate::runtime::{js_space, Error, TerminalRuntime, Trim, MAX_READ_ROWS};
 use ghostty_vt::CellWide;
+use serde::{Deserialize, Serialize};
 
 /// A buffer cell: `x` is a column, `y` an absolute row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellPos {
     pub x: u16,
     pub y: usize,
 }
 
 /// Both ends inclusive, `start` first in reading order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellRange {
     pub start: CellPos,
     pub end: CellPos,
@@ -30,14 +34,15 @@ pub struct CellRange {
 /// What [`TerminalRuntime::search`] found: the row, the match's UTF-16 offset in that row's text
 /// (JavaScript's `indexOf`, so the TypeScript side can use it as is) and the row text's UTF-16
 /// length, which is what the find box selects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub row: usize,
     pub column: usize,
     pub length: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Direction {
     Forward,
     Backward,
@@ -88,6 +93,34 @@ impl TerminalRuntime {
             }
         }
         Ok(lines.join("\n").replace('\u{a0}', " "))
+    }
+
+    /// `range` as a renderer highlights it: the part of it inside the viewport, in viewport cells.
+    /// `None` when none of its rows is visible or it ends before it starts.
+    // shortcut: rows that leave a full scrollback shift the absolute rows under a held range;
+    // move the range with them when the native engine keeps a selection across trimmed output.
+    pub fn selection_overlay(&self, range: CellRange) -> Result<Option<Selection>, Error> {
+        let view = self.viewport()?;
+        let (start, end) = (range.start, range.end);
+        let below = view.top + view.rows;
+        if (end.y, end.x) < (start.y, start.x) || end.y < view.top || start.y >= below {
+            return Ok(None);
+        }
+        let last = self.size().cols - 1;
+        let anchor = match start.y.checked_sub(view.top) {
+            Some(row) => (start.x.min(last), row as u16),
+            None => (0, 0),
+        };
+        let head = if end.y < below {
+            (end.x.min(last), (end.y - view.top) as u16)
+        } else {
+            (last, (view.rows - 1) as u16)
+        };
+        Ok(Some(Selection {
+            kind: SelectionKind::Linear,
+            anchor,
+            head,
+        }))
     }
 
     /// The visible rows in full: what "copy screen" selects.

@@ -8,6 +8,7 @@ import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
+import type {TerminalAdapter} from "./terminalAdapter";
 import {XtermTerminalAdapter} from "./xtermTerminalAdapter";
 import {openNativeTerminalAdapter} from "./nativeTerminalAdapter";
 import {createHeadlessCore} from "./xterm/nativeCoreHeadless";
@@ -1587,6 +1588,24 @@ it('retains search result, modifier state and exact input bytes across language 
   fireEvent.change(input,{target:{value:'raw-no-match'}});fireEvent.submit(input.closest('form')!);
   await act(async()=>{await uiI18n.changeLanguage('en');});
   expect(screen.getByText('No match in retained history.')).toBeTruthy();
+});
+it('asks a backend that searches its whole buffer and shows each answer when it arrives',async()=>{
+  const adapter=adapterOf(terminal) as TerminalAdapter;
+  const searchBuffer=vi.fn<NonNullable<TerminalAdapter['searchBuffer']>>(async()=>({row:41,column:0,length:5}));
+  adapter.searchBuffer=searchBuffer;
+  try {
+    render(<LocaleTerminal/>);
+    pressMore('Find');
+    fireEvent.change(screen.getByRole('textbox',{name:'Search terminal history'}),{target:{value:'world'}});
+    const next=()=>act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Next'}));});
+    await next();
+    expect(screen.getByText('Match on line 42')).toBeTruthy();
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(41);
+    searchBuffer.mockRejectedValueOnce(new Error('the core is gone'));
+    await next();
+    expect(screen.getByText('No match in retained history.')).toBeTruthy();
+    expect(searchBuffer.mock.calls).toEqual([['world',1,undefined],['world',1,41]]);
+  } finally { delete adapter.searchBuffer; }
 });
 it('keeps one explicit OSC copy through a held write and retranslates only its local failure',async()=>{
   let reject!:(error:Error)=>void;

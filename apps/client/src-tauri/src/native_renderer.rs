@@ -13,7 +13,9 @@
 //! * **Surface loss.** [`Host::lost`] destroys the renderer before it returns; the session lives on
 //!   and [`Host::surface`] with a newer generation draws it again from a snapshot.
 //! * **Device loss.** A lost GPU device is rebuilt and the screen redrawn from core state.
-//! * **Overlay.** The selection, and the text a keyboard is composing, drawn at the cursor.
+//! * **Overlay.** The selection the session holds (`Session::set_selection`, absolute rows, so it
+//!   stays on its rows while the reader scrolls), and the text a keyboard is composing, drawn at
+//!   the cursor.
 //! * **Appearance.** [`Look`] is the user's preferences: the theme (the cursor's colour included)
 //!   and the font: the machine's fonts for the family list, and the renderer's bundled one (#1325).
 //!   The cursor's shape and blink are the core's, frame by frame (#2218).
@@ -24,7 +26,7 @@
 use lazysh_terminal_renderer_wgpu::{FontLibrary, Target, WgpuRenderer};
 use lazysh_terminal_runtime::{
     Appearance, BlinkClock, Cell, CellMetrics, CellStyle, CellWide, Frame, FramePacer, Overlay,
-    RenderError, Selection, Session, SessionError, TerminalRenderer, Theme, BLINK_HALF_PERIOD,
+    RenderError, Session, SessionError, TerminalRenderer, Theme, BLINK_HALF_PERIOD,
 };
 use std::sync::atomic::{AtomicBool, Ordering::AcqRel};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -171,7 +173,6 @@ struct Loop {
     /// Nothing is drawn before this instant: the renderer must be resumed first.
     retry: Option<Duration>,
     look: Look,
-    selection: Option<Selection>,
     composing: Option<String>,
     pacer: FramePacer,
 }
@@ -274,7 +275,7 @@ impl Loop {
         }
         renderer.set_overlay(Overlay {
             cursor_phase_on: blink().phase_on(at),
-            selection: self.selection,
+            selection: self.session.selection_overlay()?,
         })?;
         let due = self.pacer.next_frame(at, renderer.needs_draw());
         if due.is_some_and(|due| due <= at) {
@@ -450,7 +451,6 @@ impl Host {
             stale: true,
             retry: None,
             look,
-            selection: None,
             composing: None,
             pacer: FramePacer::new(REFRESH_HZ),
         };
@@ -505,11 +505,6 @@ impl Host {
     /// told so; the session keeps parsing.
     pub(crate) fn set_active(&self, active: bool) -> Result<(), String> {
         self.ask(move |state| state.set_active(active))
-    }
-
-    /// The selection to highlight, in viewport cells.
-    pub(crate) fn set_selection(&self, selection: Option<Selection>) -> Result<(), String> {
-        self.ask(move |state| state.selection = selection)
     }
 
     /// The text a keyboard is composing, drawn underlined at the cursor; `None` when it ends.

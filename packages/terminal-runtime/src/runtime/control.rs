@@ -3,6 +3,8 @@
 //! here. The types are the wire format of the app's `terminal_core_*` commands and of the stdio harness, and
 //! `fixtures/control-plane.json` pins them to what xterm.js answers for the same bytes.
 use super::{Error, TerminalRuntime, Viewport, MAX_READ_ROWS};
+use crate::clipboard::clipboard_consent_text;
+use crate::selection::{CellPos, CellRange, Direction, SearchHit};
 use crate::size::Size;
 use ghostty_vt::ActiveScreen;
 use serde::{Deserialize, Serialize};
@@ -13,8 +15,6 @@ pub const CONTROL_WINDOW_DEFAULT: usize = 256;
 pub const CONTROL_WINDOW_MAX: usize = 1024;
 /// The most bells one answer reports; a program that rings in a loop is one flood, not a thousand events.
 const MAX_BELLS: usize = 8;
-/// The largest clipboard write offered to the user, the bound the xterm backend's `decodeClipboardRequest` has.
-const MAX_CLIPBOARD: usize = 64 * 1024;
 
 /// DEC private mouse tracking modes: X10 (9), normal (1000), button-event (1002), any-event (1003).
 const MOUSE_MODES: [(u16, MouseTracking); 4] = [
@@ -119,7 +119,58 @@ pub enum ControlEvent {
     },
 }
 
+/// What a reader asks about the text of the buffer (#1320), in the adapter's shapes: absolute rows, both ends of a
+/// range inclusive. The answers are text, a range or a search hit, never cells.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ControlQuery {
+    SelectionText {
+        range: CellRange,
+    },
+    /// `from` is the previous hit's row.
+    Search {
+        query: String,
+        direction: Direction,
+        from: Option<usize>,
+    },
+    WordAt {
+        cell: CellPos,
+    },
+    LineAt {
+        row: usize,
+    },
+    /// Select all: `null` for an empty buffer.
+    BufferRange,
+    CopyScreen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ControlAnswer {
+    Text(String),
+    Range(Option<CellRange>),
+    Hit(Option<SearchHit>),
+}
+
 impl TerminalRuntime {
+    /// One question about the buffer's text, answered from the core's state as [`crate::selection`] defines it.
+    pub fn control_query(&self, query: ControlQuery) -> Result<ControlAnswer, Error> {
+        Ok(match query {
+            ControlQuery::SelectionText { range } => {
+                ControlAnswer::Text(self.selection_text(range)?)
+            }
+            ControlQuery::Search {
+                query,
+                direction,
+                from,
+            } => ControlAnswer::Hit(self.search(&query, direction, from)?),
+            ControlQuery::WordAt { cell } => ControlAnswer::Range(Some(self.word_at(cell)?)),
+            ControlQuery::LineAt { row } => ControlAnswer::Range(Some(self.line_at(row)?)),
+            ControlQuery::BufferRange => ControlAnswer::Range(self.buffer_range()?),
+            ControlQuery::CopyScreen => ControlAnswer::Text(self.copy_screen()?),
+        })
+    }
+
     /// The control state and the text of up to `window` rows chosen so the viewport is inside them: the last
     /// rows of the buffer while the reader follows, the rows from the viewport's top when they scrolled back.
     pub fn control_snapshot(&mut self, window: usize) -> Result<ControlSnapshot, Error> {
@@ -203,8 +254,7 @@ impl TerminalRuntime {
             .map(|path| ControlEvent::Cwd { path });
         let writes = std::mem::take(&mut events.clipboard_writes)
             .into_iter()
-            .filter(|bytes| bytes.len() <= MAX_CLIPBOARD)
-            .filter_map(|bytes| String::from_utf8(bytes).ok())
+            .filter_map(|bytes| clipboard_consent_text(&bytes))
             .map(|text| ControlEvent::Clipboard { text });
         title
             .into_iter()

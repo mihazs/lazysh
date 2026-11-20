@@ -202,6 +202,26 @@ describe('the native core over the Tauri commands', () => {
     await adapter.dispose();
   });
 
+  it('asks the core for the selected text and for a search, and tells it which cells to highlight', async () => {
+    const {adapter} = await open();
+    invoke.mockClear();
+    invoke.mockImplementation(async (command: string) => command === 'terminal_core_selection_text' ? 'as the core reads it' : command === 'terminal_core_search' ? {row: 9, column: 1, length: 4} : undefined);
+    const range = {start: {x: 0, y: 2}, end: {x: 5, y: 3}};
+    adapter.select(range);
+    await flush();
+    expect(adapter.selectedText()).toBe('as the core reads it');
+    expect(await adapter.searchBuffer!('file', -1, 12)).toEqual({row: 9, column: 1, length: 4});
+    adapter.clearSelection();
+    await flush();
+    expect(invoke.mock.calls.map(([command, args]) => [command, args])).toEqual([
+      ['terminal_core_select', {sessionId: 'local:7', range}],
+      ['terminal_core_selection_text', {sessionId: 'local:7', range}],
+      ['terminal_core_search', {sessionId: 'local:7', query: 'file', direction: 'backward', from: 12}],
+      ['terminal_core_select', {sessionId: 'local:7', range: null}],
+    ]);
+    await adapter.dispose();
+  });
+
   it('drops the input of a locked app and wakes the core again after the unlock', async () => {
     const {adapter} = await open();
     setLocked(true);

@@ -1,5 +1,5 @@
 import {isAndroidApp} from './isAndroidApp';
-import type {NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from './nativeCoreBridge';
+import type {NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeInputCapture} from './nativeInputCapture';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
@@ -30,8 +30,10 @@ export type NativeAdapterOptions = {
 /**
  * The native backend: the terminal's state lives in a Rust core behind a {@link NativeCoreBridge}. The adapter keeps a
  * mirror (the state plus the text of a bounded window of rows) so the contract's synchronous readers need no round trip;
- * every command answers with a fresh mirror and the commands run in order. Rows outside the window read as empty, and
- * search and selection text work on the window until the core owns them (#1320).
+ * every command answers with a fresh mirror and the commands run in order. Rows outside the window read as empty.
+ * A core that answers questions about its text (`bridge.query`, #1320) is asked for the selected text, which then
+ * replaces what the window gave, and for `searchBuffer`; the synchronous readers answer from the window meanwhile,
+ * and always for a core without queries.
  */
 export class NativeTerminalAdapter implements TerminalAdapter {
   readonly backend = 'native' as const;
@@ -39,8 +41,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   get capabilities(): TerminalCapabilities { return this.mirrored ? {...nativeCapabilities, accessibility: true} : nativeCapabilities; }
   readonly dataPath: 'renderer' | 'runtime';
   write?: TerminalAdapter['write'];
+  searchBuffer?: TerminalAdapter['searchBuffer'];
   private mirror: NativeCoreSnapshot;
   private selected: TerminalRange | undefined;
+  /** The selected text as the core read it; undefined until it answers for the current selection. */
+  private coreText: string | undefined;
+  private asking = false;
+  private askAgain = false;
   private anchor: HTMLElement | undefined;
   private capture: NativeInputCapture | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
@@ -63,6 +70,10 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.theme = options.theme && JSON.stringify(options.theme);
     this.dataPath = bridge.feed ? 'renderer' : 'runtime';
     if (bridge.feed) this.write = (bytes, onApplied) => this.feed(bytes, onApplied);
+    if (bridge.query) this.searchBuffer = async (query, direction, from) => {
+      if (this.disposed) return undefined;
+      return await this.ask({kind: 'search', query, direction: direction > 0 ? 'forward' : 'backward', from}) ?? undefined;
+    };
     this.source = bridge.subscribe(event => this.onCore(event));
   }
 
@@ -100,10 +111,31 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
 
   /** Commands go to the core one at a time, in the order they were issued, whatever their latency. */
-  private command(run: () => Promise<NativeCoreSnapshot>) {
+  private command<T>(run: () => Promise<T>) {
     const result = this.queue.then(run);
     this.queue = result.catch(noop);
     return result;
+  }
+
+  /** A question for the core, asked after the commands already issued, so the answer includes what they wrote. */
+  private ask<Q extends NativeCoreQuery>(query: Q) { return this.command(() => this.bridge.query!(query)); }
+
+  /** Asks the core for the selected text, one question at a time; the latest selection and screen are asked again when it answers. */
+  private readSelection() {
+    const range = this.selected;
+    if (!range || !this.bridge.query || this.disposed) return;
+    if (this.asking) { this.askAgain = true; return; }
+    this.asking = true;
+    // shortcut: output under a selection re-reads all of its text; ask only for the rows that changed if a large selection held during heavy output costs too much.
+    this.ask({kind: 'selectionText', range}).then(text => { if (this.selected === range) this.coreText = text; }, noop)
+      .then(() => { this.asking = false; if (this.askAgain) { this.askAgain = false; this.readSelection(); } });
+  }
+
+  /** Output was applied: the mirror is replaced and the rows under a selection may read differently. */
+  private applyOutput(snapshot: NativeCoreSnapshot) {
+    this.apply(snapshot);
+    this.readSelection();
+    this.emit({type: 'output'});
   }
 
   private feed(bytes: Uint8Array, onApplied?: () => void) {
@@ -113,8 +145,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       this.command(() => this.bridge.feed!(bytes)).then(snapshot => {
         if (!this.pending.delete(reject)) return;
         try {
-          this.apply(snapshot);
-          this.emit({type: 'output'});
+          this.applyOutput(snapshot);
           onApplied?.();
           resolve();
         } catch (error) { reject(error); }
@@ -145,7 +176,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     if (!this.active) { this.stale = true; return; }
     if (this.pulling) { this.again = true; return; }
     this.pulling = true; this.stale = false;
-    this.command(() => this.bridge.snapshot()).then(snapshot => { this.apply(snapshot); this.emit({type: 'output'}); }, noop)
+    this.command(() => this.bridge.snapshot()).then(snapshot => this.applyOutput(snapshot), noop)
       .catch(noop)
       .then(() => new Promise(resolve => setTimeout(resolve, this.options.refreshMs ?? REFRESH_MS)))
       .then(() => { this.pulling = false; if (this.again) { this.again = false; this.ring(); } });
@@ -258,6 +289,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   selectedText() {
     const range = this.selected;
     if (!range) return '';
+    if (this.coreText !== undefined) return this.coreText;
     const {columns} = this.mirror.state, lines: string[] = [];
     for (let y = range.start.y; y <= range.end.y; y++) {
       lines.push(sliceColumns(this.rowText(y), y === range.start.y ? range.start.x : 0, (y === range.end.y ? range.end.x : columns - 1) + 1));
@@ -265,7 +297,12 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     return lines.join('\n');
   }
 
-  select(range: TerminalRange) { this.selected = range; this.emit({type: 'selection', range}); }
+  select(range: TerminalRange) {
+    this.selected = range; this.coreText = undefined;
+    if (!this.disposed) this.bridge.select?.(range);
+    this.readSelection();
+    this.emit({type: 'selection', range});
+  }
 
   /** The run of non-blank cells under the finger, or that single cell. A wide character's second cell belongs to its word. */
   selectWordAt(cell: TerminalCell): TerminalRange {
@@ -281,7 +318,8 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   clearSelection() {
     if (!this.selected) return;
-    this.selected = undefined;
+    this.selected = undefined; this.coreText = undefined;
+    if (!this.disposed) this.bridge.select?.(undefined);
     this.emit({type: 'selection', range: undefined});
   }
 

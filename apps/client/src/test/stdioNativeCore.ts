@@ -57,6 +57,8 @@ export async function openStdioCore(binary: string, {columns = 20, rows = 5, scr
     // shortcut: the harness encodes text only; give it a `key` method when a real-core key case exists.
     async key() { throw new Error('The stdio harness has no key input.'); },
     setActive(active) { request('setActive', {active}).catch(noop); },
+    query: query => request('query', {query}),
+    select(range) { request('select', {range: range ?? null}).catch(noop); },
     subscribe(listener) {
       events.on('event', listener);
       return {dispose: () => { events.off('event', listener); }};

@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 mod control;
 pub use control::{
-    control_window, ControlCursor, ControlEvent, ControlModes, ControlSnapshot, ControlState,
-    MouseTracking, RowWindow, ScrollAction, CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX,
+    control_window, ControlAnswer, ControlCursor, ControlEvent, ControlModes, ControlQuery,
+    ControlSnapshot, ControlState, MouseTracking, RowWindow, ScrollAction, CONTROL_WINDOW_DEFAULT,
+    CONTROL_WINDOW_MAX,
 };
 
 /// Terminal-generated replies (DSR, DA, ...) waiting for the transport. A peer can spam queries,

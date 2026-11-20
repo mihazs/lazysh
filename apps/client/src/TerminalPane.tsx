@@ -987,12 +987,18 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }
   function search(direction: number) {
     if (!query) return;
-    const hit = session.adapter.search(query, direction > 0 ? 1 : -1, searchLine.current < 0 ? undefined : searchLine.current);
-    if (!hit) {setSearchStatus("none"); return;}
-    searchLine.current = hit.row;
-    session.adapter.scroll({kind: 'toRow', row: hit.row});
-    session.adapter.select({start: {x: 0, y: hit.row}, end: {x: hit.length - 1, y: hit.row}});
-    setSearchStatus(hit.row + 1);
+    const asked = [query, direction > 0 ? 1 : -1, searchLine.current < 0 ? undefined : searchLine.current] as const;
+    const show = (hit: ReturnType<typeof session.adapter.search>) => {
+      if (!hit) {setSearchStatus("none"); return;}
+      searchLine.current = hit.row;
+      session.adapter.scroll({kind: 'toRow', row: hit.row});
+      session.adapter.select({start: {x: 0, y: hit.row}, end: {x: hit.length - 1, y: hit.row}});
+      setSearchStatus(hit.row + 1);
+    };
+    // A backend that must ask its core answers later, from every row it holds; the pane may be gone by then.
+    const whole = session.adapter.searchBuffer?.(...asked);
+    if (whole) void whole.catch(() => undefined).then(hit => {if (mounted.current) show(hit);});
+    else show(session.adapter.search(...asked));
   }
   function sendChord(keys: string | undefined): boolean {
     const current = () => mounted.current && access.current() && activeRef.current && session.connected;

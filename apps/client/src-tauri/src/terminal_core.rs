@@ -20,7 +20,9 @@
 //! The control plane (#1321): `terminal_core_snapshot`, `_scroll`, `_resize` and `_set_active` answer with the state
 //! and the text of a bounded window of rows, never a cell, and the core's event stream (the screen changed, title,
 //! bell, directory, clipboard) goes out on the same `Channel` that opened it, at most one `changed` per read of the
-//! state however much output arrives. The logic is the runtime crate's (`control_*`, [`Doorbell`]), which the stdio
+//! state however much output arrives. The text questions (#1320) are a command each: `terminal_core_selection_text`,
+//! `_search`, `_word_at`, `_line_at`, `_buffer_range` and `_copy_screen` answer with text, a range or a hit, and
+//! `terminal_core_select` hands the selection to the session, where a renderer host draws it. The logic is the runtime crate's (`control_*`, [`Doorbell`]), which the stdio
 //! harness shares; this module gates it behind the renderer's access lease.
 #![cfg_attr(not(test), allow(dead_code))]
 
@@ -89,6 +91,11 @@ pub(crate) trait Core: Send + Sync {
         rows: u32,
         window: Option<usize>,
     ) -> Result<Json, String>;
+    /// One question about the buffer's text (#1320): selected text, a search, the word or line at a place, the
+    /// whole buffer's range or the screen's text. The answer is text, a range or a hit, never cells.
+    fn control_query(&self, lease: &AccessLease, query: Json) -> Result<Json, String>;
+    /// The cells the renderer highlights as selected, in absolute rows; `None` clears them.
+    fn select(&self, lease: &AccessLease, range: Option<Json>) -> Result<(), String>;
     /// Whether a reader is looking. An inactive core keeps parsing and wakes nobody; becoming active rings once
     /// to catch up. A core starts active.
     fn set_active(&self, lease: &AccessLease, active: bool);
@@ -579,6 +586,97 @@ pub async fn terminal_core_resize(
         .await
 }
 
+/// One question about the buffer's text, for the current renderer like the rest of the control plane.
+async fn query(lease: AccessLease, session_id: String, query: Json) -> AccessResult<Json> {
+    lease
+        .run(async { live(&session_id)?.control_query(&lease, query) })
+        .await
+}
+
+/// The text of a range of cells (absolute rows, both ends inclusive) as a copy takes it.
+#[tauri::command]
+pub async fn terminal_core_selection_text(
+    lease: AccessLease,
+    session_id: String,
+    range: Json,
+) -> AccessResult<Json> {
+    query(
+        lease,
+        session_id,
+        serde_json::json!({"kind": "selectionText", "range": range}),
+    )
+    .await
+}
+
+/// The next row whose text contains `query`, ignoring case and wrapping around; `from` is the previous hit's row.
+#[tauri::command]
+pub async fn terminal_core_search(
+    lease: AccessLease,
+    session_id: String,
+    query: String,
+    direction: Json,
+    from: Option<usize>,
+) -> AccessResult<Json> {
+    let search =
+        serde_json::json!({"kind": "search", "query": query, "direction": direction, "from": from});
+    self::query(lease, session_id, search).await
+}
+
+#[tauri::command]
+pub async fn terminal_core_word_at(
+    lease: AccessLease,
+    session_id: String,
+    cell: Json,
+) -> AccessResult<Json> {
+    let word = serde_json::json!({"kind": "wordAt", "cell": cell});
+    query(lease, session_id, word).await
+}
+
+/// The whole soft-wrapped line that holds `row`.
+#[tauri::command]
+pub async fn terminal_core_line_at(
+    lease: AccessLease,
+    session_id: String,
+    row: usize,
+) -> AccessResult<Json> {
+    let line = serde_json::json!({"kind": "lineAt", "row": row});
+    query(lease, session_id, line).await
+}
+
+/// Select all: the range of everything held, `null` for an empty buffer.
+#[tauri::command]
+pub async fn terminal_core_buffer_range(
+    lease: AccessLease,
+    session_id: String,
+) -> AccessResult<Json> {
+    query(
+        lease,
+        session_id,
+        serde_json::json!({"kind": "bufferRange"}),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn terminal_core_copy_screen(
+    lease: AccessLease,
+    session_id: String,
+) -> AccessResult<Json> {
+    query(lease, session_id, serde_json::json!({"kind": "copyScreen"})).await
+}
+
+/// The selection overlay: the cells the renderer host highlights, or none. The selection itself is the reader's.
+#[tauri::command]
+pub async fn terminal_core_select(
+    lease: AccessLease,
+    session_id: String,
+    range: Option<Json>,
+) -> AccessResult<()> {
+    lease
+        .run(async { live(&session_id)?.select(&lease, range) })
+        .await
+}
+
 #[tauri::command]
 pub async fn terminal_core_set_active(
     lease: AccessLease,
@@ -751,10 +849,10 @@ mod native {
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
-        control_window, dom_mods, ffi, scrollback_bytes_for_lines, Config, ControlEvent,
-        ControlSnapshot, DomKey, Doorbell, Error as RuntimeError, Hooks, Hub, HubConfig, KeyInput,
-        MouseInput, Offer, Origin, PtyWriter, Refused, RgbColor, ScrollAction, Session, Size,
-        TerminalRuntime, Theme,
+        control_window, dom_mods, ffi, scrollback_bytes_for_lines, CellRange, Config, ControlEvent,
+        ControlQuery, ControlSnapshot, DomKey, Doorbell, Error as RuntimeError, Hooks, Hub,
+        HubConfig, KeyInput, MouseInput, Offer, Origin, PtyWriter, Refused, RgbColor, ScrollAction,
+        Session, Size, TerminalRuntime, Theme,
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
@@ -975,6 +1073,28 @@ mod native {
             self.answer(lease, window, |runtime, window| {
                 runtime.control_resize(cols as u16, rows as u16, window)
             })
+        }
+
+        fn control_query(&self, lease: &AccessLease, query: Json) -> Result<Json, String> {
+            let query: ControlQuery = serde_json::from_value(query)
+                .map_err(|error| format!("Not a terminal query: {error}"))?;
+            self.1.use_lease(lease);
+            let answer = self
+                .0
+                .with(|runtime| runtime.control_query(query))
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(answer).map_err(|error| error.to_string())
+        }
+
+        fn select(&self, lease: &AccessLease, range: Option<Json>) -> Result<(), String> {
+            let range: Option<CellRange> = range
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| format!("Not a range of cells: {error}"))?;
+            self.1.use_lease(lease);
+            self.0.set_selection(range);
+            Ok(())
         }
 
         fn set_active(&self, lease: &AccessLease, active: bool) {
@@ -1452,6 +1572,37 @@ mod native {
                 ),
                 (Some(20), Some(7))
             );
+            // Questions about the text are answered from the same screen, in the adapter's shapes.
+            let ask = |query: Json| core.control_query(&lease, query);
+            let word =
+                ask(serde_json::json!({"kind": "wordAt", "cell": {"x": 4, "y": 3}})).unwrap();
+            assert_eq!(
+                word,
+                serde_json::json!({"start": {"x": 4, "y": 3}, "end": {"x": 4, "y": 3}})
+            );
+            let text = ask(
+                serde_json::json!({"kind": "selectionText", "range": {"start": {"x": 4, "y": 3}, "end": {"x": 2, "y": 4}}}),
+            );
+            assert_eq!(text.unwrap(), "3\nrow");
+            let hit = ask(
+                serde_json::json!({"kind": "search", "query": "ROW 29", "direction": "forward"}),
+            );
+            assert_eq!(
+                hit.unwrap(),
+                serde_json::json!({"row": 29, "column": 0, "length": 6})
+            );
+            let bad = ask(serde_json::json!({"kind": "cells"}));
+            assert!(bad.unwrap_err().starts_with("Not a terminal query"));
+            let selected = serde_json::json!({"start": {"x": 0, "y": 0}, "end": {"x": 3, "y": 0}});
+            core.select(&lease, Some(selected)).unwrap();
+            assert!(
+                core.0.selection_overlay().unwrap().is_some(),
+                "held for the renderer host"
+            );
+            core.select(&lease, None).unwrap();
+            assert_eq!(core.0.selection_overlay().unwrap(), None);
+            let bad = core.select(&lease, Some(serde_json::json!({"start": 1})));
+            assert!(bad.unwrap_err().starts_with("Not a range of cells"));
             // Whatever the reader asks, the answer is bounded.
             let wide = core.control_snapshot(&lease, Some(usize::MAX)).unwrap();
             assert!(wide["window"]["rows"].as_array().unwrap().len() <= 1024);
@@ -1717,6 +1868,8 @@ pub(crate) mod fake {
         pub(crate) themes: Mutex<Vec<Json>>,
         /// The input events the bridge handed to `Core::input`, in order.
         pub(crate) inputs: Mutex<Vec<CoreInput>>,
+        /// The questions about the buffer's text and the selections the commands handed over, in order.
+        pub(crate) asked: Mutex<Vec<Json>>,
         pub(crate) closed: std::sync::atomic::AtomicBool,
         /// What the last `set_active` said; a core starts active.
         pub(crate) active: std::sync::atomic::AtomicBool,
@@ -1747,6 +1900,7 @@ pub(crate) mod fake {
                 sizes: Mutex::default(),
                 themes: Mutex::default(),
                 inputs: Mutex::default(),
+                asked: Mutex::default(),
                 closed: Default::default(),
                 active: std::sync::atomic::AtomicBool::new(true),
                 queued: Arc::default(),
@@ -1847,6 +2001,17 @@ pub(crate) mod fake {
         ) -> Result<Json, String> {
             self.resize(cols, rows)?;
             self.control_snapshot(lease, window)
+        }
+
+        /// Answers with the question, so a test sees what a command asked.
+        fn control_query(&self, _: &AccessLease, query: Json) -> Result<Json, String> {
+            self.asked.lock().unwrap().push(query.clone());
+            Ok(query)
+        }
+
+        fn select(&self, _: &AccessLease, range: Option<Json>) -> Result<(), String> {
+            self.asked.lock().unwrap().push(range.into());
+            Ok(())
         }
 
         fn set_active(&self, _: &AccessLease, active: bool) {
@@ -1966,6 +2131,13 @@ mod tests {
             "terminal_core_resize",
             "terminal_core_set_active",
             "terminal_core_theme",
+            "terminal_core_selection_text",
+            "terminal_core_search",
+            "terminal_core_word_at",
+            "terminal_core_line_at",
+            "terminal_core_buffer_range",
+            "terminal_core_copy_screen",
+            "terminal_core_select",
         ] {
             assert!(!allowed_while_locked(protected), "{protected}");
         }
@@ -2017,19 +2189,25 @@ mod tests {
         close("locked-control");
     }
 
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
-    async fn the_control_commands_need_a_session_a_valid_size_and_the_current_renderer() {
-        let _kept = tests_keeping_cores().read();
+    /// A stand-in core attached as session `id`, with the access state and the lease of the renderer that may ask it.
+    fn gated(id: &str) -> (crate::app_lock::AccessState, AccessLease, Arc<ChecksumCore>) {
         let access = crate::app_lock::AccessState::disabled();
         let renderer = access.lease(None).unwrap();
         let (core, prepared) = ChecksumCore::prepared();
         prepared.attach(
-            "control-gated",
+            id,
             &CoreSlot::default(),
             Arc::new(|_| {}),
             Arc::new(|_, _| Ok(())),
         );
+        (access, renderer, core)
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_control_commands_need_a_session_a_valid_size_and_the_current_renderer() {
+        let _kept = tests_keeping_cores().read();
+        let (access, renderer, core) = gated("control-gated");
         let message = |result: AccessResult<Json>| result.err().unwrap().into_inner().unwrap();
         let scroll = || serde_json::json!({"kind": "toTop"});
         assert!(
@@ -2103,6 +2281,78 @@ mod tests {
             );
         }
         close("control-gated");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_text_commands_ask_the_core_one_question_each_for_the_current_renderer_only() {
+        use serde_json::json;
+        let _kept = tests_keeping_cores().read();
+        let (access, renderer, core) = gated("text-gated");
+        let id = || "text-gated".to_owned();
+        let range = json!({"start": {"x": 1, "y": 2}, "end": {"x": 3, "y": 4}});
+        let lease = renderer.clone();
+        let ask = |id: String| async {
+            let range = json!({"start": {"x": 1, "y": 2}, "end": {"x": 3, "y": 4}});
+            let lease = || lease.clone();
+            [
+                terminal_core_selection_text(lease(), id.clone(), range).await,
+                terminal_core_search(
+                    lease(),
+                    id.clone(),
+                    "needle".into(),
+                    json!("backward"),
+                    Some(7),
+                )
+                .await,
+                terminal_core_word_at(lease(), id.clone(), json!({"x": 5, "y": 6})).await,
+                terminal_core_line_at(lease(), id.clone(), 9).await,
+                terminal_core_buffer_range(lease(), id.clone()).await,
+                terminal_core_copy_screen(lease(), id).await,
+            ]
+        };
+        for answer in ask(id()).await {
+            assert!(answer.unwrap().into_inner().is_ok());
+        }
+        terminal_core_select(renderer.clone(), id(), Some(range.clone()))
+            .await
+            .unwrap();
+        terminal_core_select(renderer.clone(), id(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            *core.asked.lock().unwrap(),
+            [
+                json!({"kind": "selectionText", "range": range}),
+                json!({"kind": "search", "query": "needle", "direction": "backward", "from": 7}),
+                json!({"kind": "wordAt", "cell": {"x": 5, "y": 6}}),
+                json!({"kind": "lineAt", "row": 9}),
+                json!({"kind": "bufferRange"}),
+                json!({"kind": "copyScreen"}),
+                range,
+                Json::Null,
+            ]
+        );
+        for answer in ask("nobody".into()).await {
+            assert_eq!(
+                answer.err().unwrap().into_inner().unwrap(),
+                "No native terminal core for this session"
+            );
+        }
+        access.replace_renderer().unwrap();
+        for answer in ask(id()).await {
+            assert!(
+                answer.err().unwrap().into_inner().is_err(),
+                "a replaced renderer is refused"
+            );
+        }
+        assert!(terminal_core_select(renderer, id(), None).await.is_err());
+        assert_eq!(
+            core.asked.lock().unwrap().len(),
+            8,
+            "a refusal asks nothing"
+        );
+        close("text-gated");
     }
 
     #[test]
