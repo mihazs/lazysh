@@ -2368,7 +2368,7 @@ mod tests {
         (core, connected)
     }
     /// What a core command answered the current renderer: its value or its error message.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     fn answered<T>(
         result: Result<crate::app_lock::Guarded<T>, crate::app_lock::GuardedError<String>>,
     ) -> Result<T, String> {
@@ -2378,12 +2378,12 @@ mod tests {
         }
     }
     /// The real core's screen text, read as the current renderer.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     async fn real_core_text(id: &str) -> Result<String, String> {
         answered(crate::terminal_core::terminal_core_text(access_lease(), id.to_owned()).await)
     }
     /// The real core's screen text once it contains `marker`.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     async fn real_core_text_with(id: &str, marker: &str) -> String {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -2412,7 +2412,7 @@ mod tests {
         terminal_core::close(&id);
     }
     /// Needs the `native-terminal` feature (Zig); only the `native-terminal-bridge` CI job enables it.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn local_pty_output_is_parsed_by_the_real_core_and_readable_as_text() {
@@ -2447,7 +2447,7 @@ mod tests {
         assert!(real_core_text(&id).await.is_err());
     }
     /// Needs the `native-terminal` feature (Zig).
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn the_real_core_follows_the_size_the_renderer_resized_to() {
@@ -2473,7 +2473,7 @@ mod tests {
         terminal_core::close(&id);
     }
     /// A local state and a core opened for a terminal of this size, with the Channel the session starts with.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     async fn open_core(
         cols: u32,
         rows: u32,
@@ -2489,7 +2489,7 @@ mod tests {
         (LocalState::default(), event, rx)
     }
     /// The events the core's Channel has delivered so far. The core's output never travels on it.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     fn queued(
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
     ) -> Vec<serde_json::Value> {
@@ -2502,7 +2502,7 @@ mod tests {
     }
     /// The events up to and including the next `changed`. A chunk is announced just after it is parsed, so the
     /// screen can show it a moment before its ring has gone out.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     async fn until_ring(
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
     ) -> Vec<serde_json::Value> {
@@ -2515,7 +2515,7 @@ mod tests {
         }
         events
     }
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     fn kinds(events: &[serde_json::Value]) -> Vec<&str> {
         events
             .iter()
@@ -2525,7 +2525,7 @@ mod tests {
     /// Needs the `native-terminal` feature (Zig). The control plane over a real PTY: a program the shell runs
     /// prints, the reader asks for the state, scrolls, resizes and stops looking, and the core's event stream on the
     /// session's Channel says what the program reported and rings once per read, however much output arrives.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader() {
@@ -2673,7 +2673,7 @@ mod tests {
         terminal_core::close(id);
     }
     /// Needs the `native-terminal` feature (Zig). `cat -v` makes the bytes the program receives visible.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn the_real_core_answers_queries_and_encodes_paste_and_mouse_into_the_pty() {
@@ -2721,7 +2721,7 @@ mod tests {
     }
     /// Needs the `native-terminal` feature (Zig). It reads the process-wide hub, so it takes the cores
     /// exclusively: no other test's core is alive while it counts.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' cores away
     async fn history_lines_set_the_scrollback_the_real_core_reserves_for_a_session() {
@@ -2748,7 +2748,7 @@ mod tests {
     }
     /// Needs the `native-terminal` feature (Zig) and a Linux `/proc`; run alone (`--test-threads=1`)
     /// with `--nocapture` to see the measured resident set.
-    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget() {

@@ -1045,7 +1045,7 @@ pub(crate) enum Input {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 // The core's event stream is built only with the `native-terminal` feature.
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 pub enum SshEvent {
     Data {
         data: Vec<u8>,
@@ -5867,7 +5867,7 @@ mod tests {
     /// Rust-side cost of the data path, host microbenchmark: 64 MiB of 80-column text through
     /// `send_output` to (a) the Channel with an instant renderer that acknowledges every chunk, and
     /// (b) the real core. Wall time and the process's CPU time (user + system, all threads).
-    #[cfg(feature = "native-terminal")]
+    #[cfg(native_terminal_core)]
     #[tokio::test]
     #[ignore = "benchmark: cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture"]
     async fn bridge_throughput_channel_versus_core() {

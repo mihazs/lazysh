@@ -14,6 +14,15 @@ const MAX_PIXELS: f64 = 16_384.0;
 /// A phone's ratio is 2 to 4; anything past this is a corrupt page, not a display.
 const MAX_DPR: f64 = 8.0;
 
+/// A surface is refused on every platform by a build made with `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`).
+fn ensure_enabled() -> Result<(), String> {
+    if cfg!(native_terminal_disabled) {
+        Err(crate::terminal_core::DISABLED_IN_BUILD.into())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "android")]
 struct Surfaces(tauri::plugin::PluginHandle<tauri::Wry>);
 
@@ -98,6 +107,7 @@ pub async fn native_terminal_surface_place(
     anchor: Anchor,
     background: u32,
 ) -> Result<SurfaceState, String> {
+    ensure_enabled()?;
     validate_session(&session)?;
     anchor.validate()?;
     if background > 0xff_ffff {
@@ -145,6 +155,7 @@ pub async fn native_terminal_surface_state(
     app: AppHandle,
     session: String,
 ) -> Result<SurfaceState, String> {
+    ensure_enabled()?;
     validate_session(&session)?;
     #[cfg(target_os = "android")]
     {
@@ -270,6 +281,21 @@ mod tests {
             .is_err(),
             "a missing dpr is refused"
         );
+    }
+
+    #[cfg(native_terminal_disabled)]
+    #[test]
+    fn the_surface_is_refused_disabled_in_this_build() {
+        assert_eq!(
+            ensure_enabled(),
+            Err("The native terminal is disabled in this build".into())
+        );
+    }
+
+    #[cfg(not(native_terminal_disabled))]
+    #[test]
+    fn the_surface_is_not_refused_without_the_kill_switch() {
+        assert_eq!(ensure_enabled(), Ok(()));
     }
 
     #[test]
