@@ -207,6 +207,7 @@ pub fn run() {
                 terminal_core::terminal_core_set_active,
                 terminal_core::terminal_core_close,
                 terminal_core::terminal_core_available,
+                terminal_core::native_terminal_probe,
                 local::local_disconnect,
                 apple_status::apple_status_capability,
                 apple_status::apple_status_configure,

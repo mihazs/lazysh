@@ -25,7 +25,7 @@
 mod adapter;
 mod atlas;
 
-pub use adapter::{rank, ranked, AdapterInfo, Policy, Window};
+pub use adapter::{probe, rank, ranked, refusal, AdapterInfo, Policy, Window};
 
 use atlas::{Atlas, Slot};
 use bytemuck::{Pod, Zeroable};

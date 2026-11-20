@@ -2,7 +2,7 @@
  * The NativeCoreBridge over the app's `terminal_core_*` Tauri commands (docs/architecture/terminal-adapter.md, "Native backend").
  * The transport feeds the core in Rust, so the bridge has no `feed` and no `resize`: it asks for state and sends input.
  * Commands belong to the renderer's access lease (a locked app is refused and told nothing); `terminal_core_close` is allowed
- * while locked, like a disconnect, and so is the probe's `terminal_core_available`, which reads the build and nothing of the user's.
+ * while locked, like a disconnect, and so are the probe's `terminal_core_available` and `native_terminal_probe`, which read the build and the device, nothing of the user's.
  */
 import {Channel, invoke as unguardedInvoke, isTauri} from '@tauri-apps/api/core';
 import {isAccessReady, protectedInvoke, sessionOutput, subscribeAccess} from './access';
@@ -48,15 +48,21 @@ const blank = ({columns, rows, scrollbackLines}: NativeTerminalOptions): NativeC
   window: {first: 0, rows: []},
 });
 
+type ProbeAnswer = {available?: boolean; reason?: string} | null;
+
 /**
- * The native backend's probe: the app says whether this build has the core compiled in and a host to draw it on. Only an
- * explicit yes passes, so no app, an app without the command or an unexpected answer is a refusal with a reason. The GPU and
- * surface probe is #1336. A rejected command is the registry's to record.
+ * The native backend's probe: the app says whether this build has the core compiled in and a host to draw it on
+ * (`terminal_core_available`, free), and only then whether the device's GPU can draw it (`native_terminal_probe`, #1336,
+ * which the app bounds and answers once per process). Only an explicit yes to both passes, so no app, an app without a
+ * command or an unexpected answer is a refusal with a reason. A rejected command is the registry's to record.
  */
 export async function probeNativeCore(): Promise<BackendProbe> {
   if (!isTauri()) return {ok: false, reason: 'this is not the lazysh app'};
-  const answer = await unguardedInvoke<{available?: boolean; reason?: string} | null>('terminal_core_available');
-  return answer?.available === true ? {ok: true} : {ok: false, reason: answer?.reason || 'the app did not report a native terminal core'};
+  for (const [command, silent] of [['terminal_core_available', 'the app did not report a native terminal core'], ['native_terminal_probe', 'the app did not report whether this device can draw a native terminal']] as const) {
+    const answer = await unguardedInvoke<ProbeAnswer>(command);
+    if (answer?.available !== true) return {ok: false, reason: answer?.reason || silent};
+  }
+  return {ok: true};
 }
 
 /**

@@ -16,6 +16,7 @@ async function openSession(page:Page,phone:boolean,storage:Record<string,string>
     window.nativeFixtureInvoke=async command=>{
       if(command==='list_hosts')return [{id:'fixture',name:'Fixture',hostname:'fixture.invalid',username:'owner',port:22}];
       if(command==='terminal_core_available')return coreReason?{available:false,reason:coreReason}:{available:true,reason:'present'};
+      if(command==='native_terminal_probe')return {available:true,reason:'present',elapsedMs:1};
       if(command==='connect')return {sessionId:'engine-session'};
       if(command==='native_terminal_surface_place')return {placed:true,ready:true,generation:1,width:1,height:1};
       if(command==='transport_capabilities')return {mosh:false,et:false};
