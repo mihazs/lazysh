@@ -133,7 +133,8 @@ beforeEach(() => {
   mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
-    getItem: vi.fn(),
+    // The device has launched before: it already recorded the engine Auto resolves to, so a launch writes nothing.
+    getItem: vi.fn((key: string) => key === 'lazysh.terminal.defaultEngineSeen' ? 'xterm' : undefined),
     removeItem: vi.fn(),
     length: 0,
   });

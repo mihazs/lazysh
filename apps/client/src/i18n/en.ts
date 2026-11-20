@@ -2479,4 +2479,6 @@ export const english = {
   terminalEngineLacksAccessibility: "a screen reader is active and the native engine cannot be read by it",
   terminalEngineLacks: "the native engine lacks {{capabilities}}",
   terminalEngineProbeFailed: "the native engine cannot run here ({{detail}})",
+  terminalEngineChanged: "The terminal engine changed on this platform. Switch back in Settings, Terminal engine.",
+  terminalEngineChangedOpenSettings: "Open Settings",
 } as const;

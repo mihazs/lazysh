@@ -42,6 +42,9 @@ export function developerBackendOverride(): BackendPreference | undefined {
 /** A session read with a screen reader needs a backend whose content that reader can reach. */
 export const screenReaderRequirements = (screenReader: boolean): NonNullable<SelectOptions['requires']> => screenReader ? ['accessibility'] : [];
 
+/** The engine Auto gives a new session on this device now. */
+export const defaultTerminalEngine = async (backends: Pick<typeof registry, 'select'> = registry) => (await backends.select({requires: screenReaderRequirements(getPreferences().screenReader)})).id;
+
 /** The terminal of one new session, from the backend selection rules. */
 export function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {
   return backends.create({override: developerBackendOverride(), ...options, requires: [...(options.requires ?? []), ...screenReaderRequirements(getPreferences().screenReader)]});

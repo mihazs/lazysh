@@ -2485,6 +2485,8 @@ const translations = {
   terminalEngineLacksAccessibility: ["um leitor de tela está ativo e o mecanismo nativo não pode ser lido por ele", "un lector de pantalla está activo y el motor nativo no puede ser leído por él"],
   terminalEngineLacks: ["o mecanismo nativo não oferece {{capabilities}}", "el motor nativo no ofrece {{capabilities}}"],
   terminalEngineProbeFailed: ["o mecanismo nativo não pode ser executado aqui ({{detail}})", "el motor nativo no puede ejecutarse aquí ({{detail}})"],
+  terminalEngineChanged: ["O mecanismo de terminal mudou nesta plataforma. Volte ao anterior em Configurações, Mecanismo de terminal.", "El motor de terminal cambió en esta plataforma. Vuelve al anterior en Configuración, Motor de terminal."],
+  terminalEngineChangedOpenSettings: ["Abrir Configurações", "Abrir Configuración"],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;
