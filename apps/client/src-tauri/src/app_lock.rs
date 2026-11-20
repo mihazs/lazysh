@@ -237,6 +237,10 @@ fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
             .cancel_for_lock()
             .await;
         handle
+            .state::<crate::host_browser::HostBrowsers>()
+            .cancel_for_lock()
+            .await;
+        handle
             .state::<crate::transcript_watch::TranscriptWatches>()
             .cancel_for_lock()
             .await;

@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod fs;
+pub mod host_browser;
 pub mod private_state;
 pub mod record_checkpoint;
 #[cfg(feature = "repository-review")]

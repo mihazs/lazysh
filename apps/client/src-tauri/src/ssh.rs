@@ -4071,6 +4071,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "file_download_fixture.rs"]
     mod file_download_fixture;
+    #[cfg(unix)]
+    #[path = "host_browser_fixture.rs"]
+    mod host_browser_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
     #[cfg(unix)]
@@ -7541,6 +7544,17 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH, a current-source companion binary with host-browser serve and Chrome or Chromium"]
+    async fn openssh_host_browser_streams_a_real_page_and_closing_the_channel_ends_the_browser() {
+        if let Some(reason) = host_browser_fixture::unavailable() {
+            eprintln!("skipped: {reason}");
+            return;
+        }
+        openssh_interoperability(OpenSshCheck::HostBrowser).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
     async fn openssh_companion_install_and_managed_path() {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
@@ -7598,6 +7612,7 @@ mod tests {
         TranscriptImages,
         TranscriptWatch,
         AuthListeners,
+        HostBrowser,
         TemporaryAttachments,
         CompanionInstall,
         CompanionUnsupportedArchitecture,
@@ -7681,6 +7696,8 @@ mod tests {
             client_environment_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::AccountUsage) {
             account_usage_fixture::environment(dir.path())
+        } else if matches!(check, OpenSshCheck::HostBrowser) {
+            host_browser_fixture::environment(dir.path())
         } else if matches!(
             check,
             OpenSshCheck::CompanionInstall | OpenSshCheck::CompanionUnsupportedArchitecture
@@ -7777,6 +7794,12 @@ mod tests {
         if matches!(check, OpenSshCheck::TranscriptWatch) {
             app.manage(crate::transcript_watch::TranscriptWatches::default());
             transcript_watch_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::HostBrowser) {
+            app.manage(crate::host_browser::HostBrowsers::default());
+            // Boxed: its future would otherwise inflate this check's, and overflow a debug test thread's stack.
+            Box::pin(host_browser_fixture::verify(&app, &id, dir.path())).await;
             return;
         }
         if matches!(check, OpenSshCheck::TemporaryAttachments) {

@@ -78,10 +78,7 @@ fn one() -> f32 {
 impl Viewport {
     /// A phone-sized to tablet-sized page, at most 3x, and at most 8 million pixels once scaled.
     pub fn valid(&self) -> bool {
-        (100..=2048).contains(&self.width)
-            && (100..=2048).contains(&self.height)
-            && (1.0..=3.0).contains(&self.scale)
-            && (self.width as f32 * self.height as f32 * self.scale * self.scale) <= 8_000_000.0
+        lazysh_common::host_browser::valid_viewport(self.width, self.height, self.scale)
     }
 }
 
@@ -298,27 +295,6 @@ mod tests {
                 serde_json::from_value::<Client>(bad.clone()).is_err(),
                 "{bad}"
             );
-        }
-    }
-
-    #[test]
-    fn viewports_are_bounded() {
-        let viewport = |width, height, scale| Viewport {
-            width,
-            height,
-            scale,
-        };
-        assert!(viewport(412, 915, 1.0).valid());
-        assert!(viewport(412, 915, 3.0).valid());
-        for bad in [
-            viewport(99, 915, 1.0),
-            viewport(412, 2049, 1.0),
-            viewport(412, 915, 0.5),
-            viewport(412, 915, 3.1),
-            viewport(2048, 2048, 1.5),
-            viewport(412, 915, f32::NAN),
-        ] {
-            assert!(!bad.valid(), "{bad:?}");
         }
     }
 }
