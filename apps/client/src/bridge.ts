@@ -61,10 +61,13 @@ export type HerdrNavigationTarget =
   | {kind:'workspace';workspace:string}
   | {kind:'tab';workspace:string;tab:string}
   | {kind:'pane';workspace:string;tab:string;pane:string;terminal:string};
+/** One pane of a tmux window. `title` is empty while the pane still has tmux's default title (the host name). */
+export type TmuxJumpPane = { id: string; index: number; title: string; command: string; active: boolean };
+/** `panes`, `zoomed` and `current.paneId` come from a host-side binding that lists panes; without them the tree stays at the window level. */
 export type TmuxJumpSnapshot = {
   generation: string;
-  current: { sessionId: string; windowId: string };
-  sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string }[] }[];
+  current: { sessionId: string; windowId: string; paneId?: string };
+  sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string; zoomed?: boolean; panes?: TmuxJumpPane[] }[] }[];
 };
 
 /** What to show before a sign-in page opens on this device: the host, never the query. */
@@ -194,8 +197,8 @@ export const api = {
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
-  tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string) =>
-    remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId }),
+  tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string, paneId?: string) =>
+    remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId, ...(paneId === undefined ? {} : { paneId }) }),
   attachTmux: (
     sessionId: string,
     name: string,

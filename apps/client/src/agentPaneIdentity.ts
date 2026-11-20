@@ -1,3 +1,13 @@
+import type {AgentSession} from './AgentPanel';
+
+/** The companion writes this summary when an agent's session ends, so the pane no longer runs it. */
+const SESSION_ENDED='Session ended';
+/** The agent a tmux pane runs: the newest companion hook report carrying that pane's `TMUX_PANE`, null when there is none or its session has ended. */
+export function paneAgent(reports:readonly AgentSession[],pane:string):string|null {
+  const newest=reports.find(row=>row.paneId===pane);
+  return newest&&newest.summary!==SESSION_ENDED?newest.agent:null;
+}
+
 /** The Zellij pane a hook report names: the companion writes `zellij:<session>:<pane>` for an agent that runs in a Zellij terminal pane. */
 export function zellijPane(id:string|null|undefined):{session:string;pane:number}|undefined {
   const match=/^zellij:(.+):(\d{1,10})$/.exec(id ?? '');

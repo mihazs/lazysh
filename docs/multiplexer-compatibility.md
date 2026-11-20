@@ -143,7 +143,7 @@ implemented without full evidence, *part* means partial.
 | --- | --- | --- | --- | --- |
 | Discovery | yes | impl → yes #1145 | yes | no → #1140 |
 | Attach, reattach | yes | yes | yes | no → #1140 |
-| Navigation, Jump To, current marker | yes; pane rows → #1146 | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
+| Navigation, Jump To, current marker | yes, with pane rows (#1691) | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
 | Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
 | Agent launch | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |

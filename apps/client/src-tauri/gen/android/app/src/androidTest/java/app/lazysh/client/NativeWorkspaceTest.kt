@@ -3096,6 +3096,11 @@ class NativeWorkspaceTest {
         val jumpPanel = "section[aria-label='tmux Jump To']"
         fun title(window: JSONObject) = "${window.getInt("index")}: ${window.getString("name")}"
         fun click(xpath: String) = onWebView().withElement(findElement(Locator.XPATH, xpath)).perform(webScrollIntoView()).perform(webClick())
+        // Jump To lists each window's panes under it, and its one Current marker sits on the pane row of the displayed window.
+        val jumpMarker = "(panel=>{const rows=Array.from(panel.querySelectorAll('.mux-row')),marked=Array.from(panel.querySelectorAll('.mux-row button[aria-current=location]'))," +
+            "row=marked.length===1?marked[0].closest('.mux-row'):null,owner=row?rows.slice(0,rows.indexOf(row)).reverse().find(x=>!x.classList.contains('mux-pane-row')):null;" +
+            "return {windows:rows.filter(x=>!x.classList.contains('mux-pane-row')).map(x=>x.textContent.trim()),panes:rows.filter(x=>x.classList.contains('mux-pane-row')).length," +
+            "marked:marked.length,onPane:!!row?.classList.contains('mux-pane-row'),owner:owner?.textContent.trim()};})"
         fun visible(target: JSONObject, other: JSONObject, stage: String) {
             sessionView(scenario, "Terminal")
             val forbidden = JSONArray(listOf(other.getString("marker")))
@@ -3131,15 +3136,16 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "live tmux Jump To marks ${title(current)} current", """
                 (()=>{const panels=document.querySelectorAll(${JSONObject.quote(jumpPanel)});
                   if(panels.length!==1 || panels[0].querySelector('[role=status],[role=alert]'))return false;
-                  const buttons=Array.from(panels[0].querySelectorAll('.mux-row button')),marked=buttons.filter(x=>x.getAttribute('aria-current')==='location');
-                  return buttons.length===2 && marked.length===1 && marked[0].textContent.trim()===${JSONObject.quote(title(current) + " · Current")} &&
-                    buttons.some(x=>x.textContent.trim()===${JSONObject.quote(title(target))} && !x.disabled);})()
+                  const found=$jumpMarker(panels[0]);
+                  return found.windows.length===2 && found.panes===2 && found.marked===1 && found.onPane && found.owner===${JSONObject.quote(title(current))} &&
+                    found.windows.includes(${JSONObject.quote(title(target))});})()
             """)
             click("//section[@aria-label='tmux Jump To']//button[normalize-space(.)='${title(target)}']")
             awaitDocument(scenario, "tmux Jump To reached ${title(target)}", """
                 (()=>{const panel=document.querySelector(${JSONObject.quote(jumpPanel)});
-                  return !panel || (!panel.querySelector('[role=status],[role=alert]') &&
-                    panel.querySelector('.mux-row button[aria-current=location]')?.textContent.trim()===${JSONObject.quote(title(target) + " · Current")});})()
+                  if(!panel)return true;
+                  const found=$jumpMarker(panel);
+                  return !panel.querySelector('[role=status],[role=alert]') && found.marked===1 && found.onPane && found.owner===${JSONObject.quote(title(target))};})()
             """)
         }
         fun numbered(target: JSONObject) {

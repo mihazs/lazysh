@@ -1,5 +1,6 @@
 //! Fixture-only Jump To investigation. No product API, helper installation or IPC.
 use super::*;
+use crate::tmux_jump::Target;
 use std::{
     io::Read,
     os::unix::fs::PermissionsExt,
@@ -1001,7 +1002,12 @@ async fn product_actor_probe() {
         .call(
             &lease,
             &mut cancellation,
-            Some((generation.clone(), bid.into(), bwid.into()))
+            Some(Target::new(
+                generation.clone(),
+                bid.into(),
+                bwid.into(),
+                None
+            ))
         )
         .await
         .is_err());
@@ -1011,7 +1017,7 @@ async fn product_actor_probe() {
         .call(
             &fresh,
             &mut cancellation,
-            Some((generation, bid.into(), bwid.into())),
+            Some(Target::new(generation, bid.into(), bwid.into(), None)),
         )
         .await
         .unwrap();
@@ -1073,10 +1079,11 @@ async fn product_actor_probe() {
         .call(
             &fresh,
             &mut epoch_cancel,
-            Some((
+            Some(Target::new(
                 prior["generation"].as_str().unwrap().into(),
                 reused,
-                "@0".into()
+                "@0".into(),
+                None
             ))
         )
         .await
@@ -1116,6 +1123,204 @@ async fn product_actor_probe() {
     assert!(partial.call(&fresh, &mut live, None).await.is_err());
     let _ = channel.eof().await;
     let _ = channel.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.4+; pane-level Jump To acceptance"]
+async fn real_tmux_jump_pane_exact_target() {
+    timeout(Duration::from_secs(30), pane_target_probe())
+        .await
+        .expect("bounded pane Jump To fixture");
+}
+/// The product commands against a real tmux server: the tree lists every pane, and choosing a pane
+/// moves the displayed client to that exact pane, in any window or session.
+async fn pane_target_probe() {
+    use serde_json::{json, Value};
+    let f = Fixture::new().await;
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec!["chat-a".into()],
+    };
+    let tmux = |args: &[&str]| servers.direct("chat-a", args);
+    // work: @0 with %0 %1, and @1 "build" with %2 %3 where %2 is zoomed. other: $1 @2 %4.
+    // `exec` so a pane runs sleep itself: a plain command can leave it on the `sh` tmux started it with.
+    let sleep = "exec sleep 120";
+    tmux(&["new-session", "-d", "-s", "work", sleep]);
+    tmux(&["split-window", "-d", "-t", "%0", sleep]);
+    tmux(&["new-window", "-d", "-t", "$0", "-n", "build", sleep]);
+    tmux(&["split-window", "-d", "-t", "%2", sleep]);
+    tmux(&["resize-pane", "-Z", "-t", "%2"]);
+    tmux(&["new-session", "-d", "-s", "other", sleep]);
+    let (state, app, _access, lease) = chat_fixture_app(f.dir.path().join("pane-config"));
+    let parent = f.neutral(&state, &lease).await;
+    let display = chat_fixture_attach(&app, &lease, &parent.session_id, "work").await;
+    // The window, session and pane the displayed (not the control) client shows, as tmux itself reports them.
+    let shown = || {
+        let rows = tmux(&[
+            "list-clients",
+            "-F",
+            "#{client_control_mode}|#{session_id}|#{window_id}|#{pane_id}",
+        ]);
+        let shown = rows
+            .lines()
+            .filter_map(|row| row.strip_prefix("0|"))
+            .collect::<Vec<_>>();
+        assert_eq!(shown.len(), 1, "{rows}");
+        shown[0].to_owned()
+    };
+    let read = || async {
+        let snapshot = crate::tmux_jump::tmux_jump_snapshot(
+            lease.clone(),
+            app.state(),
+            app.state(),
+            display.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        serde_json::to_value(snapshot).unwrap()
+    };
+    let go = |generation: &Value, session: &str, window: &str, pane: Option<&str>| {
+        crate::tmux_jump::tmux_jump(
+            lease.clone(),
+            app.state(),
+            app.state(),
+            display.clone(),
+            generation.as_str().unwrap().into(),
+            session.into(),
+            window.into(),
+            pane.map(Into::into),
+        )
+    };
+    let tree = read().await;
+    assert_eq!(shown(), "$0|@0|%0");
+    assert_eq!(
+        tree["current"],
+        json!({"sessionId": "$0", "windowId": "@0", "paneId": "%0"})
+    );
+    let windows = &tree["sessions"][0]["windows"];
+    let panes = |window: &Value| {
+        window["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pane| {
+                (
+                    pane["id"].as_str().unwrap().to_owned(),
+                    pane["active"].as_bool().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        panes(&windows[0]),
+        [("%0".into(), true), ("%1".into(), false)]
+    );
+    // The zoomed window shows only its active pane, and that is the one it keeps marking active.
+    assert_eq!(
+        panes(&windows[1]),
+        [("%2".into(), true), ("%3".into(), false)]
+    );
+    assert_eq!(
+        (windows[0]["zoomed"].clone(), windows[1]["zoomed"].clone()),
+        (json!(false), json!(true))
+    );
+    // A pane still on tmux's default title (the host name) has none; the running command names it.
+    assert_eq!(windows[0]["panes"][0]["title"], "");
+    assert_eq!(windows[0]["panes"][0]["command"], "sleep");
+    let generation = &tree["generation"];
+    // Another pane of the shown window.
+    let moved = serde_json::to_value(
+        go(generation, "$0", "@0", Some("%1"))
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$0|@0|%1");
+    assert_eq!(moved["current"]["paneId"], "%1");
+    assert_eq!(
+        panes(&moved["sessions"][0]["windows"][0]),
+        [("%0".into(), false), ("%1".into(), true)]
+    );
+    // A hidden pane of another window brings that window forward, and un-zooms it so the pane shows.
+    let moved = serde_json::to_value(
+        go(generation, "$0", "@1", Some("%3"))
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$0|@1|%3");
+    assert_eq!(
+        moved["current"],
+        json!({"sessionId": "$0", "windowId": "@1", "paneId": "%3"})
+    );
+    assert_eq!(moved["sessions"][0]["windows"][1]["zoomed"], false);
+    assert_eq!(
+        tmux(&["display-message", "-p", "-t", "@1", "#{window_zoomed_flag}"]),
+        "0"
+    );
+    // A pane of another session.
+    let moved = serde_json::to_value(
+        go(generation, "$1", "@2", Some("%4"))
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$1|@2|%4");
+    assert_eq!(moved["current"]["sessionId"], "$1");
+    // A window row, with no pane, still lands on that window's active pane.
+    let moved = serde_json::to_value(
+        go(generation, "$0", "@0", None)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$0|@0|%1");
+    assert_eq!(moved["current"]["paneId"], "%1");
+    // A pane that is not in that window, or no longer exists, is refused without moving the client or retiring the binding.
+    for (window, pane) in [("@0", "%3"), ("@1", "%99")] {
+        let refused = go(generation, "$0", window, Some(pane))
+            .await
+            .unwrap_err()
+            .into_inner()
+            .unwrap();
+        assert_eq!(refused.kind(), "tmux_pane_gone");
+        assert_eq!(shown(), "$0|@0|%1");
+    }
+    tmux(&["kill-pane", "-t", "%1"]);
+    let refused = go(generation, "$0", "@0", Some("%1"))
+        .await
+        .unwrap_err()
+        .into_inner()
+        .unwrap();
+    assert_eq!(refused.kind(), "tmux_pane_gone");
+    // A forged pane id never reaches tmux.
+    let forged = go(generation, "$0", "@0", Some("%0; kill-server"))
+        .await
+        .unwrap_err()
+        .into_inner()
+        .unwrap();
+    assert_eq!(forged.kind(), "tmux_stale");
+    let after = read().await;
+    assert_eq!(
+        after["current"],
+        json!({"sessionId": "$0", "windowId": "@0", "paneId": "%0"})
+    );
+    assert_eq!(
+        panes(&after["sessions"][0]["windows"][0]),
+        [("%0".into(), true)]
+    );
+    assert_eq!(shown(), "$0|@0|%0");
+    disconnect(app.state(), display).await.unwrap();
 }
 
 #[tokio::test]
@@ -1957,6 +2162,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         navigation["generation"].as_str().unwrap().into(),
         destination["id"].as_str().unwrap().into(),
         destination["windows"][0]["id"].as_str().unwrap().into(),
+        None,
     )
     .await
     .unwrap()
@@ -2924,6 +3130,45 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     );
 }
 
+fn snapshot_failure(error: GuardedError<SshError>) -> ! {
+    let category = match error.into_inner() {
+        Err(_) => "access_changed",
+        Ok(error) => match error.kind() {
+            "tmux_stale" => "tmux_stale",
+            "tmux_unavailable" => "tmux_unavailable",
+            "tmux_protocol" => "tmux_protocol",
+            "tmux_pane_gone" => "tmux_pane_gone",
+            _ => "other",
+        },
+    };
+    panic!("owned tmux snapshot failed: {category}");
+}
+
+#[test]
+fn snapshot_failure_reports_only_fixed_categories() {
+    let (access, lease) = unlocked_authority();
+    let diagnostic = |error| {
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| snapshot_failure(error)))
+                .expect_err("snapshot errors must fail the fixture");
+        panic.downcast_ref::<String>().unwrap().clone()
+    };
+    assert_eq!(
+        diagnostic(lease.error(SshError::new("tmux_stale", "private detail"))),
+        "owned tmux snapshot failed: tmux_stale"
+    );
+    assert_eq!(
+        diagnostic(lease.error(SshError::new("private kind", "private detail"))),
+        "owned tmux snapshot failed: other"
+    );
+    let revoked = lease.error(SshError::new("tmux_stale", "private detail"));
+    access.lock().unwrap();
+    assert_eq!(
+        diagnostic(revoked),
+        "owned tmux snapshot failed: access_changed"
+    );
+}
+
 /// `tmux_jump_snapshot` as the renderer calls it, serialized.
 async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
     app: &M,
@@ -2938,7 +3183,7 @@ async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
             id.to_owned(),
         )
         .await
-        .unwrap()
+        .unwrap_or_else(|error| snapshot_failure(error))
         .into_inner()
         .unwrap(),
     )
