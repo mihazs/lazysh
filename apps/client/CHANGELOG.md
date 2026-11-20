@@ -1,5 +1,35 @@
 # @lazysh/client
 
+## 1.89.0
+
+### Minor Changes
+
+- feat(zellij): open the Zellij pane that raised an agent notification ([#1872](https://github.com/mihazs/lazysh/pull/1872))
+
+  <details><summary>Details</summary>
+
+  Opening an inbox row, tapping a desktop notification or choosing **Open session** for an agent that ran in a Zellij pane now also focuses that pane, and the tab that holds it, in the Zellij session your terminal is attached to, so the Agent view follows that agent and not another one in the session (#1690, part of #1146). A pane of another Zellij session, or of another multiplexer, is left alone, and a pane that has gone still opens the session. No defaults change.
+
+  </details>
+- feat(tmux): list the panes of every tmux window in Jump To and move to the exact pane you choose. ([#1875](https://github.com/mihazs/lazysh/pull/1875))
+- feat(zellij): rename and close sessions and panes, and move pane dividers, from the Workspaces panel ([#1870](https://github.com/mihazs/lazysh/pull/1870))
+
+  <details><summary>Details</summary>
+
+  Rename and close Zellij sessions and panes, and move pane dividers, from the Workspaces panel on Zellij 0.45.1: **Control Zellij** lists the session's panes and gains Rename pane, four divider arrows and Close pane for each, and Rename Zellij session and Close Zellij session for the session. Closing asks first with a confirmation that names the pane or session and sends one exact action only when confirmed. No defaults change.
+
+  </details>
+
+### Patch Changes
+
+- test(multiplexers): verify that a copy in tmux, Zellij and Herdr reaches the device clipboard ([#1874](https://github.com/mihazs/lazysh/pull/1874))
+
+  <details><summary>Details</summary>
+
+  Verifies that text copied in tmux, Zellij and Herdr reaches the device clipboard through the OSC 52 consent prompt (#1699, part of #1147), and documents the option each multiplexer needs. No behavior or default change. `native-linux-runtimes` now drives real tmux, Zellij 0.45.1 and stock Herdr clients in the terminal pane, and Windows runs the unit tests of the client's OSC 52 handler.
+
+  </details>
+
 ## 1.88.0
 
 ### Minor Changes
