@@ -69,7 +69,7 @@ export class Ci {
       // bubblewrap (the owned-SSH fixtures) needs user namespaces, which an unprivileged container exec does not get.
       .withExec(["bun", "run", "test:ci"], { insecureRootCapabilities: true })
       .withEnvVariable("MOON_BASE", base)
-      .withExec(moon)
+      .withExec(moon, { insecureRootCapabilities: true }) // the mobile-e2e unit suite starts owned sshd fixtures under bubblewrap too
       .withWorkdir("/src/apps/client")
       .withExec(["bun", "x", "playwright", "install", "--with-deps", "chromium"])
       .withEnvVariable("LAZYSH_E2E_TERMINAL_BACKEND", "xterm")
