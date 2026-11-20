@@ -1,5 +1,38 @@
 # @lazysh/client
 
+## 1.90.0
+
+### Minor Changes
+
+- feat: Add the app's bridge to the host browser relay ([#1886](https://github.com/mihazs/lazysh/pull/1886))
+
+  <details><summary>Details</summary>
+
+  Add the app's bridge to the host browser relay: six Tauri commands (`host_browser_start`, `host_browser_next`, `host_browser_ack`, `host_browser_pause`, `host_browser_resume`, `host_browser_stop`) run `lazysh-agent host-browser serve` on one SSH exec channel and hand the viewer its frames as bytes, one pull at a time. A browser stops, and its channel closes, on stop, lock, a dropped connection and the end of the session; one runs per session and two per app. A companion without the relay, or with the host browser switch off, is named and never retried, and nothing about a page is written to a log or to storage. Nothing in the app calls the commands yet: the viewer ships in the next slice of the same feature.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): check the device's GPU before the native terminal engine is offered ([#2221](https://github.com/mihazs/lazysh/pull/2221))
+
+  <details><summary>Details</summary>
+
+  The app asks the renderer for a graphics adapter before a session may use the native
+  engine. A device with only a software rasterizer, with no adapter, or whose driver
+  takes longer than 2 seconds to answer keeps xterm.js, and the engine line says why.
+  No release build includes the native engine yet, so nothing changes for users.
+  Changed defaults: none.
+
+  </details>
+- fix(release): List changes from every package in the release notes, not only the client's ([#2232](https://github.com/mihazs/lazysh/pull/2232))
+
+  <details><summary>Details</summary>
+
+  The GitHub release notes and the release section of the root `CHANGELOG.md` were built from the client's changelog alone, so a change whose fragment named another package, such as the companion, was missing from them. They now take the version's entries from every `@lazysh/*` package changelog and list a change that names several packages once. Releases already published are not rewritten. No application behaviour and no defaults change.
+
+  </details>
+
 ## 1.89.1
 
 ### Patch Changes
