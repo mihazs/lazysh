@@ -56,7 +56,7 @@ a follow-up issue is linked. A quarantined test keeps its row with `quarantined`
 - A `fix(...)` pull request ticks one box of "Regression test" in the template: **Added** (`Test:` names it, and the pull
   request changes this file) or **Not applicable** (`Reason:` names the existing test that covers the bug, or why no layer can
   reproduce it). The `regression-test` check of the `conventional-commits` workflow runs `sh .githooks/regression-check pr`, so a fix without
-  either is not ready to merge (it becomes a required check when the maintainer adds it to the ruleset).
+  either is not ready to merge (it becomes a required check when the maintainer adds it to the [required list](../CONTRIBUTING.md#required-checks)).
 - Every Appium regression spec is named `<issue>-<behaviour>.e2e.ts` and its issue is linked from a row above.
   `sh .githooks/regression-check index` lists the specs by issue and fails on a spec without a row; the same check runs it.
 - The test fails on the parent commit. Put the failing output in the pull request, or the reason it cannot be shown.

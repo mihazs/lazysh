@@ -568,7 +568,7 @@ and the same-run stock Herdr with the real companion, and runs `bun run test:mob
 
 ### Promotion to a required check
 
-The job starts **report-only**: it is not in the ruleset, so a red run is visible but does not block a merge. It becomes required after
+The job starts **report-only**: it is not a [required check](../CONTRIBUTING.md#required-checks), so a red run is visible but does not block a merge. It becomes required after
 20 consecutive concluded runs on `main` are green. Cancelled runs (a busy trunk cancels pending ones) do not count, which is why the nightly exists.
 List the latest outcomes of the gating job:
 
@@ -577,8 +577,8 @@ gh run list --workflow checks.yml --branch main --limit 100 --json databaseId -q
   while read -r id; do gh run view "$id" --json jobs -q '.jobs[] | select(.name | startswith("native-android-appium (")) | .conclusion | select(. == "success" or . == "failure")'; done | head -20
 ```
 
-Twenty `success` lines promote it. Adding `native-android-appium (1/1)` to the ruleset and the PR driver's required list stays a maintainer
-action, as for every required check. A failure after promotion is fixed forward or the check is demoted in the same ruleset change; it is never
+Twenty `success` lines promote it. Adding `native-android-appium (1/1)` to the PR driver's required list ([Required checks](../CONTRIBUTING.md#required-checks)) stays a maintainer
+action, as for every required check. A failure after promotion is fixed forward or the check is demoted in the same change; it is never
 made green by retrying an assertion.
 
 ### Run the same thing locally
