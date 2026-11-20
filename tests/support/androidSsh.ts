@@ -703,6 +703,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       await tmux.verifySplitAndZoom();
       await tmux.verifyDetachedAndReattached();
       console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, split, zoom, detach and reattach verified against the original server and pane processes');
+      if(tmux.metadata().chat) {
+        await tmux.verifyChatInput();
+        console.log('Owned packaged tmux Chat: the confirmed draft reached the original pane once, with no extra display client');
+      }
     }
     if(zellij) {
       await zellij.verifyDetachedAndReattached();

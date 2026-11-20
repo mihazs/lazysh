@@ -1292,6 +1292,12 @@ jobs:
           cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'ssh-parity'
+      # The tmux owner needs only the companion binary: it reads the synthetic transcript the Chat case opens.
+      - name: Build the real companion for the owned tmux Chat case
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
+        run: |
+          cargo build --locked -p lazysh-agent --bin lazysh-agent
+          printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" >> "$GITHUB_ENV"
       - &android-owned-kvm
         name: Grant this runner access to KVM
         run: |

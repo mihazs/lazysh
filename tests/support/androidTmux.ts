@@ -1,9 +1,10 @@
-import {join} from 'node:path';
-import {lstat,readdir,readlink,realpath} from 'node:fs/promises';
+import {isAbsolute,join} from 'node:path';
+import {lstat,readdir,readlink,realpath,writeFile} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,descendants,identity,type OwnedPid} from './ownedProcess';
 import {SshFixture,stopOwnedTree} from './sshFixture';
 
+type OwnedChat={transcript:string;record:string;draft:string;window:'alpha'};
 type OwnedWindow={windowId:string;index:number;name:'alpha'|'beta';marker:string;paneId:string;pane:OwnedPid};
 const paneRow=/^(@[0-9]{1,9})\|([0-9]{1,3})\|(alpha|beta)\|([01])\|(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])$/;
 
@@ -72,6 +73,16 @@ export function tmuxPassthroughSupported(version:string) {
   return !!parts && (Number(parts[1])>3 || (Number(parts[1])===3 && Number(parts[2])>=3));
 }
 
+/**
+ * The Chat draft must sit in exactly one pane, once, and that pane is the one the attached client displayed.
+ * Captures are `capture-pane -p -J` texts keyed by pane id; anything else is a different delivery.
+ */
+export function tmuxChatDeliveredOnce(captures:readonly {paneId:string;text:string}[],draft:string,expected:string) {
+  if(!draft || !captures.some(item=>item.paneId===expected) || new Set(captures.map(item=>item.paneId)).size!==captures.length)throw new Error('Owned tmux Chat readback invalid');
+  const holders=captures.filter(item=>item.text.includes(draft));
+  if(holders.length!==1 || holders[0].paneId!==expected || holders[0].text.split(draft).length!==2)throw new Error('Owned tmux Chat input did not reach exactly the original pane once');
+}
+
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
   'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown','Owned tmux server exited uncleanly',
   'Owned SSH root identity unavailable','Owned SSH root identity lost','Owned SSH listener survived teardown'];
@@ -118,10 +129,13 @@ export class TmuxFixture {
   private history:number[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
   private extraPanes=0;
+  private chat:OwnedChat|undefined;
   private constructor(readonly ssh:SshFixture) {}
-  static async start(binary=process.env.LAZYSH_TEST_TMUX) {
+  /** With an `agent` companion the fixture also owns a synthetic Claude transcript, so the app can open it and send Chat input. */
+  static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
-    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary});
+    if(agent!==undefined && !isAbsolute(agent))throw new Error('Explicit current-source companion required');
+    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary,agentBinary:agent});
     const owned=new TmuxFixture(ssh);
     try {
       const version=(await owned.run(['-V'],false)).trim();
@@ -162,6 +176,7 @@ export class TmuxFixture {
           await delay(10);
         }
       }
+      if(agent)await owned.prepareChat();
       await owned.observe();
       return owned;
     } catch(error) {
@@ -249,9 +264,28 @@ export class TmuxFixture {
     if(await realpath(added.path)!==await realpath(this.ssh.directory))throw new Error('Owned tmux split directory differs');
     this.extraPanes=1;
   }
+  /** One synthetic Claude record the companion reads, and a draft that is distinct per run and echoed by the pane's tty. */
+  private async prepareChat() {
+    const nonce=this.ssh.nonce,transcript=join(this.ssh.directory,'owned-transcript.jsonl'),record=`OWNED_TMUX_RECORD_${nonce}`;
+    await writeFile(transcript,JSON.stringify({type:'user',uuid:`owned-${nonce}`,message:{role:'user',content:record}})+'\n',{mode:0o600});
+    // The companion the app will run over SSH must read this record through the same private environment.
+    const read=await this.ssh.client(true,`lazysh-agent transcript --agent claude --path '${transcript}' --offset 0 --limit 50`);
+    const page=JSON.parse(await read.finish('owned tmux companion transcript preflight',5000));
+    if(page.schemaVersion!==1 || !JSON.stringify(page.messages).includes(record))throw new Error('Owned tmux companion did not read the synthetic transcript');
+    this.chat={transcript,record,draft:`tmux chat ${nonce}: it's "quoted" $HOME #{pane_id} a;b`,window:'alpha'};
+  }
+  /** After the run: the confirmed draft is in the original pane only (by pane id), once, and that pane is the same process. */
+  async verifyChatInput() {
+    const chat=this.chat,alpha=this.windows.find(window=>window.name===chat?.window);
+    if(!chat || !alpha)throw new Error('Owned tmux Chat fixture required');
+    await this.observe();
+    const captures=[];
+    for(const window of this.windows)captures.push({paneId:window.paneId,text:await this.run(['capture-pane','-p','-J','-t',window.paneId])});
+    tmuxChatDeliveredOnce(captures,chat.draft,alpha.paneId);
+  }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames]};
+    return {name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames],...(this.chat?{chat:this.chat}:{})};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */
