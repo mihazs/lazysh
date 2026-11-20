@@ -34,6 +34,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Configure terminal appearance and imports | [Themes](themes.md) · [Theme QR](theme-qr.md) · [Fonts](font-downloads.md) |
 | Use terminal shortcuts and chords | [Shortcuts](shortcuts.md) |
 | Open a host sign-in page on your phone or desktop (device side, not wired to the app yet) | [Open a sign-in page on your device](guest-browser.md) |
+| Use the phone edge swipes and replay the gesture tour | [Session gestures](how-to/use-session-gestures.md) |
 | Dictate editable text or import a local speech model | [Voice](voice.md) · [Parakeet](voice-parakeet.md) |
 | Configure an optional cloud transcription service | [Cloud transcription](cloud-transcription.md) |
 | Keep a supported active mobile screen awake | [Keep awake](keep-awake.md) |

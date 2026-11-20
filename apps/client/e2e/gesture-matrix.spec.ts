@@ -37,6 +37,8 @@ const swipeFrom=(edge:'left'|'right'|'bottom',distance:number)=>edge==='left'?{f
 
 async function openWorkspace(page:Page,overlay:Overlay,zoneWidth:number) {
   await page.addInitScript(([key,value])=>localStorage.setItem(key as string,JSON.stringify({version:1,...value as object})),[zoneKey,{edgeGestures:{zoneWidth}}]);
+  // The first-run gesture tour would open over the session and make the page behind it inert (gesture-tour.spec.ts covers the tour).
+  await page.addInitScript(()=>localStorage.setItem('lazysh.gestureTour.v1','999'));
   await openSwipeWorkspace(page);
   const touch=await touchscreen(page,false);
   await reportGestureInsets(page,overlay.insets);
