@@ -26,6 +26,11 @@ Glyphs are still the reference renderer's dot patterns; fonts are #1325.
 
 ## Build and test
 
+The app depends on this crate by path behind its optional `native-terminal` feature
+([#2201](https://github.com/mihazs/lazysh/issues/2201)), so the root `Cargo.lock` pins wgpu as well as this crate's
+own lock file, which only the tests below use: bump wgpu in both. The `native-terminal-bridge` CI job compiles the
+app with it and fails if a build without the feature would compile wgpu. Nothing in the app calls the crate yet.
+
 The crate depends on `../terminal-runtime`, which builds libghostty-vt with Zig, so build from a copy outside the
 checkout with `herdr-upstream`, `terminal-runtime` and this crate as siblings, as the `herdr-native` CI job does
 (see the runtime README). The tests need a GPU adapter and **fail without one** instead of skipping, because a

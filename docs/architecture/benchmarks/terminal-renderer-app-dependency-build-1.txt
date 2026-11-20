@@ -1,0 +1,39 @@
+# Build cost of the wgpu renderer as an app dependency (#2201). Host: AMD Ryzen 9 5900X, Linux 7.3.4-1-cachyos, CARGO_BUILD_JOBS=4, one run each.
+# Linux x86_64: cargo build --release --locked --features native-terminal --timings in apps/client/src-tauri (rustc 1.99.0 (b940084d7 2026-09-28)),
+# root release profile (lto, codegen-units=1, strip, panic=abort). before = the feature without the renderer dependency, after = with it.
+# before1 is a clean build; after, before2 and after2 are incremental in the same target directory.
+before1 rc=0 wall=526s load=1.81 4.40 5.05
+before1 lazysh 57207792
+before1 liblazysh_lib.so 3951496
+before1 liblazysh_lib.a 404486146
+before1 159fa09bb277dcb7b553c73d4e11650b11047b36d0fbea188c0922d35d9bad7e  lazysh
+before1 591ea01109f495494344f9e3d2aa870ee09d0f087afacec9a2b44bc5b0b34a8d  liblazysh_lib.so
+after rc=0 wall=352s load=3.13 3.90 4.63
+after lazysh 57205872
+after liblazysh_lib.so 3951496
+after liblazysh_lib.a 404544512
+after 84cd4976b5246f5974d91d108d22faae6b7e983e0654521da70cf7852479d443  lazysh
+after 1ba2ba5faf825b2250a835f77c787f05ad61cbe3985a12eaa68abba2c3b2e560  liblazysh_lib.so
+before2 rc=0 wall=256s load=1.21 2.33 3.79
+before2 lazysh 57207792
+before2 liblazysh_lib.so 3951496
+before2 liblazysh_lib.a 404486146
+before2 159fa09bb277dcb7b553c73d4e11650b11047b36d0fbea188c0922d35d9bad7e  lazysh
+before2 591ea01109f495494344f9e3d2aa870ee09d0f087afacec9a2b44bc5b0b34a8d  liblazysh_lib.so
+after2 rc=0 wall=252s load=1.01 1.58 3.13
+after2 lazysh 57205872
+after2 liblazysh_lib.so 3951496
+after2 liblazysh_lib.a 404544512
+after2 84cd4976b5246f5974d91d108d22faae6b7e983e0654521da70cf7852479d443  lazysh
+after2 1ba2ba5faf825b2250a835f77c787f05ad61cbe3985a12eaa68abba2c3b2e560  liblazysh_lib.so
+
+# Android: cargo +1.96.1 build --release --locked --lib --target <triple> in packages/terminal-renderer-wgpu (its nested workspace and lock,
+# NDK r29.0.14206865, API 24 linker, Zig 0.16.0): first -p lazysh-terminal-runtime, then the rest, which is the renderer and the crates it adds.
+aarch64-linux-android [-p lazysh-terminal-runtime] rc=0 wall=69s compiled=27 load=2.89 2.12 3.18
+aarch64-linux-android [renderer] rc=0 wall=26s compiled=63 load=2.98 2.20 3.18
+451308 aarch64-linux-android/release/liblazysh_terminal_renderer_wgpu.rlib
+1765350 aarch64-linux-android/release/liblazysh_terminal_runtime.rlib
+x86_64-linux-android [-p lazysh-terminal-runtime] rc=0 wall=57s compiled=20 load=2.38 2.18 3.11
+x86_64-linux-android [renderer] rc=0 wall=24s compiled=54 load=2.78 2.28 3.13
+450312 x86_64-linux-android/release/liblazysh_terminal_renderer_wgpu.rlib
+1752822 x86_64-linux-android/release/liblazysh_terminal_runtime.rlib

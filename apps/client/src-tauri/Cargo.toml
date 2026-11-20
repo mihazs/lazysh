@@ -16,8 +16,9 @@ parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 # Android's Google build links the pinned prebuilt ONNX Runtime for local Parakeet. It is opt-in so the F-Droid recipe,
 # which must compile every native library from source, keeps its Whisper-only graph.
 parakeet-android = ["dep:lazysh-parakeet-runtime"]
-# The native terminal core (libghostty-vt, built with Zig 0.16.0): off by default so no build needs Zig.
-native-terminal = ["dep:lazysh-terminal-runtime"]
+# The native terminal core (libghostty-vt, built with Zig 0.16.0) and its wgpu renderer: off by default so no
+# build needs Zig or compiles wgpu.
+native-terminal = ["dep:lazysh-terminal-runtime", "dep:lazysh-terminal-renderer-wgpu"]
 # Owned emulator builds only: trusts one extra root for the loopback WebDAV fixture (see `sync.rs`). Never a product feature.
 sync-tls-acceptance = []
 
@@ -36,6 +37,7 @@ lazysh-companion-release = { path = "../../../packages/companion-release" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
 lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }
+lazysh-terminal-renderer-wgpu = { path = "../../../packages/terminal-renderer-wgpu", optional = true }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
