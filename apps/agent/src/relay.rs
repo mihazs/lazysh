@@ -104,6 +104,9 @@ impl Store {
     pub fn relay_status(&self) -> Result<RelayStatus> {
         store::status(&self.connection)
     }
+    pub fn relay_enabled(&self) -> Result<bool> {
+        Ok(store::policy(&self.connection)?.enabled)
+    }
     pub fn relay_disable(&mut self, expected_revision: u64) -> Result<RelayStatus> {
         store::change(&mut self.connection, expected_revision, None, false)
     }

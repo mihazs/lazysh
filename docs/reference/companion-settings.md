@@ -17,7 +17,7 @@ Every successful update increments the revision exactly once. Native SSH APIs fo
 
 The host browser switch has its own native commands, `get_host_browser_settings` and `update_host_browser_settings`, which run `lazysh-agent settings host-browser show` and `update --expected-revision R --host-browser-enabled true|false` on the same verified session with the same limits (4 KiB, schema version 1, revision below 2^53, unknown fields refused). They never carry the three switches above, and `get_companion_settings` and `update_companion_settings` never carry the host browser switch. A companion that predates the subcommand answers with clap's `error: unrecognized subcommand` usage error; that one error becomes the fixed kind `host_browser_companion_required`, which the app shows as an update message while it writes nothing. Every other failure, such as `SettingsConflict`, keeps its own text. The per-host confirmation is app-side only: one device-local list of host ids under `lazysh.hostBrowserConfirmed.v1`, outside the preferences that encrypted sync uploads.
 
-Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. Port discovery and HTTP probing currently run through a separate native SSH implementation, so these switches do not affect them. There is no port-scan or nested-agent switch that lacks an enforcing implementation.
+Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. Port discovery and HTTP probing currently run through a separate native SSH implementation, so these switches do not affect them. There is no port-scan switch that lacks an enforcing implementation, and the nested-agent and unlocked-desktop switches are [separate](#notification-policy-nested-agents-and-an-unlocked-desktop).
 
 The response and persisted `settings.json` use this strict schema:
 
@@ -53,5 +53,47 @@ The browser's profile lives under `host-browser/` in the state directory (mode 0
 ## Companion updates in the app
 
 `get_companion_settings` adds `autoUpdate: {revision, policy}` to the response when `lazysh-agent auto-update status` answers (`policy` is `off`, `notify` or `install`; a companion without the command has no `autoUpdate`, and a failed status read is that, not an error). `update_companion_settings` takes an optional `autoUpdate: {expectedRevision, policy}`, which the app only sends when the policy changed; the host's reply to `lazysh-agent auto-update set --expected-revision R --policy P` replaces the value shown, and a `SettingsConflict` is reported like the other settings. Every command the app runs on a Linux or macOS host sets `LAZYSH_APP_VERSION`; a `snapshot` reply's `update` field becomes the one-line row of the Agents panel (`started` and `running` show progress, `done` the new version, `failed` says the companion stays on its version, and `skipped` is shown only for `policyOff`, `policyNotify` and `activeTurn`). See [Companion update](companion-update.md#started-by-a-newer-app).
+
+## Notification policy: nested agents and an unlocked desktop
+
+Two opt-in switches decide whether a lifecycle event may queue a [relay notification](../notification-relay.md#opt-in-the-host-companion) on this host. Both default to **off**, which is the behavior before they existed, so no default changes. They live in their own `notification-policy.json` with its own revision, `notification-policy.lock` and 4 KiB limit, for the same reason as the update policy: `settings.json` and `settings update` stay exactly as they are, and an older companion sharing the state directory keeps reading `settings.json` and ignores the new file.
+
+| CLI operation | Contract |
+| --- | --- |
+| `settings notifications show` | Reads the policy and revision; an absent file reports both switches off and creates nothing. |
+| `settings notifications update` | Requires `--expected-revision` and both `--nested-agent-suppression-enabled` and `--suppress-while-desktop-unlocked`. A stale revision is `NotificationPolicyConflict`, a busy lock `NotificationPolicyBusy`. |
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "nestedAgentSuppressionEnabled": true,
+  "suppressWhileDesktopUnlocked": false
+}
+```
+
+**What a switch changes.** Only whether a state change is added to the relay outbox. The event is always recorded locally, so `snapshot`, the Agent view and the board show it exactly as before, and an event already queued stays queued. A change applies to the next hook run: every hook is its own process, so nothing needs a restart. An unreadable or invalid policy file counts as no policy, so a hook is never refused over a preference; `settings notifications show` is where the file is reported as invalid.
+
+**Nested agents.** With `nestedAgentSuppressionEnabled`, an `ingest` or `approval-request` from an agent that another supported agent started stores the event and queues no relay event. For `approval-request` (Claude Code and Codex), no approval is taken either: nothing is listed for the phone, the hook prints nothing, and the agent decides as it would without the hook (Codex then shows its own terminal prompt). A nesting is claimed only when it is seen, in one of two ways:
+
+- **A declared parent session**, on every platform. A launcher that starts an agent on purpose sets `LAZYSH_PARENT_SESSION_ID` (1 to 256 printable characters) in that agent's environment, for example `LAZYSH_PARENT_SESSION_ID="$session_id" codex exec ...` in a hook of the outer agent. The value is only checked for shape, never stored or sent.
+- **Process ancestry**, on Linux and macOS (and other Unix hosts). The companion walks up to 64 parent processes (`/proc` where the host has it, otherwise `ps`) and recognizes an agent by its command name or by the script an interpreter runs: `claude`, `codex`, `opencode`, `gemini`, `droid`, `kimi`, `copilot`, `cursor-agent`, `amp` and `cline`. The reporting agent's own process is not a nesting; any other agent above it is. Processes of one agent that follow each other directly count once, because that is a launcher script and the program it starts.
+
+What it does not detect, which therefore notifies as before:
+
+- Windows: no process ancestry; only the declared parent session works.
+- An agent running under a name that is not listed (a renamed or wrapped binary shown as `node` with no script name), and agents that do not call the companion, such as Aider.
+- The same agent started by itself with no other process between them, which looks like a launcher and its program.
+- A hook that detaches from its parent (a double fork or `setsid` daemon): its ancestry ends at the init process.
+- A hook-less nesting where the inner agent never calls `lazysh-agent`: nothing is reported, so there is nothing to suppress.
+
+**Unlocked desktop.** With `suppressWhileDesktopUnlocked`, a state change queues no relay event while the host's own desktop is known to be unlocked. It is evaluated on the host that runs the companion and fails open: **only a known unlocked desktop suppresses; a locked, unknown or unreadable state notifies.**
+
+- Linux (systemd-logind): `loginctl show-user UID -p Display` names the user's display session, then `loginctl show-session ID -p Type -p Remote -p Active -p LockedHint`, each bounded at 2 seconds. The desktop is unlocked only for a local (`Remote=no`), active (`Active=yes`) `x11`, `wayland` or `mir` session with `LockedHint=no`. A session over SSH, on a text console, in the background, or a host without `loginctl` reads as unknown.
+- macOS and Windows: not implemented. The state is always unknown, so the switch never suppresses there.
+- `LockedHint` is only as accurate as the screen locker. One that never sets it leaves the hint at `no`, which this reads as unlocked, and notifications are then suppressed while the screen is locked. Lock the screen and read `loginctl show-session "$(loginctl show-user "$UID" -p Display --value)" -p LockedHint` before relying on the switch.
+- It detects a lock, not presence: an unlocked desktop that nobody sits at still suppresses.
+
+**Verification and limits.** Rust fixtures cover the defaults, the revision protocol, the `settings.json` compatibility, the rule table for both switches against injected process trees and session states, the `loginctl` argument and output handling against a controlled `loginctl`, and the `lazysh-agent` binary end to end (the relay policy row is written into the state database, because a live relay needs a server): a declared parent session and a real process chain of scripts named `claude` and `codex` are stored without a relay event while the switch is on and queue one while it is off, an unlocked, locked and absent `loginctl` give suppress, notify and notify, and a nested permission request takes no approval. On one Linux desktop (CachyOS, systemd-logind, Wayland) the real provider reported the locked session as `Locked`, matching `loginctl`, and a hook run by a script named `claude` inside a real Claude Code session was detected as nested, while the same script detached from every agent was not. **Not run:** macOS and Windows hardware (so the `ps` reader was exercised only through Linux's `ps`, not BSD's), any lock or unlock transition on a real desktop, other screen lockers and desktop environments, and the real `codex exec`, OpenCode, Gemini or other agent started by a real outer agent. The app has no control for these switches yet ([#1817](https://github.com/mihazs/lazysh/issues/1817)); change them with the commands above. macOS and Windows lock state and Windows process ancestry are tracked in [#1818](https://github.com/mihazs/lazysh/issues/1818).
 
 Related: [change host settings](../companion-settings.md) · [companion event storage](companion-events.md) · [documentation](../README.md).
