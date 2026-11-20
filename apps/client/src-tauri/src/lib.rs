@@ -139,6 +139,8 @@ pub fn run() {
             use tauri::Manager;
             #[cfg(target_os = "linux")]
             build_unspawned_windows(app)?;
+            #[cfg(feature = "sync-tls-acceptance")]
+            sync::install_acceptance_root(app)?;
             let mut state = ssh::AppState::new(app.path().app_config_dir()?)?;
             state.background = app
                 .state::<session_background::Controller>()

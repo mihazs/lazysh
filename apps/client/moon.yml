@@ -88,9 +88,10 @@ tasks:
     command: tauri android build --target aarch64 --debug --apk --ci
     env: &androidBuildEnv {WHISPER_DONT_GENERATE_BINDINGS: '1', CMAKE_ANDROID_NDK: '${NDK_HOME}'}
     options: &envLocal {cache: false, envOverride: true}
+  # Owned emulator and Waydroid builds also carry the sync-tls-acceptance trust hook (sync.rs); no published artifact is built here.
   build-android-emulator:
     type: build
-    command: tauri android build --target x86_64 --debug --apk --ci
+    command: tauri android build --target x86_64 --debug --apk --ci --features sync-tls-acceptance
     env: *androidBuildEnv
     options: *envLocal
   build-android-fdroid:

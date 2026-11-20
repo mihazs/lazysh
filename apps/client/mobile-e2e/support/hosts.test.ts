@@ -60,6 +60,16 @@ test('teardown removes the forwards first, stops the last fixture first, keeps g
   expect(await exists(hosts.directory)).toBe(false);
 });
 
+test('lost emulator ownership stops local fixtures without changing device forwards', async () => {
+  const events: string[] = [];
+  const hosts = await startHosts({adb: adbFor(SERIAL, fake.binary), kinds: ['ssh'], fixtures: {ssh: async () => stub(4251, events, 'ssh')}});
+  const calls = (await fake.read()).calls;
+  await hosts.stop({removeForwards: false});
+  expect((await fake.read()).calls).toEqual(calls);
+  expect(events).toEqual(['ssh:stop reverses=1']);
+  expect(await exists(hosts.directory)).toBe(false);
+});
+
 test('a fixture that fails to start leaves nothing behind', async () => {
   const events: string[] = [];
   const before = await readFile(fake.directory + '/device.json', 'utf8');
