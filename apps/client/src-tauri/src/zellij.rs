@@ -23,6 +23,25 @@ pub enum ZellijAction {
         id: u32,
         name: String,
     },
+    /// By the terminal pane's number from `list-panes` (`--pane-id terminal_N`), never the focused pane: a pane that went since the list was read is refused by Zellij.
+    ClosePane {
+        target: u32,
+    },
+    RenamePane {
+        target: u32,
+        name: String,
+    },
+    /// Moves the pane's divider toward `direction`. A Zellij resize has no cell count (it is a fixed step), so `amount` repeats the step.
+    ResizePane {
+        target: u32,
+        direction: ResizeDirection,
+        amount: u32,
+    },
+    RenameSession {
+        name: String,
+    },
+    /// Ends the whole session and forgets it: every pane and program in it stops.
+    CloseSession,
     NextTab,
     PreviousTab,
     NextPane,
@@ -33,9 +52,21 @@ pub enum ZellijAction {
     },
     ZoomPane,
 }
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+const MAX_RESIZE_STEPS: u32 = 50;
 fn text(value: &str, max: usize) -> Result<String> {
     crate::multiplexer::validate_text(value, max, "Invalid Zellij name or path")?;
     Ok(value.to_owned())
+}
+fn pane_id(target: u32) -> String {
+    format!("terminal_{target}")
 }
 /// `zellij --session=<name> action <args>` as argv; names and paths stay single words.
 fn session_command(session: &str, args: Vec<String>) -> Result<Cmd> {
@@ -74,6 +105,56 @@ fn command(session: &str, action: &ZellijAction) -> Result<Cmd> {
             "--".into(),
             text(name, 200)?,
         ],
+        ZellijAction::ClosePane { target } => {
+            vec!["close-pane".into(), "--pane-id".into(), pane_id(*target)]
+        }
+        ZellijAction::RenamePane { target, name } => vec![
+            "rename-pane".into(),
+            "--pane-id".into(),
+            pane_id(*target),
+            "--".into(),
+            text(name, 200)?,
+        ],
+        ZellijAction::RenameSession { name } => {
+            vec!["rename-session".into(), "--".into(), text(name, 200)?]
+        }
+        ZellijAction::ResizePane {
+            target,
+            direction,
+            amount,
+        } => {
+            if !(1..=MAX_RESIZE_STEPS).contains(amount) {
+                return Err(SshError::new("invalid_target", "Resize by 1 to 50 steps"));
+            }
+            vec![
+                "resize".into(),
+                "increase".into(),
+                match direction {
+                    ResizeDirection::Left => "left",
+                    ResizeDirection::Right => "right",
+                    ResizeDirection::Up => "up",
+                    ResizeDirection::Down => "down",
+                }
+                .into(),
+                "--pane-id".into(),
+                pane_id(*target),
+            ]
+        }
+        // Not an `action`. `kill-session` alone leaves a session older than the serialization interval listed as EXITED, so it
+        // would come back in the session list and `attach` would resurrect it; `delete-session --force` kills a running
+        // session and removes that record. `--` keeps a name that starts with a dash a name.
+        ZellijAction::CloseSession => {
+            return Ok(Cmd::new(
+                &[],
+                &[
+                    "zellij",
+                    "delete-session",
+                    "--force",
+                    "--",
+                    &text(session, 200)?,
+                ],
+            ))
+        }
         ZellijAction::NextTab => vec!["go-to-next-tab".into()],
         ZellijAction::PreviousTab => vec!["go-to-previous-tab".into()],
         ZellijAction::NextPane => vec!["focus-next-pane".into()],
@@ -132,6 +213,75 @@ fn parse_tabs(output: &str) -> Result<Vec<ZellijTab>> {
         })
         .collect()
 }
+/// One terminal pane as `zellij action list-panes --json --all` reports it. `id` is the number `--pane-id terminal_N` takes; plugin panes (the bars) have a separate numbering and are not listed.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct ZellijPane {
+    id: u32,
+    title: String,
+    command: String,
+    tab: String,
+    focused: bool,
+    columns: u32,
+    rows: u32,
+}
+const MAX_PANES: usize = 5000;
+fn panes_command(session: &str) -> Result<Cmd> {
+    session_command(
+        session,
+        vec!["list-panes".into(), "--json".into(), "--all".into()],
+    )
+}
+fn parse_panes(output: &str) -> Result<Vec<ZellijPane>> {
+    let invalid = || SshError::new("zellij_protocol", "Zellij returned an unreadable pane list");
+    let rows: Vec<serde_json::Value> = serde_json::from_str(output).map_err(|_| invalid())?;
+    if rows.len() > MAX_PANES {
+        return Err(invalid());
+    }
+    // Titles, commands and tab names are host-controlled text shown in the panel: drop control characters and bound them.
+    let bounded = |value: &serde_json::Value| -> Option<String> {
+        Some(
+            value
+                .as_str()?
+                .chars()
+                .filter(|character| !character.is_control())
+                .take(200)
+                .collect(),
+        )
+    };
+    let number = |value: &serde_json::Value| value.as_u64().and_then(|n| u32::try_from(n).ok());
+    let mut panes = Vec::new();
+    for row in &rows {
+        if row["is_plugin"].as_bool().ok_or_else(invalid)? || row["is_suppressed"] == true {
+            continue;
+        }
+        panes.push(ZellijPane {
+            id: number(&row["id"]).ok_or_else(invalid)?,
+            title: bounded(&row["title"]).ok_or_else(invalid)?,
+            command: bounded(&row["pane_command"]).unwrap_or_default(),
+            tab: bounded(&row["tab_name"]).unwrap_or_default(),
+            focused: row["is_focused"].as_bool().ok_or_else(invalid)?,
+            columns: number(&row["pane_columns"]).ok_or_else(invalid)?,
+            rows: number(&row["pane_rows"]).ok_or_else(invalid)?,
+        });
+    }
+    Ok(panes)
+}
+#[tauri::command]
+pub async fn zellij_panes(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    session_id: String,
+    name: String,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<Vec<ZellijPane>> {
+    access
+        .run(async {
+            let command = panes_command(&name)?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            parse_panes(&host.run(&access, &command).await?)
+        })
+        .await
+}
 #[tauri::command]
 pub async fn zellij_tabs(
     state: State<'_, AppState>,
@@ -160,10 +310,15 @@ pub async fn zellij_action(
     access
         .run(async {
             let command = command(&name, &action);
-            Host::resolve(&state, &local, &session_id, &access)
-                .await?
-                .run(&access, &command?)
-                .await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let command = command?;
+            // A Zellij resize has no cell count (it is one fixed step), so `amount` runs the step that many times.
+            for _ in 0..match &action {
+                ZellijAction::ResizePane { amount, .. } => *amount,
+                _ => 1,
+            } {
+                host.run(&access, &command).await?;
+            }
             Ok(())
         })
         .await
@@ -216,6 +371,185 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<ZellijAction>(bad).is_err(), "{bad}");
         }
+    }
+    #[test]
+    fn closes_renames_and_resizes_one_named_pane_with_literal_text() {
+        let hostile = "a'$(touch nope);x";
+        let quoted = "'a'\\''$(touch nope);x'";
+        let session = "'--session=a'\\''$(touch nope);x'";
+        let command = |action| command(hostile, &action).unwrap().render();
+        assert_eq!(
+            command(ZellijAction::ClosePane { target: 12 }),
+            format!("zellij {session} action close-pane --pane-id terminal_12")
+        );
+        assert_eq!(
+            command(ZellijAction::RenamePane {
+                target: 3,
+                name: "-x';$(touch nope)".into()
+            }),
+            format!("zellij {session} action rename-pane --pane-id terminal_3 -- '-x'\\'';$(touch nope)'")
+        );
+        assert_eq!(
+            command(ZellijAction::RenameSession {
+                name: "-new';$(touch nope)".into()
+            }),
+            format!("zellij {session} action rename-session -- '-new'\\'';$(touch nope)'")
+        );
+        assert_eq!(
+            command(ZellijAction::CloseSession),
+            format!("zellij delete-session --force -- {quoted}")
+        );
+        // A Zellij resize has no cell count: one command is one step, and `zellij_action` runs it `amount` times.
+        let step = |direction: &str| {
+            format!("zellij {session} action resize increase {direction} --pane-id terminal_4")
+        };
+        for (direction, word) in [
+            (ResizeDirection::Left, "left"),
+            (ResizeDirection::Right, "right"),
+            (ResizeDirection::Up, "up"),
+            (ResizeDirection::Down, "down"),
+        ] {
+            assert_eq!(
+                command(ZellijAction::ResizePane {
+                    target: 4,
+                    direction,
+                    amount: 1
+                }),
+                step(word)
+            );
+        }
+        assert_eq!(
+            command(ZellijAction::ResizePane {
+                target: 4,
+                direction: ResizeDirection::Right,
+                amount: 3
+            }),
+            step("right")
+        );
+        for amount in [0, MAX_RESIZE_STEPS + 1] {
+            assert!(
+                super::command(
+                    "work",
+                    &ZellijAction::ResizePane {
+                        target: 4,
+                        direction: ResizeDirection::Up,
+                        amount
+                    }
+                )
+                .is_err(),
+                "{amount}"
+            );
+        }
+        for action in [
+            ZellijAction::RenamePane {
+                target: 1,
+                name: "".into(),
+            },
+            ZellijAction::RenamePane {
+                target: 1,
+                name: "a\nb".into(),
+            },
+            ZellijAction::RenameSession { name: "".into() },
+            ZellijAction::RenameSession {
+                name: "a\nb".into(),
+            },
+        ] {
+            assert!(super::command("work", &action).is_err(), "{action:?}");
+        }
+        assert!(super::command("a\nb", &ZellijAction::CloseSession).is_err());
+        // The bridge takes only an unsigned pane number, the four directions and no extra fields.
+        for ok in [
+            r#"{"type":"closePane","target":1}"#,
+            r#"{"type":"renamePane","target":1,"name":"x"}"#,
+            r#"{"type":"resizePane","target":1,"direction":"left","amount":2}"#,
+            r#"{"type":"renameSession","name":"x"}"#,
+            r#"{"type":"closeSession"}"#,
+        ] {
+            assert!(serde_json::from_str::<ZellijAction>(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            r#"{"type":"closePane","target":-1}"#,
+            r#"{"type":"closePane","target":"terminal_1;id"}"#,
+            r#"{"type":"closePane"}"#,
+            r#"{"type":"closePane","target":1,"force":true}"#,
+            r#"{"type":"resizePane","target":1,"direction":"sideways","amount":2}"#,
+            r#"{"type":"resizePane","target":1,"direction":"left","amount":-1}"#,
+        ] {
+            assert!(serde_json::from_str::<ZellijAction>(bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn lists_terminal_panes_from_the_json_the_cli_prints_and_refuses_anything_else() {
+        let panes = parse_panes(
+            r#"[
+            {"id":2,"is_plugin":true,"is_suppressed":false,"title":"tab-bar","is_focused":false,"pane_columns":50,"pane_rows":1},
+            {"id":0,"is_plugin":false,"is_suppressed":false,"title":"build\u001b[31m","pane_command":"/bin/sh -c make","tab_name":"Tab #1","is_focused":true,"pane_columns":25,"pane_rows":48},
+            {"id":1,"is_plugin":false,"title":"Pane #2","is_focused":false,"pane_columns":25,"pane_rows":48},
+            {"id":4,"is_plugin":false,"is_suppressed":true,"title":"hidden","is_focused":false,"pane_columns":1,"pane_rows":1}
+        ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            panes,
+            vec![
+                ZellijPane {
+                    id: 0,
+                    title: "build[31m".into(),
+                    command: "/bin/sh -c make".into(),
+                    tab: "Tab #1".into(),
+                    focused: true,
+                    columns: 25,
+                    rows: 48
+                },
+                // A Zellij that reports no command or tab for a pane still lists it.
+                ZellijPane {
+                    id: 1,
+                    title: "Pane #2".into(),
+                    command: String::new(),
+                    tab: String::new(),
+                    focused: false,
+                    columns: 25,
+                    rows: 48
+                },
+            ]
+        );
+        assert_eq!(
+            parse_panes(&format!(
+                r#"[{{"id":0,"is_plugin":false,"title":"{}","is_focused":true,"pane_columns":1,"pane_rows":1}}]"#,
+                "n".repeat(300)
+            ))
+            .unwrap()[0]
+                .title
+                .len(),
+            200
+        );
+        for bad in [
+            "",
+            "{}",
+            "[1]",
+            r#"[{"id":-1,"is_plugin":false,"title":"a","is_focused":true,"pane_columns":1,"pane_rows":1}]"#,
+            r#"[{"id":0,"title":"a","is_focused":true,"pane_columns":1,"pane_rows":1}]"#,
+            r#"[{"id":0,"is_plugin":false,"title":3,"is_focused":true,"pane_columns":1,"pane_rows":1}]"#,
+            r#"[{"id":0,"is_plugin":false,"title":"a","pane_columns":1,"pane_rows":1}]"#,
+            r#"[{"id":0,"is_plugin":false,"title":"a","is_focused":true,"pane_rows":1}]"#,
+            r#"[{"id":0,"is_plugin":false,"title":"a","is_focused":true,"pane_columns":"wide","pane_rows":1}]"#,
+        ] {
+            assert_eq!(
+                parse_panes(bad).unwrap_err().kind(),
+                "zellij_protocol",
+                "{bad}"
+            );
+        }
+        let many = format!(
+            "[{}]",
+            vec![r#"{"id":0,"is_plugin":true,"title":"a","is_focused":false}"#; MAX_PANES + 1]
+                .join(",")
+        );
+        assert!(parse_panes(&many).is_err());
+        assert_eq!(
+            panes_command("a'$(touch nope)").unwrap().render(),
+            "zellij '--session=a'\\''$(touch nope)' action list-panes --json --all"
+        );
     }
     #[test]
     fn lists_tabs_from_the_json_the_cli_prints_and_refuses_anything_else() {
@@ -502,18 +836,20 @@ mod tests {
             );
             String::from_utf8(output.stdout).unwrap()
         };
-        struct Server(String, std::path::PathBuf);
+        // Shared, so a session the test renames is still the one torn down on a panic.
+        struct Server(std::sync::Arc<std::sync::Mutex<String>>, std::path::PathBuf);
         impl Drop for Server {
             fn drop(&mut self) {
                 let _ = Command::new("zellij")
-                    .args(["kill-session", "--", &self.0])
+                    .args(["delete-session", "--force", "--", &self.0.lock().unwrap()])
                     .env("XDG_RUNTIME_DIR", &self.1)
                     .env("XDG_CACHE_HOME", &self.1)
                     .env("XDG_CONFIG_HOME", &self.1)
                     .output();
             }
         }
-        let server = Server(name.clone(), temp.path().to_path_buf());
+        let live_name = std::sync::Arc::new(std::sync::Mutex::new(name.clone()));
+        let server = Server(live_name.clone(), temp.path().to_path_buf());
         let layout = temp.path().join("test-layout.kdl");
         std::fs::write(&layout, "layout { pane; }\n").unwrap();
         let config = temp.path().join("config.kdl");
@@ -683,6 +1019,75 @@ mod tests {
             .unwrap()
             .render());
         wait("previous pane focus", &focused_pane, &|id| id == second);
+        // Layout actions, each read back from the panes the product parses. The panes sit side by side here, before the zoom.
+        let (first_pane, second_pane) = (first as u32, second as u32);
+        let read_panes = |session: &str| -> std::result::Result<Vec<ZellijPane>, String> {
+            let output = execute(panes_command(session).unwrap().render());
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+            }
+            parse_panes(&String::from_utf8_lossy(&output.stdout))
+                .map_err(|error| error.message().to_owned())
+        };
+        let columns = |id: u32| -> std::result::Result<u64, String> {
+            read_panes(&name)?
+                .iter()
+                .find(|pane| pane.id == id)
+                .map(|pane| u64::from(pane.columns))
+                .ok_or_else(|| format!("pane {id} is not listed"))
+        };
+        let (left, right) = (
+            wait("first pane geometry", &|| columns(first_pane), &|c| c > 0),
+            wait("second pane geometry", &|| columns(second_pane), &|c| c > 0),
+        );
+        run(command(
+            &name,
+            &ZellijAction::RenamePane {
+                target: first_pane,
+                name: "-build';$(touch nope)".into(),
+            },
+        )
+        .unwrap()
+        .render());
+        let titled = || {
+            Ok(u64::from(read_panes(&name)?.iter().any(|pane| {
+                pane.id == first_pane && pane.title == "-build';$(touch nope)"
+            })))
+        };
+        wait("renamed pane by id", &titled, &|found| found == 1);
+        // Rename acts on the pane it names, not the focused one: of the two panes the second keeps its focus and its title.
+        let panes = read_panes(&name).unwrap();
+        let focused: Vec<_> = panes
+            .iter()
+            .filter(|pane| pane.focused && [first_pane, second_pane].contains(&pane.id))
+            .map(|pane| pane.id)
+            .collect();
+        assert_eq!(focused, [second_pane]);
+        assert_ne!(
+            panes
+                .iter()
+                .find(|pane| pane.id == second_pane)
+                .unwrap()
+                .title,
+            "-build';$(touch nope)"
+        );
+        // One step moves the divider toward the direction: the first pane widens by what the second loses.
+        run(command(
+            &name,
+            &ZellijAction::ResizePane {
+                target: first_pane,
+                direction: ResizeDirection::Right,
+                amount: 1,
+            },
+        )
+        .unwrap()
+        .render());
+        let widened = wait("first pane widened", &|| columns(first_pane), &|c| c > left);
+        assert_eq!(
+            wait("second pane narrowed", &|| columns(second_pane), &|c| c
+                < right),
+            right - (widened - left)
+        );
         run(command(&name, &ZellijAction::ZoomPane).unwrap().render());
         let tabs = run(format!(
             "zellij --session={} action list-tabs --json",
@@ -741,6 +1146,105 @@ mod tests {
         assert_eq!(tab_count().unwrap(), 1);
         assert_eq!(active_tab().unwrap(), 0);
         assert!(!temp.path().join("nope").exists());
-        run(format!("zellij kill-session -- {}", quote(&name)));
+        // Close the second pane by its number: the first stays, with the name it was given.
+        run(command(
+            &name,
+            &ZellijAction::ClosePane {
+                target: second_pane,
+            },
+        )
+        .unwrap()
+        .render());
+        let remaining = || {
+            let panes = read_panes(&name)?;
+            Ok(
+                if panes.len() == 1
+                    && panes[0].id == first_pane
+                    && panes[0].title == "-build';$(touch nope)"
+                {
+                    1
+                } else {
+                    0
+                },
+            )
+        };
+        wait("closed pane by number", &remaining, &|found| found == 1);
+        // A pane that is gone is not guessed at: closing its number again leaves the other pane alone.
+        execute(
+            command(
+                &name,
+                &ZellijAction::ClosePane {
+                    target: second_pane,
+                },
+            )
+            .unwrap()
+            .render(),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(remaining().unwrap(), 1);
+        assert!(!temp.path().join("nope").exists());
+        // Rename the session, then close it, each read back from the session list the product parses.
+        let sessions = |session_list: &str| -> Vec<String> {
+            crate::multiplexer::persistent_sessions(
+                crate::multiplexer::MultiplexerKind::Zellij,
+                session_list,
+            )
+            .map(|sessions| {
+                serde_json::to_value(sessions)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|session| session["name"].as_str().unwrap().to_owned())
+                    .collect()
+            })
+            .unwrap()
+        };
+        let list = || {
+            let output = execute("zellij list-sessions --short --no-formatting".into());
+            // With no session left Zellij prints that none is active and exits with a failure: an empty list, not an error.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() || stderr.contains("No active zellij sessions found"),
+                "{stderr}"
+            );
+            sessions(&String::from_utf8_lossy(&output.stdout))
+        };
+        let renamed = "-renamed session';$(touch nope)";
+        run(command(
+            &name,
+            &ZellijAction::RenameSession {
+                name: renamed.into(),
+            },
+        )
+        .unwrap()
+        .render());
+        *live_name.lock().unwrap() = renamed.into();
+        let mut names = Vec::new();
+        for _ in 0..250 {
+            names = list();
+            if names.iter().any(|session| session == renamed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(names.iter().any(|session| session == renamed), "{names:?}");
+        assert!(!names.contains(&name), "{names:?}");
+        // The renamed session answers to its new name, and the old one is refused.
+        assert_eq!(read_panes(renamed).unwrap().len(), 1);
+        assert!(read_panes(&name).is_err());
+        run(command(renamed, &ZellijAction::CloseSession)
+            .unwrap()
+            .render());
+        let mut names = vec![renamed.to_owned()];
+        for _ in 0..250 {
+            names = list();
+            if !names.iter().any(|session| session == renamed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!names.iter().any(|session| session == renamed), "{names:?}");
+        assert!(!temp.path().join("nope").exists());
     }
 }
