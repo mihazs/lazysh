@@ -1,5 +1,5 @@
 import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
-import {SshFixture, sshCommand} from './sshFixture';
+import {SshFixture, listening, sshCommand} from './sshFixture';
 export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
 import {chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
@@ -12,6 +12,8 @@ import type {TmuxFixture} from './androidTmux';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './androidMoshBackground';
+import {observeAndroidUploadRecovery} from './androidUploadRecovery';
+import {OwnedSshRelay} from '../../apps/client/native-e2e/sshRelay';
 import {agentBoardDecisions,prepareAgentBoardHooks} from './androidAgentBoard';
 import {recordedCompanionBytes,prepareRecordedConversation} from './recordedConversation';
 export {recordedCompanionBytes,prepareRecordedConversation} from './recordedConversation';
@@ -247,7 +249,7 @@ export async function reportInstrumentationFailures(directory:string) {
   } catch {/* The report never replaces the primary failure, and absent results are not an error. */}
 }
 
-type AndroidCleanupStage='reverse'|'control'|'fixture-file'|'Herdr'|'tmux'|'SSH'|'ET'|'app-package'|'test-package'|'software-keyboard';
+type AndroidCleanupStage='reverse'|'control'|'relay'|'fixture-file'|'Herdr'|'tmux'|'SSH'|'ET'|'app-package'|'test-package'|'software-keyboard';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
@@ -530,7 +532,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const moshBinary=(moshBackground || attachments)?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
   const rawInput=ime || dpad,rawKind=ime?'ime':'dpad';
   const fixture=herdr?.ssh??tmux?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}:(companion || recorded)?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
-  const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`};
+  const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`,recoveryName:`owned-recovery-${fixture.nonce}.png`};
+  // The device reaches the SSH daemon only through this relay, so the host can close exactly the app's SSH stream (#1523).
+  let relay:OwnedSshRelay|undefined,relayPort:number|undefined,recovery:ReturnType<typeof observeAndroidUploadRecovery>|undefined;
   let recordedFixture:Awaited<ReturnType<typeof prepareRecordedConversation>>|undefined;
   let imeObserved:Awaited<ReturnType<typeof identity>>|undefined;
   let imeImageHash:string|undefined;
@@ -571,7 +575,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(attachments) {
       await writeFile(join(fixture.directory,attachmentNames.collisionName),Buffer.from(`OWNED-COLLISION:${fixture.nonce}`),{mode:0o600,flag:'wx'});
       collisionBefore=await attachmentIdentity(join(fixture.directory,attachmentNames.collisionName));
-      await lstat(join(fixture.directory,attachmentNames.newName)).then(()=>{throw new Error('Owned upload destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw error;});
+      for(const destination of [attachmentNames.newName,attachmentNames.recoveryName])await lstat(join(fixture.directory,destination)).then(()=>{throw new Error('Owned upload destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw error;});
+      relay=await OwnedSshRelay.start(fixture.port);relayPort=relay.port;
     }
     if(moshBackground || herdrMosh || attachments) {
       const server=join(fixture.directory,'bin/mosh-server');
@@ -601,11 +606,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     keyboard=await ownedSoftwareKeyboard(adb,serial,5000,keyboardProfile);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
-    await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(tmux?{tmux:tmux.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+    await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:relayPort??fixture.port,username:fixture.username,
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:{...attachmentNames,directory:fixture.directory}}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(tmux?{tmux:tmux.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
+    if(relay)recovery=observeAndroidUploadRecovery(fixture,relay,attachmentNames.recoveryName);
     if((await stat(data)).size>32*1024)throw new Error('Owned Android fixture exceeds native bound');
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
@@ -686,11 +692,14 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     }
     if(attachments) {
       const expected=attachmentReceipt(await shell(['shell','run-as','app.lazysh.client','cat',`files/owned-attachment-${fixture.nonce}.json`]),fixture.nonce);
-      const actual=await attachmentIdentity(join(fixture.directory,attachmentNames.newName));
-      if(actual.bytes!==expected.bytes || actual.sha256!==expected.sha256)throw new Error('Manual native attachment bytes differ from the valid provider PNG');
+      for(const destination of [attachmentNames.newName,attachmentNames.recoveryName]) {
+        const actual=await attachmentIdentity(join(fixture.directory,destination));
+        if(actual.bytes!==expected.bytes || actual.sha256!==expected.sha256)throw new Error('Manual native attachment bytes differ from the valid provider PNG');
+      }
+      await recovery!.assertVerified(expected.bytes);
       const collisionAfter=await attachmentIdentity(join(fixture.directory,attachmentNames.collisionName));
       if(JSON.stringify(collisionBefore)!==JSON.stringify(collisionAfter))throw new Error('Existing attachment inode, size, mtime or hash changed');
-      const attachmentFiles=(await readdir(fixture.directory)).filter(name=>/^owned-(?:upload|collision)-/.test(name)).sort();
+      const attachmentFiles=(await readdir(fixture.directory)).filter(name=>/^owned-(?:upload|collision|recovery)-/.test(name)).sort();
       if(JSON.stringify(attachmentFiles)!==JSON.stringify(Object.values(attachmentNames).sort()))throw new Error('Unexpected owned attachment destination created');
       console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
     }
@@ -739,6 +748,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     throw error;
   } finally {
     await moshWitness?.stop();
+    await recovery?.stop();
+    try{recovery?.check();}catch{console.error('Owned upload recovery witness failure');}
     await crashes?.stop();
     await androidSshCleanup(primary,[
       ...(recordedFixture?[['recorded-corpus',()=>recordedFixture!.verify()]] as const:[]),
@@ -749,6 +760,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
         ['test-package',()=>shell(['uninstall',ownedAndroidPackages[1]])] as const,
         ['app-package',()=>shell(['uninstall',ownedAndroidPackages[0]])] as const,
       ]:[]),
+      ['relay',async()=>{await relay?.stop();if(relayPort!==undefined && await listening(relayPort))throw new Error('Owned SSH relay listener survived teardown');}],
       [herdr?'Herdr':tmux?'tmux':'SSH',()=>herdr?herdr.stop():tmux?tmux.stop():fixture.stop()],
     ]);
   }
