@@ -1,5 +1,88 @@
 # @lazysh/client
 
+## 1.84.0
+
+### Minor Changes
+
+- feat(voice): offer the local Parakeet engine in the Google build of the Android app ([#1819](https://github.com/mihazs/lazysh/pull/1819))
+
+  <details><summary>Details</summary>
+
+  Voice on a phone can now select Parakeet next to Whisper, for arm64-v8a and x86_64: pinned ONNX Runtime and sherpa-onnx, the model in the app's private storage, and a free-space check (about 1.6 GB) before it is downloaded or prepared. The F-Droid build does not include it. No defaults change: Whisper stays the default and nothing downloads Parakeet until you choose it.
+
+  </details>
+- feat(voice): offer the Parakeet local dictation engine on Windows x86_64 ([#1825](https://github.com/mihazs/lazysh/pull/1825))
+
+  <details><summary>Details</summary>
+
+  Whisper stays the default; Parakeet needs an explicit model download, as on Linux, and its model files live in a private folder that only the current user, the administrators and the system can reach.
+
+  </details>
+
+### Patch Changes
+
+- test: Prove local Whisper on Android with the real engine ([#1806](https://github.com/mihazs/lazysh/pull/1806))
+
+  <details><summary>Details</summary>
+
+  Prove local Whisper on Android with the real engine: the emulator job imports the pinned English model through the Voice import commands, transcribes the public JFK sample with the bundled whisper.cpp and removes the model again. The Linux runtime job and the Android job now take their speech fixtures from one pinned download script.
+
+  </details>
+- feat(companion): explain where the host companion is installed and what is verified before it starts ([#1787](https://github.com/mihazs/lazysh/pull/1787))
+
+  <details><summary>Details</summary>
+
+  Agents now says where the companion goes, what the host verifies and that nothing changes until the button is pressed. An unsupported host architecture is covered by an owned OpenSSH test (both routes refuse it before anything is fetched or written). Installation behaviour is unchanged.
+
+  </details>
+- test(android): prove upload recovery after the SSH control stream closes on the owned emulator ([#1785](https://github.com/mihazs/lazysh/pull/1785))
+
+  <details><summary>Details</summary>
+
+  Extend the Android Mosh attachment acceptance case: the owned device now reaches its SSH daemon through the owned relay, the host closes only the app's SSH stream (server-attributed) while the Mosh daemon stays alive, and the real UI shows the closed-control upload error with its Reconnect uploads action, restores uploads by manual authentication without an automatic upload or a second terminal, and then uploads the exact bytes by a separate explicit Upload (a repeated Upload leaves the file untouched). Test-only; no behaviour changes.
+
+  </details>
+- change: Add an owned Android emulator case for encrypted sync (#1540, child of #17) ([#1804](https://github.com/mihazs/lazysh/pull/1804))
+
+  <details><summary>Details</summary>
+
+  Add an owned Android emulator case for encrypted sync (#1540, child of #17): through the real Sync panel it enrolls against an owned HTTPS WebDAV server, shows the recovery key again from the native credential store after a restart, checks that nothing is uploaded before the explicit action and that credentials stay off, uploads settings as age ciphertext, then enrolls a reset install with the recovery key and previews and applies the saved host list. Owned emulator builds trust one extra root for `127.0.0.1` through the `sync-tls-acceptance` Cargo feature; published builds do not compile it, and production sync still requires HTTPS with the web PKI roots. Test infrastructure only.
+
+  </details>
+- test(agents): stop the dialog picker's digit-key test from timing out at random in CI ([#2207](https://github.com/mihazs/lazysh/pull/2207))
+
+  <details><summary>Details</summary>
+
+  The test pressed the digit as soon as the option was enabled, which could be
+  before the picker began listening for keys on a busy runner; the key was then
+  lost and the test waited out its 5 s limit. It now runs the 400 ms safety delay
+  on fake timers inside `act()`, so the listener is attached before the key is
+  pressed. Its assertions are unchanged, and the app's behaviour does not change.
+
+  </details>
+- change: Add two Linux native GUI cases for the command palette and Files over a real SSH session ([#1788](https://github.com/mihazs/lazysh/pull/1788))
+
+  <details><summary>Details</summary>
+
+  Add two Linux native GUI cases for the command palette and Files over a real SSH session: the palette opens with Ctrl+Shift+P from the focused terminal and with Ctrl+K elsewhere and runs the Files tool, the Terminal tool and End connection from the keyboard, and Files shows Markdown, a PNG and an SVG read over SFTP without running their content (#993). Test-only; no behavior change.
+
+  </details>
+- feat(agent): add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent review status` and `review diff` to the host companion: the Diff view's changed files and one file's patch from a terminal on the host, as plain text or one JSON line, read-only and under the app's size bounds, with its help in English, Brazilian Portuguese and Spanish. The app and the companion now build their Git review commands in one shared module; the app's behavior does not change.
+
+  </details>
+- change: Add the owned Windows OpenSSH server the Windows GUI SSH case will connect to, and a hosted Windows check… ([#1826](https://github.com/mihazs/lazysh/pull/1826))
+
+  <details><summary>Details</summary>
+
+  Add the owned Windows OpenSSH server the Windows GUI SSH case will connect to, and a hosted Windows check that proves it with the real `ssh.exe`: a second `sshd` run by the job user on a fresh loopback port with one throwaway key, accepting only that key, offering the fingerprint the application must show, and leaving the machine's own `sshd` service and every other file untouched. Test infrastructure only; the application, its defaults and the release artifacts are unchanged.
+
+  </details>
+- fix: Fix Android Appium CI task selection so the regression suite runs ([#1804](https://github.com/mihazs/lazysh/pull/1804))
+
 ## 1.83.1
 
 ### Patch Changes
