@@ -10,6 +10,18 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.89.0] - 2026-11-20
+
+### New
+
+- **zellij:** open the Zellij pane that raised an agent notification ([#1872](https://github.com/mihazs/lazysh/pull/1872))
+- **tmux:** list the panes of every tmux window in Jump To and move to the exact pane you choose. ([#1875](https://github.com/mihazs/lazysh/pull/1875))
+- **zellij:** rename and close sessions and panes, and move pane dividers, from the Workspaces panel ([#1870](https://github.com/mihazs/lazysh/pull/1870))
+
+### Under the hood
+
+- **multiplexers:** verify that a copy in tmux, Zellij and Herdr reaches the device clipboard ([#1874](https://github.com/mihazs/lazysh/pull/1874))
+
 ## [1.88.0] - 2026-11-20
 
 ### New
