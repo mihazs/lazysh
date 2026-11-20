@@ -311,6 +311,12 @@ export const english = {
   agentsRestore: "Restore",
   agentsRestoreReport: "Restore {{agent}} report for {{project}}",
   agentsProjectGroup: "{{project}} on {{host}}",
+  agentsScope: "Board scope",
+  agentsScopeHost: "This host",
+  agentsScopeAll: "All hosts",
+  agentsOpenReport: "Open {{agent}} report for {{project}} on {{host}}",
+  agentsHostsLimited: "Showing {{shown}} of {{total}} connected hosts.",
+  agentsAllHostsArchived: "{{total}} archived reports are hidden here. Restore them on each host's own board.",
 
   defaultMuxPreferencesHint: "Choose a default multiplexer for each saved host. Edit a host to select Herdr, tmux or Zellij and the session to attach to or create on connection.",
   defaultMuxLabel: "Default multiplexer",

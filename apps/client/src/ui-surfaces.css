@@ -286,19 +286,19 @@ input[type="search"] {
 .agent-panel > .tool-bar > .agent-search input { width: 100%; padding-left: 40px; background-image: none; font-size: 15px; }
 .agent-panel .agent-tool[aria-expanded="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .workspace-navigation-agents .agent-discovery, .agent-panel .agent-discovery { padding: 0; }
-.agent-panel .agent-filters {
+.agent-panel :is(.agent-filters, .agent-scope) {
   display: flex; flex-wrap: nowrap; gap: 6px; margin: 4px 0 2px; padding: 0 0 2px; border: 0;
   overflow-x: auto; scrollbar-width: none;
 }
-.agent-panel .agent-filters::-webkit-scrollbar { display: none; }
-.agent-panel .agent-filters .filter-chip {
+.agent-panel :is(.agent-filters, .agent-scope)::-webkit-scrollbar { display: none; }
+.agent-panel :is(.agent-filters, .agent-scope) .filter-chip {
   flex: 0 0 auto; min-width: 0; min-height: 44px; padding: 6px 14px;
   border: 0; border-block: 5px solid transparent; border-radius: 999px; background-clip: padding-box;
   background-color: var(--theme-control); color: var(--theme-muted); font-size: 13px; font-weight: 600; white-space: nowrap;
 }
-.agent-panel .agent-filters .filter-chip span { margin-left: 2px; color: inherit; opacity: .8; font-variant-numeric: tabular-nums; }
-.agent-panel .agent-filters .filter-chip, .agent-panel .agent-filters .filter-chip[aria-pressed] { border-color: transparent; background-clip: padding-box; }
-.agent-panel .agent-filters .filter-chip[aria-pressed="true"] { background-color: var(--theme-text); color: var(--theme-bg); }
+.agent-panel :is(.agent-filters, .agent-scope) .filter-chip span { margin-left: 2px; color: inherit; opacity: .8; font-variant-numeric: tabular-nums; }
+.agent-panel :is(.agent-filters, .agent-scope) .filter-chip, .agent-panel :is(.agent-filters, .agent-scope) .filter-chip[aria-pressed] { border-color: transparent; background-clip: padding-box; }
+.agent-panel :is(.agent-filters, .agent-scope) .filter-chip[aria-pressed="true"] { background-color: var(--theme-text); color: var(--theme-bg); }
 .agent-panel:has(> .panel-empty) .agent-filters { display: none; }
 .agent-panel .agent-result-count { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .agent-panel .agent-discovery > .subtle-button { min-height: 36px; margin-top: 6px; background: transparent; color: var(--accent); }
@@ -547,8 +547,8 @@ input[type="search"] {
   .sidebar > .workspace-navigation-modes { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (forced-colors: active) {
-  .agent-panel .agent-filters .filter-chip { border-block-width: 1px; border-color: ButtonText; }
-  .agent-panel .agent-filters .filter-chip[aria-pressed="true"], .agent-section-jumps button[aria-pressed=true],
+  .agent-panel :is(.agent-filters, .agent-scope) .filter-chip { border-block-width: 1px; border-color: ButtonText; }
+  .agent-panel :is(.agent-filters, .agent-scope) .filter-chip[aria-pressed="true"], .agent-section-jumps button[aria-pressed=true],
   .sidebar .workspace-navigation-modes button[aria-current="page"] { outline: 2px solid Highlight; }
   .preferences-content [data-settings-page] > label > input[type="checkbox"] { appearance: auto; -webkit-appearance: auto; width: 20px; height: 20px; }
   .preferences-content [data-settings-page] > label > input[type="checkbox"]::after { content: none; }

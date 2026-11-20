@@ -161,6 +161,18 @@ A report in the needs-attention state also says what the agent waits for: `waiti
 
 Within each state, the board groups reports by project on the connected host, most recently reported project first. **Archive** hides a report on this device only; **Archived N** lists archived reports with **Restore**. An archived report returns when its agent reports a newer event, and the archive forgets it once the companion ages the report out. Archives are stored per saved host on the device and are not synced or written to the host.
 
+#### Board of all connected hosts
+
+With two or more saved hosts connected, a **This host / All hosts** switch appears above the board. **This host** is the default and is the per-connection board described above. **All hosts** is opt-in: it reads `agent_snapshot` of every connected host and groups the reports by state, then host, then project, with the same search and status filters. Each host is read through its own connection, so a report, its access lease and its archive stay bound to that host; the merged view only renders what each connection returns.
+
+- **Poll budget.** While the board is shown, every connected host is read every five seconds, at most four reads at once and at most 32 hosts (the same budget as the [inbox](reference/inbox.md)); a note says how many hosts are left out. A host whose read is still running is not read again, and nothing is read while the board is hidden or the app is in the background. The host you are on is read by its own board as well, so it is read twice while **All hosts** is shown.
+- **One host, several sessions.** Two sessions of one saved host reach the same companion and count once. Two saved hosts that point at the same machine are two hosts: lazysh has no host identity to merge them on.
+- **A host that fails.** It shows its own error row (its name and the reason) and none of its rows; the other hosts stay. It recovers on the next read.
+- **Archive.** Archive and Restore keep their per-host keys and live on each host's own board. The merged board hides what that board archived, returns a report when its agent reports a newer event, and says how many archived reports it hides.
+- **Opening a report.** A row opens that host's connection, the way an inbox notification does: the Agent view for a needs-attention Claude Code or Codex report with a pane, the host's Agents list otherwise. The panel then shows that host's own board.
+
+Nothing changes on the host: no companion command, schema or on-disk format is added.
+
 ### Live conversation stream
 
 `lazysh-agent transcript-watch --agent claude|codex (--path FILE | --session-id UUID)

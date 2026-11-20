@@ -1,6 +1,6 @@
 import {t} from './i18n/core';
 import { useSyncExternalStore } from 'react';
-import { parseSnapshot } from './AgentPanel';
+import { parseSnapshot } from './agentReports';
 import { localHostLabel } from './localHost';
 
 export type InboxSession = { id: string; hostId: string; name: string; connected: boolean; local?: boolean };
@@ -90,6 +90,11 @@ export async function focusInboxPane(invoke: (command: string, args: Record<stri
 export function openInboxEvent(eventId: string, sessions: InboxSession[], expectedSessionId?: string): boolean {
   const row = getInbox().rows.find(row => row.eventId === eventId);
   if (!row || (expectedSessionId !== undefined && row.sessionId !== expectedSessionId) || !sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)) return false;
-  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, paneId: row.paneId, waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent) } }));
+  dispatchInboxOpen(row);
   return true;
+}
+
+/** Asks the app to open a reported agent's connection: the session, and for a waiting agent its pending card. `section` picks what the Agents drawer shows. */
+export function dispatchInboxOpen(row: Pick<InboxRow, 'sessionId' | 'paneId' | 'state' | 'agent'>, section?: 'activity') {
+  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, paneId: row.paneId, waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent), ...(section ? { section } : {}) } }));
 }
