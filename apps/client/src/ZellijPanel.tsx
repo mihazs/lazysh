@@ -1,4 +1,5 @@
 import {t,useUi,formatNumber} from './i18n/core';
+import ToolHelp from './ToolHelp';
 import { useMountedAccess, useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
@@ -32,7 +33,7 @@ export default function ZellijPanel({ sessionId, name, projectDirectory = '.' }:
     {error && <p className="inline-error" role="alert">{error}</p>}{(busy || message) && <p role="status">{busy ? t('muxSending') : t('zellijSent')}</p>}
     <form onSubmit={create}><label>{t('zellijNewTabName')}<input value={title} maxLength={200} disabled={busy} required onChange={e => setTitle(e.target.value)} /></label><label>{t('zellijDirectory')}<input value={directory} maxLength={4096} disabled={busy} required onChange={e => setDirectory(e.target.value)} /></label><button className="subtle-button" disabled={busy || !title.trim()} type="submit">{t('zellijCreateTab')}</button></form>
     <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'previousTab' })}>{t('gesturePreviousZellijTab')}</button><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'nextTab' })}>{t('gestureNextZellijTab')}</button></div>
-    <p>{t('zellijQuickHint')}</p>
+    <ToolHelp label={t('zellijQuickAbout')}>{t('zellijQuickHint')}</ToolHelp>
     <div className="mux-shortcuts" role="group" aria-label={t('zellijQuickTabs')}>
       {Array.from({length:20},(_,index)=>index+1).map(index=><button type="button" className="subtle-button" key={index} disabled={busy} onClick={()=>void run({type:'goToTab',index})}>{t('muxShortcutTab',{index:formatNumber(index)})}</button>)}
     </div>

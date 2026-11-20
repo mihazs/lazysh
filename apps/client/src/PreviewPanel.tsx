@@ -1,4 +1,5 @@
 import {t, useUi} from './i18n/core';
+import ToolHelp from './ToolHelp';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {discoverPreviewListeners} from './previewDiscovery';
 import { observeCurrent } from "./asyncState";
@@ -161,7 +162,7 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
     <label className="preview-filter">{t('previewDiscoverPorts')} <input disabled={automatic} value={allowlist} onChange={event => { discoveryRevision.current++; setAllowlist(event.target.value); }} maxLength={2048} placeholder={t('previewPortsHint')} /></label>
     <label className="preview-filter"><input type="checkbox" disabled={automatic} checked={probeHttp} onChange={event => { discoveryRevision.current++; setProbeHttp(event.target.checked); }} /> {t('previewProbe')}</label>
     <label className="preview-filter"><input type="checkbox" checked={automatic} onChange={toggleAutomatic} /> {t('previewAutomatic')}</label>
-    <p className="agent-note">{t('previewAutomaticHint')}</p>
+    <ToolHelp label={t('previewAutomaticAbout')}>{t('previewAutomaticHint')}</ToolHelp>
     <form className="preview-connect" onSubmit={event => { event.preventDefault(); void start(); }}><label>{t('previewLoopback')} <select value={address} onChange={event => setAddress(event.target.value)}><option value="127.0.0.1">IPv4</option><option value="::1">IPv6</option></select></label><label>{t('previewRemotePort')} <input type="text" inputMode="numeric" value={port} onChange={event => setPort(event.target.value)} maxLength={5} /></label><button className="subtle-button" disabled={busy || previews.length >= 4} type="submit">{t('previewOpen')}</button></form>
     <label className="preview-filter"><input type="checkbox" checked={annotations} onChange={event => setAnnotations(event.target.checked)} /> {t('previewEnablePicker')}</label>
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}

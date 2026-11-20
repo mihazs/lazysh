@@ -1717,6 +1717,12 @@ button svg {
 
 /* Attachment panels already provide their own content padding. */
 .tool-panel:not(.attachment-panel) > :is(h2, h3, p) { margin-inline: 18px; }
+/* Optional panel help (ToolHelp): closed by default, one 44px line, same gutter as the panel's own paragraphs. */
+.tool-help summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--theme-muted, var(--muted)); font-size: 13px; }
+.tool-help summary::before { content: '▸'; content: '▸' / ''; margin-inline-end: 6px; }
+.tool-help[open] summary::before { content: '▾'; content: '▾' / ''; }
+.tool-help p { margin: 0 0 8px; color: var(--theme-muted, var(--muted)); font-size: 12px; line-height: 1.5; }
+.tool-panel:not(.attachment-panel) > .tool-help { margin-inline: 18px; flex-shrink: 0; }
 
 /* Keep settings sections on one shared gutter, including native app lock. */
 .preferences-content { padding: 0 24px 24px; overflow-wrap: anywhere; }
