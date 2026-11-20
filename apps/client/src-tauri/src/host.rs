@@ -177,10 +177,7 @@ impl Host {
         match self {
             Self::Remote(session) => {
                 let line = if cmd.herdr {
-                    crate::herdr_path::select(
-                        &cmd.render(),
-                        crate::herdr_path::admit(session, lease).await?,
-                    )
+                    crate::herdr_backend::resolve(session, lease, &cmd.render()).await?
                 } else {
                     cmd.render()
                 };

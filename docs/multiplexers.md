@@ -158,6 +158,14 @@ List running named servers, then attach or browse one. The Herdr tree preserves 
 
 The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. Incompatible response shapes fail explicitly. lazysh does not install the system Herdr, alter its configuration, or stop existing servers. The one exception is the optional managed Herdr, which only an explicit action installs or removes: see [Managed Herdr install and removal](herdr-managed-install.md).
 
+### Which Herdr a connection runs
+
+A connection runs one Herdr, chosen once: the host's own `herdr` (the default) or the optional managed derivative built from `packages/herdr-upstream` with the `lazysh-managed` feature (its own `lazysh-herdr` namespace, see [its provenance](../packages/herdr-upstream/PROVENANCE.md)). The choice is the closed name `system` or `managed`, never a path or a command: `herdr_backend_select` takes it for a connection, and an `attach_multiplexer` call or a Mosh entry can carry it as `backend` so that a restored entry names the Herdr it ran on.
+
+The first Herdr use on a connection captures the choice; a first use that names none captures the host's own Herdr. A later, different choice fails with `herdr_backend_captured` and is never re-resolved, and a reconnect is a new connection that chooses again. Everything on the connection then runs that Herdr: discovery, the session list, the tree and its actions, workspace creation, SSH and Mosh attachment, the guard's capability check and its RPCs, and the actor that owns the attached display. Exact pane focus runs the companion with the chosen Herdr first on `PATH`, so it reads that Herdr's sessions. A guarded attachment whose startup fails is closed and never retried as the other Herdr or as an ordinary attach. A local session always runs the host's own Herdr.
+
+The managed Herdr is the single file `~/.local/libexec/lazysh-herdr/herdr`. It must be an executable regular file that only you (or root) can replace, below directories that only you (or root) can change, and no part of the path may be a symbolic link: the same check as for the official installer's `~/.local/bin` fallback. If that fails, or the host is not a positively identified Linux or macOS host, the call fails, discovery reports Herdr as absent, and nothing falls back to the host's own Herdr. Nothing installs the managed file yet and the app offers no choice: the explicit install and remove (#1760) and the release asset (#1522) are later slices, so no release or platform support is claimed.
+
 Supported Herdr versions are **0.9.3 through 0.9.5**. CI builds stock and guarded Herdr 0.9.5 from the pinned source and runs the native and Android Herdr suites against them. lazysh uses only commands, exact IDs, snapshot fields and error codes that 0.9.3 and 0.9.5 share, so hosts still on 0.9.3 keep working. What changed in Herdr 0.9.4 and 0.9.5:
 
 - If a workspace, tab or pane was closed on the host after the tree loaded, Herdr answers `workspace_not_found`, `tab_not_found`, `pane_not_found` or `agent_not_found`. lazysh shows "The selected connection or destination changed" instead of Herdr's raw JSON. Exact pane navigation goes through the companion, which reports `pane_not_found` as `HerdrFocusMissing`; an older companion still shows its generic failure. Since 0.9.4, an out-of-range workspace number also returns `workspace_not_found` instead of crashing the server.
@@ -574,6 +582,16 @@ path, not OS CLI delivery, actual GUI startup or physical biometric prompts.
 Those and mobile/device lifecycle acceptance remain separate. This ignored
 external-tool fixture executes when explicitly requested; ordinary native test
 runs compile it without executing it.
+
+The same fixture accepts the managed backend. `real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one`
+(`LAZYSH_TEST_HERDR_STOCK`) puts a Herdr at the managed path and leaves a failing decoy where the host's own Herdr
+would be. After the connection captures the managed Herdr it checks discovery, the session list, the tree, an action and an
+attachment, that a different second choice is refused and that the decoy never ran; then, on a host with no managed file,
+that Herdr reads as absent, every call fails and the decoy still never runs.
+`real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_executable` (`LAZYSH_TEST_HERDR`) does the same with a
+guarded build and checks the guard probe and the bound display. The Herdr at the managed path is a stock or guarded debug
+build, not a `lazysh-managed` release build, and Mosh startup was checked only through composed commands: namespace isolation next
+to a stock server and the exact release artifact are the acceptance of #1761.
 
 ### Fresh verified SSH restoration acceptance
 

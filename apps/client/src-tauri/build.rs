@@ -161,6 +161,7 @@ fn main() {
         "tmux_jump_snapshot",
         "tmux_jump",
         "tmux_chat",
+        "herdr_backend_select",
         "herdr_chat",
         "herdr_agent_input",
         "herdr_agent_screen",

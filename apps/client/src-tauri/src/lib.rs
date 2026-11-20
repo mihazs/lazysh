@@ -20,6 +20,7 @@ mod et;
 mod file_transfer;
 mod forward_agent;
 mod herdr;
+mod herdr_backend;
 mod herdr_create;
 mod herdr_guard;
 mod herdr_path;
@@ -306,6 +307,7 @@ pub fn run() {
                 tmux_jump::tmux_jump_snapshot,
                 tmux_jump::tmux_jump,
                 tmux_jump::chat::tmux_chat,
+                herdr_backend::herdr_backend_select,
                 herdr_guard::herdr_chat,
                 herdr_stock_input::herdr_agent_input,
                 herdr_stock_input::herdr_agent_screen,

@@ -755,6 +755,8 @@ pub(crate) struct SshHandle {
     handle: Arc<client::Handle<HostVerifier>>,
     open_slots: Arc<Semaphore>,
     pub(crate) herdr_unix: std::sync::atomic::AtomicU8,
+    /// The Herdr this connection runs, fixed on its first Herdr use.
+    pub(crate) herdr_backend: crate::herdr_backend::Capture,
     pub(crate) host_probe: crate::companion::HostProbe,
     /// Execs started on this connection, so a test can assert how many a user action costs.
     #[cfg(test)]
@@ -1200,6 +1202,7 @@ where
         handle: Arc::new(handle),
         open_slots: Arc::new(Semaphore::new(4)),
         herdr_unix: crate::herdr_path::new_cache(),
+        herdr_backend: Default::default(),
         host_probe: Default::default(),
         #[cfg(test)]
         execs: Default::default(),
@@ -3882,9 +3885,18 @@ pub async fn attach_multiplexer(
     rows: u32,
     events: Channel<SshEvent>,
     create_if_missing: Option<bool>,
+    backend: Option<crate::herdr_backend::HerdrBackend>,
 ) -> AccessResult<Connected> {
     lease
         .run(async {
+            // Restoration carries its backend, which this connection captures before anything runs on it.
+            if let Some(backend) = backend {
+                if matches!(kind, crate::multiplexer::MultiplexerKind::Herdr) {
+                    crate::herdr_backend::capture(&state.session(&session_id).await?.handle, backend)?;
+                } else if !backend.is_system() {
+                    return Err(SshError::new("invalid_target", "Only Herdr has a managed backend"));
+                }
+            }
             if create_if_missing.unwrap_or(false) {
                 check_size(cols, rows)?;
                 if tmux_server.is_some() {return Err(SshError::new("invalid_tmux_server","Default entry uses the default multiplexer server"));}
@@ -3924,7 +3936,7 @@ pub async fn attach_multiplexer(
             }
             let command = if guarded { crate::herdr_guard::attach_command(&name) } else { ordinary_command };
             let command = if matches!(kind, crate::multiplexer::MultiplexerKind::Herdr) {
-                crate::herdr_path::select(&command, crate::herdr_path::admit(&parent, &lease).await?)
+                crate::herdr_backend::resolve(&parent, &lease, &command).await?
             } else { command };
             let (mut channel, initial) = tokio::select! { biased;
                 _ = cancellation.changed() => return Err(SshError::new("disconnected", "Session closed")),
@@ -6287,6 +6299,61 @@ mod tests {
         let reconnected = fixture.reconnect().await;
         assert_eq!(crate::herdr_path::cached(&reconnected), None);
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn one_herdr_backend_is_captured_per_ssh_connection_and_every_call_runs_it() {
+        use crate::herdr_backend::{
+            capture, captured, choose, resolve, resolve_cached,
+            sandbox::Sandbox,
+            HerdrBackend::{Managed, System},
+        };
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        let sandbox = Sandbox::new(true);
+        let command = "herdr --session 'owned' api snapshot";
+        let first = &fixture.session;
+        crate::herdr_path::mark_unix(&first.handle);
+        // Nothing was chosen: the first Herdr use captures the system Herdr, and a later choice is refused.
+        let resolved = resolve(first, &lease, command).await.unwrap();
+        assert_eq!(
+            sandbox.run_wrapped(&resolved),
+            ("system --session owned api snapshot\n".into(), true)
+        );
+        assert_eq!(
+            capture(&first.handle, Managed).unwrap_err().kind(),
+            "herdr_backend_captured"
+        );
+        assert_eq!(choose(&first.handle, None).unwrap(), System);
+        // A reconnect is a new connection that chooses again. The choice then reaches the session
+        // commands and the owned guard RPC channel alike, and the other Herdr is refused.
+        let second = fixture.reconnect().await;
+        crate::herdr_path::mark_unix(&second);
+        assert_eq!(
+            captured(&second),
+            System,
+            "a reconnect does not inherit the capture"
+        );
+        let fresh = fixture.reconnect().await;
+        crate::herdr_path::mark_unix(&fresh);
+        assert_eq!(choose(&fresh, Some(Managed)).unwrap(), Managed);
+        assert_eq!(choose(&fresh, None).unwrap(), Managed);
+        assert_eq!(choose(&fresh, Some(Managed)).unwrap(), Managed);
+        assert_eq!(
+            choose(&fresh, Some(System)).unwrap_err().kind(),
+            "herdr_backend_captured"
+        );
+        assert_eq!(
+            sandbox.run_wrapped(&resolve_cached(&fresh, command).unwrap()),
+            ("managed --session owned api snapshot\n".into(), true)
+        );
+        // Without the Unix probe the managed Herdr never runs, and nothing falls back to the system one.
+        let unknown = fixture.reconnect().await;
+        capture(&unknown, Managed).unwrap();
+        assert_eq!(
+            resolve_cached(&unknown, command).unwrap_err().kind(),
+            "herdr_managed_unsupported_host"
+        );
+    }
     #[tokio::test]
     async fn cancelled_exec_closes_late_confirmation() {
         cancelled_auxiliary_open(Auxiliary::Exec).await;
@@ -6640,6 +6707,7 @@ mod tests {
             80,
             24,
             Channel::new(|_| Ok(())),
+            None,
             None,
         )
         .await
@@ -7277,6 +7345,7 @@ mod tests {
             "update_companion_settings",
             "get_host_browser_settings",
             "update_host_browser_settings",
+            "herdr_backend_select",
         ] {
             let policy = context.runtime_authority_mut();
             assert!(policy.resolve_access(command, "main", "main", &tauri::ipc::Origin::Local).is_some(), "the documented command must be admitted by the generated local-main policy: {command}");
