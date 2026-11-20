@@ -317,9 +317,9 @@ type View =
   | "voice"
   | "devices"
   | "apple";
-type LocalTool='files'|'repository'|'attachments'|'previews'|'companion';
+type LocalTool='files'|'repository'|'attachments'|'previews'|'companion'|'devices';
 type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:Partial<Record<LocalTool,boolean>>&{companionSource?:string|null}}[]};
-const localViewTools:Partial<Record<View,LocalTool>>={files:'files',diff:'repository',attachments:'attachments',preview:'previews',agents:'companion',chat:'companion',apple:'companion'};
+const localViewTools:Partial<Record<View,LocalTool>>={files:'files',diff:'repository',attachments:'attachments',preview:'previews',agents:'companion',chat:'companion',apple:'companion',devices:'devices'};
 /** A local session offers its terminal tools plus the host tools its default target reports. */
 function localTools(capability:LocalCapability) {return capability.targets?.find(target=>target.id==='default')?.tools;}
 function localTool(capability:LocalCapability,tool:LocalTool) {return localTools(capability)?.[tool];}
@@ -2596,7 +2596,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.connected && view === "voice" && (
                   <VoicePanel key={active.id} sessionId={active.id} onDirectDictation={deliverDictation} />
                 )}
-                {active.connected && !active.local && view === "devices" && (
+                {active.connected && (!active.local || localView(localCapability,'devices')) && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && (!active.local || localView(localCapability,'files')) && view === "files" && (
