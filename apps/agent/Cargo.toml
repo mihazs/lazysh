@@ -44,6 +44,8 @@ tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Validates Kimi's foreign config.toml before and after the owned hook suffix is appended; never rewrites it.
+toml_edit = "0.25.17"
 
 [dev-dependencies]
 lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }

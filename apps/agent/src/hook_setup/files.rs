@@ -394,6 +394,10 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     if target.agent == Agent::Droid && provider.state == FileState::Missing {
         return Err(rejected("HooksDroidStandaloneRequired"));
     }
+    // Kimi's config.toml is foreign-owned and secret-bearing: appending to it never creates it.
+    if target.agent == Agent::KimiCode && provider.state == FileState::Missing {
+        return Err(rejected("HooksKimiConfigRequired"));
+    }
     let manifest = read(
         &profile,
         &format!(".lazysh-hooks-{}.json", target.agent.name()),

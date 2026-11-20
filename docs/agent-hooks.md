@@ -22,7 +22,8 @@ are refused.
 Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
 on the qualified Linux filesystems described below. Explicit version-2 discovery
 also enables managed GitHub Copilot CLI setup; explicit version-3 discovery adds
-managed Amp setup while preserving both older mappings. Gemini uses the selected
+managed Amp setup, and explicit version-4 discovery adds managed Kimi Code 2.4
+setup, each preserving every older mapping. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
 layer; detection does not establish or enable the provider's active layer.
@@ -292,8 +293,11 @@ overrides use the default. The other dialect remains a separate candidate, not a
 fallback or automatic selection. Identical unresolved HOME diagnostics appear
 once. Discovery reads directory metadata only: it
 does not execute Kimi, open/create configuration, migrate profiles, or identify
-the installed version. Kimi remains manual-only in discovery schema 1; the seven
-managed providers and existing printer/ingestion behavior are unchanged.
+the installed version. Kimi remains manual-only in discovery schemas 1 to 3, so
+shipped clients keep working; only explicit schema 4 offers the current Kimi Code
+profile for [managed setup](#managed-kimi-code-setup). The legacy profile stays
+metadata, and the seven managed providers and existing printer/ingestion behavior
+are unchanged.
 
 Kimi Code 2.4.1 hooks were observed natively, but lazysh does not ingest or
 install them. The official Linux x64 release (SHA-256 `f4a225fb...d738de`) ran in a
@@ -379,8 +383,52 @@ unknown event, so edit it with care.
   and `Interrupt` cannot say whose turn it ended, so such a report would stay until
   `SessionEnd` or the seven-day retention. A request delivered after `SessionEnd`
   is reported again. A `Stop` cannot retire a request, because a sub-agent's `Stop`
-  is identical to the root's. Release 2.6.2, a real provider, macOS, Windows and the
-  managed install lane ([#1636](https://github.com/mihazs/lazysh/issues/1636)) are not covered.
+  is identical to the root's. Release 2.6.2, a real provider, macOS and Windows are not covered.
+
+### Managed Kimi Code setup
+
+Use `lazysh-agent hooks discover --schema-version 4` to discover the current Kimi Code
+profile (`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and its managed capability. The app
+asks for version 4 first and falls back one version at a time only when an older companion
+rejects the schema; a malformed or failed answer never negotiates again, and a fallback
+version labels Kimi manual. Select the existing profile, then inspect and separately
+install, update or remove its exact plan with `--agent kimi-code`;
+`lazysh-agent hooks preview --agent kimi-code` prints the block without touching a profile.
+Legacy Kimi CLI 1.52.0 (`~/.kimi`) and a custom config path stay manual.
+
+The companion edits one foreign, secret-bearing file, so it only appends:
+
+- `config.toml` must already exist. A missing file is refused (`HooksKimiConfigRequired`)
+  and never created. Ownership is recorded in the private manifest
+  `.lazysh-hooks-kimi-code.json`, not in a field of the file: Kimi ignores the whole `hooks`
+  section when an entry has a fifth field.
+- The owned block is three `[[hooks]]` entries at the end of the file, the events of the
+  printed fragment (`PermissionRequest`, `PermissionResult`, `SessionEnd`) with `event`,
+  `command` and `timeout = 5` only. It is deterministic for the inspected companion, so it
+  can be found again at the end of the file.
+- Every earlier byte is kept as is: comments, secrets, CRLF line endings, a missing
+  final newline, foreign hooks and the file's mode. The text is parsed with `toml_edit`
+  before and after, so a result that is not valid TOML, or in which the owned entries are
+  not exactly the last hooks, is never written. A UTF-8 BOM is refused without rewriting:
+  Kimi Code 2.4.1 rejects it even when the remaining TOML is valid. Update and remove also
+  refuse a BOM-bearing managed file; resolve it manually before retrying.
+- Update and remove act only when the file ends with exactly the recorded block. A foreign
+  line after it, an edit inside it or the block moved elsewhere is a conflict and the file
+  is not rewritten; an edit before the block does not prevent removal, which only cuts the
+  block. Install is also refused when the file already has `hooks = [...]` inline, a
+  `[hooks]` table, invalid TOML or a foreign hook with the same event and command.
+- A crash is classified by the same private manifest: configured only for the exact
+  end-of-file block, never resumed or rolled back automatically.
+
+Restart Kimi Code afterwards; configuring the hooks does not prove they were loaded or
+that they report. Tests drive the real `lazysh-agent hooks` command against a temporary
+profile (byte-exact install and removal, tampering, interrupted writes, the quoted
+absolute command running the companion) and the client against schema fallback. The
+official Kimi Code 2.4.1 `kimi doctor`, run in a network-less sandbox, accepted a profile
+with a foreign hook followed by the owned block, and reports a hook with `timeout = 601` as an
+error; that one-off run is not part of CI. macOS filesystem qualification
+([#1527](https://github.com/mihazs/lazysh/issues/1527)), Windows, Release 2.6.2 and a real
+authenticated session are not covered.
 
 Droid managed setup uses the same six events and five-second deadline in its
 standalone event map, with the inspected companion’s quoted absolute path.
@@ -628,6 +676,7 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |
 | [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Explicit V3 managed system plugin and bounded observer; actual asset fixtures, native loading/order and authenticated runtime unverified |
 | [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |
+| [Kimi Code](https://moonshotai.github.io/kimi-code/) | `PermissionRequest`/`PermissionResult` for the root agent; `SessionEnd` | Opt-in 2.4 fragment and explicit V4 managed end-of-file block; root approval requests only, synthetic endpoint and `kimi doctor` qualification of 2.4.1 |
 | [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | Prompt/tool activity; permission notification; root CLI SessionEnd | Native observable callbacks and TOML fragment; unscoped per-turn completion remains unavailable; hooks are beta |
 
 Generic schema-1 ingestion remains available for explicit integrations, but a

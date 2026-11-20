@@ -1,6 +1,6 @@
 //! Read-only crash-state classification; it never resumes or rolls back a write.
 use super::{
-    json,
+    json, kimi_toml,
     record::{hash, Agent, FileState, Record},
     render,
 };
@@ -77,6 +77,16 @@ pub(super) fn classify(
             Observation::Configured
         } else {
             Observation::Prepared
+        });
+    }
+    if record.agent == Agent::KimiCode {
+        // Only an exact owned EOF suffix counts; a foreign append, edit or move after it is a conflict.
+        return Ok(match &record.next {
+            Some(owned) if matches!(kimi_toml::rewrite(text, &owned.entries, &owned.entries), Ok(ref same) if same == text) => {
+                Observation::Configured
+            }
+            None if current_hash == record.provider_after_sha256.as_deref() => Observation::Removed,
+            _ => Observation::Conflict,
         });
     }
     if record.agent == Agent::Cursor

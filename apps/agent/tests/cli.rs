@@ -1601,7 +1601,7 @@ fn cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows(
 #[test]
 fn hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles() {
     let directory = tempfile::tempdir().unwrap();
-    for version in ["0", "4", "-1", "latest", "256"] {
+    for version in ["0", "5", "-1", "latest", "256"] {
         let output = run(
             directory.path(),
             &["hooks", "discover", "--schema-version", version],
