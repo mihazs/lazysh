@@ -119,7 +119,7 @@ case "$linux$linux_runtimes$android_runtime$android_herdr$android_appium" in *tr
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
 # Outputs of jobs that are not required to merge and that no pull request selects: pushes keep them.
-main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios terminal_macos terminal_ios '
+main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios terminal_macos '
 
 native=false
 for output in \
