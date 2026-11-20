@@ -4073,6 +4073,9 @@ mod tests {
     mod file_download_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
+    #[cfg(target_os = "linux")]
+    #[path = "managed_herdr_fixture.rs"]
+    mod managed_herdr_fixture;
     #[cfg(unix)]
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
@@ -7261,6 +7264,8 @@ mod tests {
             "install_companion",
             "install_companion_from_device",
             "check_companion_update",
+            "install_managed_herdr",
+            "remove_managed_herdr",
             "restore_file_transfer",
             "restore_host_tools",
             "host_home",
@@ -7555,6 +7560,13 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH"]
+    async fn openssh_managed_herdr_installs_and_removes_only_its_own_binary() {
+        openssh_interoperability(OpenSshCheck::ManagedHerdr).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and a current-source companion binary"]
     async fn openssh_agent_board_and_approvals_through_companion_hooks() {
         openssh_interoperability(OpenSshCheck::AgentBoard).await;
@@ -7601,6 +7613,8 @@ mod tests {
         TemporaryAttachments,
         CompanionInstall,
         CompanionUnsupportedArchitecture,
+        #[cfg(target_os = "linux")]
+        ManagedHerdr,
         #[cfg(target_os = "linux")]
         AgentBoard,
         AccountUsage,
@@ -7699,6 +7713,8 @@ mod tests {
         #[cfg(target_os = "linux")]
         let environment = if matches!(check, OpenSshCheck::AgentBoard) {
             agent_board_fixture::environment(dir.path())
+        } else if matches!(check, OpenSshCheck::ManagedHerdr) {
+            companion_fixture::environment(dir.path())
         } else {
             environment
         };
@@ -7768,6 +7784,11 @@ mod tests {
         if matches!(check, OpenSshCheck::AuthListeners) {
             // Boxed: awaiting it inline grows this function's debug frame past a test thread's stack.
             Box::pin(auth_listeners_fixture::verify(&app, &id, dir.path())).await;
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if matches!(check, OpenSshCheck::ManagedHerdr) {
+            Box::pin(managed_herdr_fixture::verify(&app, &id, dir.path())).await;
             return;
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {

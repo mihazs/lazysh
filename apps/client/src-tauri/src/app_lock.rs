@@ -881,7 +881,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion_settings::get_host_browser_settings, crate::companion_settings::update_host_browser_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::check_companion_update, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion_settings::get_host_browser_settings, crate::companion_settings::update_host_browser_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::install_managed_herdr, crate::companion::remove_managed_herdr, crate::companion::check_companion_update, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -937,6 +937,12 @@ mod tests {
             check.cmd = "check_companion_update".into();
             check.body =
                 tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
+            let mut managed = request(nonce);
+            managed.cmd = "install_managed_herdr".into();
+            managed.body = installer.body.clone();
+            let mut removal = request(nonce);
+            removal.cmd = "remove_managed_herdr".into();
+            removal.body = check.body.clone();
             let mut hooks = request(nonce);
             hooks.cmd = "companion_hooks".into();
             hooks.body = tauri::ipc::InvokeBody::Json(
@@ -954,6 +960,8 @@ mod tests {
                 installer,
                 fallback,
                 check,
+                managed,
+                removal,
                 hooks,
                 discovery,
             ]
@@ -969,7 +977,7 @@ mod tests {
         };
         let admitted = |nonce: &str| {
             for request in protected_requests(Some(nonce)) {
-                let installer = request.cmd.starts_with("install_companion");
+                let installer = request.cmd.starts_with("install_");
                 let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
                 if installer {
                     assert!(error.get("phase").is_some_and(serde_json::Value::is_null));

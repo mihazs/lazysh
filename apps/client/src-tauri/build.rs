@@ -220,6 +220,8 @@ fn main() {
         "install_companion",
         "install_companion_from_device",
         "check_companion_update",
+        "install_managed_herdr",
+        "remove_managed_herdr",
         "companion_hooks",
         "companion_hook_discovery",
         "get_companion_settings",
