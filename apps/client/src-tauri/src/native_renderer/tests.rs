@@ -34,6 +34,7 @@ fn look() -> Look {
         font_family: "monospace".into(),
         font_px: 40.0 / 3.0,
         scale: 1.0,
+        system_fonts: false,
     }
 }
 
@@ -383,4 +384,30 @@ fn the_preferences_decide_the_cells_the_colours_and_the_fonts() {
         "an impossible font size is refused"
     );
     shown.shows(&reference(&text, &large, None), "and changes nothing");
+}
+
+#[test]
+fn with_system_fonts_text_is_drawn_from_a_font_and_follows_the_family_list() {
+    // A family no machine has: the generic name, or the renderer's bundled font, draws the text.
+    let fonts = Look {
+        font_family: "'No Such Font', monospace".into(),
+        system_fonts: true,
+        ..look()
+    };
+    let text = format!("{STEADY}fonts \x1b[1mbold\x1b[0m");
+    let dots = reference(&text, &look(), None);
+    let blank = Image::new(dots.width, dots.height, fonts.theme.background).unwrap();
+    let shown = Shown::new(&text, look());
+    shown.shows(&dots, "the reference glyphs without fonts");
+    // The preferences turn the fonts on, off and on again: the same pixels each way.
+    shown.host.set_look(fonts.clone()).unwrap();
+    wait("glyphs from a font", || shown.image().unwrap() != dots);
+    let drawn = shown.image().unwrap();
+    assert_ne!(drawn, blank, "a font draws the text, not nothing");
+    shown.host.set_look(look()).unwrap();
+    shown.shows(&dots, "the reference glyphs again");
+    shown.host.set_look(fonts.clone()).unwrap();
+    shown.shows(&drawn, "the font's glyphs again");
+    // A session attached with the fonts on draws them from its first surface.
+    Shown::new(&text, fonts).shows(&drawn, "the font's glyphs on a first surface");
 }

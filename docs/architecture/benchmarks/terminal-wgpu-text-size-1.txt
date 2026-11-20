@@ -1,0 +1,16 @@
+Binary size of swash (shaping + unhinted rasterization + color bitmaps and layers), measured with a scratch
+crate of two binaries: `base` reads the font file and prints its length; `with_swash` also shapes one
+cluster, builds a scaler and renders one glyph (Source::ColorOutline, ColorBitmap, Outline), the calls the
+text path makes. `cargo +1.96.1 build --release`, profile opt-level "s", lto true, codegen-units 1,
+panic abort, x86_64 Linux host, binaries stripped with `strip`.
+
+base.stripped        297808 bytes
+with_swash.stripped 1227216 bytes
+difference           929408 bytes (0.89 MiB)
+
+Android compile check of the same crate (`cargo +1.96.1 check --release --target T --bin with_swash`, no
+NDK, no C compiler involved):
+aarch64-linux-android   Finished
+x86_64-linux-android    Finished
+armv7-linux-androideabi not checked: the target is not installed for the 1.96.1 toolchain here
+i686-linux-android      not checked: the target is not installed for the 1.96.1 toolchain here

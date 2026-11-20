@@ -161,6 +161,12 @@ pub fn goldens() -> Vec<Golden> {
 /// Compare `image` with `<dir>/<name>.png` pixel for pixel. With `update` the golden is rewritten
 /// instead; a difference writes `<name>.actual.png` into the target directory and panics.
 pub fn assert_golden(dir: &str, name: &str, image: &Image, update: bool) {
+    assert_golden_within(dir, name, image, update, 0);
+}
+
+/// [`assert_golden`] that accepts a difference of up to `tolerance` per color channel: for images
+/// whose glyphs a rasterizer draws and a GPU blends, where the last bit is the driver's.
+pub fn assert_golden_within(dir: &str, name: &str, image: &Image, update: bool, tolerance: u8) {
     let path = format!("{dir}/{name}.png");
     let encode = |path: &str, image: &Image| {
         let mut encoder = png::Encoder::new(
@@ -185,10 +191,13 @@ pub fn assert_golden(dir: &str, name: &str, image: &Image, update: bool) {
         let info = reader.next_frame(&mut rgb).unwrap();
         (info.width, info.height, rgb)
     });
-    if decoded
-        .as_ref()
-        .is_ok_and(|(w, h, rgb)| (*w, *h, rgb) == (image.width, image.height, &image.rgb))
-    {
+    if decoded.as_ref().is_ok_and(|(w, h, rgb)| {
+        (*w, *h) == (image.width, image.height)
+            && rgb
+                .iter()
+                .zip(&image.rgb)
+                .all(|(a, b)| a.abs_diff(*b) <= tolerance)
+    }) {
         return;
     }
     let actual = format!("{}/{name}.actual.png", env!("CARGO_TARGET_TMPDIR"));

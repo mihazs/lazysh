@@ -15,12 +15,13 @@
 //! * **Device loss.** A lost GPU device is rebuilt and the screen redrawn from core state.
 //! * **Overlay.** The selection, and the text a keyboard is composing, drawn at the cursor.
 //! * **Appearance.** [`Look`] is the user's preferences: the theme (the cursor's colour included)
-//!   and the font. The cursor's shape and blink are the core's, frame by frame (#2218).
+//!   and the font: the machine's fonts for the family list, and the renderer's bundled one (#1325).
+//!   The cursor's shape and blink are the core's, frame by frame (#2218).
 //!
 //! Nothing in the app attaches a surface yet: the first caller is a platform surface (#1327).
 #![cfg_attr(not(test), allow(dead_code))]
 
-use lazysh_terminal_renderer_wgpu::{Target, WgpuRenderer};
+use lazysh_terminal_renderer_wgpu::{FontLibrary, Target, WgpuRenderer};
 use lazysh_terminal_runtime::{
     Appearance, BlinkClock, Cell, CellMetrics, CellStyle, CellWide, Frame, FramePacer, Overlay,
     RenderError, Selection, Session, SessionError, TerminalRenderer, Theme, BLINK_HALF_PERIOD,
@@ -61,12 +62,17 @@ pub(crate) struct Look {
     pub font_px: f32,
     /// Device pixels per CSS pixel.
     pub scale: f32,
+    /// Draw glyphs with the machine's fonts for `font_family` and the renderer's bundled font.
+    /// Without it glyphs are the reference renderer's dot patterns, which is what the tests that
+    /// compare pixels with that renderer draw.
+    pub system_fonts: bool,
 }
 
 impl Look {
     pub(crate) fn appearance(&self) -> Result<Appearance, RenderError> {
-        // shortcut: a cell is 0.6 x 1.2 of the font size until glyphs come from real fonts
-        // (#1325), which bring the font's own metrics.
+        // shortcut: a cell is 0.6 x 1.2 of the font size and the renderer fits the font to it (one
+        // cell is the advance of `0`); take the cell from the font's own metrics when a font
+        // whose advance is not 0.6 em shows text of the wrong size.
         let thirds = (self.font_px * self.scale * 3.0).round() as u32;
         Ok(Appearance {
             metrics: CellMetrics::default().scaled(thirds, 40)?,
@@ -78,6 +84,15 @@ impl Look {
                 .collect(),
             theme: self.theme,
         })
+    }
+
+    /// The fonts of `appearance`'s family list; none keeps the reference dot patterns.
+    fn fonts(&self, appearance: &Appearance) -> FontLibrary {
+        if self.system_fonts {
+            FontLibrary::system(&appearance.font_families)
+        } else {
+            FontLibrary::new()
+        }
     }
 }
 
@@ -304,6 +319,11 @@ impl Loop {
         }
         self.detach();
         let appearance = self.look.appearance().map_err(|e| e.to_string())?;
+        let target = if self.look.system_fonts {
+            target.with_fonts(self.look.fonts(&appearance))
+        } else {
+            target
+        };
         let mut renderer = WgpuRenderer::create(target, appearance).map_err(|e| e.to_string())?;
         if !self.active {
             renderer.suspend();
@@ -337,7 +357,16 @@ impl Loop {
 
     fn set_look(&mut self, look: Look) -> Result<(), String> {
         let appearance = look.appearance().map_err(|e| e.to_string())?;
-        self.change(|renderer| renderer.set_appearance(appearance.clone()))?;
+        // Another family list names other files: read them again.
+        let fonts = (look.font_family != self.look.font_family
+            || look.system_fonts != self.look.system_fonts)
+            .then(|| look.fonts(&appearance));
+        self.change(|renderer| {
+            renderer.set_appearance(appearance.clone())?;
+            fonts
+                .clone()
+                .map_or(Ok(()), |fonts| renderer.set_fonts(fonts))
+        })?;
         self.look = look;
         Ok(())
     }

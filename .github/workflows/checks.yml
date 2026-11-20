@@ -1207,6 +1207,7 @@ jobs:
             composing_text_stops_at_the_end_of_the_row_and_never_leaves_half_a_wide_character
             a_blinking_cursor_redraws_only_its_row_once_per_phase_without_any_output
             the_preferences_decide_the_cells_the_colours_and_the_fonts
+            with_system_fonts_text_is_drawn_from_a_font_and_follows_the_family_list
           )
           for case_name in "${guards[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "native_renderer::tests::$case_name" | grep -Fx -- "native_renderer::tests::$case_name: test"

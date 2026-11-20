@@ -6,7 +6,7 @@
 #[path = "../../../terminal-runtime/tests/support/mod.rs"]
 pub mod support;
 
-use lazysh_terminal_renderer_wgpu::{Policy, Target, WgpuRenderer};
+use lazysh_terminal_renderer_wgpu::{FontLibrary, Policy, Target, WgpuRenderer};
 use lazysh_terminal_runtime::{
     Appearance, Frame, Image, Overlay, ReferenceRenderer, TerminalRenderer, TerminalRuntime, Theme,
 };
@@ -29,6 +29,20 @@ pub fn gpu(cols: u16, rows: u16) -> WgpuRenderer {
 pub fn gpu_at(cols: u16, rows: u16, appearance: &Appearance) -> WgpuRenderer {
     let (width, height) = surface(cols, rows, appearance);
     let target = Target::new(width, height).with_policy(Policy::for_platform().with_software());
+    WgpuRenderer::create(target, appearance.clone()).expect("a GPU adapter is required")
+}
+
+/// A GPU renderer for `cols` x `rows` cells of `appearance` that draws glyphs with `fonts`.
+pub fn gpu_with_fonts(
+    cols: u16,
+    rows: u16,
+    appearance: &Appearance,
+    fonts: FontLibrary,
+) -> WgpuRenderer {
+    let (width, height) = surface(cols, rows, appearance);
+    let target = Target::new(width, height)
+        .with_policy(Policy::for_platform().with_software())
+        .with_fonts(fonts);
     WgpuRenderer::create(target, appearance.clone()).expect("a GPU adapter is required")
 }
 
