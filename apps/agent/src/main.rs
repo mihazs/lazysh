@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use lazysh_agent::{Agent, Error, Store};
 use std::io::{self, Write};
 
@@ -121,6 +121,8 @@ enum Command {
     },
     /// List TCP listeners on loopback or a wildcard address, to confirm a sign-in callback.
     Listeners(lazysh_agent::listeners::Options),
+    /// Review a repository: its changed files and the diff of one file. Read-only.
+    Review(lazysh_agent::review::Arguments),
     /// Inspect and explicitly control host Android devices or iOS Simulators.
     Devices {
         #[command(subcommand)]
@@ -550,6 +552,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             None
         }
         Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
+        Command::Review(arguments) => {
+            lazysh_agent::review::run(arguments, &mut io::stdout().lock())?;
+            None
+        }
         Command::ApprovalConfig { agent } => Some(lazysh_agent::approvals::config(agent)),
         Command::ApprovalRequest {
             agent,
@@ -879,7 +885,11 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_agent::browser::invoked_as_launcher() {
         return code;
     }
-    let cli = Cli::parse();
+    let command = lazysh_agent::review::localize(
+        Cli::command(),
+        lazysh_agent::review::locale_from_environment().as_deref(),
+    );
+    let cli = Cli::from_arg_matches_mut(&mut command.get_matches()).unwrap_or_else(|e| e.exit());
     if let Command::Update(args) = cli.command {
         return lazysh_agent::update::run(args);
     }
