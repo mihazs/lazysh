@@ -193,7 +193,7 @@ test.each([
   ['the shared companion release crate', ['packages/companion-release/src/lib.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
     `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2 }] as const),
-  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts',
+  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts', 'tests/speech-fixtures.test.ts',
     '.github/workflows/main-verdict.yml', 'tests/main-verdict.test.ts', '.github/workflows/conventional-commits.yml', 'tests/regression-check.test.ts', 'apps/transcription-service/src/main.rs', 'fdroid/metadata/app.lazysh.client.yml'], alwaysRun],
   ['the Windows composition probe, a standalone prototype crate with its own workflow', ['packages/terminal-runtime/prototypes/windows-surface/src/main.rs', '.github/workflows/windows-surface-probe.yml'], alwaysRun],
 ] as const)('a pull request changing %s runs exactly the jobs it can affect', async (_, paths, expected) => {

@@ -71,6 +71,20 @@ On the workflow-owned AVD only, `bun run test:android-fdroid` builds the FOSS em
 
 `LAZYSH_ANDROID_PUSH_VARIANT=google bunx moon run client:test-android-push-artifact` checks a previously built normal APK. Use `fdroid` for the Google-free variant; optionally set `LAZYSH_ANDROID_PUSH_APK` and `LAZYSH_ANDROID_PUSH_CONFIGURATION=universalReleaseRuntimeClasspath` for the unsigned release artifact. Both variants require the unchanged package/version identity and matching debug/release flag. The retained JSON contains the APK hash and fixed Google dependency/class/manifest booleans, not arbitrary manifest metadata. This verifies the identified Firebase/GMS blocker only; it is not a complete F-Droid licensing/scanner audit.
 
+## Local Whisper acceptance
+
+`bun run test:android-voice` is an explicit, uncached Linux/emulator-only task (`client:test-android-voice`). It depends on the emulator APK build and runs in the `native-android-auxiliary` job after the QR run. It needs an explicitly selected owned emulator (`ANDROID_SERIAL=emulator-NNNN`) and refuses any other device before running a command.
+
+The owner (`tests/support/androidVoice.ts`) checks the pinned `ggml-tiny.en.bin` (SHA-256 `921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`, 77,704,715 bytes) and `jfk.wav` (SHA-256 `59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e`) with `.github/scripts/speech-fixtures.sh`, the script `native-linux-runtimes` uses for the same files, so a replaced publisher file fails with the pin to update before the device changes. It pushes them to `/data/local/tmp/lazysh-voice-<random>` and runs only `NativeWorkspaceTest#ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView` with `-PlazyshVoiceAcceptance=true` (results under `outputs/androidTest-results/voice`). The case reads the files as the shell user, like the owned SSH fixture, so no storage permission is involved. It then:
+
+1. asserts `voice_models` is empty, imports the model through `voice_import_begin`, `voice_import_chunk` and `voice_import_finish` with 1 MiB chunks as the Voice panel does, and asserts the installed id and byte count;
+2. calls `voice_transcribe` with the 11-second JFK sample decoded to 16 kHz mono samples and asserts the transcript contains "ask not what your country can do for you";
+3. calls `voice_remove_model` and asserts `voice_models` is empty again.
+
+A failure at any stage cancels an open import, removes the model and deletes the staged directory; a cleanup failure never replaces the first failure. The ordinary `test:android` run excludes the case because it needs the staged files. Set `LAZYSH_RUNTIME_FIXTURES` to reuse a download directory.
+
+This runs the real bundled whisper.cpp on an x86_64 emulator. It does not cover ARM64 devices, the microphone, inference latency or battery use, and it does not run the Portuguese sample with `ggml-tiny.bin` (Android non-English inference). The parity matrix keeps the Android cells `implemented` until `native-android-auxiliary` is green on `main`.
+
 ## Owned QR camera acceptance
 
 The owned runtime build explicitly sets `VITE_LAZYSH_QR_CAMERA_TRACE=1`. Only that exact build-time value enables seven fixed console warnings at the real camera continuation boundaries: request, resolved, rejected, stale, attached, play_resolved and play_rejected. Normal builds do not log these markers. They contain no stream identifiers, payloads, device details or exception data, and logger failures are ignored. The `client:build-android-emulator` task declares this input through the process environment. These markers distinguish a pending media request from late stale resolution, actual video attachment and play-promise settlement without wrapping the API, adding observers or changing the original deadlines. They do not establish pixel delivery or successful decoding.
