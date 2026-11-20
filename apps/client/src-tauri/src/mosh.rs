@@ -381,7 +381,7 @@ impl EntryStartup {
                     *child.bindings.herdr.lock().map_err(|_| entry_failed())? =
                         Some(crate::herdr_guard::start(
                             startup,
-                            child.handle.clone(),
+                            crate::herdr_guard::Route::Ssh(child.handle.clone()),
                             child.cancel.subscribe(),
                         ));
                 }

@@ -125,7 +125,10 @@ install semaphore move from `ssh::Session` into a small `Bindings` struct embedd
 both session types. `TmuxServer::for_session`, `tmux_jump`, `tmux_chat` and
 `herdr_guard` take `&Bindings`. Their actors become generic over a byte stream plus a
 close signal, so a local `tmux -C attach-session` child or a local guarded `herdr`
-child drives the same parser, budgets and admission checks. Locally the tmux display
+child drives the same parser, budgets and admission checks. The Herdr guard splits
+that in two: the first frame comes off the display stream (the PTY locally, the
+channel over SSH) and each request runs through a `Route`, an SSH exec channel or a
+one-shot local `herdr api guarded` child. Locally the tmux display
 identity comes from the owned PTY (`child.process_id()`, `MasterPty::tty_name()`), so
 the printf handshake is not needed.
 

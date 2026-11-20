@@ -30,6 +30,7 @@ async fn guard(
     let result = crate::herdr_guard::herdr_chat(
         lease.clone(),
         app.state(),
+        app.state(),
         session.session_id.clone(),
         serde_json::from_value(action).unwrap(),
     )
@@ -399,8 +400,26 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
             &child,
             json!({"kind":"prepare","source":source}),
         )
-        .await
-        .unwrap();
+        .await;
+        let inspected = match inspected {
+            Ok(inspected) => inspected,
+            Err(error) => {
+                // This probe happens after the failure; it cannot establish what
+                // the display or ownership state was when preparation failed.
+                let observation = guard(&app, &lease, &child, json!({"kind":"observe"})).await;
+                let readiness = match observation {
+                    Ok(reply) => match &seeded {
+                        Some((_, pane, _)) if reply["destination"]["pane"] == *pane => {
+                            "expected-pane".to_owned()
+                        }
+                        Some(_) => "different-pane".to_owned(),
+                        None => "observable".to_owned(),
+                    },
+                    Err(error) => format!("unobservable ({error})"),
+                };
+                panic!("guard prepare failed: {error}; user_install={user_install}; preseed={preseed}; post-failure display={readiness}");
+            }
+        };
         let pane = inspected["destination"]["pane"].as_str().unwrap();
         let original_pid = if let Some((_, expected_pane, pid)) = &seeded {
             assert_eq!(pane, expected_pane);

@@ -289,7 +289,7 @@ async fn revoked_original_binding_lease_cannot_dispatch_through_a_fresh_call_lea
             ownership: secret.clone(),
             name: "original".into(),
         },
-        handle: fixture.session.handle.clone(),
+        route: Route::Ssh(fixture.session.handle.clone()),
         preparation: 1,
         bound: Some(Bound {
             token: token.clone(),
@@ -502,4 +502,228 @@ fn a_long_prompt_is_a_tmux_paste_and_a_herdr_pane_refuses_it() {
         "input":{"kind":"send_long","text":"y".repeat(5000)}}))
     .unwrap();
     assert!(action.validate().is_err());
+}
+
+/// A display that yields its chunks one read at a time, as a PTY does.
+struct Chunks(std::collections::VecDeque<Vec<u8>>);
+impl io::Read for Chunks {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let Some(mut chunk) = self.0.pop_front() else {
+            return Ok(0);
+        };
+        if chunk.len() > out.len() {
+            self.0.push_front(chunk.split_off(out.len()));
+        }
+        out[..chunk.len()].copy_from_slice(&chunk);
+        Ok(chunk.len())
+    }
+}
+fn chunked(bytes: &[u8], size: usize) -> Chunks {
+    Chunks(bytes.chunks(size).map(<[u8]>::to_vec).collect())
+}
+fn displayed(reader: &mut impl io::Read) -> io::Result<Vec<u8>> {
+    let (mut shown, mut buffer) = (Vec::new(), [0u8; 64]);
+    loop {
+        match reader.read(&mut buffer)? {
+            0 => return Ok(shown),
+            count => shown.extend_from_slice(&buffer[..count]),
+        }
+    }
+}
+
+#[test]
+fn a_local_display_never_shows_its_private_first_frame() {
+    let mut stream = private_frame();
+    stream.extend_from_slice(b"public rendered terminal bytes");
+    // The frame may arrive in any split, including one that ends exactly where it ends.
+    for size in [1, 3, 7, private_frame().len(), stream.len()] {
+        let (ticket, delivered) = oneshot::channel();
+        let mut reader = StartupReader::new(chunked(&stream, size), ticket);
+        assert_eq!(
+            displayed(&mut reader).unwrap(),
+            b"public rendered terminal bytes",
+            "split {size}"
+        );
+        let ticket = delivered.blocking_recv().unwrap();
+        assert!(ticket.boot.0 == "ab".repeat(32) && ticket.ticket.0 == "cd".repeat(32));
+    }
+}
+
+#[test]
+fn a_local_display_that_does_not_open_with_the_frame_is_refused() {
+    let mut late = b"untrusted output before the frame".to_vec();
+    late.extend_from_slice(&private_frame());
+    let mut oversized = PREFIX.to_vec();
+    oversized.extend_from_slice(format!("{:08x}:", FRAME_BODY + 1).as_bytes());
+    for stream in [late, oversized] {
+        let (ticket, mut delivered) = oneshot::channel();
+        let mut reader = StartupReader::new(chunked(&stream, 5), ticket);
+        let error = displayed(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(delivered.try_recv().is_err());
+    }
+}
+
+#[test]
+fn a_local_display_that_ends_before_its_frame_supplies_no_ticket() {
+    let (ticket, mut delivered) = oneshot::channel();
+    let partial = &private_frame()[..private_frame().len() - 1];
+    let mut reader = StartupReader::new(chunked(partial, 4), ticket);
+    assert!(displayed(&mut reader).unwrap().is_empty());
+    drop(reader);
+    assert!(matches!(
+        delivered.try_recv(),
+        Err(oneshot::error::TryRecvError::Closed)
+    ));
+}
+
+#[cfg(unix)]
+mod local_exchange {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A `herdr` on the PATH of the exchange that runs `script` and records where `$LOG` points.
+    struct FakeHerdr {
+        directory: tempfile::TempDir,
+    }
+    impl FakeHerdr {
+        fn new(script: &str) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::create_dir(directory.path().join("bin")).unwrap();
+            let herdr = directory.path().join("bin/herdr");
+            std::fs::write(&herdr, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self { directory }
+        }
+        fn at(&self, name: &str) -> std::path::PathBuf {
+            self.directory.path().join(name)
+        }
+        fn local(&self) -> Local {
+            Local {
+                env: vec![
+                    (
+                        "PATH".into(),
+                        format!("{}:/usr/bin:/bin", self.at("bin").display()),
+                    ),
+                    ("LOG".into(), self.directory.path().display().to_string()),
+                ],
+            }
+        }
+        async fn call(&self, name: &str) -> WireOutcome<WireResult> {
+            let lease = crate::app_lock::AccessState::disabled()
+                .lease(None)
+                .unwrap();
+            let (_open, mut cancel) = watch::channel(false);
+            rpc(
+                &Route::Local(self.local()),
+                name,
+                &lease,
+                &mut cancel,
+                "lazysh.guard.release",
+                &json!({"receipt":"r"}),
+                &mut None,
+            )
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn the_request_reaches_herdr_on_stdin_and_the_name_stays_one_argument() {
+        let herdr = FakeHerdr::new(
+            r#"printf '%s\n' "$@" > "$LOG/argv"; cat > "$LOG/stdin"; printf '{"id":"guard","result":{"type":"ok"}}'"#,
+        );
+        assert!(matches!(
+            herdr.call("own'ed $(touch NO) `x`").await,
+            Ok(WireResult::Ok {})
+        ));
+        assert_eq!(
+            std::fs::read_to_string(herdr.at("argv")).unwrap(),
+            "--session\nown'ed $(touch NO) `x`\napi\nguarded\n"
+        );
+        let request: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(herdr.at("stdin")).unwrap()).unwrap();
+        assert_eq!(
+            request,
+            json!({"id":"guard","method":"lazysh.guard.release","params":{"receipt":"r"}})
+        );
+        assert!(!herdr.at("NO").exists());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_on_stderr_with_exit_one_keeps_its_meaning() {
+        for (code, expected) in [
+            ("guard_stale", Fault::Stale),
+            ("guard_busy", Fault::Busy),
+            ("guard_uncertain", Fault::Uncertain),
+            ("anything_else", Fault::Protocol),
+        ] {
+            let herdr = FakeHerdr::new(&format!(
+                r#"cat > /dev/null; printf '{{"id":"guard","error":{{"code":"{code}","message":"{code}"}}}}' >&2; exit 1"#
+            ));
+            assert_eq!(herdr.call("n").await.err(), Some(expected), "{code}");
+        }
+        // Output on the wrong stream, or with the wrong status, is not a reply.
+        let herdr = FakeHerdr::new(
+            r#"cat > /dev/null; printf '{"id":"guard","result":{"type":"ok"}}'; exit 3"#,
+        );
+        assert_eq!(herdr.call("n").await.err(), Some(Fault::Protocol));
+    }
+
+    #[tokio::test]
+    async fn a_reply_over_the_budget_is_a_protocol_fault() {
+        // The request is drained first: a child that exits before reading it breaks the pipe under load.
+        let herdr = FakeHerdr::new("cat > /dev/null; head -c 40000 /dev/zero | tr '\\0' x");
+        assert_eq!(herdr.call("n").await.err(), Some(Fault::Protocol));
+    }
+
+    #[tokio::test]
+    async fn an_exchange_past_its_deadline_is_uncertain_and_its_process_ends() {
+        let herdr = FakeHerdr::new(r#"echo $$ > "$LOG/pid"; exec sleep 30"#);
+        let started = tokio::time::Instant::now();
+        assert_eq!(herdr.call("n").await.err(), Some(Fault::Uncertain));
+        assert!(started.elapsed() < DEADLINE + Duration::from_secs(2));
+        let pid = std::fs::read_to_string(herdr.at("pid")).unwrap();
+        // A killed child may linger as a zombie until it is reaped; it must not run.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let state = std::process::Command::new("ps")
+                    .args(["-o", "stat=", "-p", pid.trim()])
+                    .output()
+                    .unwrap();
+                let state = String::from_utf8_lossy(&state.stdout);
+                if state.trim().is_empty() || state.trim().starts_with('Z') {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the guard process outlived its exchange");
+    }
+
+    #[tokio::test]
+    async fn only_the_exact_invalid_probe_reply_admits_the_guard_on_this_device() {
+        let lease = crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap();
+        let probe = |script: &'static str| {
+            let lease = lease.clone();
+            async move {
+                let herdr = FakeHerdr::new(script);
+                let (_open, mut cancel) = watch::channel(false);
+                available_local(herdr.local(), "n", &lease, &mut cancel).await
+            }
+        };
+        assert!(
+            probe(r#"cat > /dev/null; printf '{"id":"guard","error":{"code":"guard_invalid","message":"guard_invalid"}}' >&2; exit 1"#).await
+        );
+        // Stock Herdr does not know the subcommand, and a Herdr that is not there cannot start.
+        assert!(!probe("cat > /dev/null; echo 'unknown option' >&2; exit 2").await);
+        assert!(!probe(r#"printf '{"id":"guard","result":{"type":"ok"}}'"#).await);
+        let missing = Local {
+            env: vec![("PATH".into(), "/nonexistent".into())],
+        };
+        let (_open, mut cancel) = watch::channel(false);
+        assert!(!available_local(missing, "n", &lease, &mut cancel).await);
+    }
 }
