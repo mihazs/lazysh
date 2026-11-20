@@ -2,9 +2,11 @@
 //! bytes in xterm.js 5.5.0 (`fixtures/links.json`; `apps/client/src/xterm/linksFixture.test.ts` replays
 //! them through the TypeScript code and fails if the recorded results drift).
 
+mod replay;
 mod support;
 
 use lazysh_terminal_runtime::CellRange;
+use replay::*;
 use serde_json::{json, Value};
 use support::*;
 
@@ -85,6 +87,34 @@ fn a_row_past_the_end_and_a_row_of_a_huge_wrapped_line_cost_nothing_unbounded() 
     let total = rt.viewport().unwrap().length;
     let found = rt.find_urls(total - 1).unwrap();
     assert!(found.len() <= 1, "one bounded answer");
+}
+
+#[test]
+fn a_url_wrapped_over_rows_far_outside_the_control_window_still_resolves_on_each_row() {
+    use lazysh_terminal_runtime::CONTROL_WINDOW_MAX;
+    let url = format!("https://example.com/{}", "a".repeat(40));
+    let mut rt = runtime(20, 5);
+    // The URL (60 characters) soft-wraps over three rows, then more than the largest window of rows scrolls it away.
+    let mut output = format!("{url}\r\n").into_bytes();
+    output
+        .extend((0..CONTROL_WINDOW_MAX + 200).flat_map(|i| format!("filler {i}\r\n").into_bytes()));
+    feed(&mut rt, &output);
+    let view = rt.viewport().unwrap();
+    assert!(
+        view.top > CONTROL_WINDOW_MAX + 100,
+        "the URL is far above the viewport"
+    );
+    for row in 0..3 {
+        let found = rt.find_urls(row).unwrap();
+        assert_eq!(found.len(), 1, "row {row}");
+        assert_eq!(found[0].text, url, "row {row}");
+        assert_eq!(
+            (found[0].range.start.y, found[0].range.end.y),
+            (0, 2),
+            "row {row}"
+        );
+    }
+    assert!(rt.find_urls(3).unwrap().is_empty());
 }
 
 #[test]
