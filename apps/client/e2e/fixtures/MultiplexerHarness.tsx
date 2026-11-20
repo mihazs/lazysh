@@ -10,6 +10,7 @@ export function mountMultiplexerHarness() {
     if(command==='multiplexer_tree')return muxFixture;
     if(command==='multiplexer_sessions')return [{name:remoteMuxName}];
     if(command==='herdr_tree')return herdrFixture;
+    if(command==='herdr_action')return;
     if(command==='zellij_action')return new Promise<void>(resolve=>{complete=resolve;});
     if(command==='tmux_action')throw remoteMuxError;
     throw new Error(`Unexpected fixture command: ${command}`);

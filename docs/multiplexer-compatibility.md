@@ -136,10 +136,10 @@ implemented without full evidence, *part* means partial.
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
 | Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
 | Agent launch | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
-| Rename | session, window; pane → #1144 | no → #1144 | workspace, tab; pane → #1144 | no → #1140, #1144 |
-| Close | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
+| Rename | session, window; pane → #1144 | no → #1144 | workspace, tab, pane | no → #1140, #1144 |
+| Close | no → #1144 | no → #1144 | workspace, tab (#1573), pane | no → #1144 |
 | Split, zoom | yes | yes | yes | no → #1140 |
-| Resize | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
+| Resize | no → #1144 | no → #1144 | yes | no → #1144 |
 | History | prefix+[ only → #1147 | no → #1147 | no → #1147 | no → #1147 |
 | OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
