@@ -107,8 +107,9 @@ impl Fixture {
         .collect()
     }
 
-    fn command(&self, session: &str) -> Command {
-        let mut command = Command::new(&self.executable);
+    /// The owned environment without a session: `executable` runs with private roots only.
+    fn command_for(&self, executable: &std::path::Path) -> Command {
+        let mut command = Command::new(executable);
         command
             .env_clear()
             .envs(self.environment())
@@ -121,10 +122,34 @@ impl Fixture {
             .env("TERM", "xterm-256color")
             .env("LANG", "C.UTF-8")
             .env("HERDR_DISABLE_SOUND", "1")
-            .env("HERDR_GUARD_SSH_MARKER", self.base.join("ssh-attempted"))
+            .env("HERDR_GUARD_SSH_MARKER", self.base.join("ssh-attempted"));
+        command
+    }
+
+    fn command(&self, session: &str) -> Command {
+        let mut command = self.command_for(&self.executable);
+        command
             .args(["--session", session])
             .current_dir(self.base.join(session));
         command
+    }
+
+    /// A `curl` first on PATH that records every call and fails. The updater and the background
+    /// checks fetch through `curl`, so the log holds exactly what the build tried to download.
+    #[cfg(feature = "lazysh-managed")]
+    fn record_curl_calls(&self) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let bin = self.base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let log = self.base.join("curl-calls");
+        let curl = bin.join("curl");
+        fs::write(
+            &curl,
+            format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit 22\n", log.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+        log
     }
 
     fn data(&self, session: &str) -> PathBuf {
@@ -571,6 +596,101 @@ fn managed_build_keeps_sockets_config_and_state_in_its_own_namespace() {
         .filter(|name| matches!(name.as_str(), "herdr" | "herdr-dev") || name.starts_with(".herdr"))
         .collect();
     assert!(stock.is_empty(), "stock Herdr names created: {stock:?}");
+}
+
+#[cfg(feature = "lazysh-managed")]
+fn sha256(path: &std::path::Path) -> Vec<u8> {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut fs::File::open(path).unwrap(), &mut hasher).unwrap();
+    hasher.finalize().to_vec()
+}
+
+/// Upstream's `herdr update` and the self-update behind `herdr channel set` download a stock
+/// release over the running executable. The managed build must leave its bytes, its directory and
+/// the network alone, and say that updates arrive only through lazysh.
+#[cfg(feature = "lazysh-managed")]
+#[test]
+fn managed_build_refuses_to_replace_itself_with_a_stock_release() {
+    let fixture = Fixture::new();
+    let curl_calls = fixture.record_curl_calls();
+    for (_, path) in fixture.environment() {
+        fs::create_dir_all(path).unwrap();
+    }
+    // A private copy stands for the installed executable, so a regression can only rewrite it.
+    let installed = fixture.base.join("installed");
+    fs::create_dir(&installed).unwrap();
+    let executable = installed.join("herdr");
+    fs::copy(&fixture.executable, &executable).unwrap();
+    let digest = sha256(&executable);
+    for (args, code) in [
+        (&["update"][..], 1),
+        (&["update", "--handoff"], 1),
+        (&["channel", "set", "stable"], 0),
+        (&["channel", "set", "preview"], 1),
+    ] {
+        let output = fixture
+            .command_for(&executable)
+            .args(args)
+            .current_dir(&fixture.base)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&[output.stdout, output.stderr].concat()).into_owned();
+        assert_eq!(output.status.code(), Some(code), "herdr {args:?}: {text}");
+        assert!(
+            text.contains("only through lazysh"),
+            "herdr {args:?} gave no reason: {text}"
+        );
+    }
+    assert!(
+        !curl_calls.exists(),
+        "an update command downloaded: {}",
+        fs::read_to_string(&curl_calls).unwrap_or_default()
+    );
+    assert_eq!(sha256(&executable), digest, "the executable was rewritten");
+    let beside: Vec<_> = fs::read_dir(&installed)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        beside,
+        ["herdr"],
+        "an update left files beside the executable"
+    );
+}
+
+/// Every running server polls the stock update manifest in the background, but upstream only
+/// does so in builds without debug assertions. Run this with
+/// `--config 'profile.dev.package.herdr.debug-assertions=false'` (a release build runs it too).
+/// The server's other background check, the agent-detection refresh, proves the polling is live,
+/// and it is the only fetch the managed build may make.
+#[cfg(feature = "lazysh-managed")]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "background checks do not run with debug assertions"
+)]
+#[test]
+fn managed_build_background_checks_never_poll_the_stock_update_manifest() {
+    let mut fixture = Fixture::new();
+    let config = fixture.base.join("config.toml");
+    let enabled = fs::read_to_string(&config)
+        .unwrap()
+        .replace("check = false", "check = true");
+    fs::write(&config, enabled).unwrap();
+    let curl_calls = fixture.record_curl_calls();
+    fixture.start("background");
+    let deadline = Instant::now() + BOUND;
+    while !fs::read_to_string(&curl_calls).is_ok_and(|calls| calls.contains("/agent-detection/")) {
+        assert!(Instant::now() < deadline, "no background check ran");
+        thread::sleep(Duration::from_millis(10));
+    }
+    // The update check starts beside the agent-detection refresh; give a regression time to show.
+    thread::sleep(Duration::from_millis(500));
+    let calls = fs::read_to_string(&curl_calls).unwrap();
+    assert!(
+        calls.lines().all(|call| call.contains("/agent-detection/")),
+        "a background check left the agent-detection catalog: {calls}"
+    );
 }
 
 #[test]

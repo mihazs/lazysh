@@ -63,6 +63,16 @@ mod terminal_notify;
 mod terminal_theme;
 mod thread_spawn;
 mod ui;
+#[cfg(not(feature = "lazysh-managed"))]
+mod update;
+// The managed build never replaces itself with a stock release: the unchanged upstream updater
+// stays compiled (and unreachable) beside the owned module that answers for `crate::update`.
+#[cfg(feature = "lazysh-managed")]
+#[allow(dead_code)]
+#[path = "update.rs"]
+mod stock_update;
+#[cfg(feature = "lazysh-managed")]
+#[path = "../../herdr-guard/managed_update.rs"]
 mod update;
 mod workspace;
 mod worktree;
