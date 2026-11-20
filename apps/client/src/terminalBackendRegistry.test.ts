@@ -48,6 +48,15 @@ describe('terminal backend selection', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
+  it('answers Settings with the reason a selection would record for a backend, or nothing when it is usable', async () => {
+    expect(await registry().r.refusal('native')).toBeUndefined();
+    expect(await registry({probe: {ok: false, reason: 'no Vulkan'}}).r.refusal('native')).toBe('no Vulkan');
+    const {r, probe} = registry({capabilities: {accessibility: false}});
+    expect(await r.refusal('native', ['accessibility'])).toBe('lacks accessibility');
+    expect(probe).not.toHaveBeenCalled();
+    expect(await createBackendRegistry().refusal('native')).toBe('not registered');
+  });
+
   it('probes once and creates the selected adapter', async () => {
     const {r, probe} = registry();
     await r.select({preference: 'native'});

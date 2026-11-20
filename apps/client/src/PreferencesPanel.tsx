@@ -13,6 +13,7 @@ import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
 import {setShowTopBar, useShowTopBar} from "./sideMenuMode";
 import GestureTestPage from "./GestureTestPage";
+import TerminalEngineChoice from "./TerminalEngineChoice";
 import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, gestureModes, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { providerName, usageProviders, type UsageBarMode } from "./usageAgentProvider";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
@@ -120,6 +121,8 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[],termi
     <label><input type="checkbox" checked={preferences.screenReader} onChange={e => update({screenReader: e.target.checked})} />{t("preferencesScreenReaderAnnouncements")}</label>
     <label><input type="checkbox" checked={preferences.pinchZoom} onChange={e => update({pinchZoom: e.target.checked})} />{t("preferencesPinchWithTwoFingersToResizeTerminalText")}</label>
     <label><input type="checkbox" checked={preferences.autoHideToolbar} onChange={e => update({autoHideToolbar: e.target.checked})} />{t("preferencesAutoHideToolbarInDesktopPointerLayouts")}</label>
+    <h3 className="settings-group-title">{t("settingsGroupTerminalEngine")}</h3>
+    <TerminalEngineChoice engine={preferences.terminalEngine} screenReader={preferences.screenReader} update={update} />
 
 </>},
 {id:"input",section:"input",title:t("preferencesCategoryInput"),content:<>

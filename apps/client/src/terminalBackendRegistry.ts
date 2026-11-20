@@ -47,18 +47,24 @@ export function createBackendRegistry() {
     return result;
   };
 
+  /** Why a session needing `requires` cannot use this backend, or undefined when it can: the one rule selection and Settings share. */
+  async function refusal(id: TerminalBackendId, requires: SelectOptions['requires'] = []): Promise<string | undefined> {
+    const backend = backends.get(id);
+    if (!backend) return NOT_REGISTERED;
+    const missing = requires.filter(capability => !backend.capabilities[capability]);
+    if (missing.length) return `${LACKS_PREFIX}${missing.join(', ')}`;
+    const probe = await probeOnce(backend);
+    return probe.ok ? undefined : probe.reason;
+  }
+
   async function select({preference = 'auto', override, requires = []}: SelectOptions = {}): Promise<BackendSelection> {
     const wanted = override ?? preference;
     const source = override ? 'developer override' : 'preference';
     const order = wanted === 'auto' ? [...backends.values()].filter(backend => backend.autoEligible && backend.id !== FALLBACK).map(backend => backend.id) : [wanted];
     const fallbacks: BackendSelection['fallbacks'] = [];
     for (const id of [...order, ...(order.includes(FALLBACK) ? [] : [FALLBACK])]) {
-      const backend = backends.get(id);
-      if (!backend) { fallbacks.push({id, reason: NOT_REGISTERED}); continue; }
-      const missing = requires.filter(capability => !backend.capabilities[capability]);
-      if (missing.length) { fallbacks.push({id, reason: `${LACKS_PREFIX}${missing.join(', ')}`}); continue; }
-      const probe = await probeOnce(backend);
-      if (!probe.ok) { fallbacks.push({id, reason: probe.reason}); continue; }
+      const reason = await refusal(id, requires);
+      if (reason !== undefined) { fallbacks.push({id, reason}); continue; }
       return {id, reason: fallbacks.length ? 'fallback' : wanted === 'auto' ? 'automatic' : source, fallbacks};
     }
     throw new Error(`No terminal backend is usable: ${fallbacks.map(f => `${f.id} (${f.reason})`).join('; ')}`);
@@ -72,6 +78,7 @@ export function createBackendRegistry() {
       backends.set(backend.id, backend);
     },
     select,
+    refusal,
     async create(options?: SelectOptions) {
       const selection = await select(options);
       return {selection, adapter: await backends.get(selection.id)!.create()};

@@ -1,6 +1,7 @@
 import {getPreferences} from './preferences';
 import {nativeCapabilities} from './nativeTerminalAdapter';
 import {createNativeTerminalAdapter, probeNativeCore} from './tauriNativeCoreBridge';
+import type {TerminalBackendId} from './terminalAdapter';
 import {createBackendRegistry, type BackendPreference, type BackendRegistration, type SelectOptions} from './terminalBackendRegistry';
 import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
@@ -44,6 +45,9 @@ export const screenReaderRequirements = (screenReader: boolean): NonNullable<Sel
 
 /** The engine Auto gives a new session on this device now. */
 export const defaultTerminalEngine = async (backends: Pick<typeof registry, 'select'> = registry) => (await backends.select({requires: screenReaderRequirements(getPreferences().screenReader)})).id;
+
+/** Why a new session cannot use `id` now, as the registry would record it (undefined: it can); Settings shows it beside the choice. */
+export const backendRefusal = (id: TerminalBackendId, screenReader: boolean) => registry.refusal(id, screenReaderRequirements(screenReader));
 
 /** The terminal of one new session, from the backend selection rules. */
 export function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {

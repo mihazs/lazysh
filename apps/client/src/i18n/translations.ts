@@ -2568,6 +2568,11 @@ const translations = {
   terminalEngineProbeFailed: ["o mecanismo nativo não pode ser executado aqui ({{detail}})", "el motor nativo no puede ejecutarse aquí ({{detail}})"],
   terminalEngineChanged: ["O mecanismo de terminal mudou nesta plataforma. Volte ao anterior em Configurações, Mecanismo de terminal.", "El motor de terminal cambió en esta plataforma. Vuelve al anterior en Configuración, Motor de terminal."],
   terminalEngineChangedOpenSettings: ["Abrir Configurações", "Abrir Configuración"],
+  settingsGroupTerminalEngine: ["Mecanismo de terminal", "Motor de terminal"],
+  preferencesTerminalEngine: ["Mecanismo das novas sessões", "Motor de las nuevas sesiones"],
+  preferencesTerminalEngineAuto: ["Automático", "Automático"],
+  preferencesTerminalEngineHelp: ["Vale para as sessões que você abrir daqui em diante; uma sessão já aberta mantém o mecanismo. Automático deixa o lazysh escolher a cada sessão e registra o motivo.", "Se aplica a las sesiones que abras desde ahora; una sesión ya abierta conserva su motor. Automático deja que lazysh elija en cada sesión y registra el motivo."],
+  preferencesTerminalEngineNativeOff: ["Nativo está desativado: {{reason}}.", "Nativo está desactivado: {{reason}}."],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;

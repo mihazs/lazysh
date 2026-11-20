@@ -2562,4 +2562,9 @@ export const english = {
   terminalEngineProbeFailed: "the native engine cannot run here ({{detail}})",
   terminalEngineChanged: "The terminal engine changed on this platform. Switch back in Settings, Terminal engine.",
   terminalEngineChangedOpenSettings: "Open Settings",
+  settingsGroupTerminalEngine: "Terminal engine",
+  preferencesTerminalEngine: "Engine for new sessions",
+  preferencesTerminalEngineAuto: "Auto",
+  preferencesTerminalEngineHelp: "Applies to sessions you open from now on; a session that is already open keeps its engine. Auto lets lazysh choose for each session and records why.",
+  preferencesTerminalEngineNativeOff: "Native is turned off: {{reason}}.",
 } as const;
