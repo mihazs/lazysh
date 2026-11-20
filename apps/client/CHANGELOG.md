@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.91.1
+
+### Patch Changes
+
+- change: Probe whether a native surface can sit below the transparent web view on macOS (#1333) ([#2152](https://github.com/mihazs/lazysh/pull/2152))
+
+  <details><summary>Details</summary>
+
+  Probe whether a native surface can sit below the transparent web view on macOS (#1333): a standalone test host builds the real tao and wry window, puts a `CAMetalLayer` view below the `WKWebView` inside wry's `WryWebViewParent`, and a macOS CI job reads the window back from the window server to judge placement, DOM overlap, resize and recreate at 1x and 2x. Test infrastructure only; the app is unchanged and xterm.js stays the terminal on macOS.
+
+  </details>
+- build: Build and test the shared terminal core and its wgpu renderer on Windows (#1332, part of #1302) ([#2127](https://github.com/mihazs/lazysh/pull/2127))
+
+  <details><summary>Details</summary>
+
+  Build and test the shared terminal core and its wgpu renderer on Windows (#1332, part of #1302): a `terminal-windows` CI job on `windows-latest` compiles libghostty-vt with Zig 0.16.0 for `x86_64-pc-windows-msvc` against the runner's MSVC and Windows SDK headers (`LIBGHOSTTY_VT_WINDOWS_LIBC`), runs the runtime crate's tests, and runs the renderer crate's tests on Direct3D 12 with the WARP software adapter. Build and CI only; the app does not use the core yet, no Windows surface exists, and xterm.js stays the only engine.
+
+  </details>
+
 ## 1.91.0
 
 ### Minor Changes
