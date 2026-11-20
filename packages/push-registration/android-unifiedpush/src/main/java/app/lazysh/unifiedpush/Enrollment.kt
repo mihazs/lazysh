@@ -50,6 +50,9 @@ internal data class Challenge(val deviceId: String, val generation: Long, val ch
 }
 internal interface EnrollmentStore { var value: EnrollmentState? }
 
+/** What became of one pushed message. Counted in memory only, never with any value from it. */
+internal enum class MessageOutcome { OTHER, ERROR, GATE, STATE, BINDING, PHASE, BUFFERED, BUSY, CHALLENGE, CONFIRMING }
+
 /** Every implementation must hold the registration gate before invoking action.
  * Enrollment never calls this gate while holding its own monitor. */
 internal interface EnrollmentGate {
@@ -113,6 +116,10 @@ internal class EnrollmentController(
     fun state(): EnrollmentState? = synchronized(lock) { store.value }
     fun busy(): Boolean = synchronized(lock) { active != null }
     fun unavailable():Boolean = synchronized(lock) { storageFailed }
+    private val outcomes = java.util.EnumMap<MessageOutcome, Int>(MessageOutcome::class.java)
+    fun record(outcome: MessageOutcome) = synchronized(lock) { outcomes.merge(outcome, 1) { a, _ -> minOf(a + 1, 2) }; Unit }
+    /** Diagnostics only: tells a message the distributor never delivered from one the app dropped. */
+    fun deliveries(): Map<MessageOutcome, Int> = synchronized(lock) { outcomes.toMap() }
 
     /** Keep original consent and the confirmed private binding live through the
      * bounded display admission/post; do not capture authority and use it later. */
@@ -198,16 +205,24 @@ internal class EnrollmentController(
     }
     fun message(instance: String, proof: Challenge) {
         var captured: EnrollmentState? = null
-        gate.current(instance) {
-            synchronized(lock) {
-                val state = store.value ?: return@synchronized
-                if (state.instance != instance || state.deviceId != proof.deviceId || state.generation != proof.generation ||
-                    state.phase !in listOf(EnrollmentPhase.SUBSCRIBE, EnrollmentPhase.VERIFY)) return@synchronized
-                if (state.challengeId == null) { buffered = proof; return@synchronized }
-                if (active != null || state.challengeId != proof.challengeId) return@synchronized
-                captured = state
+        var outcome = MessageOutcome.GATE
+        try {
+            gate.current(instance) {
+                synchronized(lock) {
+                    outcome = MessageOutcome.ERROR // Stays when private storage throws.
+                    val state = store.value
+                    outcome = when {
+                        state == null -> MessageOutcome.STATE
+                        state.instance != instance || state.deviceId != proof.deviceId || state.generation != proof.generation -> MessageOutcome.BINDING
+                        state.phase !in listOf(EnrollmentPhase.SUBSCRIBE, EnrollmentPhase.VERIFY) -> MessageOutcome.PHASE
+                        state.challengeId == null -> { buffered = proof; MessageOutcome.BUFFERED }
+                        active != null -> MessageOutcome.BUSY
+                        state.challengeId != proof.challengeId -> MessageOutcome.CHALLENGE
+                        else -> { captured = state; MessageOutcome.CONFIRMING }
+                    }
+                }
             }
-        }
+        } finally { record(outcome) }
         val state = captured ?: return
         launch(state, { relay.confirm(state, proof, it) }, {
             publish(state, state.copy(phase = EnrollmentPhase.CONFIRMED, challengeId = null))

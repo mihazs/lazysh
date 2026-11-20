@@ -62,7 +62,10 @@ class RegistrationService : PushService() {
         try {
             val proof=parseChallenge(message.content,message.decrypted)
             if (proof!=null) PushEnrollment.controller(applicationContext).message(instance,proof)
-            else parseDisplayEvent(message.content,message.decrypted)?.let { PushDisplay.message(applicationContext,instance,it) }
+            else {
+                PushEnrollment.controller(applicationContext).record(MessageOutcome.OTHER)
+                parseDisplayEvent(message.content,message.decrypted)?.let { PushDisplay.message(applicationContext,instance,it) }
+            }
         } catch (_:Exception) { /* No storage fallback, unbound confirmation or display retry. */ }
     }
     override fun onRegistrationFailed(reason: FailedReason, instance: String) { controller().failed(instance) }
