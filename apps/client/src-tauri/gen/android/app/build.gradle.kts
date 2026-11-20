@@ -175,6 +175,8 @@ android {
     sourceSets {
         getByName("test").java.srcDir("src/sharedTest/java")
         getByName("androidTest").java.srcDir("src/sharedTest/java")
+        // The owned theme QR PNG is staged into the system picker by the instrumentation; one copy of the bytes serves Rust, Playwright and Android.
+        getByName("androidTest").assets.srcDir("../../../fixtures")
     }
     // Keep first-Activity link receipts when the ordinary instrumentation task
     // executes afterward. Both paths use Gradle's native connected-test reports.

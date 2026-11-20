@@ -1811,6 +1811,60 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** One real finger tap on the centre of a page element: a WebView file chooser needs the trusted user activation a scripted click lacks. */
+    private fun fingerTapElement(scenario: ActivityScenario<MainActivity>, selector: String) {
+        evaluate(scenario, "(document.querySelector(${JSONObject.quote(selector)})?.scrollIntoView({block:'center'}), true)")
+        awaitDocument(scenario, "touchable $selector", workspaceElementVisible(selector, true))
+        val centre = JSONArray(evaluate(scenario, """
+            (()=>{const r=document.querySelector(${JSONObject.quote(selector)}).getBoundingClientRect();
+              return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()
+        """))
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, CoordinatesProvider { view ->
+            val origin = IntArray(2); view.getLocationOnScreen(origin)
+            val scale = view.width / centre.getDouble(2)
+            floatArrayOf((origin[0] + centre.getDouble(0) * scale).toFloat(), (origin[1] + centre.getDouble(1) * scale).toFloat())
+        }, Press.FINGER))
+    }
+
+    // The ordinary picker branch of the QR image fallback: no capture attribute, so Wry opens the system chooser (DocumentsUI)
+    // and the chosen bytes reach the page through the real result path. It needs only the emulator, so it runs with the shared cases.
+    @Test fun qrImageFallbackChoosesAFileThroughTheRealSystemPicker() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val scenario = NativeActivityFixture.scenario
+        val name = "lazysh-qr-${UUID.randomUUID()}.png"
+        val file = ".theme-qr-panel input[type=file]"
+        val saved = "localStorage.getItem('lazysh.preferences.v1')"
+        val noPreview = "!document.querySelector('.theme-preview')"
+        val staged = OwnedFileChooser.stage(instrumentation, "theme-qr.png", name)
+        var primary: Throwable? = null
+        var propagating = false
+        try {
+            openAppearance(scenario, "QR image fallback workspace")
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
+            awaitDocument(scenario, "QR image fallback enabled", "Boolean(document.querySelector(${JSONObject.quote(file)}) && !document.querySelector(${JSONObject.quote(file)}).disabled)")
+            assertEquals("No preview before a file is chosen", "true", evaluate(scenario, noPreview))
+            val before = evaluate(scenario, saved)
+            fingerTapElement(scenario, file)
+            OwnedFileChooser.choose(instrumentation, name)
+            awaitDocument(scenario, "preview decoded from the chosen image", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'")
+            assertEquals("A chosen image must not apply itself", before, evaluate(scenario, saved))
+            webButton("Cancel preview")
+            awaitDocument(scenario, "chosen-image preview discarded", noPreview)
+            assertEquals("Discarding the preview must not apply preferences", before, evaluate(scenario, saved))
+            println("lazysh QR UI: real system picker chose the owned image; preview shown, not applied")
+        } catch (failure: Throwable) { primary = failure; propagating = true; throw failure }
+        finally {
+            fun cleanup(action: () -> Unit) { try { action() } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary!!.addSuppressed(failure)
+            } }
+            // A picker still open would hide the app from every later case.
+            cleanup { OwnedFileChooser.dismiss(instrumentation) }
+            cleanup { closePreferences() }
+            cleanup { OwnedFileChooser.unstage(instrumentation, staged) }
+            if (!propagating && primary != null) throw primary!!
+        }
+    }
+
     private fun workspaceElementVisible(selector: String, touchable: Boolean = false) = """
         (()=>{const element=document.querySelector(${JSONObject.quote(selector)});
           if(!element || !element.getClientRects().length || getComputedStyle(element).visibility==='hidden')return false;
