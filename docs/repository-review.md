@@ -28,7 +28,16 @@ images; **Show source** displays the text. PNG, JPEG, GIF and WebP files up to
 larger images are refused before reading. SVG files, read as text up to 1 MiB,
 are shown only as an image resource from a local blob URL, so their scripts,
 event handlers and external references do not run or load; **Show source**
-displays the markup as text. Video, audio and PDF are not previewed.
+displays the markup as text.
+
+MP4, M4V and WebM video and MP3, M4A, Ogg, Opus, WAV and FLAC audio up to 8 MiB
+play in a frame that has no script rights and no access to the app: the file's
+type is read from its first bytes, so a page named `clip.mp4` is refused rather
+than played, and larger files are refused before reading. Where the platform
+cannot play media safely (Linux without GStreamer's audio plugins) the app says
+so, and **Open with…** and **Download** still work. PDF files are not drawn in
+the app: **Open with…** opens them in the device's PDF viewer. See the
+[viewer reference](reference/files-media-viewer.md) for the trust boundary.
 
 ## Review from the host's terminal
 
