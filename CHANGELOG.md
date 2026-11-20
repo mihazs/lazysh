@@ -10,6 +10,22 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.82.0] - 2026-11-20
+
+### New
+
+- **herdr:** collapse completed agent groups by default ([#1772](https://github.com/mihazs/lazysh/pull/1772))
+- **devices:** touch an Android device on its video preview ([#1773](https://github.com/mihazs/lazysh/pull/1773))
+- **desktop:** bundle lazysh-agent with the Linux and Windows packages and prove it in the release ([#1855](https://github.com/mihazs/lazysh/pull/1855))
+
+### Fixed
+
+- **account-usage:** stop a stalled Windows credential store from holding the Cline quota check ([#1778](https://github.com/mihazs/lazysh/pull/1778))
+
+### Under the hood
+
+- **android:** let the owned tmux fixture forward a DCS-wrapped OSC 52 to its attached client ([#1807](https://github.com/mihazs/lazysh/pull/1807))
+
 ## [1.81.0] - 2026-11-19
 
 ### New
