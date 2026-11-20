@@ -108,6 +108,14 @@ enum Command {
         #[arg(long)]
         session: String,
     },
+    /// Stream the agent-status changes of one Herdr server until stdin closes.
+    HerdrEvents {
+        #[arg(long)]
+        session: String,
+        /// Frame vocabulary version; only 1 exists.
+        #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
+        protocol: u8,
+    },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -447,6 +455,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         }
         Command::HerdrPaneInput { session } => {
             lazysh_agent::herdr_pane_input::run_stdio(&session)?;
+            None
+        }
+        Command::HerdrEvents { session, .. } => {
+            lazysh_agent::herdr_events::run_stdio(&session)?;
             None
         }
         Command::Licenses => Some(serde_json::json!({

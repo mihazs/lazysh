@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    sync::mpsc::{Receiver, RecvTimeoutError},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -423,18 +423,11 @@ pub fn run_stdio(options: Options) -> Result<()> {
     let watcher = Watcher::new(options.agent, source, options.limit)?
         .with_images(options.inline_images)?
         .with_large_history(options.allow_large_history)?;
-    let (closed_tx, closed) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buffer = [0; 64];
-        let mut stdin = std::io::stdin();
-        while matches!(stdin.read(&mut buffer), Ok(count) if count > 0) {}
-        drop(closed_tx);
-    });
     run(
         watcher,
         options.interval,
         &mut std::io::stdout().lock(),
-        &closed,
+        &crate::stdin_closed(),
     )
 }
 
@@ -703,7 +696,7 @@ mod tests {
     #[test]
     fn an_unreadable_source_ends_at_once_and_a_stuck_one_after_the_retry_budget() {
         let directory = tempfile::tempdir().unwrap();
-        let (_tx, closed) = mpsc::channel();
+        let (_tx, closed) = std::sync::mpsc::channel();
         let mut out = Vec::new();
         let missing = watcher(&directory.path().join("gone.jsonl"), 50);
         assert!(run(missing, Duration::from_millis(1), &mut out, &closed).is_err());

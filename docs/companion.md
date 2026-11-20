@@ -232,6 +232,37 @@ Codex records no queue, so Codex pages carry none.
 An older companion rejects the subcommand as a usage error (exit status 2), which a client
 treats as "update the host companion" and answers by polling `transcript` as before.
 
+### Herdr event stream
+
+`lazysh-agent herdr-events --session NAME [--protocol 1]` keeps one command channel open
+and prints one JSON frame per line while a Herdr view is shown, so a pane's status change
+reaches the app when it happens instead of at the next 5-second read of the tree. It finds
+the running session `NAME` the way `herdr-focus-pane` does (`herdr session list --json`,
+one exact match), reads `session.snapshot`, subscribes to Herdr's `events.subscribe` for
+the status of every pane and for the lifecycle events a view of the tree follows, and reads
+the snapshot again so a change between the two reads is a difference, not a gap. It ends when
+its standard input closes (an SSH channel going away) or its output breaks. It starts no
+server, sends no key, changes no Herdr state and writes nothing on the host.
+
+| Frame | Fields | Meaning |
+| --- | --- | --- |
+| `hello` | `protocol`, `session` | First line, sent once the subscription runs: everything that happens after it is reported. A client that does not know `protocol` stops. |
+| `status` | `paneId`, `workspaceId`, `status`, `agent`, `cwd` | A pane's agent status changed to `idle`, `working`, `blocked`, `done` or `unknown`. `agent` is the kind Herdr detects (`claude`, `codex`, ...) or `null`; `cwd` is the pane's directory or `null`. A repeated status sends nothing. |
+| `changed` | none | Something the tree shows changed (a workspace, tab or pane was created, closed, moved, renamed or focused): read the tree once. At most four a second. |
+| `heartbeat` | none | Sent after 5 s without another frame so a client can tell a quiet server from a dead channel. |
+| `end` | `reason` | `disconnected` (Herdr closed the subscription) or `busy` (more than 20 resubscriptions in 10 s). The exit status is 0. |
+| `unsupported` | `reason` | The only frame when this Herdr cannot stream: `events_subscribe` (it refuses `session.snapshot` or `events.subscribe`) or `too_many_panes` (more than 256 panes). The exit status is 0; the client keeps polling and asks again later. |
+
+A frame never carries a pane title, the command running in the pane, a label, a token or any
+screen text: it is built from the fields above only, so a title such as `rm -rf /` that
+Herdr reports never leaves the host. A new, closed or moved pane resubscribes (Herdr takes one
+subscription per pane); a pane that appeared while the stream was resubscribing is caught by
+the second snapshot. Pane and workspace ids are checked against Herdr's exact public id
+format. Only Herdr 0.9.5 has been run against it; a Herdr that does not know one of the requests answers
+with an error, which is `unsupported`. A companion that predates the subcommand rejects it as a usage
+error (exit status 2), which a client treats as "update the host companion" and answers by
+polling the tree as before.
+
 ## Other agents and scripts
 
 Use the [generic lifecycle event protocol and storage reference](reference/companion-events.md) for schema, retention, WAL backups, filesystem admission and bounded syscall-observation evidence. For a reporting task, follow [configure the companion](how-to/configure-companion.md). Only configure hosts and agents you control.

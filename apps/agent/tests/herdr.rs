@@ -1,7 +1,7 @@
 //! Owned socket and executable fixtures only; never a user Herdr server.
 #![cfg(unix)]
 use serde_json::{json, Value};
-use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixListener,
@@ -9,6 +9,8 @@ use tokio::{
 };
 #[path = "support/binary.rs"]
 mod binary;
+#[path = "support/fake_herdr.rs"]
+mod fake_herdr;
 
 #[tokio::test]
 async fn exact_public_pane_focus_is_bounded_and_never_retries_uncertain_dispatch() {
@@ -22,21 +24,8 @@ async fn exact_public_pane_focus_is_bounded_and_never_retries_uncertain_dispatch
         "timeout",
         "cancel",
     ] {
-        let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("owned.sock");
+        let (directory, socket) = fake_herdr::owned("owned");
         let listener = UnixListener::bind(&socket).unwrap();
-        let sessions =
-            json!({"sessions":[{"name":"owned","running":true,"socket_path":socket}]}).to_string();
-        let herdr = directory.path().join("herdr");
-        fs::write(
-            &herdr,
-            format!(
-                "#!/bin/sh\n[ \"$*\" = 'session list --json' ] || exit 91\nprintf '%s' '{}'\n",
-                sessions
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&herdr, fs::Permissions::from_mode(0o700)).unwrap();
         let mut child = Command::new(binary::path());
         child
             .env_clear()
