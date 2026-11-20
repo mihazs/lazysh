@@ -13,6 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 fdroid = ["tauri-plugin-lazysh-push/fdroid"]
 # Optional interop test harness; independent of Linux x86_64 product availability.
 parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
+# Android's Google build links the pinned prebuilt ONNX Runtime for local Parakeet. It is opt-in so the F-Droid recipe,
+# which must compile every native library from source, keeps its Whisper-only graph.
+parakeet-android = ["dep:lazysh-parakeet-runtime"]
 # The native terminal core (libghostty-vt, built with Zig 0.16.0): off by default so no build needs Zig.
 native-terminal = ["dep:lazysh-terminal-runtime"]
 # Owned emulator builds only: trusts one extra root for the loopback WebDAV fixture (see `sync.rs`). Never a product feature.
@@ -73,7 +76,7 @@ lazysh-account-usage = { path = "../../../packages/account-usage", features = ["
 portable-pty = { version = "0.9", path = "../../../packages/portable-pty-vendor", default-features = false }
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))'.dependencies]
 libc = "0.2"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]

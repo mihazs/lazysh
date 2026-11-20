@@ -17,9 +17,9 @@ pub(crate) fn trusted_parent(_: &Path) -> Result<PathBuf, Error> {
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub(crate) fn trusted_parent(parent: &Path) -> Result<PathBuf, Error> {
     let canonical = std::fs::canonicalize(parent).map_err(|_| Error::Storage)?;
-    // SAFETY: geteuid has no pointer arguments and only reads the current process identity.
-    let owner = unsafe { libc::geteuid() };
-    validate_canonical(&canonical, owner, cfg!(target_os = "android"))?;
+    // SAFETY: geteuid and getegid have no pointer arguments and only read the current process identity.
+    let identity = unsafe { (libc::geteuid(), libc::getegid()) };
+    validate_canonical(&canonical, identity, cfg!(target_os = "android"))?;
     Ok(canonical)
 }
 
@@ -29,14 +29,19 @@ fn trusted_owner(owner: u32, current: u32, android: bool) -> bool {
 }
 
 #[cfg(all(unix, not(target_vendor = "apple")))]
-fn untrusted_write(mode: u32, group: u32, android: bool) -> bool {
-    // Android's root/system groups are platform identities, unlike arbitrary application UIDs/groups.
-    let trusted_group = android && matches!(group, 0 | 1000);
+fn untrusted_write(mode: u32, group: u32, current_group: u32, android: bool) -> bool {
+    // Android's root/system groups are platform identities, unlike arbitrary application UIDs/groups. An app's own
+    // group is shared with nobody, and the framework creates its data directories group-writable (mode 0771).
+    let trusted_group = android && (matches!(group, 0 | 1000) || group == current_group);
     mode & 0o002 != 0 || (mode & 0o020 != 0 && !trusted_group)
 }
 
 #[cfg(all(unix, not(target_vendor = "apple")))]
-fn validate_canonical(parent: &Path, current: u32, android: bool) -> Result<(), Error> {
+fn validate_canonical(
+    parent: &Path,
+    (current, current_group): (u32, u32),
+    android: bool,
+) -> Result<(), Error> {
     use std::os::unix::fs::MetadataExt;
     if !parent.is_absolute() {
         return Err(Error::Storage);
@@ -51,7 +56,7 @@ fn validate_canonical(parent: &Path, current: u32, android: bool) -> Result<(), 
             return Err(Error::Storage);
         }
         let leaf = path == parent;
-        if untrusted_write(metadata.mode(), metadata.gid(), android)
+        if untrusted_write(metadata.mode(), metadata.gid(), current_group, android)
             && (leaf || metadata.mode() & 0o1000 == 0)
         {
             return Err(Error::Storage);
@@ -127,11 +132,11 @@ mod tests {
         let former = root.path().join("former");
         std::fs::rename(first.path(), &former).unwrap();
         symlink(second.path(), &canonical).unwrap();
-        let uid = unsafe { libc::geteuid() };
-        assert!(validate_canonical(&canonical, uid, false).is_err());
+        let identity = unsafe { (libc::geteuid(), libc::getegid()) };
+        assert!(validate_canonical(&canonical, identity, false).is_err());
         std::fs::remove_file(&canonical).unwrap();
         std::fs::write(&canonical, b"not a directory").unwrap();
-        assert!(validate_canonical(&canonical, uid, false).is_err());
+        assert!(validate_canonical(&canonical, identity, false).is_err());
     }
 
     #[test]
@@ -140,10 +145,20 @@ mod tests {
         assert!(trusted_owner(1000, app, true));
         assert!(!trusted_owner(1000, app, false));
         assert!(!trusted_owner(10124, app, true));
-        assert!(!untrusted_write(0o771, 1000, true));
-        assert!(!untrusted_write(0o771, 0, true));
-        assert!(untrusted_write(0o771, 1000, false));
-        assert!(untrusted_write(0o771, 10124, true));
-        assert!(untrusted_write(0o777, 1000, true));
+        assert!(!untrusted_write(0o771, 1000, app, true));
+        assert!(!untrusted_write(0o771, 0, app, true));
+        assert!(untrusted_write(0o771, 1000, app, false));
+        assert!(untrusted_write(0o771, 10124, app, true));
+        assert!(untrusted_write(0o777, 1000, app, true));
+    }
+
+    #[test]
+    fn android_app_data_directory_group_writable_by_its_own_group_is_trusted() {
+        // The framework creates files/ as drwxrwx--x owned by, and grouped to, the app itself.
+        let app = 10123;
+        assert!(!untrusted_write(0o771, app, app, true));
+        assert!(untrusted_write(0o771, app, app, false));
+        assert!(untrusted_write(0o771, 10124, app, true));
+        assert!(untrusted_write(0o772, app, app, true));
     }
 }

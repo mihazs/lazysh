@@ -2,11 +2,15 @@ use super::*;
 use crate::app_lock::AccessState;
 use std::os::unix::fs::PermissionsExt;
 fn fixture() -> (tempfile::TempDir, Arc<Manager>, AccessState) {
+    fixture_with_peak_disk(PEAK_DISK_BYTES)
+}
+fn fixture_with_peak_disk(peak_disk: u64) -> (tempfile::TempDir, Arc<Manager>, AccessState) {
     let directory = tempfile::tempdir().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let manager = Manager::new(
+    let manager = Manager::with_peak_disk(
         directory.path().join("parakeet"),
         Arc::new(AtomicBool::new(false)),
+        peak_disk,
     )
     .unwrap();
     let authority = AccessState::default();
@@ -209,6 +213,52 @@ fn cache_rejects_links_and_publication_never_overwrites() {
     publish(&source, &destination).unwrap();
     assert!(!source.exists());
     assert_eq!(fs::read(destination).unwrap(), b"new");
+}
+
+#[test]
+fn android_platform_identities_and_own_group_extend_the_ancestor_allowlist() {
+    let app = (10123, 10123);
+    // Linux: root or this user owns the ancestor, and only a root sticky directory may be writable.
+    assert!(trusted_ancestor((0, 0, 0o755), app, false));
+    assert!(trusted_ancestor((10123, 10123, 0o700), app, false));
+    assert!(trusted_ancestor((0, 0, 0o1777), app, false));
+    assert!(!trusted_ancestor((10123, 10123, 0o1777), app, false));
+    assert!(!trusted_ancestor((10123, 10123, 0o771), app, false));
+    assert!(!trusted_ancestor((1000, 1000, 0o771), app, false));
+    assert!(!trusted_ancestor((10124, 10124, 0o700), app, true));
+    // Android: /data is system-owned and files/ is group-writable by the app's own group.
+    assert!(trusted_ancestor((1000, 1000, 0o771), app, true));
+    assert!(trusted_ancestor((10123, 10123, 0o771), app, true));
+    assert!(!trusted_ancestor((10123, 10124, 0o771), app, true));
+    assert!(!trusted_ancestor((10123, 10123, 0o777), app, true));
+}
+
+#[test]
+fn free_storage_is_checked_against_the_filesystem_of_the_cache() {
+    let (directory, _manager, _authority) = fixture();
+    require_free_space(directory.path(), 1).unwrap();
+    let error = require_free_space(directory.path(), u64::MAX).unwrap_err();
+    assert!(error.contains("free storage"), "{error}");
+}
+
+#[tokio::test]
+async fn install_refuses_for_lack_of_storage_before_any_download_or_file() {
+    let (_directory, manager, authority) = fixture_with_peak_disk(u64::MAX);
+    let error = manager
+        .install(
+            &lease(&authority),
+            &id(),
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("free storage"), "{error}");
+    assert_eq!(
+        fs::read_dir(&manager.cache.root).unwrap().count(),
+        1,
+        "only the stable cache lock remains"
+    );
+    assert!(!manager.status().busy);
 }
 
 #[test]

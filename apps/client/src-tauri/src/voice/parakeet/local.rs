@@ -19,6 +19,10 @@ const CACHE_ERROR: &str =
     "Private Parakeet model storage is unavailable or is in use by another app process";
 const CANCELLED: &str = "Parakeet result cancelled; native work may still be finishing";
 const ARCHIVE_NAME: &str = "parakeet-v3-int8.tar.bz2";
+/// Peak extra disk use while installing: the download, the private verification snapshot and the four extracted
+/// files coexist (docs/voice-parakeet.md). Preparing an already stored archive needs only the last two.
+const PEAK_DISK_BYTES: u64 = 1_644_999_670;
+const PUBLISH_FAILED: &str = "Cannot install Parakeet model; destination may already exist";
 // The release asset URL is mutable upstream; a replaced archive must read as such, not as a network fault.
 const REPUBLISHED: &str = "The downloaded Parakeet archive does not match the one this lazysh version pins, so nothing was installed. The publisher may have replaced it; if this persists, update lazysh";
 struct Cache {
@@ -32,13 +36,15 @@ impl Cache {
             .ok_or(CACHE_ERROR)?
             .canonicalize()
             .map_err(|_| CACHE_ERROR)?;
-        let uid = unsafe { libc::geteuid() };
+        let current = unsafe { (libc::geteuid(), libc::getegid()) };
         for ancestor in parent.ancestors() {
             let metadata = fs::symlink_metadata(ancestor).map_err(|_| CACHE_ERROR)?;
             if !metadata.is_dir()
-                || !matches!(metadata.uid(), 0) && metadata.uid() != uid
-                || metadata.mode() & 0o022 != 0
-                    && !(metadata.uid() == 0 && metadata.mode() & 0o1000 != 0)
+                || !trusted_ancestor(
+                    (metadata.uid(), metadata.gid(), metadata.mode()),
+                    current,
+                    cfg!(target_os = "android"),
+                )
             {
                 return Err(CACHE_ERROR.into());
             }
@@ -105,6 +111,37 @@ impl Cache {
         Ok(file)
     }
 }
+/// `(owner, group, mode)` of a directory above the cache. Root and this app own safe ancestors, writable only by
+/// trusted identities. Android's `system` account owns `/data`, and an app's data directories are typically
+/// group-writable (mode 0771) by the app's own group, which no other app shares.
+fn trusted_ancestor(
+    (owner, group, mode): (u32, u32, u32),
+    (uid, gid): (u32, u32),
+    android: bool,
+) -> bool {
+    let trusted_owner = owner == 0 || owner == uid || (android && owner == 1000);
+    let trusted_group = android && (matches!(group, 0 | 1000) || group == gid);
+    let writable = mode & 0o002 != 0 || (mode & 0o020 != 0 && !trusted_group);
+    trusted_owner && (!writable || (owner == 0 && mode & 0o1000 != 0))
+}
+/// The model lives on private storage that may be small, so a lack of space is refused before any byte is written.
+#[allow(clippy::unnecessary_cast)] // statvfs field widths differ between libc targets
+fn require_free_space(directory: &Path, needed: u64) -> Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = CString::new(directory.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
+    // SAFETY: `path` is NUL-terminated and outlives the call; a zeroed statvfs is a valid out-parameter.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
+        return Err(CACHE_ERROR.into());
+    }
+    if (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64) < needed {
+        return Err(format!(
+            "Parakeet needs about {:.1} GB of free storage to prepare its model; free some space and try again",
+            needed as f64 / 1e9
+        ));
+    }
+    Ok(())
+}
 fn private(metadata: &fs::Metadata, directory: bool) -> Result<()> {
     if metadata.file_type().is_symlink()
         || (if directory {
@@ -141,13 +178,22 @@ pub(super) struct Manager {
     cache: Cache,
     inner: Mutex<Inner>,
     capacity: Arc<AtomicBool>,
+    peak_disk: u64,
 }
 impl Manager {
     pub(super) fn new(root: PathBuf, capacity: Arc<AtomicBool>) -> Result<Arc<Self>> {
+        Self::with_peak_disk(root, capacity, PEAK_DISK_BYTES)
+    }
+    fn with_peak_disk(
+        root: PathBuf,
+        capacity: Arc<AtomicBool>,
+        peak_disk: u64,
+    ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             cache: Cache::new(root)?,
             inner: Mutex::new(Inner::default()),
             capacity,
+            peak_disk,
         }))
     }
     pub(super) fn status(&self) -> Status {
@@ -270,6 +316,7 @@ impl Manager {
         if self.cache.archive().exists() {
             return Err("Remove the existing Parakeet model before installing".into());
         }
+        require_free_space(&self.cache.root, self.peak_disk)?;
         work.keep_engine = false;
         let partial = self.cache.root.join(format!("{id}.part"));
         let mut file = OpenOptions::new()
@@ -312,7 +359,11 @@ impl Manager {
         tokio::task::spawn_blocking(move || {
             work.check()?;
             if work.engine.is_none() {
-                work.prepare(work.manager.cache.open_archive()?)?;
+                let archive = work.manager.cache.open_archive()?;
+                // The stored archive already occupies its share of the peak.
+                let extra = work.manager.peak_disk.saturating_sub(ARCHIVE_BYTES);
+                require_free_space(&work.manager.cache.root, extra)?;
+                work.prepare(archive)?;
             }
             work.check()?;
             work.progress("transcribing", ARCHIVE_BYTES);
@@ -509,6 +560,7 @@ async fn transfer(
     }
     work.check()
 }
+#[cfg(not(target_os = "android"))]
 fn publish(source: &Path, destination: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
@@ -525,9 +577,18 @@ fn publish(source: &Path, destination: &Path) -> Result<()> {
         )
     } != 0
     {
-        return Err("Cannot install Parakeet model; destination may already exist".into());
+        return Err(PUBLISH_FAILED.into());
     }
     Ok(())
+}
+// bionic only exports renameat2 from API 30 and the app supports API 24. The cache lock and the single active slot
+// leave no other writer between this check and the atomic same-directory rename.
+#[cfg(target_os = "android")]
+fn publish(source: &Path, destination: &Path) -> Result<()> {
+    if fs::symlink_metadata(destination).is_ok() {
+        return Err(PUBLISH_FAILED.into());
+    }
+    fs::rename(source, destination).map_err(|_| PUBLISH_FAILED.into())
 }
 fn publisher_client() -> Result<Client> {
     super::super::download::client(publisher_url, "Unsupported Parakeet download redirect")
