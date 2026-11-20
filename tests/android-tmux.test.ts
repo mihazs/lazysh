@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSplitRows,tmuxTeardownObservation,tmuxWindowLifecycle,tmuxWindowRows} from './support/androidTmux';
 import {listening,OwnedProcess} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -285,3 +285,35 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
 test.skipIf(process.platform!=='linux' || process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android app shows the lost-connection banner, retries a cut route, reattaches the same tmux pane and closes without reconnecting',async()=>{
   await androidLostConnectionAcceptance();
 },610_000);
+
+test('escape passthrough needs tmux 3.3 or later',()=>{
+  for(const version of ['tmux 3.3','tmux 3.3a','tmux 3.4','tmux 3.10','tmux 4.0'])expect(tmuxPassthroughSupported(version)).toBe(true);
+  for(const version of ['tmux 3.2a','tmux 3.0','tmux 2.9','tmux next-3.4','tmux'])expect(tmuxPassthroughSupported(version)).toBe(false);
+});
+
+// Only a server with allow-passthrough on forwards the wrapped sequence to its client, which an Android clipboard case needs from this fixture.
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux forwards a DCS-wrapped OSC 52 printed in its beta shell to the attached client unwrapped',async()=>{
+  const owned=await TmuxFixture.start();
+  const [alpha,beta]=owned.metadata().windows;
+  let client:OwnedProcess|undefined;
+  try {
+    const wait=async(predicate:()=>boolean)=>{
+      const deadline=performance.now()+5000;
+      while(!predicate()){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+    };
+    client=await owned.ssh.client();
+    await wait(()=>client!.stdout.includes(owned.ssh.prompt));
+    client.child.stdin!.write("exec tmux -u -L default attach-session -t '=owned-tmux'\n");
+    await wait(()=>client!.stdout.includes(alpha.marker));
+    client.child.stdin!.write('\x021');
+    await wait(()=>client!.stdout.includes(beta.marker));
+    const copied=`OSC52_${owned.ssh.nonce}`;
+    // The shell computes the base64, so the copied text never appears in the typed line.
+    client.child.stdin!.write(`printf '\\033Ptmux;\\033\\033]52;c;%s\\007\\033\\\\' "$(printf %s ${copied} | base64)"\r`);
+    await wait(()=>client!.stdout.includes(`\x1b]52;c;${Buffer.from(copied).toString('base64')}\x07`));
+    expect(client.stdout.includes('\x1bPtmux;')).toBe(false);
+  } finally {
+    await client?.stop();
+    await owned.stop();
+  }
+},60_000);

@@ -66,6 +66,11 @@ export function tmuxDisplayClients(text:string) {
 export function tmuxAttachHistoryVerified(history:readonly number[]) {
   return history.length===5 && [0,1,0,1,0].every((count,index)=>history[index]===count);
 }
+/** tmux 3.3 added `allow-passthrough`; an older server drops a DCS-wrapped sequence instead of forwarding it. */
+export function tmuxPassthroughSupported(version:string) {
+  const parts=/^tmux ([0-9]+)[.]([0-9]+)[a-z]?$/.exec(version);
+  return !!parts && (Number(parts[1])>3 || (Number(parts[1])===3 && Number(parts[2])>=3));
+}
 
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
   'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown','Owned tmux server exited uncleanly',
@@ -121,6 +126,7 @@ export class TmuxFixture {
     try {
       const version=(await owned.run(['-V'],false)).trim();
       if(!/^tmux [0-9]+[.][0-9]+[a-z]?$/.test(version))throw new Error('Owned tmux version unavailable');
+      if(!tmuxPassthroughSupported(version))throw new Error('Owned tmux 3.3 or later required for escape passthrough');
       console.log(`Owned Android tmux fixture ${version}`);
       owned.server=ssh.tmuxServer(['-D','-f','/dev/null','-L','default']);
       const socket=join(ssh.environment!.TMUX_TMPDIR!,`tmux-${process.getuid!()}`,'default');
@@ -130,8 +136,11 @@ export class TmuxFixture {
         if(performance.now()>=until || !await owned.server.liveIdentity())throw new Error('Owned tmux startup deadline');
         await delay(10);
       }
+      // The pinned server forwards a DCS-wrapped escape sequence from a pane to its attached clients, as tmux 3.3 added.
+      await owned.run(['set-option','-g','allow-passthrough','on']);
       for(const [index,name] of [[0,'alpha'],[1,'beta']] as const) {
-        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec sleep 3600`;
+        // beta stays an interactive shell, so the app can print a passthrough sequence there; alpha only waits.
+        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec ${name==='beta'?'/bin/sh -i':'sleep 3600'}`;
         await owned.run(index===0?['new-session','-d','-s',owned.name,'-n',name,'-x','80','-y','24','-c',ssh.directory,command]
           :['new-window','-d','-t',`=${owned.name}:${index}`,'-n',name,'-c',ssh.directory,command]);
         owned.windows.push({windowId:'',index,name,marker,paneId:'',pane:{pid:0,parent:0,start:'',state:''}});
