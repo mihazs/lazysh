@@ -2476,6 +2476,7 @@ const translations = {
   terminalEngineXterm: ["xterm.js", "xterm.js"],
   terminalEngineNative: ["Nativo", "Nativo"],
   terminalEngineUsed: ["{{engine}}: {{reason}}", "{{engine}}: {{reason}}"],
+  terminalEngineOfSession: ["O mecanismo de terminal da sessão atual é {{engine}}", "El motor de terminal de la sesión actual es {{engine}}"],
   terminalEngineAutomatic: ["escolhido automaticamente", "elegido automáticamente"],
   terminalEnginePreference: ["escolhido nas Configurações", "elegido en la configuración"],
   terminalEngineOverride: ["escolhido pela substituição do desenvolvedor", "elegido por la anulación del desarrollador"],

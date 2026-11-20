@@ -2470,6 +2470,7 @@ export const english = {
   terminalEngineXterm: "xterm.js",
   terminalEngineNative: "Native",
   terminalEngineUsed: "{{engine}}: {{reason}}",
+  terminalEngineOfSession: "The current session's terminal engine is {{engine}}",
   terminalEngineAutomatic: "chosen automatically",
   terminalEnginePreference: "chosen in Settings",
   terminalEngineOverride: "chosen by the developer override",

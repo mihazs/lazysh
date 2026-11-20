@@ -395,6 +395,7 @@ input[type="search"] {
   background: transparent; text-align: left; font-weight: 500;
 }
 .workspace-tools-content .workspace-tools-group > button:hover:not(:disabled), .sidebar .workspace-tools-group > button:hover:not(:disabled) { background: var(--theme-hover); }
+.terminal-engine-line { margin: 0; padding: 8px 12px; color: var(--theme-muted); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .workspace-tools-danger { border-top: 0; padding-top: 0; }
 .workspace-tools-content .workspace-tools-end { justify-content: center; min-height: 52px; border-radius: var(--ui-radius); }
 @media (max-width: 600px) {

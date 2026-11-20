@@ -94,6 +94,7 @@ import type {HerdrTree} from "./useHerdrNavigation";
 import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
+import {describeTerminalEngine} from "./terminalEngineReason";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
@@ -2171,6 +2172,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
         {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
+        <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
         <button type="button" onClick={()=>{closeTools();setPreferences(true);}}>{t('appPreferences')}</button>
@@ -2717,7 +2719,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          <PreferencesPanel footer={t('settingsVersionFooter',{version:appVersion})} usageAccounts={accountUsage.response?.report?.entries} pages={[
+          <PreferencesPanel footer={t('settingsVersionFooter',{version:appVersion})} terminalEngine={active && describeTerminalEngine(active.selection)} usageAccounts={accountUsage.response?.report?.entries} pages={[
             ...(native?[{id:'connections',section:'general',title:t('preferencesCategoryConnections'),value:t('syncHostCount',{count:hosts.length,value:formatNumber(hosts.length)}),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
