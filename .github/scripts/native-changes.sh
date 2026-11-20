@@ -28,12 +28,12 @@ package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
     # The app's native-terminal bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt (native-terminal-bridge).
-    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
+    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge terminal_windows ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
     herdr-upstream/*) add herdr terminal_runtime ;;
     herdr-guard/*) add herdr ;;
     terminal-runtime/prototypes) add linux_surface ;; # a standalone prototype crate with its own lock file: only its own job builds it.
-    terminal-runtime/*) add terminal_runtime terminal_bridge ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
-    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge ;; # the app compiles it with the native-terminal feature.
+    terminal-runtime/*) add terminal_runtime terminal_bridge terminal_windows ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt. terminal-windows builds and tests it again on Windows.
+    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge terminal_windows ;; # the app compiles it with the native-terminal feature.
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
@@ -63,7 +63,7 @@ classify() {
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
       apps/client/src-tauri/src/apple_*) add client ios ;;
     # The terminal runtime replays this file in herdr-native; the client e2e suite reads it too.
-    apps/client/e2e/fixtures/mosh-resize-frames.json | apps/client/e2e/fixtures/platform-keys/*) add client terminal_runtime ;;
+    apps/client/e2e/fixtures/mosh-resize-frames.json | apps/client/e2e/fixtures/platform-keys/*) add client terminal_runtime terminal_windows ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
     apps/notification-service/*) add agent push relay ;;
@@ -127,6 +127,7 @@ for output in \
   "herdr=$herdr" \
   "terminal_runtime=$(flag any terminal_runtime)" \
   "terminal_bridge=$(flag any client terminal_bridge)" \
+  "terminal_windows=$(flag has terminal_windows)" \
   "linux=$linux" \
   "linux_runtimes=$linux_runtimes" \
   "desktop=$(flag any client agent)" \

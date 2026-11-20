@@ -225,8 +225,9 @@ fn a_backend_the_host_does_not_have_is_unsupported_and_the_next_one_is_used() {
         create_on(&[Backend::Metal], 10, 2),
         Err(RenderError::Unsupported(_))
     ));
-    let r = create_on(&[Backend::Metal, Backend::Vulkan, Backend::Gl], 10, 2)
-        .expect("a later backend is the fallback");
+    let mut fallbacks = vec![Backend::Metal];
+    fallbacks.extend(Policy::for_platform().backends);
+    let r = create_on(&fallbacks, 10, 2).expect("a later backend is the fallback");
     assert_ne!(r.adapter().unwrap().backend, Backend::Metal);
 }
 
@@ -239,6 +240,18 @@ fn on_apple_the_renderer_runs_on_metal() {
     let info = gpu(10, 2).adapter().unwrap().clone();
     eprintln!("Metal adapter: {info:?}");
     assert_eq!(info.backend, Backend::Metal);
+}
+
+#[test]
+fn windows_draws_on_direct3d_12_even_where_the_only_adapter_is_warp() {
+    if !cfg!(windows) {
+        return;
+    }
+    // A hosted runner has no GPU; WARP, the CPU adapter that ships with Windows, is a Direct3D 12 adapter.
+    let r = gpu(10, 2);
+    let info = r.adapter().unwrap();
+    eprintln!("Direct3D 12 adapter: {info:?}");
+    assert_eq!(info.backend, Backend::Dx12, "{info:?}");
 }
 
 #[test]
