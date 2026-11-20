@@ -32,6 +32,8 @@ mod links;
 mod local;
 mod mosh;
 mod multiplexer;
+#[cfg(desktop)]
+mod native_program;
 mod native_terminal_surface;
 mod notifications;
 mod previews;
