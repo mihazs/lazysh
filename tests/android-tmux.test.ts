@@ -5,6 +5,8 @@ import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCo
 import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
+import {androidForceStopRestoreAcceptance,restoreCases,restoreControl,validateInstrumentationRun} from './support/androidForceStopRestore';
+import {close,listen} from './support/androidSshParity';
 import {connect,createServer} from 'node:net';
 
 /** Runs one tmux command against the owned fixture's server over its SSH, as the app's own action does. */
@@ -201,6 +203,56 @@ const attachDisplay=async(owned:TmuxFixture,target:string,marker='')=>{
   await wait(()=>shell.stdout.includes(marker));
   return shell;
 };
+test('restore control replies the closed host facts over its socket only to its nonce and observe, and fails when the pane changed',async()=>{
+  let observe=async()=>({clients:1});
+  const channel=await listen(restoreControl({observe:()=>observe()},'owner'));
+  const ask=(request:unknown)=>new Promise<unknown>((resolve,reject)=>{
+    const socket=connect({host:'127.0.0.1',port:channel.port},()=>socket.write(JSON.stringify(request)+'\n'));
+    let text='';
+    socket.setEncoding('utf8');
+    socket.on('data',chunk=>{text+=chunk;});
+    socket.on('error',reject);
+    socket.on('close',()=>resolve(JSON.parse(text)));
+  });
+  try {
+    expect(await ask({nonce:'owner',action:'observe'})).toEqual({ok:true,clients:1});
+    observe=async()=>({clients:0});
+    expect(await ask({nonce:'owner',action:'observe'})).toEqual({ok:true,clients:0});
+    // The Herdr case adds whether its receiver holds the typed bytes.
+    observe=async()=>({clients:1,typed:true});
+    expect(await ask({nonce:'owner',action:'observe'})).toEqual({ok:true,clients:1,typed:true});
+    expect(await ask({nonce:'foreign',action:'observe'})).toEqual({ok:false,error:'nonce'});
+    for(const action of ['cut','toString'])expect(await ask({nonce:'owner',action})).toEqual({ok:false,error:'action'});
+    observe=async()=>{throw new Error('Owned tmux pane identity changed');};
+    expect(await ask({nonce:'owner',action:'observe'})).toEqual({ok:false,error:'failed'});
+  } finally {await close(channel.server);}
+});
+
+test('a restore phase counts only when its own case started and passed in a finished instrumentation run',()=>{
+  const status=(name:string,code:number,extra='')=>[
+    'INSTRUMENTATION_STATUS: class=app.lazysh.client.NativeWorkspaceTest','INSTRUMENTATION_STATUS: current=1','INSTRUMENTATION_STATUS: id=AndroidJUnitRunner',
+    'INSTRUMENTATION_STATUS: numtests=1',code===1?'INSTRUMENTATION_STATUS: stream=\napp.lazysh.client.NativeWorkspaceTest:':'INSTRUMENTATION_STATUS: stream=.',
+    ...(extra?[extra]:[]),`INSTRUMENTATION_STATUS: test=${name}`,`INSTRUMENTATION_STATUS_CODE: ${code}`,''].join('\n');
+  const finished='INSTRUMENTATION_RESULT: stream=\n\nTime: 12.3\n\nOK (1 test)\n\n\nINSTRUMENTATION_CODE: -1\n';
+  const name=restoreCases.tmux.after;
+  expect(()=>validateInstrumentationRun(status(name,1)+status(name,0)+finished,name)).not.toThrow();
+  const stack='INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Native workspace not ready at restore offer once the saved hosts load\n\tat org.junit.Assert.fail(Assert.java:89)';
+  // A failed assertion names its stage in the thrown message, so the job log says what went wrong.
+  expect(()=>validateInstrumentationRun(status(name,1)+status(name,-2,stack)+'INSTRUMENTATION_RESULT: stream=\n\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n',name))
+    .toThrow('Native workspace not ready at restore offer once the saved hosts load');
+  for(const output of [
+    '',
+    status(name,1)+status(name,0),
+    status(name,1)+finished,
+    status(name,1)+status(name,-1,stack)+finished,
+    status(name,1)+status(name,-3)+finished,
+    status(name,1)+status(name,-4)+finished,
+    status(name,1)+status(name,0)+status(name,1)+status(name,0)+finished,
+    status(restoreCases.tmux.before,1)+status(restoreCases.tmux.before,0)+finished,
+    status(name,1)+status(name,0)+'INSTRUMENTATION_RESULT: shortMsg=Process crashed.\nINSTRUMENTATION_CODE: 0\n',
+    status(name,1)+status(name,0)+'INSTRUMENTATION_FAILED: app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner\n',
+  ])expect(()=>validateInstrumentationRun(output,name)).toThrow('did not pass exactly once');
+});
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned namespaced tmux survives a real SSH detach and reattaches the original panes',async()=>{
@@ -213,6 +265,10 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     const clients=async(count:number)=>wait(async()=>{await owned.observe();return owned.diagnostic().history.at(-1)===count;});
     const attach=(marker:string)=>attachDisplay(owned,'owned-tmux',marker);
     client=await attach(alpha.marker);await clients(1);
+    // The host reads a window's original pane: its own marker is there, anything else is not.
+    expect(await owned.paneHolds(0,alpha.marker)).toBe(true);
+    expect(await owned.paneHolds(0,'NOT_IN_THE_PANE')).toBe(false);
+    await expect(owned.paneHolds(9,alpha.marker)).rejects.toThrow('topology');
     client.child.stdin!.write('\x02d');
     await client.finish('owned tmux prefix detach',5000);
     await clients(0);
@@ -524,3 +580,8 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await owned.stop();
   }
 },60_000);
+
+// The same tmux job: the pinned fixture, one saved-credential host, and two instrumentation processes with a host force-stop between them.
+test.skipIf(process.platform!=='linux' || process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android app restores the same tmux pane only on click after a force-stop and relaunch',async()=>{
+  await androidForceStopRestoreAcceptance();
+},1_200_000);

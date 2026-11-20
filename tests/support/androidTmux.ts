@@ -313,6 +313,12 @@ export class TmuxFixture {
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
   diagnostic() {return {schemaVersion:1,history:[...this.history],defaultHistory:[...this.defaultHistory],views:this.views.map(view=>`${view.window}${view.zoomed?'+zoom':''}`),windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
+  /** Whether window `index`'s original pane still shows `text` on the host, so bytes the app typed reached that pane's own tty. */
+  async paneHolds(index:number,text:string) {
+    const window=this.windows.find(value=>value.index===index);
+    if(!window)throw new Error('Owned tmux topology required');
+    return (await this.run(['capture-pane','-p','-t',window.paneId])).includes(text);
+  }
   async verifyDetachedAndReattached() {
     const deadline=performance.now()+5000;
     while(true) {

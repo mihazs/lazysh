@@ -1,4 +1,4 @@
-import {mkdir,open,readFile,stat,writeFile,lstat,realpath} from 'node:fs/promises';
+import {mkdir,open,readdir,readFile,readlink,stat,writeFile,lstat,realpath} from 'node:fs/promises';
 import {createConnection} from 'node:net';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -46,6 +46,14 @@ export function herdrHistoryFailureStage(error:unknown) {
     const message=error.message;
     return Object.hasOwn(stages,message)?stages[message]:'unknown';
   } catch {return 'unknown';}
+}
+
+/**
+ * The interactive display clients of one Herdr session among `processes`: the fixture's own binary run as `herdr --session NAME`
+ * and nothing else. The server (`... server`), an API call (`... pane list`) and another session's client are not displays.
+ */
+export function herdrDisplayClients(processes:readonly {exe:string;argv:readonly string[]}[],binary:string,session:string) {
+  return processes.filter(({exe,argv})=>exe===binary && argv.length===3 && argv[1]==='--session' && argv[2]===session).length;
 }
 
 /** Fixed public static paint before the original Mosh receiver starts; no input/RPC. */
@@ -218,6 +226,39 @@ export class HerdrFixture {
     if(!this.navigation)throw new Error('Owned navigation topology required');
     await this.expectBytes(Buffer.alloc(0));
     for(const {directory,receiver} of this.navigationReceivers)await this.expectBytes(Buffer.alloc(0),join(directory,'received-bytes'),receiver);
+  }
+  /** Interactive clients attached to this session now, read from /proc. The app's SSH channel runs one for its display. */
+  async displayClients() {
+    const processes:{exe:string;argv:string[]}[]=[],gone=(error:unknown)=>['ENOENT','ESRCH','EACCES'].includes((error as NodeJS.ErrnoException).code??'');
+    for(const entry of await readdir('/proc')) {
+      if(!/^[0-9]+$/.test(entry))continue;
+      try {
+        const exe=await readlink(`/proc/${entry}/exe`);
+        if(exe===join(this.ssh.directory,'bin/herdr'))processes.push({exe,argv:(await readFile(`/proc/${entry}/cmdline`,'utf8')).split('\0').slice(0,-1)});
+      } catch(error){if(!gone(error))throw error;}
+    }
+    return herdrDisplayClients(processes,join(this.ssh.directory,'bin/herdr'),this.name);
+  }
+  private async bytesNow(path:string) {return readFile(path).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return Buffer.alloc(0);throw error;});}
+  /**
+   * One host sample for the restore case (stock navigation topology): the original server and all three receivers are alive, the
+   * two receivers nobody types into hold nothing, and the source receiver holds what was typed or a leading part of it (the app's
+   * paste arrives in pieces), never anything else. Returns the attached display clients and whether all of it has arrived. Never waits.
+   */
+  async observeRestore(typed:string) {
+    if(!this.navigation)throw new Error('Owned navigation topology required');
+    if(!await this.server?.liveIdentity())throw new Error('Owned Herdr server identity changed');
+    for(const receiver of [this.receiver,...this.navigationReceivers.map(item=>item.receiver)])
+      if(!await this.receiverAlive(receiver))throw new Error('Owned receiver identity changed');
+    for(const {directory} of this.navigationReceivers)
+      if((await this.bytesNow(join(directory,'received-bytes'))).length)throw new Error('Owned receiver bytes differ');
+    const received=await this.bytesNow(this.bytes),expected=Buffer.from(typed+'\r');
+    if(received.length>expected.length || !expected.subarray(0,received.length).equals(received))throw new Error('Owned receiver bytes differ');
+    return {clients:await this.displayClients(),typed:received.length===expected.length};
+  }
+  /** Whether the source receiver holds exactly the bytes typed through the app, waiting for them to land. */
+  async restoreBytesHold(typed:string) {
+    return this.expectBytes(Buffer.from(typed+'\r')).then(()=>true,()=>false);
   }
   private async receiverAlive(receiver=this.receiver) {
     const current=receiver && await identity(receiver.pid);
