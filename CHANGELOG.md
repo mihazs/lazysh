@@ -10,6 +10,29 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.86.0] - 2026-11-20
+
+### New
+
+- **client:** name the companion a local session runs in the Agents setup ([#1852](https://github.com/mihazs/lazysh/pull/1852))
+- **agents:** show a Copilot CLI, Kimi CLI or Droid session's records in the Agent view, labelled as partial ([#1846](https://github.com/mihazs/lazysh/pull/1846))
+- **herdr:** choose a list, accordion or grid layout for the Herdr Spaces tree ([#1835](https://github.com/mihazs/lazysh/pull/1835))
+- **client:** show This device on the Agents board, transcripts, usage reports and inbox ([#1852](https://github.com/mihazs/lazysh/pull/1852))
+- **herdr:** close, rename and resize Herdr panes and close Herdr workspaces from the Workspaces panel ([#1869](https://github.com/mihazs/lazysh/pull/1869))
+- **agents:** follow a Grok Build session in the Agent view ([#1845](https://github.com/mihazs/lazysh/pull/1845))
+
+### Improved
+
+- Add an Android emulator case on the pinned Zellij 0.45.1… ([#1837](https://github.com/mihazs/lazysh/pull/1837))
+- Extend the Android tmux acceptance case ([#1838](https://github.com/mihazs/lazysh/pull/1838))
+
+### Under the hood
+
+- **agents:** run the Agent view native GUI cases against an agent in a real guarded Herdr pane ([#1839](https://github.com/mihazs/lazysh/pull/1839))
+- **agents:** run the Agent view native GUI cases against a reporting agent in a real tmux pane ([#1839](https://github.com/mihazs/lazysh/pull/1839))
+- **android:** verify the client environment flag sends LC_TERMINAL to an AcceptEnv LC_* host ([#1830](https://github.com/mihazs/lazysh/pull/1830))
+- **herdr:** assert live Herdr agent states and the current marker on Android and the Linux GUI ([#1833](https://github.com/mihazs/lazysh/pull/1833))
+
 ## [1.85.1] - 2026-11-20
 
 ### Under the hood

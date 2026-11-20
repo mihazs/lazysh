@@ -1,5 +1,97 @@
 # @lazysh/client
 
+## 1.86.0
+
+### Minor Changes
+
+- feat(client): name the companion a local session runs in the Agents setup ([#1852](https://github.com/mihazs/lazysh/pull/1852))
+
+  <details><summary>Details</summary>
+
+  Name the companion a local session runs (#1667, part of #1132). The Agents setup of a local session shows **Bundled**, **Managed copy** or **On PATH**, from the new `tools.companionSource` that `local_capability` reports for the default target (`null` when no companion resolved). A local session without `lazysh-agent` now says to put it beside the app, install a managed copy or add it to the PATH. No defaults change.
+
+  </details>
+- feat(agents): show a Copilot CLI, Kimi CLI or Droid session's records in the Agent view, labelled as partial ([#1846](https://github.com/mihazs/lazysh/pull/1846))
+
+  <details><summary>Details</summary>
+
+  A GitHub Copilot CLI, Kimi CLI or Droid pane that reports a session now shows that session's records in the Agent view: read-only, under a partial label, with the hook state in the header and Show terminal. The companion's `discover` names `sessionId` for these three adapters (additive). Agents the view cannot read (Pi, OMP, Hermes, Cursor, Amp, Grok Build) now say that the view shows only their last reported state instead of pointing at a setting that cannot fix it. No defaults change. Refs #1658, #1125.
+
+  </details>
+- feat(herdr): choose a list, accordion or grid layout for the Herdr Spaces tree ([#1835](https://github.com/mihazs/lazysh/pull/1835))
+
+  <details><summary>Details</summary>
+
+  Choose a list, accordion or grid layout for the Herdr Spaces tree, with the same remembered preference as tmux Jump To. The list shows every space open, the accordion opens only the focused space (any space still opens by hand) and the grid sets spaces side by side as cards when the sidebar is wide enough for two. Choosing a layout also changes the other multiplexer panels, and a layout chosen there is now the one Spaces opens in.
+
+  </details>
+- feat(client): show This device on the Agents board, transcripts, usage reports and inbox ([#1852](https://github.com/mihazs/lazysh/pull/1852))
+
+  <details><summary>Details</summary>
+
+  Show the Agents board, transcripts, usage reports, approvals and notification inbox for a local session (#1667, part of #1132). Local sessions share one host key, `local:default`, and the label **This device**, so their reports group, archive and notify like a saved host's, and every local tab on the target is polled once. The views appear when the local target reports the companion (`tools.companion`); a target without it hides them and the session details say that `lazysh-agent` was not found on this device. The companion panel offers no SSH install for a local session, and hook discovery and setup reach the local companion. Remote sessions, saved hosts and their polling are unchanged; no default changes.
+
+  </details>
+- feat(herdr): close, rename and resize Herdr panes and close Herdr workspaces from the Workspaces panel ([#1869](https://github.com/mihazs/lazysh/pull/1869))
+
+  <details><summary>Details</summary>
+
+  Each pane row shows its label and gains Rename, four divider arrows and Close, and each workspace gains Close. Closing asks first with a confirmation that names the pane or workspace and sends one exact-id command only when confirmed. A workspace that still has linked worktree workspaces is refused by Herdr and lazysh never closes the group. No defaults change.
+
+  </details>
+- feat(agents): follow a Grok Build session in the Agent view ([#1845](https://github.com/mihazs/lazysh/pull/1845))
+
+  <details><summary>Details</summary>
+
+  With the updated host companion, print the opted-in hook fragment (`lazysh-agent grok-config --reported-history`), review it and save it as `~/.grok/hooks/lazysh.json`: a Grok Build hook then reports the session id, the pane it ran in and the path of its session log (`updates.jsonl`), and the Agent view of that tmux pane shows the conversation (turns, thinking, tool calls with their output and status, the plan card) and the state (working, done, failed, waiting for an approval), polling the log about every two seconds, with the guarded send. The Claude Code hooks reach Grok Build too (it runs `~/.claude/settings.json`), so a report that carries Grok's own input is now shown as **Grok Build**, not as a Claude Code session. Nothing is guessed from processes or from the newest file of a folder: a report without a log path binds nothing, a sub-agent's events are ignored, and two different paths for one session stay unusable. Questions and approvals stay in the terminal; the view says so and holds the draft, and it offers Grok Build no Stop key and no `@` or `/` suggestions because no key was checked on a real Grok Build. The same terminal notice now also appears when Gemini CLI or OpenCode waits for an approval or a plan decision, which the view cannot answer. A session past 10,000 log records or 16 MiB shows the reader's error and leaves the terminal. Verified with synthetic fixtures built from the pinned official source and the real executable on Linux; no Grok Build binary or account was available, so a run against a real agent is still open on #1842. No defaults change.
+
+  </details>
+
+### Patch Changes
+
+- change: Add an Android emulator case on the pinned Zellij 0.45.1… ([#1837](https://github.com/mihazs/lazysh/pull/1837))
+
+  <details><summary>Details</summary>
+
+  Add an Android emulator case on the pinned Zellij 0.45.1 (new `native-android-zellij` job, `bun run test:android-zellij`): through the packaged UI the app discovers Zellij, lists the one owned session, attaches it, switches to Tab 2 and Tab 1 from the Zellij controls, detaches by closing the tab and reattaches it, while the host reads the session's active tab back with `zellij action list-tabs --json` and checks that both command panes started exactly once. The SSH test fixture gained a pinned-Zellij option. Test-only; no behaviour changes.
+
+  </details>
+- test(agents): run the Agent view native GUI cases against an agent in a real guarded Herdr pane ([#1839](https://github.com/mihazs/lazysh/pull/1839))
+
+  <details><summary>Details</summary>
+
+  Run the Agent view's mid-turn Terminal, Agent, Terminal round trip, a prompt sent from the Agent view and a prompt typed in the terminal through the real native GUI against a stand-in agent in a real guarded Herdr pane, with the same cases the tmux pane already runs. Test and fixture only: the application is unchanged.
+
+  </details>
+- change: Extend the Android tmux acceptance case ([#1838](https://github.com/mihazs/lazysh/pull/1838))
+
+  <details><summary>Details</summary>
+
+  Extend the Android tmux acceptance case: it now opens a synthetic transcript through the real companion, stages a draft in Chat, and sends it with the explicit Choose, Confirm and Send steps to the pane the attached tmux display shows, and the host reads that pane back by id to require the draft there once and nowhere else, with no extra display client. Test-only; no behaviour changes.
+
+  </details>
+- test(agents): run the Agent view native GUI cases against a reporting agent in a real tmux pane ([#1839](https://github.com/mihazs/lazysh/pull/1839))
+
+  <details><summary>Details</summary>
+
+  Run the Agent view's mid-turn Terminal, Agent, Terminal round trip, a prompt sent from the Agent view and a prompt typed in the terminal through the real native GUI against a hook-reporting stand-in agent in a real tmux pane. Test and fixture only: the application is unchanged.
+
+  </details>
+- test(android): verify the client environment flag sends LC_TERMINAL to an AcceptEnv LC_* host ([#1830](https://github.com/mihazs/lazysh/pull/1830))
+
+  <details><summary>Details</summary>
+
+  Through the real Android app, the optional client environment flag is saved with a host and sends `LC_TERMINAL=lazysh` to an OpenSSH server that accepts `LC_*`, while a host without the flag does not. The owned SSH test fixture can now start an sshd with `AcceptEnv LANG LC_*`.
+
+  </details>
+- test(herdr): assert live Herdr agent states and the current marker on Android and the Linux GUI ([#1833](https://github.com/mihazs/lazysh/pull/1833))
+
+  <details><summary>Details</summary>
+
+  The Android shared-navigation case requires each Agents row to render its real Working or Needs attention state and checks the current space, tab and pane before every Spaces switch. A new Linux GUI case moves the live agent from Unknown to Working to Needs attention and moves the real server focus from the Spaces tree. Test coverage only; no product change.
+
+  </details>
+
 ## 1.85.1
 
 ### Patch Changes
