@@ -645,7 +645,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   await page.screenshot({path:testInfo.outputPath('compact-restore.png')});
   await connectHost();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
-  const closeHosts=nativeWorkspaceSource.match(/private fun endOwnedConnection[\s\S]*?val closeHosts = "([^"\n]+)"/)![1];
+  const closeHosts=nativeWorkspaceSource.match(/private fun closeHostsDrawer[\s\S]*?val closeHosts = "([^"\n]+)"/)![1];
   await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
   if(phone){
     await page.getByRole('button',{name:'Open hosts',exact:true}).click();
