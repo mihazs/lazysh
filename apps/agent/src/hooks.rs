@@ -120,6 +120,7 @@ pub(crate) fn grok_event(payload: &Value, pane: Option<&str>) -> Result<Option<E
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
+        pane_server: None,
         waiting,
     }))
 }
