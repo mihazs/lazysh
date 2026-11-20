@@ -6309,6 +6309,122 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    /** Awaits one promise-returning script in the bundled WebView and returns its JSON reply as a String, JSONArray or number. */
+    private fun voiceReply(scenario: ActivityScenario<MainActivity>, stage: String, call: String, seconds: Long = 120): Any {
+        evaluate(scenario, """(() => {
+          window.__lazyshVoiceResult = undefined;
+          $call.then(
+            value => { window.__lazyshVoiceResult = {ok:true,value:JSON.stringify(value === undefined ? null : value)}; },
+            error => { window.__lazyshVoiceResult = {ok:false,error:String(error)}; }
+          );
+          return true;
+        })()""")
+        awaitDocument(scenario, stage, "window.__lazyshVoiceResult !== undefined", System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds))
+        assertEquals("$stage was rejected", "\"\"", evaluate(scenario, "window.__lazyshVoiceResult.ok ? '' : window.__lazyshVoiceResult.error"))
+        // evaluateJavascript returns a JSON string literal; its content is the reply's own JSON.
+        return org.json.JSONTokener(JSONArray("[" + evaluate(scenario, "window.__lazyshVoiceResult.value") + "]").getString(0)).nextValue()
+    }
+
+    /** Runs a shell command as the shell user, like the SSH fixture read, and hands its output to `read`. */
+    private fun <T> shellOutput(command: String, read: (java.io.InputStream) -> T): T =
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).use { descriptor ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use(read)
+        }
+
+    /** The samples of a 16 kHz mono 16-bit PCM RIFF/WAVE file, scaled as the product's recorder sends them. */
+    private fun pcmSamples(wav: ByteArray): FloatArray {
+        val buffer = java.nio.ByteBuffer.wrap(wav).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        require(wav.size > 12 && String(wav, 0, 4, Charsets.US_ASCII) == "RIFF" && String(wav, 8, 4, Charsets.US_ASCII) == "WAVE") { "Sample is not a WAVE file" }
+        var offset = 12
+        var supported = false
+        while (offset + 8 <= wav.size) {
+            val length = buffer.getInt(offset + 4)
+            require(length >= 0 && offset + 8 + length <= wav.size) { "Sample chunk exceeds its file" }
+            when (String(wav, offset, 4, Charsets.US_ASCII)) {
+                "fmt " -> supported = length >= 16 && buffer.getShort(offset + 8).toInt() == 1 && buffer.getShort(offset + 10).toInt() == 1 &&
+                    buffer.getInt(offset + 12) == 16_000 && buffer.getShort(offset + 22).toInt() == 16
+                "data" -> {
+                    require(supported) { "Sample must be 16 kHz mono 16-bit PCM" }
+                    return FloatArray(length / 2) { buffer.getShort(offset + 8 + it * 2) / 32768f }
+                }
+            }
+            offset += 8 + length + (length and 1)
+        }
+        throw AssertionError("Sample has no data chunk")
+    }
+
+    /**
+     * Local Whisper on the device (#1604): imports the pinned English model through the product's chunked IPC, transcribes the
+     * public JFK sample with the bundled whisper.cpp, then removes the model. The owned acceptance run stages both files.
+     */
+    @Test fun ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView() {
+        val directory = InstrumentationRegistry.getArguments().getString("lazyshVoiceFixtures")
+        require(directory != null && Regex("/data/local/tmp/lazysh-voice-[a-f0-9]{32}").matches(directory)) {
+            "An owned Whisper fixture directory is required"
+        }
+        val model = "ggml-tiny.en.bin"
+        val name = JSONObject.quote(model)
+        val scenario = NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario, "Local Whisper IPC")
+        evaluate(scenario, """(() => {
+          const call = async (command, args) => {
+            const access = await window.__TAURI_INTERNALS__.invoke('app_lock_status', {});
+            return window.__TAURI_INTERNALS__.invoke(command, args, {headers: access.nonce ? {'X-Lazysh-Access':access.nonce} : {}});
+          };
+          // The panel sends each megabyte as a plain number array.
+          window.__lazyshVoice = {call, chunk: (id, offset, base64) =>
+            call('voice_import_chunk', {id, offset, bytes: Array.from(Uint8Array.from(atob(base64), c => c.charCodeAt(0)))})};
+          return true;
+        })()""")
+        fun call(stage: String, command: String, args: String, seconds: Long = 120) =
+            voiceReply(scenario, stage, "window.__lazyshVoice.call('$command', $args)", seconds)
+        fun models() = call("Whisper model list", "voice_models", "{}") as JSONArray
+        val size = shellOutput("stat -c %s $directory/$model") { String(it.readBytes(), Charsets.UTF_8).trim().toLong() }
+        assertTrue("The staged model is the pinned tiny.en weights", size in 1024..(160L * 1024 * 1024))
+        val samples = pcmSamples(shellOutput("cat $directory/jfk.wav") { it.readBytes() })
+        assertEquals("The JFK sample is eleven seconds of speech", 11, samples.size / 16_000)
+        assertEquals("A fresh emulator holds no Whisper model; remove it before this case", 0, models().length())
+        var openImport: String? = null
+        try {
+            val id = call("Whisper import begin", "voice_import_begin", "{name:$name, bytes:$size}") as String
+            openImport = id
+            shellOutput("cat $directory/$model") { stream ->
+                val buffer = ByteArray(1024 * 1024)
+                var offset = 0L
+                while (offset < size) {
+                    var count = 0
+                    while (count < buffer.size) {
+                        val read = stream.read(buffer, count, buffer.size - count)
+                        if (read < 0) break
+                        count += read
+                    }
+                    require(count > 0) { "Staged model ended at $offset of $size bytes" }
+                    voiceReply(scenario, "Whisper import chunk at $offset", "window.__lazyshVoice.chunk(${JSONObject.quote(id)}, $offset, " +
+                        "${JSONObject.quote(Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP))})")
+                    offset += count
+                }
+            }
+            call("Whisper import finish", "voice_import_finish", "{id:${JSONObject.quote(id)}, cancel:false}")
+            openImport = null
+            val installed = models()
+            assertEquals("Exactly the imported model is installed", 1, installed.length())
+            assertEquals(model, installed.getJSONObject(0).getString("id"))
+            assertEquals(size, installed.getJSONObject(0).getLong("bytes"))
+            val transcript = call("Whisper transcription", "voice_transcribe",
+                "{id:$name, language:'en', samples:[${samples.joinToString(",")}]}", 240) as String
+            val spoken = transcript.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+            assertTrue("Unexpected on-device transcription: $transcript", spoken.contains("ask not what your country can do for you"))
+            call("Whisper model removal", "voice_remove_model", "{id:$name}")
+            assertEquals("Removing the model frees its slot", 0, models().length())
+            println("lazysh native voice: model=$model bytes=$size samples=${samples.size} transcript=${JSONObject.quote(transcript)} removed=true")
+        } finally {
+            // Leave the emulator as found, whichever stage failed; a cleanup rejection never replaces the first failure.
+            runCatching { openImport?.let { call("Whisper import cancel", "voice_import_finish", "{id:${JSONObject.quote(it)}, cancel:true}") } }
+            runCatching { call("Whisper model cleanup", "voice_remove_model", "{id:$name}") }
+            runCatching { evaluate(scenario, "delete window.__lazyshVoice; delete window.__lazyshVoiceResult; true") }
+        }
+    }
+
     // `opened` is the selector a row that opens its own dialog, instead of a page, leaves shown.
     private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String, opened: String? = null) {
         val active = opened ?: ".settings-navigation [data-settings-page='$id']:not([hidden])"

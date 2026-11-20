@@ -1367,6 +1367,7 @@ jobs:
             fdroid_result=$?;
             if (( fdroid_result != 0 )); then exit "$fdroid_result"; fi;
             LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr || exit $?;
+            bun run test:android-voice || exit $?;
             for device_case in devices::tests::android_owned_emulator_inventory_and_screenshot devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change devices::tests::android_owned_emulator_video_gestures_follow_the_display_size; do
             LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib "$device_case" -- --ignored --exact --nocapture || exit $?;
             done;
@@ -1610,32 +1611,11 @@ jobs:
           path: ${{ runner.temp }}/lazysh-runtime-fixtures
           key: lazysh-speech-fixtures-921e4cf8-be07e048-59dfb9a4-1495e91b
       - name: Download and verify pinned public speech model fixtures
-        # Whisper weights: Hugging Face LFS digests of ggml-tiny.en.bin and ggml-tiny.bin at the pinned revision.
-        # Parakeet digest and size: packages/parakeet-runtime/src/bundle.rs.
+        # The pins live in .github/scripts/speech-fixtures.sh, which the owned Android voice run shares.
         env:
           LAZYSH_RUNTIME_FIXTURES: ${{ runner.temp }}/lazysh-runtime-fixtures
         run: |
-          mkdir -p "$LAZYSH_RUNTIME_FIXTURES"
-          fixture() {
-            target="$LAZYSH_RUNTIME_FIXTURES/$1"
-            if ! printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict --status 2>/dev/null; then
-              rm -f "$target"
-              curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 900 --max-filesize "$4" "$2" -o "$target" || {
-                code=$?
-                # curl 63: the publisher serves more bytes than the pin.
-                [ "$code" != 63 ] || echo "::error::$1: $2 is larger than its pinned $4 bytes; the publisher replaced it, so update the pin"
-                exit "$code"
-              }
-            fi
-            if [ "$(stat -c%s "$target")" != "$4" ] || ! printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict --status; then
-              echo "::error::$1: $2 no longer matches its pinned $4 bytes and SHA-256 $3; the publisher replaced it, so update the pin"
-              exit 1
-            fi
-          }
-          fixture ggml-tiny.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin 921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f 77704715
-          fixture ggml-tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 77691713
-          fixture jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e 352078
-          fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 487211443
+          sh .github/scripts/speech-fixtures.sh "$LAZYSH_RUNTIME_FIXTURES" ggml-tiny.en.bin ggml-tiny.bin jfk.wav parakeet-v3-int8.tar.bz2
           printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_MULTILINGUAL_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
       - name: Exercise local sessions, files, Git review, attachments and previews through the host context
         if: ${{ !cancelled() }}
@@ -1774,7 +1754,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.android_auxiliary == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The F-Droid, QR and local Whisper runs took about 18 minutes before Whisper joined them; its download, import and inference add under ten.
+    timeout-minutes: 40
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: auxiliary
