@@ -119,6 +119,36 @@ pub fn regular_state_metadata(
     crate::private_state::regular_state_metadata(path, message)
 }
 
+/// A page that is one solid green and titled `Green`.
+pub const GREEN_PAGE: &str =
+    "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
+
+/// A page on loopback, served to a real browser for `seconds`.
+pub fn loopback_page(body: &'static str, seconds: u64) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        // The browser asks for the page and a favicon; stop when the test drops its relay and connections stop.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            };
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, server)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
