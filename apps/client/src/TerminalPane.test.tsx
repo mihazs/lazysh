@@ -9,6 +9,8 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {XtermTerminalAdapter} from "./xtermTerminalAdapter";
+import {openNativeTerminalAdapter} from "./nativeTerminalAdapter";
+import {createHeadlessCore} from "./xterm/nativeCoreHeadless";
 import {accessSnapshot,applyAccessStatus} from './access';
 import {setGestureInsets,unknownInsets} from './gestureInsets';
 const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), invoke: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
@@ -57,6 +59,25 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+it('mirrors a native session\'s rows for a screen reader while that preference is on, and declares accessibility only then',async()=>{
+  // The shell answers the pane's surface commands.
+  mocks.invoke.mockResolvedValue({});
+  savePreferences({...defaults,screenReader:true});
+  const adapter=await openNativeTerminalAdapter(createHeadlessCore({rows:3}));
+  await adapter.write!(new TextEncoder().encode('$ uptime'));
+  const view=render(<TerminalPane session={{id:'native',name:'Host',connected:true,adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+  const canvas=view.container.querySelector('.terminal-canvas')!;
+  const rows=()=>[...canvas.querySelectorAll('[role=list] [role=listitem]')].map(item=>item.textContent);
+  await waitFor(()=>expect(rows()).toEqual(['$ uptime','','']));
+  expect(canvas.querySelector('[role=log]')).toBeTruthy();
+  expect(adapter.capabilities.accessibility).toBe(true);
+  act(()=>savePreferences({...getPreferences(),screenReader:false}));
+  expect(rows()).toEqual([]);
+  expect(canvas.querySelector('[role=log]')).toBeNull();
+  expect(adapter.capabilities.accessibility).toBe(false);
+  view.unmount();
+  await adapter.dispose();
+});
 it('sizes the toolbar keys from the saved key height and follows a change without remounting',()=>{
   savePreferences({...defaults});
   mount();

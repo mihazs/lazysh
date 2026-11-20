@@ -27,7 +27,8 @@ export type NativeAdapterOptions = {refreshMs?: number};
  */
 export class NativeTerminalAdapter implements TerminalAdapter {
   readonly backend = 'native' as const;
-  readonly capabilities = nativeCapabilities;
+  /** A mounted screen-reader mirror is what makes the rows reachable, so `accessibility` holds only while one is. */
+  get capabilities(): TerminalCapabilities { return this.mirrored ? {...nativeCapabilities, accessibility: true} : nativeCapabilities; }
   readonly dataPath: 'renderer' | 'runtime';
   write?: TerminalAdapter['write'];
   private mirror: NativeCoreSnapshot;
@@ -42,6 +43,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private pulling = false;
   private again = false;
   private stale = false;
+  private mirrored = false;
 
   constructor(private readonly bridge: NativeCoreBridge, initial: NativeCoreSnapshot, private readonly options: NativeAdapterOptions = {}) {
     this.mirror = initial;
@@ -58,6 +60,11 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
 
   async detach() { this.anchor = undefined; }
+
+  screenReaderMirrored(): Disposable {
+    this.mirrored = true;
+    return {dispose: () => { this.mirrored = false; }};
+  }
 
   setActive(active: boolean) {
     if (this.disposed) return;

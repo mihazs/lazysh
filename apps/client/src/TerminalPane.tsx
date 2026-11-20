@@ -34,6 +34,7 @@ import "./ToolbarRows.css";
 import "./TerminalGestures.css";
 import {webUrl as terminalWebUrl} from "./webPage";
 import {rgbOf, trackSurfaceAnchor} from "./terminalSurfaceAnchor";
+import {mountScreenReaderMirror, needsScreenReaderMirror} from "./terminalScreenReader";
 import "./TerminalNativeSurface.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
@@ -868,6 +869,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     try {session.adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
     if (active) requestAnimationFrame(() => fit.current?.());
   }, [preferences, fonts, session, active]);
+
+  // A native surface has no text a screen reader can reach: while that preference is on, the rows are mirrored into the container (#1329).
+  useEffect(() => {
+    const element = container.current;
+    if (!element || !preferences.screenReader || !needsScreenReaderMirror(session.adapter)) return;
+    const mirror = mountScreenReaderMirror(session.adapter, element);
+    return () => mirror.dispose();
+  }, [session.adapter, preferences.screenReader]);
 
   // Covered output keeps its size and session but leaves focus and the accessibility tree.
   useEffect(() => {container.current?.toggleAttribute('inert', composing && !floatingComposer);}, [composing, floatingComposer]);
