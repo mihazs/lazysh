@@ -12,6 +12,7 @@ import HerdrPanel from './HerdrPanel';
 import ZellijPanel from './ZellijPanel';
 import MultiplexerShortcuts from './MultiplexerShortcuts';
 import { parseSnapshot } from './AgentPanel';
+import { readMuxLayout, writeMuxLayout, type MuxLayout } from './muxLayout';
 
 type Pane = { id: string; index: number; active: boolean; command: string; path: string };
 type Window = { id: string; index: number; name: string; active: boolean; panes: Pane[] };
@@ -48,7 +49,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
   const [zellij, setZellij] = useState('');
   const [projects, setProjects] = useState<string[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [layout, setLayout] = useState(() => { try { const value = localStorage.getItem('lazysh.multiplexer.layout'); return ['list', 'accordion', 'grid'].includes(value ?? '') ? value! : 'list'; } catch { return 'list'; } });
+  const [layout, setLayout] = useState(readMuxLayout);
   const generation = useRef(0);
   const locked = useRef(false);
   const currentOwner=(version:number)=>generation.current===version && lease.current() && (!requested || requested.sessionId===sessionId);
@@ -70,7 +71,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
       acceptWorkspaces, error => setError(errorMessage(error)), () => setBusy(false));
     return () => { generation.current++; };
   }, [sessionId, tmuxServer]);
-  useEffect(() => { try { localStorage.setItem('lazysh.multiplexer.layout', layout); } catch { /* Layout remains usable without persistence. */ } }, [layout]);
+  useEffect(() => writeMuxLayout(layout), [layout]);
   async function run(action?: Action, attach?: string, kind?: MultiplexerKind) {
     if (locked.current || !currentOwner(generation.current)) return;
     locked.current = true;
@@ -133,7 +134,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
       {fixedServer===undefined && <button className="subtle-button" disabled={busy || !validTmuxServer(serverDraft)} onClick={()=>{setError('');setSelectedServer(serverDraft);}}>{t('muxBrowseServer')}</button>}<span>{t('muxServerValue',{server:tmuxServer})}</span></div>}
     <div className="tool-bar"><h3>{t('muxWorkspaces')}</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}><RefreshCw size={15} /> {t('agentsRefresh')}</button>
       {!requested && tree?.tmuxAvailable && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createSession' })}>{t('muxNewSession')}</button>}</div>
-    {!requested && <div className="tool-bar"><label>{t('muxLayout')}<select value={layout} onChange={e => setLayout(e.target.value)}><option value="list">{t('muxList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option></select></label><button className="subtle-button" disabled={busy} onClick={() => void loadProjects()}>{t('muxProjects')}</button></div>}
+    {!requested && <div className="tool-bar"><label>{t('muxLayout')}<select value={layout} onChange={e => setLayout(e.target.value as MuxLayout)}><option value="list">{t('muxList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option></select></label><button className="subtle-button" disabled={busy} onClick={() => void loadProjects()}>{t('muxProjects')}</button></div>}
     {projects.length > 0 && <label>{t('muxRecentDirectory')}<select value={projects.includes(directory) ? directory : ''} onChange={e => setDirectory(e.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{projects.map(project => <option key={project} value={project}>{project}</option>)}</select></label>}
     {projectsLoaded && projects.length === 0 && <p>{t('muxNoProjects')}</p>}
     {attached && attached.kind !== 'zellij' && !(attached.kind==='herdr' && tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')) && <MultiplexerShortcuts key={`${sessionId}:${attached.kind}`} sessionId={sessionId} kind={attached.kind} />}

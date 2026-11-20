@@ -3,6 +3,7 @@ import { api as nativeApi, type TmuxJumpSnapshot } from './bridge';
 import { captureAccess, useProtectedApi } from './access';
 import { errorMessage } from './SessionTools';
 import {t,useUi,formatNumber} from './i18n/core';
+import {readMuxLayout,writeMuxLayout,type MuxLayout} from './muxLayout';
 
 export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange }: {
   sessionId: string; onClose: () => void; onJump: (snapshot: TmuxJumpSnapshot) => void; onBusyChange?:(busy:boolean)=>void;
@@ -13,10 +14,7 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
   const [snapshot, setSnapshot] = useState<TmuxJumpSnapshot | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
-  const [layout, setLayout] = useState(() => {
-    try { const value = localStorage.getItem('lazysh.multiplexer.layout'); return ['list', 'accordion', 'grid'].includes(value ?? '') ? value! : 'list'; }
-    catch { return 'list'; }
-  });
+  const [layout, setLayout] = useState(readMuxLayout);
   const revision = useRef(0);
   const pending = useRef(false);
   const busyListener=useRef(onBusyChange);busyListener.current=onBusyChange;
@@ -38,7 +36,7 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
   },[sessionId]);
   useEffect(() => {
     if (!access.current()) return;
-    try { localStorage.setItem('lazysh.multiplexer.layout', layout); } catch { /* Layout works without persistence. */ }
+    writeMuxLayout(layout);
   }, [layout]);
   async function jump(targetSessionId: string, windowId: string) {
     if (!access.current() || pending.current || !snapshot) return;
@@ -58,7 +56,7 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
     }
   }
   return <section className="multiplexer-panel" aria-label={`tmux ${t('appJumpTo')}`}>
-    <div className="tool-bar"><label>{t('jumpLayout')}<select value={layout} onChange={event => { if (access.current()) setLayout(event.target.value); }}>
+    <div className="tool-bar"><label>{t('jumpLayout')}<select value={layout} onChange={event => { if (access.current()) setLayout(event.target.value as MuxLayout); }}>
       <option value="list">{t('preferencesList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option>
     </select></label><button className="subtle-button" disabled={busy} onClick={refresh}>{t('agentsRefresh')}</button></div>
     {busy && <p role="status">{t('appReadingTmuxDestinations')}</p>}
