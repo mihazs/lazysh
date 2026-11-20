@@ -316,11 +316,15 @@ impl Publisher {
             Which::Tag {
                 version,
                 prerelease,
-            } if crate::version(version).is_some() => (
-                self.json(&format!("releases/tags/v{version}"), MAX_RELEASE)
-                    .await?,
-                prerelease,
-            ),
+            } if crate::version(version).is_some() => {
+                let release: Release = self
+                    .json(&format!("releases/tags/v{version}"), MAX_RELEASE)
+                    .await?;
+                if tag_version(&release)? != version {
+                    return Err(Error::unavailable());
+                }
+                (release, prerelease)
+            }
             Which::Tag { .. } => return Err(Error::unavailable()),
         };
         if release.assets.len() > 32 {

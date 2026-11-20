@@ -399,9 +399,13 @@ impl Fixture {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
     async fn display(&self, session: &str) -> Display {
+        self.display_with_prefix(session, "").await
+    }
+    async fn display_with_prefix(&self, session: &str, prefix: &str) -> Display {
         let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
         let command = format!(
-            "printf '{}\\t%s\\t%s\\n' \"$$\" \"$(tty)\"; exec {} attach-session -t {}",
+            "{}printf '{}\\t%s\\t%s\\n' \"$$\" \"$(tty)\"; exec {} attach-session -t {}",
+            prefix,
             marker,
             self.prefix(),
             quote(session)
@@ -409,40 +413,20 @@ impl Fixture {
         let (mut channel, mut bytes) = open_terminal(self.handle(), 80, 24, Some(command))
             .await
             .unwrap();
-        let identity = timeout(BOUND, async {
-            loop {
-                assert!(bytes.len() < 8192, "attach frame exceeded bound");
-                if let Some(end) = bytes.iter().position(|b| *b == b'\n') {
-                    let line = std::str::from_utf8(&bytes[..end])
-                        .unwrap()
-                        .trim_end_matches('\r');
-                    let fields = line.split('\t').collect::<Vec<_>>();
-                    assert_eq!(fields.len(), 3);
-                    assert_eq!(fields[0], marker);
-                    let pid = fields[1].parse::<u32>().unwrap();
-                    assert!(pid > 0);
-                    let tty = fields[2].to_owned();
-                    assert!(
-                        tty.starts_with("/dev/")
-                            && tty.len() < 128
-                            && tty
-                                .bytes()
-                                .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    );
-                    return Identity {
-                        pid,
-                        tty,
-                        live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-                    };
-                }
-                match channel.wait().await {
-                    Some(ChannelMsg::Data { data }) => bytes.extend_from_slice(&data),
-                    message => panic!("attach ended before owned frame: {message:?}"),
-                }
-            }
-        })
-        .await
-        .unwrap();
+        // The terminal can emit output before the nonce frame; use the same bounded,
+        // exact-marker and PID/TTY validation as the product attachment.
+        let frame = crate::tmux_jump::handshake(&mut channel, &mut bytes, &marker)
+            .await
+            .expect("owned attach identity frame missing or invalid");
+        assert!(
+            frame.tty.len() < 128,
+            "owned attach TTY exceeds fixture bound"
+        );
+        let identity = Identity {
+            pid: frame.pid,
+            tty: frame.tty,
+            live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
         Display { channel, identity }
     }
     async fn control(&self, session: &str) -> Control {
@@ -855,6 +839,33 @@ async fn jump_probe() {
     assert_eq!(f.local(&["list-clients", "-F", "#{client_pid}"]), "");
     next.close().await;
     eprintln!("tmux prototype: exec PID+TTY verified; exact session/window selection; name/index replacement rejected; detached display guard rejected; control closure and restart/ID reuse fail closed");
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.4+"]
+async fn real_tmux_display_accepts_output_before_owned_identity() {
+    let fixture = Fixture::new().await;
+    let session = fixture.local(&[
+        "new-session",
+        "-d",
+        "-s",
+        "owned",
+        "-P",
+        "-F",
+        "#{session_id}",
+    ]);
+    let mut display = fixture
+        .display_with_prefix("owned", "printf 'owned banner\\n'; ")
+        .await;
+    let mut control = fixture.control("owned").await;
+    control.wait_display(&display.identity, true).await.unwrap();
+    assert_eq!(
+        control.position(&display.identity).await.unwrap().0,
+        session
+    );
+    control.close().await;
+    display.close().await;
+    fixture.local(&["kill-server"]);
 }
 
 #[tokio::test]
