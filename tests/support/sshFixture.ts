@@ -166,14 +166,17 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.XDG_RUNTIME_DIR)throw new Error('Owned Zellij fixture required');
     return new OwnedProcess(join(this.directory,'bin','zellij'),args,this.directory,this.environment).finish('owned Zellij observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;zellijBinary?:string;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean;acceptEnv?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;agentBinary?:string;tmux?:boolean;zellijBinary?:string;password?:string;log?:boolean;shellSeconds?:number;exec?:boolean;sftp?:boolean;acceptEnv?:boolean}={}) {
     if((options.password!==undefined || options.log || options.sftp || options.acceptEnv) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.zellijBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
+    // The companion reads Chat transcripts for a tmux display; it is only ever added beside the pinned tmux.
+    if(options.agentBinary!==undefined && !options.tmuxBinary)throw new Error('Owned agent binary requires the pinned tmux fixture');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
     if((options.tmux || options.tmuxBinary || options.zellijBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux and Zellij require their isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
     // A namespaced companion validates its private state ancestors, which an unmapped host root fails.
-    const ownedRoot=!!tools || options.ownedReceiverRoot===true || (options.companion===true && options.privateTtyGroup===true);
+    // The pinned tmux fixture only gets this root when it also carries the companion; without it, it keeps the host root view.
+    const ownedRoot=!!tools || options.ownedReceiverRoot===true || (options.companion===true && options.privateTtyGroup===true) || (!!options.tmuxBinary && options.agentBinary!==undefined);
     if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
     if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
@@ -214,7 +217,11 @@ export class SshFixture {
         for(const [name,binary] of [['herdr',tools.herdrBinary],['lazysh-agent',tools.agentBinary],['owned-terminal-receiver',tools.receiverBinary]])bin=await installOwnedBinary(directory,name,binary);
         environment=await privateEnvironment(directory,bin+':/usr/bin:/bin',toolDirectories);
       }
-      if(options.tmuxBinary)environment=await privateEnvironment(directory,await installOwnedBinary(directory,'tmux',options.tmuxBinary)+':/usr/bin:/bin',toolDirectories);
+      if(options.tmuxBinary) {
+        const bin=await installOwnedBinary(directory,'tmux',options.tmuxBinary);
+        if(options.agentBinary)await installOwnedBinary(directory,'lazysh-agent',options.agentBinary);
+        environment=await privateEnvironment(directory,bin+':/usr/bin:/bin',toolDirectories);
+      }
       // A private socket directory keeps every system tmux command away from the account's own servers.
       if(options.tmux)environment=await privateEnvironment(directory,'/usr/bin:/bin',[['TMUX_TMPDIR','tmux']]);
       // A pinned Zellij keeps its sockets and cache in the owned directory; a plain layout avoids loading its bar plugins.
@@ -280,8 +287,9 @@ export class SshFixture {
         // Herdr shares this owned filesystem while retaining Bun's PID/network
         // namespace, so receiver PID/start records remain directly verifiable.
         if(tools)toolNamespace=[...namespace,'--proc','/proc'];
-        // tmux keeps the host root view, including the host /proc, so pane PIDs stay directly verifiable.
-        else if(options.tmuxBinary)toolNamespace=namespace;
+        // tmux keeps the host root view, including the host /proc, so pane PIDs stay directly verifiable; with the companion it
+        // shares the owned root instead (the same PID namespace, so PIDs stay host PIDs), which the companion's ancestor checks need.
+        else if(options.tmuxBinary)toolNamespace=ownedRoot?[...namespace,'--proc','/proc']:namespace;
         // System tmux daemonizes out of the SSH tree; unlike the pinned tmuxBinary server, it lives
         // in sshd's private PID namespace, so retiring sshd also retires that server.
         daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary||options.tmux||options.zellijBinary?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
