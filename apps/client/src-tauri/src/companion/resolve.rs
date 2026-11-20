@@ -1,4 +1,4 @@
-use super::*;
+use super::{powershell::Windows, *};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Unix {
     pub os: &'static str,
@@ -44,46 +44,109 @@ fn parse(text: &str) -> Option<Unix> {
         data: rows[5].into(),
     })
 }
+/// A host the app positively identified: a Unix shell, or a Windows OpenSSH host that answered the PowerShell probe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Host {
+    Unix(Unix),
+    Windows(Windows),
+}
+impl Host {
+    /// The Unix host, for what only a Unix shell can do (installation, the Herdr lookup).
+    pub(super) fn unix(self) -> Option<Unix> {
+        match self {
+            Self::Unix(unix) => Some(unix),
+            Self::Windows(_) => None,
+        }
+    }
+    pub(super) fn command(&self, original: &str) -> Result<String> {
+        match self {
+            Self::Unix(unix) => unix.command(original),
+            Self::Windows(windows) => windows.command(original),
+        }
+    }
+    /// `original`, answering `marker` instead of failing when the companion is missing or too old to know the command.
+    /// With `diagnostics` the companion's stderr is kept, for a caller that reads it.
+    pub(super) fn required(
+        &self,
+        original: &str,
+        marker: &str,
+        diagnostics: bool,
+    ) -> Result<String> {
+        match self {
+            Self::Unix(unix) => unix.required(original, marker, diagnostics),
+            Self::Windows(windows) => windows.required(original, marker, diagnostics),
+        }
+    }
+}
 /// What one probe exec learned. `Unknown` means it could not run to an answer (timeout, odd output) and must be asked again.
 pub(super) enum Probed {
-    Known(Option<Unix>),
+    Known(Option<Host>),
     Unknown,
 }
 /// The host's answer, asked once per SSH connection: it cannot change while the connection stands, and every companion
 /// command needs it. A probe that did not answer is not remembered.
-pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Option<Unix>> {
+pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Option<Host>> {
     session
         .handle
         .host_probe
         .resolve(|| probe(session, lease))
         .await
 }
-async fn probe(session: &Session, lease: &AccessLease) -> Result<Probed> {
-    match ssh::exec_bounded(
-        session,
-        format!("sh -c {}", ssh::quote(PROBE)),
-        lease,
-        Duration::from_secs(5),
-        8192,
-        None,
-    )
-    .await
-    {
-        Ok(text) => Ok(Probed::Known(parse(&text))),
+/// How one probe exec ended: with text, with a non-zero exit (the shell could not run it) or without an answer.
+enum Asked {
+    Text(String),
+    Failed,
+    Unanswered,
+}
+async fn ask(
+    session: &Session,
+    lease: &AccessLease,
+    command: String,
+    wait: Duration,
+) -> Result<Asked> {
+    let asked = match ssh::exec_bounded(session, command, lease, wait, 8192, None).await {
+        Ok(text) => return Ok(Asked::Text(text)),
+        Err(error) if error.kind() == "remote_command_failed" => Asked::Failed,
         Err(error)
             if matches!(
                 error.kind(),
-                "remote_command_failed" | "invalid_output" | "output_too_large" | "timeout"
+                "invalid_output" | "output_too_large" | "timeout"
             ) =>
         {
-            lease.check()?;
-            if *session.cancel.borrow() {
-                return Err(super::error("disconnected", "Session closed"));
-            }
-            Ok(Probed::Unknown)
+            Asked::Unanswered
         }
-        Err(error) => Err(error),
+        Err(error) => return Err(error),
+    };
+    lease.check()?;
+    if *session.cancel.borrow() {
+        return Err(super::error("disconnected", "Session closed"));
     }
+    Ok(asked)
+}
+/// The POSIX probe first. Only when it exits non-zero (no `sh`: the localized shell message cannot be matched) is the
+/// Windows probe tried, so a host that answers the first never sees the second. A host that answers neither is asked
+/// again next time, as before.
+async fn probe(session: &Session, lease: &AccessLease) -> Result<Probed> {
+    let posix = format!("sh -c {}", ssh::quote(PROBE));
+    Ok(
+        match ask(session, lease, posix, Duration::from_secs(5)).await? {
+            Asked::Text(text) => Probed::Known(parse(&text).map(Host::Unix)),
+            Asked::Unanswered => Probed::Unknown,
+            Asked::Failed => {
+                match ask(
+                    session,
+                    lease,
+                    Windows::probe_command(),
+                    Duration::from_secs(10),
+                )
+                .await?
+                {
+                    Asked::Text(text) => Probed::Known(Windows::parse(&text).map(Host::Windows)),
+                    _ => Probed::Unknown,
+                }
+            }
+        },
+    )
 }
 impl Unix {
     pub fn target(&self) -> String {
@@ -156,6 +219,17 @@ fi
                 format!("exec {original}")
             }
         );
+        Ok(format!("sh -c {}", ssh::quote(&script)))
+    }
+    pub(super) fn required(
+        &self,
+        original: &str,
+        marker: &str,
+        diagnostics: bool,
+    ) -> Result<String> {
+        let resolved = self.command(original)?;
+        let redirect = if diagnostics { "" } else { "2>/dev/null" };
+        let script=format!("{resolved} {redirect}; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
         Ok(format!("sh -c {}", ssh::quote(&script)))
     }
 }
