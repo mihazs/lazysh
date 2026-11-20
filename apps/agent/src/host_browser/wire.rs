@@ -111,6 +111,29 @@ pub enum Client {
     Control {
         on: bool,
     },
+    // Navigation, tabs and dialogs: not input, so Control does not gate them (docs/host-browser.md, "Controls").
+    Navigate {
+        url: String,
+    },
+    Back {},
+    Forward {},
+    Reload {},
+    Stop {},
+    /// Asks for the tab list again.
+    Tabs {},
+    ActivateTab {
+        id: String,
+    },
+    NewTab {},
+    CloseTab {
+        id: String,
+    },
+    /// The answer to the page's open dialog; `text` is a prompt's answer.
+    AnswerDialog {
+        accept: bool,
+        #[serde(default)]
+        text: Option<String>,
+    },
     // Input, accepted only while Control is on, in the page's CSS pixels (docs/host-browser.md, "Input mapping").
     #[serde(rename_all = "camelCase")]
     Pointer {
@@ -293,6 +316,62 @@ mod tests {
             json!({"type": "pinch"}),
             json!({"type": "text", "text": "a", "x": 1}),
             json!({"type": "text", "text": 1}),
+        ] {
+            assert!(
+                serde_json::from_value::<Client>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn navigation_tabs_and_dialog_answers_are_closed_sets_in_the_clients_own_field_names() {
+        assert_eq!(
+            serde_json::from_value::<Client>(json!({"type": "activateTab", "id": "T2"})).unwrap(),
+            Client::ActivateTab { id: "T2".into() }
+        );
+        assert_eq!(
+            serde_json::from_value::<Client>(json!({"type": "answerDialog", "accept": true}))
+                .unwrap(),
+            Client::AnswerDialog {
+                accept: true,
+                text: None
+            }
+        );
+        for good in [
+            json!({"type": "navigate", "url": "https://example.com/"}),
+            json!({"type": "back"}),
+            json!({"type": "forward"}),
+            json!({"type": "reload"}),
+            json!({"type": "stop"}),
+            json!({"type": "tabs"}),
+            json!({"type": "newTab"}),
+            json!({"type": "closeTab", "id": "T2"}),
+            json!({"type": "answerDialog", "accept": false, "text": "ação"}),
+        ] {
+            assert!(
+                serde_json::from_value::<Client>(good.clone()).is_ok(),
+                "{good}"
+            );
+        }
+        // Each of these is one wrong field away from a message above.
+        for bad in [
+            json!({"type": "navigate"}),
+            json!({"type": "navigate", "url": 1}),
+            json!({"type": "navigate", "url": "https://a.test/", "method": "Page.navigate"}),
+            json!({"type": "back", "steps": 2}),
+            json!({"type": "reload", "ignoreCache": true}),
+            json!({"type": "stop", "extra": 1}),
+            json!({"type": "tabs", "extra": 1}),
+            json!({"type": "newTab", "url": "https://a.test/"}),
+            json!({"type": "activateTab"}),
+            json!({"type": "activateTab", "id": 2}),
+            json!({"type": "closeTab", "id": "T2", "force": true}),
+            json!({"type": "answerDialog"}),
+            json!({"type": "answerDialog", "accept": "yes"}),
+            json!({"type": "answerDialog", "accept": true, "promptText": "a"}),
+            json!({"type": "answerDialog", "accept": true, "text": 1}),
+            json!({"type": "navigate_to", "url": "https://a.test/"}),
         ] {
             assert!(
                 serde_json::from_value::<Client>(bad.clone()).is_err(),

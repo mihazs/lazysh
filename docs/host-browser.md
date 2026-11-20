@@ -209,11 +209,12 @@ header (sequence, width, height, scroll offset, timestamp), so the client never 
 | client to relay | `open {browser, headed, viewport}` | Starts the managed browser; the reply carries the capability record. |
 | client to relay | `navigate {url}`, `back`, `forward`, `reload`, `stop` | `url` limited to `http`, `https`, `about:blank`. |
 | client to relay | `tabs`, `activateTab {id}`, `newTab`, `closeTab {id}` | Pages only. |
+| client to relay | `answerDialog {accept, text?}` | The answer to the page's open dialog; `text` is a prompt's answer. |
 | client to relay | `ack {sequence, decodeMs}` | After the device decoded a frame. |
 | client to relay | `quality {rung}`, `pause`, `resume` | Pause when hidden. |
 | client to relay | `control {on}` | Turns Control on or off for the session. Off when a session starts. |
 | client to relay | `pointer {kind, x, y, button, clickCount}`, `wheel {x, y, deltaX, deltaY}`, `pinch {scale}`, `key {key, modifiers}`, `text {text}` | Accepted only while Control is on; see "Relay wire format". |
-| relay to client | `frame`, `state`, `tabs`, `dialog {kind, text}`, `closed {reason}` | Page strings are untrusted text. |
+| relay to client | `frame`, `state`, `tabs`, `dialog {kind, message, defaultPrompt}`, `dialogClosed`, `notice {kind, count}`, `closed {reason}` | Page strings are untrusted text. |
 
 Everything else is dropped with a counter, and the browser's protocol is not otherwise reachable.
 
@@ -231,14 +232,16 @@ the body.
 
 Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome", headed?, viewport: {width,
 height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
-scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause`, `resume`, `control {on}` and the
-input messages below. Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
+scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause`, `resume`, `control {on}`, the
+input messages below and the navigation messages of "Navigation, tabs and dialogs". Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
 than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
 browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
 111 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
 `page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (one count
 per reason, sent at count 1, 2, 4, 8 and so on; the reasons are `OperationRefused`, `ControlOff`,
-`InputOutOfRange`, `PermissionRefused` and `InputRateLimited`), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
+`InputOutOfRange`, `PermissionRefused`, `AddressRefused` and `InputRateLimited`), the messages of "Navigation, tabs
+and dialogs" below, and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed` (the browser has no
+page left),
 `BrowserExited`, `PageCrashed`, `ProtocolViolation`, or the class of a failure before the stream started
 (`HostBrowserDisabled`, `BrowserNotFound`, `AddressRefused`, `ViewportInvalid`, and so on).
 
@@ -295,6 +298,57 @@ The relay ([#1254](https://github.com/mihazs/lazysh/issues/1254)) sets the downl
 intercepts the file chooser (the browser reports it, no file is supplied) when it starts a browser, which is how
 those two are "denied and reported once", and it sends every command through the list; the hidden developer
 launcher applies the address rule to its first page.
+
+### Navigation, tabs and dialogs
+
+Status: the relay carries these messages; the app does not send or show them yet
+([#1998](https://github.com/mihazs/lazysh/issues/1998), second slice of
+[#1706](https://github.com/mihazs/lazysh/issues/1706)). They are **not input**, so Control does not gate them: a
+session that is view-only can still navigate, switch tabs and answer a page's dialog. They are bounded by the
+switch, by the closed message set and by the allow-list like everything else, and `state` says
+`capabilities.navigation: true` and `capabilities.tabs: true`.
+
+| Client message | Relay's calls (each one passes the allow-list first) |
+| --- | --- |
+| `navigate {url}` | `Page.navigate`; an address that is not `http`, `https` or `about:blank` (printable ASCII, at most 2048 bytes) is refused with `AddressRefused` and dropped. |
+| `back`, `forward` | `Page.navigateToHistoryEntry` for the entry one step back or forward in the history the relay last read (`Page.getNavigationHistory`); nothing at either end of the history. |
+| `reload`, `stop` | `Page.reload`, `Page.stopLoading`. |
+| `tabs` | None: the relay sends the tab list again. |
+| `activateTab {id}` | Attach to that page, `Target.activateTarget`, then leave the shown page (see below). A page that is not in the list is refused with `OperationRefused`. |
+| `newTab` | `Target.createTarget` with `about:blank`, then show it; refused with `OperationRefused` at 16 pages. |
+| `closeTab {id}` | `Target.closeTarget`. A browser keeps a page: closing the last one makes a blank one first. |
+| `answerDialog {accept, text?}` | `Page.handleJavaScriptDialog`; refused with `OperationRefused` while no dialog is open and with `InputOutOfRange` when `text` is over 4 KiB. |
+
+The relay sends:
+
+- `tabs {tabs: [{id, title, url}], activeId, canGoBack, canGoForward, loading}`: the browser's pages (type `page`
+  only, in the order it first reported them, at most 16; titles at most 200 characters, addresses at most 2048) and
+  what the controls show about the shown one. It is sent again only when it changes. A list that would not fit one
+  JSON message (64 KiB) loses its last pages, never the shown one. Titles are read from `Target.getTargets` again
+  every second and whenever a page settles, because Chromium announces a title through a target change for the
+  first page only (measured). `loading` is the main frame's loading state (the main frame has the id of its
+  target, measured).
+- `dialog {kind, message, defaultPrompt}` when the shown page opens an alert, a confirm, a prompt or a
+  before-unload question (text bounded to 1000 characters), and `dialogClosed` when it closes. Showing another page
+  while a dialog is open dismisses it first (`accept: false`), so that its page is not left blocked.
+- `notice {kind: "download" | "fileChooser", count}` when the browser denied a download or a file chooser, at count
+  1, 2, 4, 8 and so on. The download behavior is set to `deny` with `eventsEnabled` before any page is attached, and the
+  file chooser is intercepted on every page the relay attaches to. **Permission prompts have no notice**: the
+  protocol typings of Playwright 1.64.1 (Chromium 157 era) have `Browser.setPermission`, `grantPermissions` and
+  `resetPermissions`, which the allow-list refuses on purpose, and no event for a request, and headless Chromium
+  denies the request without a prompt (`Notification.requestPermission()` resolved `denied`, measured in #1256).
+
+Only one page streams at a time (a background page produces no frames, measured). Showing another page attaches to it
+first and leaves the shown one only once that worked; a page the browser listed that is gone by then is dropped from
+the list and the shown page stays. A page that opens another (a link with `target="_blank"`, `window.open`)
+takes the view, like in a browser. A page that is closed (by a tab close, by itself) hands the view to the last page of
+the list; the session ends with `PageClosed` only when the browser has none left. A page beyond sixteen is closed
+again as soon as the browser creates it, so a page that opens windows in a loop cannot grow the list.
+
+Known limit: while the relay switches pages it waits for each answer of the browser, up to 90 seconds, and the
+client's messages wait in line meanwhile; a page that hangs while it is being attached would stall the session until
+that timeout ends it with `BrowserStartTimeout`. Everything else on the shown page (navigation, history, dialog
+answers, input) is sent without waiting.
 
 ### Adapters and capabilities
 
