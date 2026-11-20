@@ -10,7 +10,7 @@ function ownedNativeTapObservation(target) {
     viewport: [window.innerWidth, window.innerHeight, window.devicePixelRatio].map(n),
     visualViewport: [visual?.width, visual?.height, visual?.offsetLeft, visual?.offsetTop, visual?.scale].map(n)
   };
-  const types = ['pointerdown', 'pointerup', 'click'];
+  const types = ['pointerdown', 'pointerup', 'click', 'pointercancel'];
   const records = types.map(() => ({count: 0, overflow: false, trusted: null, target: null, point: null}));
   let closed = false;
   const listeners = types.map((type, index) => [type, event => {
@@ -40,7 +40,7 @@ function ownedNativeTapObservation(target) {
     throw new Error('Owned native tap observation unavailable');
   }
   return {
-    read: () => ({before, down: {...records[0]}, up: {...records[1]}, click: {...records[2]}, closed}),
+    read: () => ({before, down: {...records[0]}, up: {...records[1]}, click: {...records[2]}, cancel: {...records[3]}, closed}),
     close
   };
 }
