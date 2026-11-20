@@ -95,6 +95,7 @@ import type {HerdrTree} from "./useHerdrNavigation";
 import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
+import TerminalEngineNotice from "./TerminalEngineNotice";
 import {describeTerminalEngine} from "./terminalEngineReason";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
@@ -2490,6 +2491,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             </button>
           </div>
         )}
+        <TerminalEngineNotice onOpenSettings={()=>setPreferences(true)}/>
         {active?.transportNotice && <div className="browser-banner" role="status">{active.transportNotice}</div>}
         {sessions.length > 0 && (
           <div

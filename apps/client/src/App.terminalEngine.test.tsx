@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // The harness registers the module mocks, so it has to be the first import.
 import {mocks, openConnection} from './test/appHarness';
-import {afterEach, expect, it} from 'vitest';
-import {act, screen, waitFor} from '@testing-library/react';
+import {afterEach, expect, it, vi} from 'vitest';
+import {act, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {defaults, getPreferences, savePreferences} from './preferences';
 import type {LiveSession} from './terminal';
@@ -45,4 +45,14 @@ it('gives a new session the engine chosen in Settings and records why, while an 
   expect(second.selection.reason).toBe('fallback');
   expect([first, second, third].every(session => !session.disposed && session.connected)).toBe(true);
   expect(mocks.terminal.dispose).not.toHaveBeenCalled();
+});
+
+it('tells a device whose default engine changed, and its button opens Settings', async () => {
+  vi.mocked(localStorage.getItem).mockImplementation(key => key === 'lazysh.terminal.defaultEngineSeen' ? 'native' : null);
+  const user = await openConnection();
+  const notice = await screen.findByText('The terminal engine changed on this platform. Switch back in Settings, Terminal engine.');
+  await user.click(within(notice.parentElement!).getByRole('button', {name: 'Open Settings'}));
+  expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.terminal.defaultEngineSeen', 'xterm');
+  expect(screen.queryByText(notice.textContent!)).toBeNull();
+  expect(await screen.findByRole('dialog', {name: 'Preferences'})).toBeTruthy();
 });

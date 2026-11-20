@@ -464,6 +464,8 @@ button svg {
   border-radius: 3px;
   font-size: 10px;
 }
+.terminal-engine-notice { display: flex; align-items: center; gap: 12px; }
+.terminal-engine-notice > span { flex: 1; min-width: 0; }
 .global-error {
   display: flex;
   align-items: center;
