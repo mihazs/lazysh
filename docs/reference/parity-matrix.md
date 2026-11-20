@@ -498,7 +498,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | --- | --- | --- | --- | --- |
 | Optional HTTPS upload service with expiring URLs | implemented | verified | `apps/client/src/SharePanel.tsx:215-219,387`; `src-tauri/lib.rs:163-173`. Real share-service over TLS `src-tauri/share/tests.rs:278` (NL). | Android runtime case. |
 | Upload history and delete | implemented | verified | `SharePanel.tsx:181-190,290`; `share/tests.rs:278` (NL). | Android runtime case. |
-| Thumbnails | implemented | implemented | `SharePanel.tsx:302-315,435-436`; fake server `share/tests.rs:416,521`. | Real service thumbnail fetch. |
+| Thumbnails | implemented | implemented | `SharePanel.tsx:302-315,435-436`; fake server `share/tests.rs` `thumbnail_downloads_are_bounded_https_gets_without_management_credentials`. Real service over TLS: `share/tests.rs` `real_service_returns_the_uploaded_image_for_a_thumbnail_until_it_is_deleted` uploads a PNG to the real `lazysh-share` router, fetches it back through `thumbnail_bytes`, gets identical bytes and a decoded preview with the original dimensions, and sees the fetch refused after the delete (`native-linux`, NL). | A green `native-linux` run on `main` with the case (promotes Desktop); the Android runtime case (#1738). |
 | Expiry-aware copy and delete | verified | verified | `SharePanel.tsx:302,433-447`. `e2e/share-locales.spec.ts:6` (PW). | Expired state is Vitest-only. |
 | Separate from private host-local transfer | implemented | implemented | Separate Share dialog (`App.tsx:2507`) and per-session Attach (`:2237`); separate native stacks. | — |
 
