@@ -1,5 +1,42 @@
 # @lazysh/agent
 
+## 1.91.0
+
+### Minor Changes
+
+- feat(hooks): set up agent hooks on macOS hosts from the app ([#1949](https://github.com/mihazs/lazysh/pull/1949))
+
+  <details><summary>Details</summary>
+
+  The host companion now writes managed hook configuration on macOS, with ACL, link and replacement-race checks, instead of reporting managed setup unsupported. No defaults change.
+
+  </details>
+- feat(hooks): install, update and remove Kimi Code 2.4 approval hooks from Agent hook setup ([#1947](https://github.com/mihazs/lazysh/pull/1947))
+
+  <details><summary>Details</summary>
+
+  **Agent hook setup** lists Kimi Code (`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and installs three `[[hooks]]` entries (`PermissionRequest`, `PermissionResult`, `SessionEnd`, five seconds) as an owned block at the very end of the profile's existing `config.toml`. Every earlier byte, including comments, secrets, CRLF line endings, foreign hooks and the file mode, is kept; a UTF-8 BOM is refused unchanged because Kimi Code 2.4.1 rejects it. The result is validated as TOML before it is written, a missing `config.toml` is refused instead of created, and update or remove act only on that exact end-of-file block (an edit after it, a moved block or an inline `hooks` setting is a conflict, never a rewrite). It needs the updated host companion: the app asks for discovery schema 4 first and falls back to 3 and 2 for older companions, which keep Kimi manual, as do the legacy Kimi CLI 1.52 profile and custom config paths. No default changes. A one-off run of the official Kimi Code 2.4.1 `kimi doctor` accepted the result; macOS, Windows and a real authenticated Kimi session were not exercised.
+
+  </details>
+- feat(hooks): report whether the host received an agent's events in `lazysh-agent hooks status` ([#1945](https://github.com/mihazs/lazysh/pull/1945))
+
+  <details><summary>Details</summary>
+
+  Add an additive `readiness` object to `lazysh-agent hooks status`: whether this host's companion store holds a lifecycle event of the selected agent and when the latest one arrived (read-only, never creating the store), with provider reload, provider trust, pane binding and remote delivery reported as `notChecked`. `reporting` and `trust` are unchanged.
+
+  </details>
+- feat: Update the host companion by itself when a newer lazysh app connects ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+
+  <details><summary>Details</summary>
+
+  A companion that is older than the app that talks to it (the app says which version it is in `LAZYSH_APP_VERSION`, set on every command it runs), under the new `lazysh-agent auto-update` policy `install` (the default), starts one detached `lazysh-agent update --yes --version <the app's version>` in the background and replies to the request as usual, with an `update` field in `snapshot`. It never downgrades, defers when a recent active turn is reported or session state cannot be read, runs one update at a time and backs off after a failure. `lazysh-agent auto-update status` and `set --expected-revision R --policy off|notify|install` show and change the policy.
+
+  </details>
+
+### Patch Changes
+
+- change: Refuse a companion release response when its version differs from the requested update version ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+
 ## 1.90.0
 
 No changes in this release.

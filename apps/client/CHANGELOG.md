@@ -1,5 +1,91 @@
 # @lazysh/client
 
+## 1.91.0
+
+### Minor Changes
+
+- feat(hooks): install, update and remove Kimi Code 2.4 approval hooks from Agent hook setup ([#1947](https://github.com/mihazs/lazysh/pull/1947))
+
+  <details><summary>Details</summary>
+
+  **Agent hook setup** lists Kimi Code (`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and installs three `[[hooks]]` entries (`PermissionRequest`, `PermissionResult`, `SessionEnd`, five seconds) as an owned block at the very end of the profile's existing `config.toml`. Every earlier byte, including comments, secrets, CRLF line endings, foreign hooks and the file mode, is kept; a UTF-8 BOM is refused unchanged because Kimi Code 2.4.1 rejects it. The result is validated as TOML before it is written, a missing `config.toml` is refused instead of created, and update or remove act only on that exact end-of-file block (an edit after it, a moved block or an inline `hooks` setting is a conflict, never a rewrite). It needs the updated host companion: the app asks for discovery schema 4 first and falls back to 3 and 2 for older companions, which keep Kimi manual, as do the legacy Kimi CLI 1.52 profile and custom config paths. No default changes. A one-off run of the official Kimi Code 2.4.1 `kimi doctor` accepted the result; macOS, Windows and a real authenticated Kimi session were not exercised.
+
+  </details>
+- feat(herdr): add the explicit install and removal of the optional managed Herdr over SSH ([#1941](https://github.com/mihazs/lazysh/pull/1941))
+
+  <details><summary>Details</summary>
+
+  A collapsed **Managed Herdr on this host** section in the Multiplexer workspaces panel with **Install** and **Remove**. Install uploads the verified release file for the host's own platform, has the host check its size, digest and CPU and refuse a stale plan, an unsafe destination or an executable that does not run, and publishes it as `<data>/lazysh/herdr/lazysh-herdr` by one rename; removal deletes only that file. The system Herdr, its configuration, running servers and sessions are never touched. The release set lists no managed Herdr yet, so the install stops with a clear message until it is published; no release or platform support is claimed.
+
+  </details>
+- feat(hooks): list the seven readiness steps of an agent in the Agent hook setup panel ([#1945](https://github.com/mihazs/lazysh/pull/1945))
+
+  <details><summary>Details</summary>
+
+  List seven readiness steps in the Agent hook setup panel after Inspect setup (companion, hook files, provider reload, provider trust, lifecycle event received on this host, pane, remote delivery), in English, Portuguese and Spanish. Configured hooks with no recorded event show a hint; an older companion's status reads as not checked.
+
+  </details>
+
+### Patch Changes
+
+- feat(herdr): run every native Herdr call on the one Herdr a connection captured, nothing changes for users yet ([#1942](https://github.com/mihazs/lazysh/pull/1942))
+
+  <details><summary>Details</summary>
+
+  Make every native Herdr call run one Herdr that the connection captured once: the host's own `herdr` or the optional managed derivative at its fixed path `~/.local/libexec/lazysh-herdr/herdr`. Discovery, the session list, the tree and its actions, workspace creation, SSH and Mosh attachment, the guard's capability check and RPCs, and the display's owning actor all use the captured choice; a different second choice is refused, a missing or untrusted managed file never falls back to the host's own Herdr, and the choice is a closed name, never a path or command. Nothing installs the managed Herdr and the app offers no choice yet, so behaviour and defaults are unchanged.
+
+  </details>
+- change: Refuse a companion release response when its version differs from the requested update version ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+- test: Verify theme import by QR image file and by an OS `lazysh://` link in the Linux native GUI suite ([#1890](https://github.com/mihazs/lazysh/pull/1890))
+
+  <details><summary>Details</summary>
+
+  No user-visible behaviour changes.
+
+  </details>
+- test(android): cover pinch zoom and two-finger window swipes on a real tmux session ([#1887](https://github.com/mihazs/lazysh/pull/1887))
+
+  <details><summary>Details</summary>
+
+  Extend the Android tmux acceptance case with real two-finger gestures: a pinch out and a pinch in on the attached tmux display zoom and unzoom the pane the split added, and a two-finger swipe left and right select the next and the previous window. The host reads the active window and `#{window_zoomed_flag}` back from the tmux server and requires them to change in exactly that order. Test-only; no behaviour changes.
+
+  </details>
+- change: Generate and check the redistribution notice inventory of the optional managed Herdr derivative in the Herdr… ([#1936](https://github.com/mihazs/lazysh/pull/1936))
+
+  <details><summary>Details</summary>
+
+  Generate and check the redistribution notice inventory of the optional managed Herdr derivative in the Herdr native job: every Cargo package and Zig package the Linux x86-64 managed build resolves, with version, source URL, license and license texts, the modified upstream files with their change notices, the original manifest digest and the lazysh files with their licenses. The job fails when a package has no recorded license, a license nobody reviewed, or no license text, and retains `notices.json` and `NOTICES.txt` as a CI artifact. The audit result is recorded in `PROVENANCE.md`. Nothing is published and no platform support is claimed.
+
+  </details>
+- test(herdr): accept the managed Herdr beside a stock server of the same session name ([#1937](https://github.com/mihazs/lazysh/pull/1937))
+
+  <details><summary>Details</summary>
+
+  Accept the managed Herdr derivative beside an unchanged stock server in the Herdr native job: a stock and a managed server of the same session name share one `HOME` and set of XDG roots, the stock server's process, sockets, configuration and workload stay exactly as they were, everything the managed server adds sits in its own `lazysh-herdr` directory, its pane children keep `HOME`, every XDG root and the provider profile, and only the managed executable advertises guarded attachment. The owned acceptance can now run on an executable named by `LAZYSH_TEST_HERDR_MANAGED`, so a retained or downloaded release asset can be accepted instead of a rebuild. Nothing is published, no install or removal is added and no platform support is claimed yet.
+
+  </details>
+- test(desktop): verify the Linux keep-awake control through the real app and an owned portal server ([#1958](https://github.com/mihazs/lazysh/pull/1958))
+
+  <details><summary>Details</summary>
+
+  Verify the Linux desktop keep-awake control through the real app: the Agent board's request to the desktop portal, its closing on window focus loss, on leaving the board and on turning the control off, and the error shown without a portal. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+- test(android): deny the Attachment Photo camera permission through the real system sheet ([#1928](https://github.com/mihazs/lazysh/pull/1928))
+
+  <details><summary>Details</summary>
+
+  The owned Mosh attachment case now denies the camera permission and verifies no camera opens, the draft is unchanged and the ordinary file chooser still opens. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+- test(android): sample the glass chrome material in the Android WebView ([#1893](https://github.com/mihazs/lazysh/pull/1893))
+
+  <details><summary>Details</summary>
+
+  Adds an Android runtime case that samples the glass chrome material in the Android WebView (#1723): for the Workspace tools dialog and Preferences it reads the computed `backdrop-filter` and translucent background and the conditions under which they fall back to opaque, then lays a black and white underlay beneath the dialog and measures the device screenshot across its edge, so a blur or translucency that the WebView declares but does not composite fails it. Test infrastructure only; the app is unchanged.
+
+  </details>
+
 ## 1.90.0
 
 ### Minor Changes
