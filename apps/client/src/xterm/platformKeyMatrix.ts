@@ -67,13 +67,17 @@ function xtermSends(testCase: KeyCase) {
   return sent;
 }
 
-export type PlatformKeyEntry = {name: string; optionAsMeta: boolean; xterm: string; core: string; why?: string; raw: CoreKeyInput; input: CoreKeyInput};
+/** What a `KeyboardEvent` carries that `CoreKeyInput` does not, so the e2e specs can fire the event the browser fired. */
+export type FiredKey = {keyCode: number; altGraph: boolean};
+export type PlatformKeyEntry = {name: string; optionAsMeta: boolean; xterm: string; core: string; why?: string; raw: CoreKeyInput; fired: FiredKey; input: CoreKeyInput};
 const fixturePath = (platform: KeyboardPlatform) => resolve(__dirname, '../../e2e/fixtures/platform-keys', `${platform}.json`);
 
 /**
  * Runs the key cases of `platform` through xterm.js, which must have been loaded as that platform
  * (`emulatePlatform`), and through `coreKeyInput`. The fixture is what the Rust core is held to
- * (`packages/terminal-runtime/tests/platform_keys.rs`): its bytes must equal xterm.js's, or the listed difference.
+ * (`packages/terminal-runtime/tests/platform_keys.rs`): its bytes must equal xterm.js's, or the listed difference. The
+ * native input editor is held to it from the other side (`e2e/terminal-native-input.spec.ts`): the event the browser fired
+ * (`raw` and `fired`) must reach the core as `input`.
  * Regenerate it with `UPDATE_PLATFORM_KEYS=1`.
  */
 export function runPlatformKeyMatrix(platform: KeyboardPlatform) {
@@ -83,7 +87,7 @@ export function runPlatformKeyMatrix(platform: KeyboardPlatform) {
       const mods = testCase.mods ?? {};
       const raw = {code: testCase.code, key: testCase.key, keyCode: testCase.keyCode, shiftKey: !!mods.shift, ctrlKey: !!mods.ctrl, altKey: !!mods.alt, metaKey: !!mods.meta, getModifierState: (name: string) => name === 'AltGraph' && !!mods.altGraph};
       const asFired: CoreKeyInput = {type: 'key', code: raw.code, key: raw.key, mods: {shift: raw.shiftKey, ctrl: raw.ctrlKey, alt: raw.altKey, meta: raw.metaKey}, repeat: false, release: false, composing: false};
-      return {name: testCase.name, optionAsMeta: !!testCase.optionAsMeta, xterm: testCase.xterm, core: testCase.core?.bytes ?? testCase.xterm, ...(testCase.core ? {why: testCase.core.why} : {}), raw: asFired, input: coreKeyInput(raw, platform, !!testCase.optionAsMeta)};
+      return {name: testCase.name, optionAsMeta: !!testCase.optionAsMeta, xterm: testCase.xterm, core: testCase.core?.bytes ?? testCase.xterm, ...(testCase.core ? {why: testCase.core.why} : {}), raw: asFired, fired: {keyCode: testCase.keyCode, altGraph: !!mods.altGraph}, input: coreKeyInput(raw, platform, !!testCase.optionAsMeta)};
     });
 
     it('is read by this xterm.js as the platform under test', () => {

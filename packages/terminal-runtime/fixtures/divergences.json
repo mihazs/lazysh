@@ -72,7 +72,8 @@
   "shift-pageup-handled-by-host": {
     "summary": "xterm.js sends nothing for Shift+PageUp (it scrolls the viewport itself); the core encodes CSI 5;2~.",
     "rationale": "Scrolling belongs to the adapter/host (lazysh scrolls on these keys today). The native adapter must consume the scroll chords before calling the core, otherwise history scrolling would send keys to the program.",
-    "status": "open (reviewed 2026-11-18, #1314 slice 1314b): moves to #1334 (slice 1334a, key routing of the native input path); the adapter must consume the scroll chords before the core encodes them"
+    "status": "accepted (2026-11-19, #1334 slice 1334a): the native adapter's input editor consumes Shift+PageUp and Shift+PageDown (with any other modifier) before the core encodes them and scrolls the history by a page, as xterm.js does; the keys never reach the program",
+    "evidence": "apps/client/e2e/terminal-native-input.spec.ts (Shift+PageUp and Shift+PageDown scroll the history and are not sent to the program)"
   },
   "alt-cursor-key-encoding": {
     "summary": "xterm.js rewrites Alt+Up to the Ctrl form (CSI 1;5A) and drops Alt on PageUp (CSI 5~); the core sends the standard CSI 1;3A and CSI 5;3~.",

@@ -1,10 +1,13 @@
+import {isAndroidApp} from './isAndroidApp';
 import type {NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from './nativeCoreBridge';
+import {NativeInputCapture} from './nativeInputCapture';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
   Disposable, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
-  TerminalMountTarget, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalViewport,
+  TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalViewport,
 } from './terminalAdapter';
 import {TerminalEvents} from './terminalEvents';
+import type {CoreKeyInput} from './terminalPlatformKeys';
 import {searchRows} from './terminalText';
 
 /** Honest for a core without a renderer: it parses, scrolls and answers questions about the screen, and draws nothing. */
@@ -33,6 +36,9 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private mirror: NativeCoreSnapshot;
   private selected: TerminalRange | undefined;
   private anchor: HTMLElement | undefined;
+  private capture: NativeInputCapture | undefined;
+  private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
+  private preferences: TerminalPreferences | undefined;
   private active = true;
   private disposed: Promise<void> | undefined;
   private queue: Promise<unknown> = Promise.resolve();
@@ -55,9 +61,12 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     const anchor = target.kind === 'native' ? document.getElementById(target.anchorId) : target.element;
     if (!anchor) throw new Error('The native terminal anchor is not mounted.');
     this.anchor = anchor;
+    this.capture?.dispose();
+    // Android types through a native input connection (#1328), not a DOM editor.
+    this.capture = isAndroidApp() ? undefined : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences: () => this.preferences});
   }
 
-  async detach() { this.anchor = undefined; }
+  async detach() { this.capture?.dispose(); this.capture = this.anchor = undefined; }
 
   setActive(active: boolean) {
     if (this.disposed) return;
@@ -68,7 +77,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   dispose() {
     if (this.disposed) return this.disposed;
-    this.source.dispose(); this.events.clear(); this.anchor = undefined;
+    this.source.dispose(); this.capture?.dispose(); this.events.clear(); this.anchor = this.capture = undefined;
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
     // Queued commands finish first: closing the core under one would turn its answer into an error.
@@ -127,10 +136,15 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       .then(() => { this.pulling = false; if (this.again) { this.again = false; this.ring(); } });
   }
 
-  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
+  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) { this.send(() => this.bridge.input(data, origin)); }
+
+  /** A key as the DOM reports it, for the core to encode for the modes the program set; `sendInput` carries text. */
+  sendKey(input: CoreKeyInput) { this.send(() => this.bridge.key(input)); }
+
+  private send(run: () => Promise<void>) {
     // A refused write (input gated, app locked) is dropped by the transport on purpose: a stale key must not arrive later.
     if (this.disposed) return;
-    this.queue = this.queue.then(() => this.disposed ? undefined : this.bridge.input(data, origin)).catch(noop);
+    this.queue = this.queue.then(() => this.disposed ? undefined : run()).catch(noop);
   }
 
   paste(text: string) {
@@ -162,7 +176,8 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     return {columns, rows, cellWidth: rect && columns ? rect.width / columns : 0, cellHeight: rect && rows ? rect.height / rows : 0, scrollbackLines};
   }
 
-  applyPreferences() { /* The renderer applies fonts and colours; the core has no use for them. */ }
+  /** The renderer applies fonts and colours; the input editor reads them for the preedit and `optionAsMeta` for its keys. */
+  applyPreferences(preferences: TerminalPreferences) { this.preferences = preferences; }
 
   scroll(action: TerminalScrollAction) {
     if (this.disposed) return;
@@ -249,17 +264,20 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.emit({type: 'selection', range: undefined});
   }
 
-  // No renderer draws yet, so there is no DOM to lay out, no editor to type into and no key to intercept (#1327, #1328).
-  inputElement() { return undefined; }
+  // No renderer draws yet, so there is no DOM to lay out (#1327). The typed-input editor is the capture's, on desktop and iOS.
+  inputElement() { return this.capture?.element; }
   screenElement() { return undefined; }
   layoutRowHeight() { return 0; }
   proposeSize(): TerminalSize | undefined { return undefined; }
   fit() {}
   syncViewport() {}
-  interceptKeys(): Disposable { return {dispose: noop}; }
+  interceptKeys(handler: (event: KeyboardEvent) => boolean): Disposable {
+    this.interceptor = handler;
+    return {dispose: () => { if (this.interceptor === handler) this.interceptor = undefined; }};
+  }
   registerLinks(): Disposable { return {dispose: noop}; }
-  focus() {}
-  blur() {}
+  focus() { this.capture?.focus(); }
+  blur() { this.capture?.blur(); }
 
   subscribe(listener: (event: TerminalEvent) => void, types?: readonly TerminalEvent['type'][]): Disposable {
     return this.disposed ? {dispose: noop} : this.events.add(listener, types);
