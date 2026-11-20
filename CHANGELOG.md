@@ -10,6 +10,24 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.88.0] - 2026-11-20
+
+### New
+
+- **companion:** run the companion on Windows hosts reached over OpenSSH ([#1903](https://github.com/mihazs/lazysh/pull/1903))
+- **desktop:** run Files and Diff inside a WSL target on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+- **desktop:** choose PowerShell, Git Bash or a WSL distribution for a local terminal on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+- **agents:** add an opt-in "All hosts" scope to the Agents board ([#1915](https://github.com/mihazs/lazysh/pull/1915))
+- **desktop:** attach native Zellij and Herdr sessions on Windows through the ConPTY ([#1926](https://github.com/mihazs/lazysh/pull/1926))
+- **multiplexers:** run the guarded Herdr input in local terminals ([#1922](https://github.com/mihazs/lazysh/pull/1922))
+
+### Under the hood
+
+- **android:** cover the Device panel against the owned emulator over owned OpenSSH ([#1895](https://github.com/mihazs/lazysh/pull/1895))
+- **share:** verify the share thumbnail fetch against the real share service ([#1918](https://github.com/mihazs/lazysh/pull/1918))
+- **android:** record cancelled pointer sequences when diagnosing the native chooser ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+- **android:** verify the saved tmux create-if-missing default through the real host editor ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+
 ## [1.87.1] - 2026-11-20
 
 ### New

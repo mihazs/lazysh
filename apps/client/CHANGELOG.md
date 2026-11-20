@@ -1,5 +1,83 @@
 # @lazysh/client
 
+## 1.88.0
+
+### Minor Changes
+
+- feat(companion): run the companion on Windows hosts reached over OpenSSH ([#1903](https://github.com/mihazs/lazysh/pull/1903))
+
+  <details><summary>Details</summary>
+
+  Run the companion on Windows hosts reached over OpenSSH (#1725, part of #490). A host whose POSIX probe exits non-zero is now asked a second, PowerShell probe (`powershell.exe -EncodedCommand`) that reports its architecture, SID and local application data directory, and every companion command is sent to it as one encoded PowerShell line that `cmd.exe`, Windows PowerShell and POSIX quoting pass unchanged. Arguments Windows PowerShell 5.1 cannot pass faithfully are refused. Hosts that answer the POSIX probe are unchanged; installation, hook setup and the Herdr lookup stay Unix-only. Changed default: a host whose POSIX probe fails also gets the Windows probe.
+
+  </details>
+- feat(desktop): run Files and Diff inside a WSL target on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+
+  <details><summary>Details</summary>
+
+  Run **Files** and **Diff** inside a WSL target on Windows (#1745, part of #1135). A WSL session runs Git and every other host command as `wsl.exe -d <distro> --cd ~ -e <argv>` (argv, no shell string, the same deadline, output bound and process-tree cleanup as a native command) and reads and lists files through `\\wsl.localhost\<distro>\`. Only a Linux path, a `\\wsl.localhost\<distro>\` path of the same distribution or a Windows drive path (translated with `wslpath`) is accepted; other UNC hosts, other distributions, device paths and `..` escapes are refused. A distribution reports **Files** and **Diff** once `git` starts inside it. Native Windows, Linux and macOS targets are unchanged.
+
+  </details>
+- feat(desktop): choose PowerShell, Git Bash or a WSL distribution for a local terminal on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+
+  <details><summary>Details</summary>
+
+  Choose PowerShell 7, Windows PowerShell, Git Bash or a WSL distribution for a local terminal on Windows. The target list is detected natively, the app sends only the chosen id, an id that is not installed is refused, and a session saves its target for workspace restore. The default shell is unchanged. WSL targets open the distribution's login shell.
+
+  </details>
+- feat(agents): add an opt-in "All hosts" scope to the Agents board ([#1915](https://github.com/mihazs/lazysh/pull/1915))
+
+  <details><summary>Details</summary>
+
+  Part of #1743 and #991. With two or more saved hosts connected, a "This host / All hosts" switch appears above the board; "This host" stays the default and the per-connection board is unchanged. "All hosts" reads the reported activity of every connected host and groups it by state, then host, then project. Each host is read through its own connection every five seconds while the board is shown (up to 32 hosts, four reads at a time; sessions of one saved host count once), and a host that cannot answer shows its own error row while the others stay. A row opens that host's connection, like an inbox notification. Archive and Restore stay on each host's own board under its own key: the merged board only hides what that board archived. Nothing changes on the host or on disk and no default changes.
+
+  </details>
+
+### Patch Changes
+
+- test(android): cover the Device panel against the owned emulator over owned OpenSSH ([#1895](https://github.com/mihazs/lazysh/pull/1895))
+
+  <details><summary>Details</summary>
+
+  Adds an owned Android runtime case for the Device panel (#1730, #19): through the real UI over owned OpenSSH with the current `lazysh-agent` and the job's Android SDK, it finds the owned emulator as running, checks the controls its capabilities offer and shows a decoded capture of the emulator's own screen. It never presses reboot, shutdown or boot, since the emulator under test runs the app; the lifecycle half stays a documented limit. Test infrastructure only; the app is unchanged.
+
+  </details>
+- test(share): verify the share thumbnail fetch against the real share service ([#1918](https://github.com/mihazs/lazysh/pull/1918))
+
+  <details><summary>Details</summary>
+
+  A desktop test uploads a PNG to the real service router behind a throwaway-certificate TLS front, fetches it back through the client's thumbnail download, decodes it to a preview with the original dimensions, and sees the fetch refused once the share is deleted (#994, #1738). Test infrastructure only; the app is unchanged.
+
+  </details>
+- feat(desktop): attach native Zellij and Herdr sessions on Windows through the ConPTY ([#1926](https://github.com/mihazs/lazysh/pull/1926))
+
+  <details><summary>Details</summary>
+
+  Let `local_connect` attach a native Zellij or Herdr session on Windows through the ConPTY. The program is found on the `PATH` before the PTY starts, trying each directory in order with the name plus the `PATHEXT` extensions a process can be started from (`.com` and `.exe`; a batch file never resolves), and a program that is not installed is named in the error. tmux has no native Windows build, so a tmux entry is still refused there. The interface does not offer the choice yet, and attaching on Linux and macOS behaves as before.
+
+  </details>
+- feat(multiplexers): run the guarded Herdr input in local terminals ([#1922](https://github.com/mihazs/lazysh/pull/1922))
+
+  <details><summary>Details</summary>
+
+  Run the guarded Herdr input in local terminals: a local `herdr` that admits the guard is attached with `--guarded-attach`, its private first frame is taken off the PTY before any byte reaches the terminal, the ticket is claimed through a one-shot `herdr api guarded` child, and the same guard actor then serves `herdr_chat` for `local:` ids over the same receipts, budgets and access leases as SSH. A claim that fails closes the terminal and never falls back to an ordinary attach. The interface does not offer the local attach yet, and SSH Herdr behaves as before.
+
+  </details>
+- test(android): record cancelled pointer sequences when diagnosing the native chooser ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+
+  <details><summary>Details</summary>
+
+  Record cancelled pointer sequences when diagnosing the Android native chooser.
+
+  </details>
+- test(android): verify the saved tmux create-if-missing default through the real host editor ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+
+  <details><summary>Details</summary>
+
+  Verify the saved tmux create-if-missing default on Android: a second host whose Default multiplexer is tmux creates and attaches a session the server lacks through the real host editor and connect flow, and connecting again attaches the same session. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+
 ## 1.87.1
 
 ### Patch Changes
