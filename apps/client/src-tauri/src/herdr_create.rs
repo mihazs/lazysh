@@ -426,14 +426,24 @@ pub(crate) fn login_word(value: &str) -> String {
 /// parses it exactly once: a fixed wrapper and each argv element as its own
 /// [`login_word`]. `sh` then runs the argv as `"$@"`, so no element is ever
 /// parsed as shell syntax, and appends the exit status.
-pub(crate) fn script(argv: &[String]) -> String {
-    let wrapper = format!("\"$@\" 2>&1; s=$?; echo; echo {STATUS_MARK}$s");
+///
+/// `prelude` is whole lines of `sh` that run first and make `herdr` mean the connection's Herdr.
+pub(crate) fn script(prelude: &str, argv: &[String]) -> String {
+    let wrapper = format!("{prelude}\"$@\" 2>&1; s=$?; echo; echo {STATUS_MARK}$s");
     let mut command = format!("sh -c {} sh", login_word(&wrapper));
     for arg in argv {
         command.push(' ');
         command.push_str(&login_word(arg));
     }
     command
+}
+/// Lines that make every step of a plan run as `backend`. An unusable managed Herdr ends a step with
+/// status 127 and a message instead of running anything.
+fn prelude(backend: crate::herdr_backend::HerdrBackend, positive_unix: bool) -> Result<String> {
+    backend.prelude(
+        positive_unix,
+        &format!("echo 'lazysh: the managed Herdr is not installed on this host'; echo; echo {STATUS_MARK}127; exit 0"),
+    )
 }
 fn parse_status(raw: &str) -> Result<Output> {
     let invalid = || SshError::new("invalid_output", "Remote command status is missing");
@@ -750,9 +760,19 @@ struct Ssh<'a> {
 }
 impl Remote for Ssh<'_> {
     async fn run(&mut self, argv: &[String], timeout: Duration) -> Result<Output> {
+        // Every step of the plan runs as the connection's Herdr, so an unusable managed one fails the first step, before any worktree exists.
+        let backend = crate::herdr_backend::captured(&self.session.handle);
+        let prelude = if backend.is_system() {
+            String::new()
+        } else {
+            prelude(
+                backend,
+                crate::herdr_path::admit(self.session, self.access).await?,
+            )?
+        };
         let raw = crate::ssh::exec_bounded(
             self.session,
-            script(argv),
+            script(&prelude, argv),
             self.access,
             timeout,
             OUTPUT_LIMIT,

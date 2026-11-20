@@ -21,24 +21,27 @@ fn mosh_guard_startup_requires_the_exact_positive_fd_capability() {
 
 #[cfg(unix)]
 #[test]
-fn mosh_guard_attach_receipt_runs_the_exact_guarded_startup_argv() {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = tempfile::tempdir().unwrap();
-    let herdr = bin.path().join("herdr");
-    std::fs::write(&herdr, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
-    std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let output = std::process::Command::new("/bin/sh")
-        .args(["-c", &attach_receipt("own'ed $(x)")])
-        .env_clear()
-        .env("HOME", "/nonexistent")
-        .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "--session\nown'ed $(x)\n--guarded-attach\n--startup-fd\n3\n"
-    );
+fn guard_commands_run_the_exact_guarded_argv_on_the_chosen_herdr_and_never_the_other() {
+    use crate::herdr_backend::{
+        sandbox::{assert_both_backends, Sandbox},
+        HerdrBackend::{Managed, System},
+    };
+    assert_both_backends(&[
+        command("owned", false),
+        command("owned", true),
+        attach_command("owned"),
+    ]);
+    let sandbox = Sandbox::new(true);
+    for (backend, name) in [(System, "system"), (Managed, "managed")] {
+        let receipt = attach_receipt(backend, "own'ed $(x)").unwrap();
+        assert_eq!(
+            sandbox.run_wrapped(&receipt),
+            (
+                format!("{name} --session own'ed $(x) --guarded-attach --startup-fd 3\n"),
+                true
+            )
+        );
+    }
 }
 
 fn private_frame() -> Vec<u8> {

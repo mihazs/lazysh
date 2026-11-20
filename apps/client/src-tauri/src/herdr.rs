@@ -473,8 +473,7 @@ async fn read_tree(
     access: &AccessLease,
 ) -> Result<HerdrTree> {
     let command = command(name, "api snapshot".into())?;
-    let command =
-        crate::herdr_path::select(&command, crate::herdr_path::admit(session, access).await?);
+    let command = crate::herdr_backend::resolve(session, access, &command).await?;
     parse(&crate::ssh::exec_for_access(session, command, access).await?)
 }
 
@@ -690,7 +689,7 @@ pub async fn herdr_action(
             } else {
                 command
             };
-            let command = crate::herdr_path::select(&command, crate::herdr_path::admit(&session, &access).await?);
+            let command = crate::herdr_backend::resolve(&session, &access, &command).await?;
             // Closing a tab, pane or workspace moves the view like a focus does, so the input turn bound to the old view is retired first.
             let moves_view = matches!(
                 action,
@@ -1883,5 +1882,31 @@ mod tests {
             .unwrap(),
             "herdr --session 'a'\\''$(echo x)' tab rename 'w1:t2' 'a;$(echo x)'"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_action_and_the_tree_read_run_the_chosen_herdr_and_never_the_other() {
+        // Exact pane focus runs the companion, which resolves `herdr` from the PATH this wrapper sets.
+        let actions = [
+            serde_json::json!({"type":"createWorkspace","label":"w","directory":"/tmp"}),
+            serde_json::json!({"type":"renameWorkspace","target":"w1","label":"x"}),
+            serde_json::json!({"type":"focusWorkspace","target":"w1"}),
+            serde_json::json!({"type":"createTab","workspace":"w1","label":"t","directory":"/tmp"}),
+            serde_json::json!({"type":"renameTab","target":"w1:t2","label":"x"}),
+            serde_json::json!({"type":"closeTab","target":"w1:t2"}),
+            serde_json::json!({"type":"focusTab","target":"w1:t2"}),
+            serde_json::json!({"type":"focusAgent","target":"w1:p3"}),
+            serde_json::json!({"type":"splitPane","target":"w1:p3","horizontal":true,"directory":"/tmp"}),
+            serde_json::json!({"type":"zoomPane","target":"w1:p3"}),
+        ];
+        let mut commands: Vec<String> = actions
+            .into_iter()
+            .map(|action| {
+                action_command("owned", &serde_json::from_value(action).unwrap()).unwrap()
+            })
+            .collect();
+        commands.push(command("owned", "api snapshot".into()).unwrap());
+        crate::herdr_backend::sandbox::assert_both_backends(&commands);
     }
 }

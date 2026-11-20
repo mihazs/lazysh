@@ -362,6 +362,7 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
             name: name.into(),
             tmux_server: None,
             create_if_missing: false,
+            backend: None,
         };
         let (child, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
         let native = state.session(&child.session_id).await.unwrap();
