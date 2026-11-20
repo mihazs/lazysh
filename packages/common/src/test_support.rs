@@ -1,3 +1,41 @@
+/// A temporary directory only the current user can reach: owner-only mode on Unix, a protected DACL on Windows.
+pub fn private_tempdir() -> tempfile::TempDir {
+    #[cfg(unix)]
+    let directory = {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    };
+    #[cfg(windows)]
+    let directory = {
+        let directory = tempfile::tempdir().unwrap();
+        crate::windows_acl::fixtures::restrict(directory.path());
+        directory
+    };
+    directory
+}
+
+/// Lets every account modify `path` (and, on Windows, what it holds).
+pub fn expose(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::windows_acl::fixtures::expose(path);
+}
+
+/// A directory link at `link` that leads to `target`: a symbolic link on Unix, a junction on Windows.
+pub fn link_directory(link: &std::path::Path, target: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    crate::windows_acl::fixtures::junction(link, target);
+}
+
 pub fn words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())

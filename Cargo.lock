@@ -4014,6 +4014,7 @@ version = "1.83.1"
 dependencies = [
  "bzip2",
  "cmake",
+ "dunce",
  "hound",
  "lazysh-common",
  "libc",

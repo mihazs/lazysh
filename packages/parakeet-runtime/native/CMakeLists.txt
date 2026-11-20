@@ -16,7 +16,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:_GLIBCXX_USE_CXX11_ABI=${lazysh_ort_glibcxx_abi}>)
 endif()
 if(MSVC)
-  add_compile_options(/utf-8)
+  # /EHsc lets the compiler assume that an extern "C" function, such as every sherpa-onnx C API entry the bridge
+  # calls, never throws: it could then drop the bridge's catch blocks and destructors around those calls. /EHs
+  # keeps C++ exceptions synchronous without that assumption, which the boundary tests below depend on.
+  string(REGEX REPLACE "[/-]EHsc?" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  add_compile_options(/utf-8 "$<$<COMPILE_LANGUAGE:CXX>:/EHs>")
 endif()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(SHERPA_ONNX_ENABLE_C_API ON CACHE BOOL "" FORCE)

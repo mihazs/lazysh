@@ -1,6 +1,6 @@
 # Combined native voice acceptance
 
-Issue #13 requires checking the real client native graph before enabling Parakeet. The optional, default-off Cargo feature `parakeet-acceptance` enables the same-process acceptance harness. It is separate from the [Linux x86_64 product engine](voice-parakeet.md), which now links the runtime on that target while keeping Whisper as the default. Other product targets retain the optional runtime dependency and report Parakeet unavailable. The test harness itself downloads no model and adds no automatic fallback.
+Issue #13 requires checking the real client native graph before enabling Parakeet. The optional, default-off Cargo feature `parakeet-acceptance` enables the same-process acceptance harness. It is separate from the [Linux and Windows x86_64 product engine](voice-parakeet.md), which now links the runtime on those targets while keeping Whisper as the default. Other product targets retain the optional runtime dependency and report Parakeet unavailable. The test harness itself downloads no model and adds no automatic fallback.
 
 The two ignored Cargo tests run in separate processes, in both initialization orders. Each uses the actual client Whisper inference function and one owned Parakeet recognizer, repeats inference while the other engine is resident, and verifies stable output and model-file cleanup. The licensed [public LibriSpeech fixture](../packages/parakeet-runtime/tests/fixtures/librispeech/README.md), fixed WAV hash, independent corpus reference, and preselected normalized WER <= 0.10 threshold are shared with standalone acceptance. Whisper uses the existing `tiny.en` catalog model, exactly 77,704,715 bytes with SHA-256 `921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`. Inputs are explicitly supplied and verified; tasks do not download weights or use user recordings.
 
@@ -14,9 +14,9 @@ bunx moon run client-native:test-voice-interop
 bunx moon run client-native:test-voice-interop-release
 ```
 
-Both tasks disable caching and require all three paths. Each process must exit successfully; a passing test-harness line followed by an abort is a failure. The initial experiment is Linux x86_64 only, with no inference acceptance claim for other architectures or platforms.
+Both tasks disable caching and require all three paths. Each process must exit successfully; a passing test-harness line followed by an abort is a failure. The two-engine inference experiment is Linux x86_64 only, with no inference acceptance claim for other architectures or platforms; Windows runs only the no-model smoke check below and the real manager case of [Parakeet dictation](voice-parakeet.md).
 
-Linux CI also runs uncached `test:voice-interop:smoke` after the standalone package checks. It calls both pinned native version APIs and Whisper's native system-information initializer in the real feature-enabled client process, and requires a clean process exit without model weights or provider calls. The standalone CTest checks actual ORT environment/regex startup separately. This smoke check does not claim model loading or inference.
+Linux CI, and the Windows x86_64 desktop job, also run uncached `test:voice-interop:smoke` after the standalone package checks. It calls both pinned native version APIs and Whisper's native system-information initializer in the real feature-enabled client process, and requires a clean process exit without model weights or provider calls. The standalone CTest checks actual ORT environment/regex startup separately. This smoke check does not claim model loading or inference.
 
 ## Reproduced shutdown collision
 

@@ -55,7 +55,7 @@ pub(crate) fn trusted_parent(parent: &Path) -> Result<PathBuf, Error> {
 pub(crate) fn created_directory(path: &Path) -> Result<(), Error> {
     check(&open_directory(None, path.as_os_str())?, 1)
 }
-pub(crate) fn created_file(file: &File) -> Result<(), Error> {
+pub(crate) fn created_file(file: &File, _: &Path) -> Result<(), Error> {
     check(file, 2)
 }
 

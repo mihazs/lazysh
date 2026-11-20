@@ -17,20 +17,20 @@ pub fn private_directory(path: &Path) -> io::Result<()> {
 }
 
 pub fn owner_only(metadata: &Metadata, directory: bool) -> bool {
-    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
-        return false;
-    }
+    let kind = if directory {
+        metadata.is_dir()
+    } else {
+        metadata.is_file()
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o077 != 0
-            || (!directory && metadata.nlink() != 1)
-        {
-            return false;
-        }
+        kind && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o077 == 0
+            && (directory || metadata.nlink() == 1)
     }
-    true
+    #[cfg(not(unix))]
+    kind
 }
 
 pub fn read_options(writable: bool) -> OpenOptions {
