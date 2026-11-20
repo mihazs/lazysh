@@ -352,6 +352,11 @@ enum SettingsCommand {
         #[command(subcommand)]
         command: HostBrowserSettingsCommand,
     },
+    /// What may queue a relay notification; kept apart from `settings.json` for older companions.
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationsCommand,
+    },
     Update {
         #[arg(long)]
         expected_revision: u64,
@@ -383,6 +388,18 @@ enum HostBrowserSettingsCommand {
         expected_revision: u64,
         #[arg(long, action=clap::ArgAction::Set, required=true)]
         host_browser_enabled: bool,
+    },
+}
+#[derive(Subcommand)]
+enum NotificationsCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        nested_agent_suppression_enabled: bool,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        suppress_while_desktop_unlocked: bool,
     },
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
@@ -454,6 +471,22 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                             expected_revision,
                             host_browser_enabled,
                         } => settings::update(&directory, expected_revision, host_browser_enabled)?,
+                    })
+                }
+                SettingsCommand::Notifications { command } => {
+                    use lazysh_agent::notification_policy as policy;
+                    serde_json::to_value(match command {
+                        NotificationsCommand::Show => policy::read(&directory)?,
+                        NotificationsCommand::Update {
+                            expected_revision,
+                            nested_agent_suppression_enabled,
+                            suppress_while_desktop_unlocked,
+                        } => policy::update(
+                            &directory,
+                            expected_revision,
+                            nested_agent_suppression_enabled,
+                            suppress_while_desktop_unlocked,
+                        )?,
                     })
                 }
                 SettingsCommand::Show => {
@@ -566,6 +599,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             lazysh_agent::approval_pane_identity().as_deref(),
             timeout_seconds,
+            &lazysh_agent::notification_policy::System,
         )?,
         Command::ApprovalList { limit } => Some(lazysh_agent::approvals::list(
             &lazysh_agent::state_directory()?,
@@ -823,24 +857,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     event.pane_server = Some(server);
                 }
             };
-            if reported_history {
-                let (event, source) = lazysh_agent::reported_history::read_hook(
-                    io::stdin().lock(),
-                    agent,
-                    pane.as_deref(),
-                )?;
-                let event = event.map(|mut event| {
-                    named(&mut event);
-                    event
-                });
-                if event.is_some() || source.is_some() {
-                    Store::open(&lazysh_agent::state_directory()?)?.ingest_with_reported_history(
-                        event.as_ref(),
-                        source.as_ref(),
-                        chrono::Utc::now(),
-                    )?;
-                }
-            } else if matches!(agent, Agent::KimiCode) {
+            if !reported_history && matches!(agent, Agent::KimiCode) {
                 if let Some(mut observation) =
                     lazysh_agent::kimi_code::read(io::stdin().lock(), pane.as_deref())?
                 {
@@ -849,15 +866,35 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     {
                         named(event);
                     }
-                    Store::open(&lazysh_agent::state_directory()?)?
-                        .record_kimi_code(&observation, chrono::Utc::now())?;
+                    let (mut store, admission) = open_admitting(agent)?;
+                    store.record_kimi_code(&observation, chrono::Utc::now(), admission)?;
                 }
-            } else if let Some(mut event) =
-                lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?
-            {
-                named(&mut event);
-                Store::open(&lazysh_agent::state_directory()?)?
-                    .ingest(&event, chrono::Utc::now())?;
+            } else {
+                let (event, source) = if reported_history {
+                    lazysh_agent::reported_history::read_hook(
+                        io::stdin().lock(),
+                        agent,
+                        pane.as_deref(),
+                    )?
+                } else {
+                    (
+                        lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?,
+                        None,
+                    )
+                };
+                let event = event.map(|mut event| {
+                    named(&mut event);
+                    event
+                });
+                if event.is_some() || source.is_some() {
+                    let (mut store, admission) = open_admitting(agent)?;
+                    store.ingest_with_reported_history(
+                        event.as_ref(),
+                        source.as_ref(),
+                        chrono::Utc::now(),
+                        admission,
+                    )?;
+                }
             }
             None
         }
@@ -876,6 +913,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         writeln!(stdout)?;
     }
     Ok(())
+}
+/// Opens the companion state and decides whether this report may queue a relay notification.
+fn open_admitting(
+    agent: Agent,
+) -> lazysh_agent::Result<(Store, lazysh_agent::notification_policy::Admission)> {
+    let directory = lazysh_agent::state_directory()?;
+    let store = Store::open(&directory)?;
+    let admission = store.admission(
+        &directory,
+        agent,
+        &lazysh_agent::notification_policy::System,
+    )?;
+    Ok((store, admission))
 }
 fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_account_usage::worker_main() {
