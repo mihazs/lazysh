@@ -2168,11 +2168,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       </nav>},
       ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
+        <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
         {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
-        <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
         <button type="button" onClick={()=>{closeTools();setPreferences(true);}}>{t('appPreferences')}</button>
