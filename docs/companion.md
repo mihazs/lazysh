@@ -1117,6 +1117,10 @@ At most 256 entries are printed, sorted by port; when more exist the snapshot ca
 
 With `--watch` the command prints the snapshot, then one `{"event":"listen","listener":{...}}` or `"close"` line each time a listener appears or disappears (polled every `--interval-ms`, default 1000), and `{"event":"heartbeat"}` after 5 seconds without another line. It ends when its standard input closes. A companion that predates the command answers with exit status 2; the app then falls back to the `ss` or `lsof` discovery that Previews uses.
 
+## Review a repository from the host terminal
+
+`lazysh-agent review status DIRECTORY` and `lazysh-agent review diff DIRECTORY FILE` print the changed files of a Git repository and the patch of one file, as plain text or with `--json` as one line, read-only and under the app's review bounds. Details, output formats, exit classes and the languages of the help are in [Repository review](repository-review.md#review-from-the-hosts-terminal). The command is not part of what the app calls, so it needs no companion update to use the Diff view and no settings switch.
+
 ## Open host browser requests on your device (browser shim)
 
 Tracking: [#1512](https://github.com/mihazs/lazysh/issues/1512), part of the sign-in tunnel work in [#1504](https://github.com/mihazs/lazysh/issues/1504) (design: ADR 0004, `docs/architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md`). This is the host half. A program on the host that wants a browser (`aws sso login`, `gcloud auth login`, `az login`, `codex login`, `claude`, Python's `webbrowser`, a script calling `xdg-open`) asks a launcher; the shim makes that launcher hand the link to the app so it can open it on your phone or desktop. The app does not read these requests yet ([#1513](https://github.com/mihazs/lazysh/issues/1513), [#1514](https://github.com/mihazs/lazysh/issues/1514)), so today an installed shim behaves as described under "With no device attached".

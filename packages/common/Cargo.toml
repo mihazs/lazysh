@@ -7,11 +7,13 @@ description = "Shared private storage and bounded service primitives"
 
 [features]
 service = ["dep:axum", "dep:hyper-util", "dep:tokio", "secrets"]
+repository-review = ["dep:serde"]
 secrets = ["dep:zeroize"]
 test-support = []
 url = ["dep:url"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 url = { version = "2", optional = true }
 zeroize = { version = "1", optional = true }
 axum = { version = "0.8.9", optional = true }
