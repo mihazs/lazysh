@@ -1,0 +1,510 @@
+//! The renderer host of a native terminal session (#2215, epic #1302): it draws what the core's
+//! [`Session`] holds on a platform surface with the wgpu renderer. No platform code lives here: a
+//! surface arrives as a [`Target`] (raw `raw-window-handle` handles, or an offscreen texture in
+//! tests) with the generation its platform host counts, and goes away with [`Host::lost`].
+//!
+//! Each attached session has one thread that sleeps until something changes:
+//!
+//! * **Event driven.** The session's `changed` hook rings a [`Wake`]; the loop takes the frame,
+//!   draws at most once per display refresh and blocks again. An idle screen costs no frame, a
+//!   blinking cursor one row per phase.
+//! * **Suspend.** [`Host::set_active`] with `false` stops drawing and tells the core nobody looks;
+//!   with `true` the screen is drawn again from a snapshot, so what arrived meanwhile is shown.
+//! * **Surface loss.** [`Host::lost`] destroys the renderer before it returns; the session lives on
+//!   and [`Host::surface`] with a newer generation draws it again from a snapshot.
+//! * **Device loss.** A lost GPU device is rebuilt and the screen redrawn from core state.
+//! * **Overlay.** The selection, and the text a keyboard is composing, drawn at the cursor.
+//! * **Appearance.** [`Look`] is the user's preferences: the theme (the cursor's colour included)
+//!   and the font. The cursor's shape and blink are the core's, frame by frame (#2218).
+//!
+//! Nothing in the app attaches a surface yet: the first caller is a platform surface (#1327).
+#![cfg_attr(not(test), allow(dead_code))]
+
+use lazysh_terminal_renderer_wgpu::{Target, WgpuRenderer};
+use lazysh_terminal_runtime::{
+    Appearance, BlinkClock, Cell, CellMetrics, CellStyle, CellWide, Frame, FramePacer, Overlay,
+    RenderError, Selection, Session, SessionError, TerminalRenderer, Theme, BLINK_HALF_PERIOD,
+};
+use std::sync::atomic::{AtomicBool, Ordering::AcqRel};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, LazyLock};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// How long to wait before trying again to rebuild a device that could not be rebuilt.
+const RETRY: Duration = Duration::from_secs(1);
+// shortcut: every display is drawn at 60 Hz at most (a window's own vsync paces faster ones);
+// take the rate from the platform surface when one reports it.
+const REFRESH_HZ: u32 = 60;
+
+/// One clock for every session, so all cursors blink in the same phase.
+static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+fn now() -> Duration {
+    EPOCH.elapsed()
+}
+
+fn blink() -> BlinkClock {
+    BlinkClock::new(BLINK_HALF_PERIOD, Duration::ZERO)
+}
+
+/// What the user's preferences say a terminal looks like.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Look {
+    /// The theme's colours, the selection's and the cursor's included.
+    pub theme: Theme,
+    /// The preferences' CSS `font-family` list, preferred family first.
+    pub font_family: String,
+    /// Font size in CSS pixels.
+    pub font_px: f32,
+    /// Device pixels per CSS pixel.
+    pub scale: f32,
+}
+
+impl Look {
+    pub(crate) fn appearance(&self) -> Result<Appearance, RenderError> {
+        // shortcut: a cell is 0.6 x 1.2 of the font size until glyphs come from real fonts
+        // (#1325), which bring the font's own metrics.
+        let thirds = (self.font_px * self.scale * 3.0).round() as u32;
+        Ok(Appearance {
+            metrics: CellMetrics::default().scaled(thirds, 40)?,
+            font_families: self
+                .font_family
+                .split(',')
+                .map(|family| family.trim().trim_matches(['\'', '"']).to_string())
+                .filter(|family| !family.is_empty())
+                .collect(),
+            theme: self.theme,
+        })
+    }
+}
+
+enum Message {
+    /// The session's screen may have changed.
+    Changed,
+    /// A call of the [`Host`], run on the loop's thread.
+    Run(Box<dyn FnOnce(&mut Loop) + Send>),
+    Stop,
+}
+
+/// Rings the loop of a session's host. It is made before the session, whose
+/// [`Hooks::changed`](lazysh_terminal_runtime::Hooks::changed) is [`Wake::hook`].
+#[derive(Clone)]
+pub(crate) struct Wake {
+    /// A `Changed` is on its way and the loop has not taken the frame yet: a burst rings once.
+    pending: Arc<AtomicBool>,
+    to: Sender<Message>,
+}
+
+/// The receiving end of a [`Wake`], for [`Host::attach`].
+pub(crate) struct Inbox(Receiver<Message>, Wake);
+
+pub(crate) fn wake() -> (Wake, Inbox) {
+    let (to, from) = mpsc::channel();
+    let wake = Wake {
+        pending: Arc::default(),
+        to,
+    };
+    (wake.clone(), Inbox(from, wake))
+}
+
+impl Wake {
+    /// Never blocks: it runs on a VT worker.
+    pub(crate) fn ring(&self) {
+        if !self.pending.swap(true, AcqRel) {
+            let _ = self.to.send(Message::Changed);
+        }
+    }
+
+    pub(crate) fn hook(&self) -> Box<dyn Fn() + Send + Sync> {
+        let wake = self.clone();
+        Box::new(move || wake.ring())
+    }
+}
+
+/// Why a frame was not drawn.
+enum Trouble {
+    /// The session is closed: there is nothing to draw any more.
+    Closed,
+    Render(RenderError),
+}
+
+impl From<SessionError> for Trouble {
+    fn from(_: SessionError) -> Self {
+        Self::Closed
+    }
+}
+
+impl From<RenderError> for Trouble {
+    fn from(error: RenderError) -> Self {
+        Self::Render(error)
+    }
+}
+
+/// The state of one session's host, owned by its thread.
+struct Loop {
+    session: Session,
+    wake: Wake,
+    /// `None` while the session has no surface.
+    renderer: Option<WgpuRenderer>,
+    generation: u32,
+    active: bool,
+    /// The renderer holds no usable copy of the screen: the next frame is a snapshot.
+    stale: bool,
+    /// Nothing is drawn before this instant: the renderer must be resumed first.
+    retry: Option<Duration>,
+    look: Look,
+    selection: Option<Selection>,
+    composing: Option<String>,
+    pacer: FramePacer,
+}
+
+impl Loop {
+    fn run(mut self, inbox: Receiver<Message>) {
+        'run: loop {
+            let at = now();
+            let message = match self.deadline(at) {
+                None => inbox.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                Some(due) => inbox.recv_timeout(due.saturating_sub(at)),
+            };
+            let mut next = match message {
+                Ok(message) => Some(message),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+            while let Some(message) = next {
+                match message {
+                    Message::Changed => {}
+                    Message::Run(call) => call(&mut self),
+                    Message::Stop => break 'run,
+                }
+                next = inbox.try_recv().ok();
+            }
+            self.step(now());
+        }
+        self.detach();
+    }
+
+    /// When the loop has something to do without being told: a frame to draw, a blink phase to
+    /// change, a device to rebuild. `None` blocks until a message arrives.
+    fn deadline(&self, at: Duration) -> Option<Duration> {
+        let renderer = self.renderer.as_ref().filter(|_| self.active)?;
+        if self.retry.is_some() {
+            return self.retry;
+        }
+        let frame = self.pacer.next_frame(at, renderer.needs_draw());
+        let phase = renderer
+            .wants_blink_timer()
+            .then(|| blink().next_toggle(at));
+        [frame, phase].into_iter().flatten().min()
+    }
+
+    fn step(&mut self, at: Duration) {
+        if !self.active || self.renderer.is_none() {
+            return;
+        }
+        if let Some(due) = self.retry {
+            if due > at || !self.recover(at) {
+                return;
+            }
+        }
+        for _ in 0..2 {
+            match self.frame(at) {
+                Ok(()) => return,
+                Err(Trouble::Closed) => return self.suspend(),
+                Err(Trouble::Render(RenderError::NeedsFullFrame)) => self.stale = true,
+                Err(Trouble::Render(_)) => {
+                    if !self.recover(at) {
+                        return;
+                    }
+                }
+            }
+        }
+        // A snapshot on a resumed renderer failed as well: do not spin on it.
+        self.retry = Some(at + RETRY);
+    }
+
+    /// Bring the renderer back from a suspension or a lost device; the next frame is a snapshot.
+    /// False when there is still no device: tried again after [`RETRY`].
+    fn recover(&mut self, at: Duration) -> bool {
+        self.stale = true;
+        let resumed = self.renderer.as_mut().is_some_and(|r| r.resume().is_ok());
+        self.retry = (!resumed).then_some(at + RETRY);
+        resumed
+    }
+
+    /// Take what the core has, and draw when the display is due a frame.
+    fn frame(&mut self, at: Duration) -> Result<(), Trouble> {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return Ok(());
+        };
+        let changed = self.wake.pending.swap(false, AcqRel);
+        // Composing text replaces cells of the cursor's row, so a row the core did not send again
+        // could keep stale text: every frame is a snapshot while a keyboard composes.
+        let frame = if self.stale || changed && self.composing.is_some() {
+            Some(self.session.attach()?)
+        } else if changed {
+            self.session.take_frame()?
+        } else {
+            None
+        };
+        if let Some(mut frame) = frame {
+            if let Some(text) = &self.composing {
+                compose(&mut frame, text);
+            }
+            renderer.apply(&frame)?;
+            self.stale = false;
+        }
+        renderer.set_overlay(Overlay {
+            cursor_phase_on: blink().phase_on(at),
+            selection: self.selection,
+        })?;
+        let due = self.pacer.next_frame(at, renderer.needs_draw());
+        if due.is_some_and(|due| due <= at) {
+            renderer.draw()?;
+            renderer.present()?;
+            self.pacer.drew(at);
+        }
+        Ok(())
+    }
+
+    fn suspend(&mut self) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.suspend();
+        }
+        self.session.detach();
+        self.active = false;
+    }
+
+    fn set_active(&mut self, active: bool) {
+        if active {
+            self.active = true;
+            // Resumed by the next step, which then draws a snapshot.
+            self.retry = Some(Duration::ZERO);
+        } else {
+            self.suspend();
+        }
+    }
+
+    fn detach(&mut self) {
+        if let Some(mut renderer) = self.renderer.take() {
+            renderer.destroy();
+        }
+        self.session.detach();
+    }
+
+    fn surface(&mut self, target: Target, generation: u32) -> Result<(), String> {
+        if generation <= self.generation {
+            return Err(format!(
+                "Terminal surface {generation} is not newer than surface {}",
+                self.generation
+            ));
+        }
+        self.detach();
+        let appearance = self.look.appearance().map_err(|e| e.to_string())?;
+        let mut renderer = WgpuRenderer::create(target, appearance).map_err(|e| e.to_string())?;
+        if !self.active {
+            renderer.suspend();
+        }
+        (self.renderer, self.generation) = (Some(renderer), generation);
+        (self.stale, self.retry) = (true, None);
+        Ok(())
+    }
+
+    /// A change to the renderer; made again on a new device when the old one turns out lost, so
+    /// the device that replaces it does not come back with the old size or appearance.
+    fn change(
+        &mut self,
+        change: impl Fn(&mut WgpuRenderer) -> Result<(), RenderError>,
+    ) -> Result<(), String> {
+        let Some(renderer) = &mut self.renderer else {
+            return Ok(());
+        };
+        let done = match change(renderer) {
+            Err(RenderError::DeviceLost) => {
+                self.stale = true;
+                renderer.resume().and_then(|()| change(renderer))
+            }
+            done => done,
+        };
+        if !self.active {
+            renderer.suspend();
+        }
+        done.map_err(|e| e.to_string())
+    }
+
+    fn set_look(&mut self, look: Look) -> Result<(), String> {
+        let appearance = look.appearance().map_err(|e| e.to_string())?;
+        self.change(|renderer| renderer.set_appearance(appearance.clone()))?;
+        self.look = look;
+        Ok(())
+    }
+}
+
+/// Draw `text` underlined from the cursor to the end of its row at most, and put the cursor after
+/// it: what a keyboard is composing has not been sent, so the core does not hold it.
+fn compose(frame: &mut Frame, text: &str) {
+    let Some(at) = frame.cursor.viewport.as_mut() else {
+        return;
+    };
+    let Some(row) = frame.dirty.iter_mut().find(|row| row.y == at.y) else {
+        return;
+    };
+    let cell = |text: &str, wide| Cell {
+        text: text.into(),
+        wide,
+        fg: None,
+        bg: None,
+        style: CellStyle {
+            underlined: true,
+            underline: 1,
+            ..CellStyle::default()
+        },
+    };
+    let cols = row.cells.len();
+    let start = usize::from(at.x).saturating_sub(usize::from(at.wide_tail));
+    let mut x = start;
+    for cluster in text.graphemes(true) {
+        let width = cluster.width().min(2);
+        if width == 0 {
+            continue;
+        }
+        if x + width > cols {
+            break;
+        }
+        if width == 2 {
+            row.cells[x] = cell(cluster, CellWide::Wide);
+            row.cells[x + 1] = cell("", CellWide::SpacerTail);
+        } else {
+            row.cells[x] = cell(cluster, CellWide::Narrow);
+        }
+        x += width;
+    }
+    // A wide character the text covered half of is not drawn at all.
+    if let Some(cut) = row.cells.get_mut(x).filter(|_| x > start) {
+        if cut.wide == CellWide::SpacerTail {
+            *cut = Cell {
+                style: CellStyle::default(),
+                ..cell("", CellWide::Narrow)
+            };
+        }
+    }
+    (at.x, at.wide_tail) = (x.min(cols.saturating_sub(1)) as u16, false);
+}
+
+/// The renderer of one session, from its first surface until it is dropped.
+pub(crate) struct Host {
+    wake: Wake,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Host {
+    /// Draw `session` on `surface`, the `generation`-th surface its platform host gave it (from 1).
+    /// The session's `changed` hook must be the [`Wake::hook`] of `inbox`. An error (no usable GPU,
+    /// a surface no backend can draw on) leaves nothing running: the caller keeps its fallback.
+    pub(crate) fn attach(
+        session: Session,
+        inbox: Inbox,
+        surface: Target,
+        generation: u32,
+        look: Look,
+    ) -> Result<Self, String> {
+        let Inbox(from, wake) = inbox;
+        let state = Loop {
+            session,
+            wake: wake.clone(),
+            renderer: None,
+            generation: 0,
+            active: true,
+            stale: true,
+            retry: None,
+            look,
+            selection: None,
+            composing: None,
+            pacer: FramePacer::new(REFRESH_HZ),
+        };
+        let thread = std::thread::Builder::new()
+            .name("lazysh-terminal-renderer".into())
+            .spawn(move || state.run(from))
+            .map_err(|error| error.to_string())?;
+        let host = Self {
+            wake,
+            thread: Some(thread),
+        };
+        host.surface(surface, generation)?;
+        Ok(host)
+    }
+
+    /// Run `call` on the loop's thread and wait for its answer; the loop then draws what changed.
+    fn ask<R: Send + 'static>(
+        &self,
+        call: impl FnOnce(&mut Loop) -> R + Send + 'static,
+    ) -> Result<R, String> {
+        let (answer, answered) = mpsc::sync_channel(1);
+        let run = Message::Run(Box::new(move |state| {
+            let _ = answer.send(call(state));
+        }));
+        let gone = || "The terminal renderer stopped".to_string();
+        self.wake.to.send(run).map_err(|_| gone())?;
+        answered.recv().map_err(|_| gone())
+    }
+
+    /// The session got a new surface: draw it again from a snapshot. A generation that is not
+    /// newer than the current one is refused, so a late callback cannot bring an old surface back.
+    pub(crate) fn surface(&self, surface: Target, generation: u32) -> Result<(), String> {
+        self.ask(move |state| state.surface(surface, generation))?
+    }
+
+    /// The platform takes surface `generation` back. The renderer is destroyed before this returns;
+    /// a generation other than the current one changes nothing.
+    pub(crate) fn lost(&self, generation: u32) -> Result<(), String> {
+        self.ask(move |state| {
+            if generation == state.generation {
+                state.detach();
+            }
+        })
+    }
+
+    /// The surface's size in device pixels changed; its generation did not.
+    pub(crate) fn resize(&self, width: u32, height: u32) -> Result<(), String> {
+        self.ask(move |state| state.change(|renderer| renderer.resize(width, height)))?
+    }
+
+    /// Whether anyone looks at the surface. While nobody does, nothing is drawn and the core is
+    /// told so; the session keeps parsing.
+    pub(crate) fn set_active(&self, active: bool) -> Result<(), String> {
+        self.ask(move |state| state.set_active(active))
+    }
+
+    /// The selection to highlight, in viewport cells.
+    pub(crate) fn set_selection(&self, selection: Option<Selection>) -> Result<(), String> {
+        self.ask(move |state| state.selection = selection)
+    }
+
+    /// The text a keyboard is composing, drawn underlined at the cursor; `None` when it ends.
+    pub(crate) fn set_composing(&self, text: Option<String>) -> Result<(), String> {
+        self.ask(move |state| {
+            state.composing = text.filter(|text| !text.is_empty());
+            state.stale = true;
+        })
+    }
+
+    /// The preferences changed: theme, font or display scale.
+    pub(crate) fn set_look(&self, look: Look) -> Result<(), String> {
+        self.ask(move |state| state.set_look(look))?
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        let _ = self.wake.to.send(Message::Stop);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

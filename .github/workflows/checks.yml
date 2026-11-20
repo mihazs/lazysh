@@ -1058,6 +1058,28 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
           done
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --test-threads=1 "${filters[@]}"
+      # The renderer host (#2215) draws real sessions with the wgpu renderer on an offscreen target. The runner has no
+      # GPU, so the tests run on Mesa's software Vulkan (lavapipe), which their policy accepts and the shipping policy
+      # refuses, and fail without an adapter. Each guard case must be listed, so a rename is not a partial pass.
+      - name: Install a software Vulkan driver for the renderer host tests
+        run: sudo sh .github/scripts/apt-install.sh mesa-vulkan-drivers libvulkan1
+      - name: Run the renderer host tests on a software GPU
+        run: |
+          guards=(
+            a_fed_session_is_drawn_with_the_pixels_of_the_reference_renderer
+            an_idle_session_submits_nothing_to_the_gpu
+            a_suspended_host_draws_nothing_and_resuming_shows_what_arrived_meanwhile
+            a_lost_surface_detaches_and_a_newer_generation_draws_the_same_pixels_from_a_snapshot
+            a_lost_device_is_rebuilt_and_the_screen_is_drawn_again_identically
+            the_selection_and_composing_text_are_drawn_like_the_reference
+            composing_text_stops_at_the_end_of_the_row_and_never_leaves_half_a_wide_character
+            a_blinking_cursor_redraws_only_its_row_once_per_phase_without_any_output
+            the_preferences_decide_the_cells_the_colours_and_the_fonts
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "native_renderer::tests::$case_name" | grep -Fx -- "native_renderer::tests::$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- native_renderer::tests::
       # Real OpenSSH and the official Mosh server (#1564), built with the feature on. The fixture's core is a stand-in.
       - *official-mosh-fixture
       - name: Deliver real OpenSSH and Mosh output to a core with the feature on

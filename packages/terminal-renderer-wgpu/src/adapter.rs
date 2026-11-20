@@ -8,6 +8,7 @@
 //! beats it" and a software rasterizer cannot; CI and tests allow them to exercise the real path.
 
 use lazysh_terminal_runtime::RenderError;
+use wgpu::rwh::{DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle, RawWindowHandle};
 use wgpu::{Backend, Backends, DeviceType};
 
 /// What a renderer may run on.
@@ -101,23 +102,80 @@ pub fn ranked(policy: &Policy, adapters: &[AdapterInfo]) -> Vec<usize> {
     accepted.into_iter().map(|(_, i)| i).collect()
 }
 
+/// A platform window to present on, as the raw handles of `raw-window-handle` 0.6 (`wgpu::rwh`): an
+/// `ANativeWindow`, a `CAMetalLayer`'s view, an `HWND`, a Wayland or X11 surface. The renderer only
+/// hands them to wgpu, which creates the swapchain; nothing here is platform code.
+#[derive(Debug, Clone, Copy)]
+pub struct Window {
+    display: RawDisplayHandle,
+    window: RawWindowHandle,
+}
+
+// SAFETY: the handles are ids and pointers this crate never dereferences; `Window::new`'s caller
+// promises they may be used from the thread that drives the renderer.
+unsafe impl Send for Window {}
+unsafe impl Sync for Window {}
+
+impl Window {
+    /// # Safety
+    ///
+    /// Both handles must be valid, usable from the thread that drives the renderer, and stay valid
+    /// until every renderer created on them was destroyed or dropped: a host destroys the renderer
+    /// before it lets the platform take the surface back.
+    pub unsafe fn new(display: RawDisplayHandle, window: RawWindowHandle) -> Self {
+        Self { display, window }
+    }
+}
+
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        // SAFETY: `Window::new`'s caller keeps the display alive.
+        Ok(unsafe { DisplayHandle::borrow_raw(self.display) })
+    }
+}
+
 /// An adapter with a device, in the order the policy ranks them. Creating the device is part of
 /// the check: an adapter that lists but cannot create a device is skipped, not fatal.
 pub(crate) struct Selected {
     pub info: AdapterInfo,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// The window's surface and the configuration to present with, for a target with a window.
+    pub screen: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
 }
 
-pub(crate) fn select(policy: &Policy) -> Result<Selected, RenderError> {
+/// With a `window`, only an adapter that can present on it is chosen, at `size` device pixels.
+pub(crate) fn select(
+    policy: &Policy,
+    window: Option<Window>,
+    size: (u32, u32),
+) -> Result<Selected, RenderError> {
     let backends = policy.mask();
     if backends.is_empty() {
         return Err(RenderError::Unsupported("the policy allows no backend"));
     }
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    let mut descriptor = wgpu::InstanceDescriptor {
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
+    };
+    if let Some(window) = window {
+        // OpenGL ES picks its display when the instance is made.
+        descriptor = descriptor.with_display_handle(Box::new(window));
+    }
+    let instance = wgpu::Instance::new(descriptor);
+    let surface = window
+        .map(|w| {
+            // SAFETY: `Window::new`'s caller keeps both handles valid for as long as the renderer,
+            // which owns this surface, lives.
+            unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(w.display),
+                    raw_window_handle: w.window,
+                })
+            }
+        })
+        .transpose()
+        .map_err(|_| RenderError::Unsupported("no backend of the policy can draw on the window"))?;
     let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let infos: Vec<_> = adapters
         .iter()
@@ -125,6 +183,13 @@ pub(crate) fn select(policy: &Policy) -> Result<Selected, RenderError> {
         .collect();
     for i in ranked(policy, &infos) {
         let adapter = adapters[i].clone();
+        let config = match &surface {
+            Some(surface) => match present_config(surface, &adapter, size) {
+                Some(config) => Some(config),
+                None => continue,
+            },
+            None => None,
+        };
         // Every pipeline the renderer needs runs on the downlevel baseline (OpenGL ES 3.0), at the
         // largest texture size this adapter offers.
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
@@ -137,12 +202,31 @@ pub(crate) fn select(policy: &Policy) -> Result<Selected, RenderError> {
                 info: infos[i].clone(),
                 device,
                 queue,
+                screen: surface.zip(config),
             });
         }
     }
     Err(RenderError::Unsupported(
         "no adapter the policy accepts could create a device",
     ))
+}
+
+/// How to present on `surface` with `adapter` (vsync, opaque); `None` when the adapter cannot.
+/// The target holds the theme's colours as they are, so the swapchain must not encode them again:
+/// a format without sRGB encoding is taken when the surface offers one.
+// shortcut: a surface that offers only sRGB formats shows colours brighter than the theme's;
+// upgrade to a non-sRGB view format when a platform reports such a surface.
+fn present_config(
+    surface: &wgpu::Surface<'_>,
+    adapter: &wgpu::Adapter,
+    (width, height): (u32, u32),
+) -> Option<wgpu::SurfaceConfiguration> {
+    let mut config = surface.get_default_config(adapter, width, height)?;
+    let formats = surface.get_capabilities(adapter).formats;
+    if let Some(&plain) = formats.iter().find(|format| !format.is_srgb()) {
+        config.format = plain;
+    }
+    Some(config)
 }
 
 #[cfg(test)]
@@ -256,7 +340,7 @@ mod tests {
             allow_software: true,
         };
         assert!(matches!(
-            select(&none),
+            select(&none, None, (1, 1)),
             Err(RenderError::Unsupported(why)) if why.contains("no backend")
         ));
     }

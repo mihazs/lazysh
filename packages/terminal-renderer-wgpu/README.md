@@ -2,7 +2,9 @@
 
 wgpu implementation of the [Terminal Renderer API](../../docs/architecture/native-rendering.md#terminal-renderer-api)
 ([#1324](https://github.com/mihazs/lazysh/issues/1324), epic [#1302](https://github.com/mihazs/lazysh/issues/1302)).
-Not wired into the app: the Android surface is [#1327](https://github.com/mihazs/lazysh/issues/1327) and text with real
+The app's renderer host drives it ([#2215](https://github.com/mihazs/lazysh/issues/2215),
+[renderer host](../../docs/architecture/native-rendering.md#renderer-host)), but no platform surface calls the host yet:
+the Android surface is [#1327](https://github.com/mihazs/lazysh/issues/1327) and text with real
 fonts is [#1325](https://github.com/mihazs/lazysh/issues/1325); cursor blink, scale changes and loss recovery
 ([#1326](https://github.com/mihazs/lazysh/issues/1326)) are in, for the reference renderer's dot-pattern glyphs.
 
@@ -22,6 +24,9 @@ What it does, and where the tests that show it live:
 | Selection highlight | the layout's selection overlay; a drag redraws only the rows it changes | `a_selection_drag_redraws_only_the_rows_it_changes_and_matches_the_reference` |
 
 The surface is an offscreen texture (`Target`), which is what the tests and examples read back with `read_image`.
+`Target::on_window` adds a window, given as raw `raw-window-handle` handles (`Window::new`, unsafe: the caller keeps
+them valid until the renderer is destroyed): `present` then copies the texture to the window's swapchain. No test
+presents on a window, because no host that runs these tests has a display; the first platform surface proves it.
 Glyphs are still the reference renderer's dot patterns; fonts are #1325.
 
 ## Build and test
@@ -29,7 +34,7 @@ Glyphs are still the reference renderer's dot patterns; fonts are #1325.
 The app depends on this crate by path behind its optional `native-terminal` feature
 ([#2201](https://github.com/mihazs/lazysh/issues/2201)), so the root `Cargo.lock` pins wgpu as well as this crate's
 own lock file, which only the tests below use: bump wgpu in both. The `native-terminal-bridge` CI job compiles the
-app with it and fails if a build without the feature would compile wgpu. Nothing in the app calls the crate yet.
+app with it, fails if a build without the feature would compile wgpu, and runs the renderer host's tests.
 
 The crate depends on `../terminal-runtime`, which builds libghostty-vt with Zig, so build from a copy outside the
 checkout with `herdr-upstream`, `terminal-runtime` and this crate as siblings, as the `herdr-native` CI job does
