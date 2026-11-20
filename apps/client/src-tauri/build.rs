@@ -225,6 +225,8 @@ fn main() {
         "update_companion_settings",
         "get_host_browser_settings",
         "update_host_browser_settings",
+        "get_host_features",
+        "update_host_features",
         "agent_transcript",
         "agent_usage",
         "account_usage",

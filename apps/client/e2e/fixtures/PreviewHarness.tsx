@@ -7,6 +7,7 @@ export function mountPreviewHarness() {
   const calls:{command:string;args:unknown}[]=[];
   Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: { invoke: async (command: string,args:unknown) => {
     calls.push({command,args});
+    if (command === 'get_host_features') return null;
     if (command === 'discover_preview_ports') return listeners;
     if (command === 'list_previews') return [{ id: 'fixture', remotePort: 5173, remoteAddress: '127.0.0.1', localPort: 41234, url: 'http://127.0.0.1:41234/', pickerToken: token }];
     throw new Error(`Unexpected native command: ${command}`);

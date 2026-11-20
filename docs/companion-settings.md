@@ -1,6 +1,6 @@
 # Host companion settings
 
-Disable or re-enable companion transcript discovery, recorded usage inspection or device tools for a host. You need an installed [companion](how-to/configure-companion.md) and access to the same remote operating-system user.
+Disable or re-enable companion transcript discovery, recorded usage inspection or device tools for a host, and, separately, live simulator streaming and the app's port scanning. You need an installed [companion](how-to/configure-companion.md) and access to the same remote operating-system user.
 
 The Agents panel shows host settings after a valid companion snapshot is available. It loads the settings over the selected verified SSH session. Controls appear only after a supported settings response; older companions show an update/setup message. Saving changes the remote operating-system user's companion configuration, shared by that user's lazysh clients. It does not save these switches in browser storage or change an agent's own configuration.
 
@@ -60,6 +60,28 @@ lazysh-agent settings notifications update --expected-revision 0 \
 - **Unlocked desktop (Linux only).** No notification while you sit at the host's unlocked desktop that already shows the agent. If the lock state is unknown (macOS, Windows, no `loginctl`, a remote or inactive session) you are notified.
 
 Both apply to the next hook run. The [reference](reference/companion-settings.md#notification-policy-nested-agents-and-an-unlocked-desktop) lists exactly which agents, platforms and cases are covered and which validation could not be run.
+
+## Turn off live streaming or port scanning for a host
+
+Two more switches have their own save button under **Host feature switches** in the same panel, because they are kept in a separate file with their own revision:
+
+- **Simulator and emulator streaming** stops new live Android and iOS video streams. Screenshots, input and the other device tools keep following **Device tools**.
+- **Port scanning from the app** stops the Preview panel from listing listeners and sending HTTP checks to this host. Because the app scans over its own SSH connection and not through the companion, only a lazysh app that reads this switch obeys it.
+
+Both default to enabled. They apply to new operations only: a stream that is already running continues until you stop it, and a scan already under way finishes. With the port scan off, **Discover listeners** reads the switch, scans nothing and says the scan is turned off on the host; an automatic refresh stops after that one read. Opening a preview by typing its port is not a scan and still works. A host whose companion is older or absent has no feature switches (the panel says so) and scans as before.
+
+The Preview panel also remembers, per saved host and on this device, whether you chose the HTTP check and the automatic refresh. The host switch wins over that memory.
+
+From the host terminal, with the revision `show` returns:
+
+```sh
+lazysh-agent settings features show
+lazysh-agent settings features update --expected-revision 0 \
+  --simulator-streaming-enabled false \
+  --port-scan-enabled true
+```
+
+A stream refused by the host fails with `SimulatorStreamingDisabled` before any Android or iOS tool starts. A stale revision returns `SettingsConflict`. See the [settings reference](reference/companion-settings.md#host-feature-switches).
 
 ## Companion updates (planned)
 
