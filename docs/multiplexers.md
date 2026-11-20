@@ -163,6 +163,21 @@ is reading. While a Chat turn holds the guard, the last reading stays; when the
 guard is unavailable the marker returns to the shared focus. Real acceptance on
 a phone and a guarded host with two clients is not part of this change.
 
+### Live updates and the inbox
+
+While a Herdr view (Spaces, Agents, the tab strip or the Agent view) is shown, lazysh reads the server's changes from the host companion's `herdr-events` stream ([Herdr event stream](companion.md#herdr-event-stream)) instead of reading the tree every 5 seconds. A workspace, tab or pane that was created, closed, moved, renamed or focused, and an agent whose status changed, make one read of the tree about a quarter of a second later; a slow read every minute stays as a net under a missed event. Spaces and Agents say which mode they are in: **Live: Herdr's changes appear as they happen.**, or a note that live updates are unavailable and the view refreshes every 5 seconds. The note covers the cases below, and the view keeps working in each:
+
+| Host | What the view does |
+| --- | --- |
+| Companion and Herdr stream | Live. A lost stream shows the polling note at once and reopens after 1, 2, 5, 10 and then 30 seconds. |
+| A companion that predates `herdr-events` | The "newer host companion" note, and a new try every minute. |
+| A Herdr that refuses `session.snapshot` or `events.subscribe`, or has more than 256 panes | The same note, and a new try every minute. |
+| The channel cannot open (too many live views, a lost connection) | The polling note and the 5-second read. |
+
+One stream serves every view of that server on that connection. It closes with the last view, and while the app is in the background.
+
+With **Monitor connected hosts** on in the [inbox](notifications.md), an agent that becomes **blocked** while a Herdr view is shown becomes an inbox event in **Needs you**, and one that becomes **done** is listed in **Done**; a blocked agent also raises the system notification. The row carries the agent, the pane's directory and the Herdr pane (`herdr:<server>:<pane id>`), never the command, the pane title or any screen text. When Herdr names the agent's session (Claude Code, Codex and OpenCode), the row is the same one the companion's hooks report, and a hook report of the same state within a minute is not a second alert, in either order. An agent without a session id is matched by its pane and kind. Herdr's events reach the inbox only while a Herdr view is shown; while none is, the hooks report as before. A tap on the row opens its session, not yet the pane ([#1690](https://github.com/mihazs/lazysh/issues/1690)).
+
 ### Create workspaces, worktrees and agents
 
 Agent view lists live agents from the attached Herdr server, including stock
@@ -387,7 +402,7 @@ An attached tmux, Herdr or Zellij terminal shows its tabs in one native row abov
 
 | Multiplexer | Reads | Leading chip | Chip tap runs |
 | --- | --- | --- | --- |
-| Herdr | `useHerdrNavigation` (`herdr_tree`, every 5 s while the terminal is shown) | The focused workspace; opens the list of workspaces, each with its agent state, and flags another workspace that needs attention | A fresh `herdr_tree`, then `herdr_action` `focusTab` / `focusWorkspace` only if the target still exists |
+| Herdr | `useHerdrNavigation` (`herdr_tree`, read when the host's event stream reports a change and every 5 s while the terminal is shown without one) | The focused workspace; opens the list of workspaces, each with its agent state, and flags another workspace that needs attention | A fresh `herdr_tree`, then `herdr_action` `focusTab` / `focusWorkspace` only if the target still exists |
 | Zellij | `zellij_tabs` (`zellij action list-tabs --json`, Zellij 0.45 or newer; every 5 s) | The session name | `zellij_action` `goToTab` with the 1-based position |
 | tmux | The Jump To snapshot of the attached control stream (every 5 s) | The session name | `tmux_jump` with the snapshot's generation, so a stale list is refused |
 
