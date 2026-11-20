@@ -373,6 +373,24 @@ jobs:
       - name: Build the real optional Herdr binary
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked
+      # The dependency set of the managed executable: the same target and feature the release build uses, from the
+      # crates and Zig packages this build just fetched. Fails when anything it would ship has no recorded license.
+      - name: Generate and verify the notice inventory of the managed Herdr executable
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
+        env:
+          HERDR_TARGET: x86_64-unknown-linux-gnu
+          HERDR_FEATURES: lazysh-managed
+        run: |
+          cargo +1.96.1 metadata --locked --format-version 1 --filter-platform "$HERDR_TARGET" --features "$HERDR_FEATURES" > "$HERDR_CI_ROOT/cargo-metadata.json"
+          bun "$GITHUB_WORKSPACE/.github/scripts/herdr-notices.ts" --repo "$GITHUB_WORKSPACE" --checkout "$GITHUB_SHA" \
+            --metadata "$HERDR_CI_ROOT/cargo-metadata.json" --zig-packages "$PWD/vendor/libghostty-vt/zig-pkg" \
+            --target "$HERDR_TARGET" --features "$HERDR_FEATURES" --out "$HERDR_CI_ROOT/notices"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-notices-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-herdr-native/notices/
+          if-no-files-found: error
+          retention-days: 14
       - name: Exercise guarded protocol, API ownership and runtime identity
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: |

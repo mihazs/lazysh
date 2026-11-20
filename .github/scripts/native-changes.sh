@@ -67,7 +67,7 @@ classify() {
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
     apps/notification-service/*) add agent push relay ;;
-    tests/herdr-source.test.ts) add herdr ;;
+    tests/herdr-source.test.ts | tests/herdr-notices.test.ts | .github/herdr-notices/*) add herdr ;;
     tests/android-herdr-navigation.test.ts | tests/support/androidHerdr.ts) add android herdr ;;
     tests/android-ntfy.test.ts | tests/android-push-artifact.test.ts | tests/support/androidNtfy.ts) add android push ;;
     # native-linux also runs the namespaced SSH host case.

@@ -1,0 +1,69 @@
+{
+  "upstream": {
+    "repository": "https://github.com/herdrdev/herdr",
+    "version": "0.9.5",
+    "tag": "v0.9.5",
+    "commit": "2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01"
+  },
+  "licenses": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "LLVM-exception",
+    "MIT",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "WTFPL",
+    "Zlib"
+  ],
+  "ownedLicenses": ["Apache-2.0", "GPL-3.0-or-later"],
+  "changeNoticeInProvenance": ["Cargo.lock", "docs/next/api/herdr-api.schema.json"],
+  "supplements": {
+    "ratatui": {
+      "file": "ratatui-LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/ratatui/ratatui/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE",
+      "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+    },
+    "wezterm": {
+      "file": "wezterm-LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/wez/wezterm/edeae72b5fc55c7fa4aa1d08bbefd08c5493f757/LICENSE.md",
+      "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca"
+    },
+    "simdutf-mit": {
+      "file": "simdutf-LICENSE-MIT.txt",
+      "source": "https://raw.githubusercontent.com/simdutf/simdutf/v9.0.0/LICENSE-MIT",
+      "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f"
+    },
+    "uucode-unicode": {
+      "file": "uucode-LICENSE-unicode.txt",
+      "source": "https://raw.githubusercontent.com/jacobsandlund/uucode/2826a37a4562284fdacd8fa029d49509cc9bffcd/licenses/LICENSE_unicode",
+      "sha256": "1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175"
+    },
+    "uucode-hoehrmann": {
+      "file": "uucode-LICENSE-hoehrmann.txt",
+      "source": "https://raw.githubusercontent.com/jacobsandlund/uucode/2826a37a4562284fdacd8fa029d49509cc9bffcd/licenses/LICENSE_Bjoern_Hoehrmann",
+      "sha256": "de219cece932aad5a817bf763393d8d149d378a15d2ad5320e3331eac07626dd"
+    }
+  },
+  "cargoSupplements": {
+    "https://github.com/ratatui/ratatui": ["ratatui"],
+    "https://github.com/wez/wezterm": ["wezterm"]
+  },
+  "zig": {
+    "N-V-__8AAB0eQwD-0MdOEBmz7intriBReIsIDNlukNVoNu6o": { "license": "Zlib", "linked": true, "files": ["LICENSE"] },
+    "N-V-__8AADYiAAB_80AWnH1AxXC0tql9thT-R-DYO1gBqTLc": { "license": "CC0-1.0", "linked": false, "files": ["LICENSE"] },
+    "N-V-__8AAEFmBABuDGOKxAI6VMg41b9euMZ-z7HS9EcUdaor": { "license": "MIT", "linked": false, "files": [] },
+    "N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE": { "license": "Apache-2.0 OR BSD-3-Clause", "linked": true, "files": ["LICENSE", "LICENSE-BSD3"] },
+    "N-V-__8AAP5JWgCGP_AD0teWpa4krRvE9VPZzvviGdbmN4jI": { "license": "Apache-2.0 OR MIT", "linked": true, "files": ["LICENSE", "LICENSE-APACHE", "LICENSE-MIT"] },
+    "aro-0.0.0-JSD1Qk6lNgDdcDV4Vh7Sfy-34m2TluIVOdPzMmj_0BjX": { "license": "MIT AND Unicode-3.0", "linked": false, "files": ["LICENSE", "LICENSE-UNICODE"] },
+    "translate_c-0.0.0-Q_BUWhVNBwDOEcIqub4VFPJPB6D9dgwzUMHTX5KWr8Xr": { "license": "MIT", "linked": false, "files": ["LICENSE"] },
+    "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA": { "license": "MIT AND Unicode-3.0", "linked": true, "files": ["LICENSE.md"], "supplements": ["uucode-unicode", "uucode-hoehrmann"] }
+  },
+  "embedded": [
+    { "name": "simdutf", "version": "9.0.0", "path": "vendor/libghostty-vt/pkg/simdutf/vendor/simdutf.h", "license": "Apache-2.0 OR MIT", "supplements": ["simdutf-mit"] }
+  ]
+}
