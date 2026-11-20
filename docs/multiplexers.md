@@ -195,6 +195,19 @@ is needed. The message is confirmed by the conversation showing it, and a failur
 after the command started is never resent. A guarded host keeps using the guarded
 input. A dialog answer (an option's digit, arrows and Enter) goes through `herdr agent send-keys PANE KEY...` on either kind of host, after the same check of the pane's agent session, and the dialog itself is read with `herdr agent read PANE --source visible`; see [Herdr panes](agent-view.md#herdr-panes).
 
+Herdr **Spaces** has a **Jump To layout** control above the workspace tree with the
+same three layouts and the same remembered preference as tmux Jump To
+(`lazysh.multiplexer.layout`):
+
+- **List** (the default) shows every space open.
+- **Accordion** opens only the focused space. Any space can still be opened or
+  closed by hand until the layout changes.
+- **Grid** sets the spaces side by side as cards when the sidebar is wide enough for
+  two.
+
+The layout only changes how the tree is drawn: a space, tab or pane row always sends
+the same exact target, and searching opens every matching space in any layout.
+
 ### Pane input on a stock Herdr, pinned to one server process
 
 `lazysh-agent herdr-pane-input --session NAME` is the host half of typing into a
