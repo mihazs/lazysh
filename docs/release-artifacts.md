@@ -269,6 +269,19 @@ main candidates still do. The F-Droid source build runs inside the pinned offici
 buildserver container with its own downloads and gets no injected cache. Release
 jobs have no other sha256-pinned tool downloads to cache.
 
+Release Android builds still fetch Gradle dependencies from the network, and a Maven
+registry throttle or a lookup that comes back "not found" fails them minutes in. The F-Droid
+source build (`fdroid build`) and the Android job's `tauri android build` run through
+`.github/scripts/retry-gradle-resolution.sh`, which runs the build up to five times (1, 3, 6
+and then 10 minutes apart) when Gradle reports a failed download: a 429 or 5xx, a dropped
+connection, a truncated POM, or `Could not find|resolve group:artifact`. It names the attempt
+and the reason in the log. A compile, test, lint or dependency-verification failure is returned
+at once. The script adds no cache and no `--refresh-dependencies`, so each retry downloads and
+verifies exactly like the first run. `buildSrc/settings.gradle.kts` also lets the `kotlin-dsl`
+classpath fall back to Maven Central when the plugin portal reports it missing; Gradle moves to
+the next repository only on "not found", never on a 429 or 5xx, and the F-Droid scanner rejects
+any repository other than the standard ones, so no mirror is added.
+
 Linux/Windows/macOS architecture coverage and signing status must be listed
 per file. Android ARM64 is the existing production target; emulator x86_64 debug
 artifacts remain separate. Real device installation/update and Apple distribution

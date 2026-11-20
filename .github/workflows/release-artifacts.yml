@@ -133,7 +133,7 @@ jobs:
             rm -rf -- "$outputs"
             features=()
             if [ "$variant" = foss ]; then features=(--features fdroid); fi
-            bun run --cwd apps/client tauri android build --target aarch64 --apk --ci "${features[@]}" -- --locked
+            sh "$GITHUB_WORKSPACE/.github/scripts/retry-gradle-resolution.sh" bun run --cwd apps/client tauri android build --target aarch64 --apk --ci "${features[@]}" -- --locked
             bun .changeset/release-platform.ts "android-$variant-arm64" "$RUNNER_TEMP/installation-files/android-$variant-arm64"
           done
       - uses: actions/upload-artifact@v4
