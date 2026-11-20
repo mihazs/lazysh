@@ -3,14 +3,14 @@ use std::{collections::VecDeque, io::Write};
 
 const PHONE: &str = "emulator-5554";
 const UUID: &str = "9C405382-203A-4DC0-A11B-B2FC37EBA881";
-struct FakeRunner {
+pub(super) struct FakeRunner {
     calls: Vec<(Tool, Vec<String>)>,
     outputs: VecDeque<Result<Vec<u8>>>,
     launches: Vec<(Tool, Vec<String>)>,
     ios_png: Option<Vec<u8>>,
 }
 impl FakeRunner {
-    fn new(outputs: Vec<Result<Vec<u8>>>) -> Self {
+    pub(super) fn new(outputs: Vec<Result<Vec<u8>>>) -> Self {
         Self {
             calls: Vec::new(),
             outputs: outputs.into(),
@@ -38,7 +38,7 @@ impl Runner for FakeRunner {
         Ok(())
     }
 }
-fn png(width: u32, height: u32) -> Vec<u8> {
+pub(super) fn png(width: u32, height: u32) -> Vec<u8> {
     let image = image::RgbImage::from_pixel(width, height, image::Rgb([25, 90, 130]));
     let mut bytes = Cursor::new(Vec::new());
     image::DynamicImage::ImageRgb8(image)
