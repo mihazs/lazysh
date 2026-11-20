@@ -221,7 +221,7 @@ async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
     terminal_core::offer(&events, Box::new(move || Ok(prepared)));
     let (id, session) = attached(
         app,
-        connect_mosh(
+        connect_mosh_inner(
             access_lease(),
             app.state(),
             parent.into(),
@@ -230,6 +230,7 @@ async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
             80,
             24,
             events,
+            None,
         ),
     )
     .await;
@@ -260,7 +261,8 @@ async fn check_et(app: &App, parent: &str, directory: &std::path::Path) {
     let (core, prepared) = ChecksumCore::prepared();
     let (events, data_messages) = data_counting_events();
     terminal_core::offer(&events, Box::new(move || Ok(prepared)));
-    let connecting = crate::et::connect_et(
+    let connecting = crate::et::connect_et_inner(
+        None,
         access_lease(),
         app.state(),
         parent.into(),
