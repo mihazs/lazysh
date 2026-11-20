@@ -109,7 +109,7 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   return {browser,terminal,owner};
 }
 
-export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'|'AFTER_SAVED_RECONNECT'|'AFTER_WORKSPACES'=false) {
+export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'|'AFTER_SAVED_RECONNECT'|'AFTER_WORKSPACES'|'AFTER_PALETTE'=false) {
   const browser=gui.browser!;
   const suffix=typeof checkpoint==='string'?`_${checkpoint}`:checkpoint?'_AFTER_INSTALL':'';
   const expected=ssh.expected+suffix;
