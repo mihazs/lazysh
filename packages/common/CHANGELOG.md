@@ -1,5 +1,24 @@
 # @lazysh/common
 
+## 1.84.0
+
+### Patch Changes
+
+- feat(voice): offer the Parakeet local dictation engine on Windows x86_64 ([#1825](https://github.com/mihazs/lazysh/pull/1825))
+
+  <details><summary>Details</summary>
+
+  Whisper stays the default; Parakeet needs an explicit model download, as on Linux, and its model files live in a private folder that only the current user, the administrators and the system can reach.
+
+  </details>
+- feat(agent): add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent review status` and `review diff` to the host companion: the Diff view's changed files and one file's patch from a terminal on the host, as plain text or one JSON line, read-only and under the app's size bounds, with its help in English, Brazilian Portuguese and Spanish. The app and the companion now build their Git review commands in one shared module; the app's behavior does not change.
+
+  </details>
+
 ## 1.83.1
 
 No changes in this release.

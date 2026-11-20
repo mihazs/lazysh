@@ -1,5 +1,24 @@
 # @lazysh/agent
 
+## 1.84.0
+
+### Minor Changes
+
+- feat(agent): add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent review status` and `review diff` to the host companion: the Diff view's changed files and one file's patch from a terminal on the host, as plain text or one JSON line, read-only and under the app's size bounds, with its help in English, Brazilian Portuguese and Spanish. The app and the companion now build their Git review commands in one shared module; the app's behavior does not change.
+
+  </details>
+- feat(notifications): add opt-in switches that keep nested-agent and unlocked-desktop events off the relay ([#1820](https://github.com/mihazs/lazysh/pull/1820))
+
+  <details><summary>Details</summary>
+
+  `lazysh-agent settings notifications show|update` keeps events of an agent that another agent started, and events raised while the host's desktop is unlocked, out of the relay notification queue. Both switches default to off and live in their own `notification-policy.json`, so an older companion keeps reading `settings.json`. A nested agent's Claude permission request takes no approval while the first switch is on. Unlocked-desktop detection is Linux only; macOS and Windows always notify.
+
+  </details>
+
 ## 1.83.1
 
 No changes in this release.

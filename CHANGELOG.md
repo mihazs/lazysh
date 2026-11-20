@@ -10,6 +10,31 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.84.0] - 2026-11-20
+
+### New
+
+- **voice:** offer the local Parakeet engine in the Google build of the Android app ([#1819](https://github.com/mihazs/lazysh/pull/1819))
+- **voice:** offer the Parakeet local dictation engine on Windows x86_64 ([#1825](https://github.com/mihazs/lazysh/pull/1825))
+- **companion:** explain where the host companion is installed and what is verified before it starts ([#1787](https://github.com/mihazs/lazysh/pull/1787))
+- **agent:** add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+### Improved
+
+- Add an owned Android emulator case for encrypted sync (#1540, child of #17) ([#1804](https://github.com/mihazs/lazysh/pull/1804))
+- Add two Linux native GUI cases for the command palette and Files over a real SSH session ([#1788](https://github.com/mihazs/lazysh/pull/1788))
+- Add the owned Windows OpenSSH server the Windows GUI SSH case will connect to, and a hosted Windows check… ([#1826](https://github.com/mihazs/lazysh/pull/1826))
+
+### Fixed
+
+- Fix Android Appium CI task selection so the regression suite runs ([#1804](https://github.com/mihazs/lazysh/pull/1804))
+
+### Under the hood
+
+- Prove local Whisper on Android with the real engine ([#1806](https://github.com/mihazs/lazysh/pull/1806))
+- **android:** prove upload recovery after the SSH control stream closes on the owned emulator ([#1785](https://github.com/mihazs/lazysh/pull/1785))
+- **agents:** stop the dialog picker's digit-key test from timing out at random in CI ([#2207](https://github.com/mihazs/lazysh/pull/2207))
+
 ## [1.83.1] - 2026-11-20
 
 ### New

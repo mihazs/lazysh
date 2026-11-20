@@ -1,5 +1,17 @@
 # @lazysh/parakeet-runtime
 
+## 1.84.0
+
+### Minor Changes
+
+- feat(voice): offer the Parakeet local dictation engine on Windows x86_64 ([#1825](https://github.com/mihazs/lazysh/pull/1825))
+
+  <details><summary>Details</summary>
+
+  Whisper stays the default; Parakeet needs an explicit model download, as on Linux, and its model files live in a private folder that only the current user, the administrators and the system can reach.
+
+  </details>
+
 ## 1.83.1
 
 No changes in this release.
