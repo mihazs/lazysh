@@ -24,7 +24,7 @@ export class Ci {
     return dag
       .container()
       .from(pinned(UBUNTU))
-      .withExec(["sh", "-c", "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tmux strace openssl openssh-client openssh-server libnss-wrapper bubblewrap adb iproute2 && rm -rf /var/lib/apt/lists/*"])
+      .withExec(["sh", "-c", "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tmux strace openssl openssh-client openssh-server libnss-wrapper bubblewrap adb iproute2 && mkdir -p /run/sshd && rm -rf /var/lib/apt/lists/*"])
       .withDirectory("/usr/local", node)
       .withFile("/usr/local/bin/bun", bun)
       .withEnvVariable("MOON_TOOLCHAIN_FORCE_GLOBALS", "true")
