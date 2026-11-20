@@ -96,8 +96,9 @@ function installCompanionVia(command:'install_companion'|'install_companion_from
 }
 export const api = {
   accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
-  companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
-  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
+  /** The hook commands run on the host's companion; a local session runs it on this device, so they take any session id. */
+  companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3) => invoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
+  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => invoke<unknown>('companion_hooks',{sessionId,request}),
   /** The host downloads and installs the companion; this device sends only a pin. */
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion',sessionId,onProgress),
   /** Compares the installed companion with the latest verified release; changes nothing. */
