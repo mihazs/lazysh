@@ -6013,20 +6013,20 @@ class NativeWorkspaceTest {
         return text
     }
 
-    /** A real finger tap at the point `point` reports in WebView CSS pixels as [x, y, innerWidth], measured once the keyboard is closed. */
-    private fun tapCss(point: () -> JSONArray) {
+    /** A real finger tap (or long press) at the point `point` reports in WebView CSS pixels as [x, y, innerWidth], measured once the keyboard is closed. */
+    private fun tapCss(tap: Tap = Tap.SINGLE, point: () -> JSONArray) {
         closeSoftKeyboard()
         val css = point()
-        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(tap, { view ->
             val location = IntArray(2); view.getLocationOnScreen(location)
             val scale = view.width / css.getDouble(2)
             floatArrayOf((location[0] + css.getDouble(0) * scale).toFloat(), (location[1] + css.getDouble(1) * scale).toFloat())
         }, Press.FINGER))
     }
 
-    /** The one visible button with this label or text, hit-tested, as [x, y, innerWidth]. */
-    private fun buttonCenter(scenario: ActivityScenario<MainActivity>, label: String) = JSONArray(evaluate(scenario, """
-        (()=>{const matches=Array.from(document.querySelectorAll('button')).filter(x=>(x.getAttribute('aria-label')||x.textContent.trim())===${JSONObject.quote(label)});
+    /** The one visible button with this label or text inside `within` (the whole page by default), hit-tested, as [x, y, innerWidth]. */
+    private fun buttonCenter(scenario: ActivityScenario<MainActivity>, label: String, within: String = "") = JSONArray(evaluate(scenario, """
+        (()=>{const matches=Array.from(document.querySelectorAll(${JSONObject.quote("$within button".trim())})).filter(x=>(x.getAttribute('aria-label')||x.textContent.trim())===${JSONObject.quote(label)});
           if(matches.length!==1||matches[0].disabled)throw Error('Owned enabled button required');
           const rect=matches[0].getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
           if(document.elementFromPoint(x,y)?.closest('button')!==matches[0])throw Error('Owned button hit target required');
@@ -6035,7 +6035,7 @@ class NativeWorkspaceTest {
 
     /** The middle of `text` inside the terminal row that reads exactly `row`, as [x, y, innerWidth]. */
     private fun terminalTextCenter(scenario: ActivityScenario<MainActivity>, row: String, text: String) = JSONArray(evaluate(scenario, """
-        (()=>{const lines=Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).filter(x=>x.textContent.trim()===${JSONObject.quote(row)});
+        (()=>{const lines=Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).filter(x=>x.textContent.replace(/\u00a0/g,' ').trim()===${JSONObject.quote(row)});
           if(lines.length<1)throw Error('Owned terminal row required');
           let offset=lines[0].textContent.indexOf(${JSONObject.quote(text)})+${text.length / 2};
           const nodes=document.createTreeWalker(lines[0],NodeFilter.SHOW_TEXT);
@@ -6046,8 +6046,22 @@ class NativeWorkspaceTest {
           throw Error('Owned terminal text was not drawn');})()
     """))
 
+    /** True once a terminal row reads exactly `row` (blank cells may be drawn as no-break spaces). */
+    private fun rowShows(row: String) =
+        "Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).some(x=>x.textContent.replace(/\\u00a0/g,' ').trim()===${JSONObject.quote(row)})"
+
     private fun regionShows(label: String, text: String) =
         "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')===${JSONObject.quote(label)} && x.textContent.includes(${JSONObject.quote(text)}))"
+
+    /** Adds the host, connects it to the primary sshd with the owned private key, trusts the host key and waits for the owned prompt. */
+    private fun connectOwnedPrimaryWithKey(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, name: String) {
+        addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+        openOwnedConnect(scenario, name)
+        chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+        submitOwnedConnect(scenario)
+        trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+        awaitDocument(scenario, "authenticated owned primary prompt", terminalScreenContains(parity.prompt("primary")))
+    }
 
     /**
      * What a remote shell can ask of the device, observed at the operating system: an OSC 52 write reaches the system
@@ -6057,12 +6071,7 @@ class NativeWorkspaceTest {
         val name = "Parity clipboard links"
         ownedParityCase(listOf(name)) { scenario, parity ->
             val instrumentation = InstrumentationRegistry.getInstrumentation()
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
-            openOwnedConnect(scenario, name)
-            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
-            submitOwnedConnect(scenario)
-            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
-            awaitDocument(scenario, "authenticated owned clipboard prompt", terminalScreenContains(parity.prompt("primary")))
+            connectOwnedPrimaryWithKey(scenario, parity, name)
 
             val copied = "OSC52_${parity.nonce}"
             val osc = "printf '\\033]52;c;%s\\007' \"\$(printf %s $copied | base64)\""
@@ -6082,8 +6091,7 @@ class NativeWorkspaceTest {
 
             val url = "https://example.invalid/l/${parity.nonce.take(8)}"
             sendOwnedCommand(scenario, "printf '%s\\n' $url", parity.label)
-            awaitDocument(scenario, "owned terminal link row",
-                "Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).some(x=>x.textContent.trim()===${JSONObject.quote(url)})")
+            awaitDocument(scenario, "owned terminal link row", rowShows(url))
             var offered = false
             for (attempt in 1..4) {
                 if (offered) break
@@ -6328,6 +6336,40 @@ class NativeWorkspaceTest {
             println("lazysh parity: the Device panel listed $serial as running and showed a ${frame.getInt("width")}x${frame.getInt("height")} frame of the ${real.x}x${real.y} screen")
             sessionView(scenario, "Terminal")
             endOwnedConnection(scenario, name)
+        }
+    }
+
+    /**
+     * Copy on a touch selection, observed at the operating system: a long press selects only the word under the finger,
+     * selecting alone leaves the system clipboard untouched, and Copy in the selection actions writes exactly that word.
+     */
+    @Test fun ownedSshTerminalSelectionCopyReachesTheSystemClipboardThroughRealUi() {
+        val name = "Parity selection copy"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            connectOwnedPrimaryWithKey(scenario, parity, name)
+
+            val marker = "COPY_${parity.nonce.take(8)}"
+            val row = "before $marker after"
+            // The marker is printed from two arguments, so the typed command never holds it as one word.
+            sendOwnedCommand(scenario, "printf 'before %s%s after\\n' COPY_ ${parity.nonce.take(8)}", parity.label)
+            awaitDocument(scenario, "owned selection row", rowShows(row))
+            assertTrue("The marker must not be on the system clipboard before the selection", systemClipboardText() != marker)
+
+            val actions = "[role=toolbar][aria-label='Selection actions']"
+            tapCss(Tap.LONG) { terminalTextCenter(scenario, row, marker) }
+            awaitDocument(scenario, "touch selection actions", present("$actions button"))
+            assertTrue("Selecting must not write the system clipboard", systemClipboardText() != marker)
+
+            tapCss { buttonCenter(scenario, "Copy", actions) }
+            val copiedAt = System.nanoTime()
+            val deadline = copiedAt + TimeUnit.SECONDS.toNanos(10)
+            while (systemClipboardText() != marker) {
+                assertTrue("Copy did not write exactly the selected word to the system clipboard (it holds ${systemClipboardText()?.take(80)})", System.nanoTime() < deadline)
+                Thread.sleep(100)
+            }
+            awaitDocument(scenario, "selection actions closed after Copy", "!(${present("$actions button")})")
+            awaitClipboardPreviewGone(copiedAt)
+            println("lazysh parity: a long press selected one terminal word and Copy wrote exactly that word to the system clipboard")
         }
     }
 
