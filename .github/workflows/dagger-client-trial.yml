@@ -1,0 +1,20 @@
+# Throwaway trial for #2175: NOT for merge. Runs the client function on a hosted runner to measure cold and warm times.
+name: dagger-client-trial
+on:
+  push:
+    branches: [ci/dagger-client-job]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dagger-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-dagger
+      - run: dagger call client --git=.git
+      - if: always()
+        uses: ./.github/actions/save-dagger-state

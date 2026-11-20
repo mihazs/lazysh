@@ -24,7 +24,7 @@ export class Ci {
     return dag
       .container()
       .from(pinned(UBUNTU))
-      .withExec(["sh", "-c", "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tmux strace && rm -rf /var/lib/apt/lists/*"])
+      .withExec(["sh", "-c", "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tmux strace openssl openssh-client openssh-server libnss-wrapper bubblewrap adb iproute2 && rm -rf /var/lib/apt/lists/*"])
       .withDirectory("/usr/local", node)
       .withFile("/usr/local/bin/bun", bun)
       .withEnvVariable("MOON_TOOLCHAIN_FORCE_GLOBALS", "true")
@@ -66,7 +66,8 @@ export class Ci {
       .withMountedCache("/src/.moon/cache", dag.cacheVolume("moon-cache"))
       .withMountedCache("/root/.cache/ms-playwright", dag.cacheVolume("playwright-browsers"))
       .withExec(["bun", "run", "test:hooks"])
-      .withExec(["bun", "run", "test:ci"])
+      // bubblewrap (the owned-SSH fixtures) needs user namespaces, which an unprivileged container exec does not get.
+      .withExec(["bun", "run", "test:ci"], { insecureRootCapabilities: true })
       .withEnvVariable("MOON_BASE", base)
       .withExec(moon)
       .withWorkdir("/src/apps/client")
