@@ -585,7 +585,9 @@ struct ProfileFixture {
 impl ProfileFixture {
     fn new(agent: record::Agent) -> Self {
         use std::{fs, os::unix::fs::PermissionsExt};
-        let root = tempfile::tempdir().unwrap();
+        // The companion namespace must be physical: macOS keeps its temp dir behind the
+        // /var symlink, which admission refuses to follow.
+        let root = tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let profile = root.path().join("selected profile");
         fs::create_dir(&profile).unwrap();
         fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
@@ -669,10 +671,6 @@ impl Drop for ProfileFixture {
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_foreign_values_or_modes(
 ) {
     use files::Action;
@@ -740,10 +738,6 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection() {
     for agent in WHOLE_FILE_AGENTS {
         use files::Action;
@@ -800,10 +794,6 @@ fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection()
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fresh_explicit_plan() {
     use commit::Boundary;
     use files::Action;
@@ -853,10 +843,6 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone() {
     for agent in WHOLE_FILE_AGENTS {
         use files::Action;
@@ -876,10 +862,6 @@ fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn provider_changes_at_both_commit_cutoffs_are_preserved_and_never_replayed() {
     use files::Action;
     use std::fs;
@@ -920,10 +902,6 @@ fn provider_changes_at_both_commit_cutoffs_are_preserved_and_never_replayed() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn source_and_profile_replacements_before_provider_commit_cannot_change_the_replacement_namespace()
 {
     use files::Action;
@@ -972,10 +950,6 @@ fn source_and_profile_replacements_before_provider_commit_cannot_change_the_repl
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_named_root_file() {
     for agent in WHOLE_FILE_AGENTS {
         use files::Action;
@@ -1004,10 +978,6 @@ fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_nam
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn unsafe_provider_files_locks_and_oversized_binaries_are_refused_without_mutating_user_files() {
     use files::Action;
     use std::{
@@ -1117,46 +1087,65 @@ fn actual_different_provider_group_is_plan_bound_and_preserved_through_install_a
         .contains("foreign private value"));
 }
 
-#[cfg(target_os = "linux")]
-fn set_fixture_acl(file: &std::fs::File, default: bool) {
-    use std::os::fd::AsRawFd;
-    // Linux UAPI POSIX_ACL_XATTR_VERSION=2 and five little-endian entries.
-    // A named group read entry remains masked on a 0600 inherited stage.
-    let mut acl = 2_u32.to_le_bytes().to_vec();
-    for (tag, permissions, id) in [
-        (1_u16, 7_u16, u32::MAX),
-        (4, 0, u32::MAX),
-        (8, 4, 3),
-        (16, 4, u32::MAX),
-        (32, 0, u32::MAX),
-    ] {
-        acl.extend(tag.to_le_bytes());
-        acl.extend(permissions.to_le_bytes());
-        acl.extend(id.to_le_bytes());
+/// Adds one ACL the installer cannot preserve: an access ACL on a file, or an entry
+/// that new children of a directory would inherit when `default` is set.
+fn set_fixture_acl(path: &std::path::Path, default: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // Linux UAPI POSIX_ACL_XATTR_VERSION=2 and five little-endian entries.
+        // A named group read entry remains masked on a 0600 inherited stage.
+        let mut acl = 2_u32.to_le_bytes().to_vec();
+        for (tag, permissions, id) in [
+            (1_u16, 7_u16, u32::MAX),
+            (4, 0, u32::MAX),
+            (8, 4, 3),
+            (16, 4, u32::MAX),
+            (32, 0, u32::MAX),
+        ] {
+            acl.extend(tag.to_le_bytes());
+            acl.extend(permissions.to_le_bytes());
+            acl.extend(id.to_le_bytes());
+        }
+        let name = if default {
+            c"system.posix_acl_default"
+        } else {
+            c"system.posix_acl_access"
+        };
+        let file = std::fs::File::open(path).unwrap();
+        // SAFETY: this is an owned fixture descriptor and a complete Linux ACL value.
+        assert_eq!(
+            unsafe {
+                libc::fsetxattr(
+                    file.as_raw_fd(),
+                    name.as_ptr(),
+                    acl.as_ptr().cast(),
+                    acl.len(),
+                    0,
+                )
+            },
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
     }
-    let name = if default {
-        c"system.posix_acl_default"
-    } else {
-        c"system.posix_acl_access"
-    };
-    // SAFETY: this is an owned fixture descriptor and a complete Linux ACL value.
-    assert_eq!(
-        unsafe {
-            libc::fsetxattr(
-                file.as_raw_fd(),
-                name.as_ptr(),
-                acl.as_ptr().cast(),
-                acl.len(),
-                0,
-            )
-        },
-        0,
-        "{}",
-        std::io::Error::last_os_error()
-    );
+    #[cfg(target_os = "macos")]
+    {
+        let entry = if default {
+            "everyone allow read,file_inherit"
+        } else {
+            "everyone allow read"
+        };
+        let status = std::process::Command::new("/bin/chmod")
+            .args(["+a", entry])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "chmod +a {entry} failed");
+    }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_intact() {
     use std::{fs, os::unix::fs::PermissionsExt};
@@ -1168,7 +1157,7 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
         } else {
             &fixture.provider()
         };
-        set_fixture_acl(&fs::File::open(path).unwrap(), default);
+        set_fixture_acl(path, default);
         let error = match files::inspect(fixture.target.clone(), &fixture.companion) {
             Err(error) => error,
             Ok(_) => panic!("ACL was accepted"),
@@ -1203,7 +1192,7 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
     let profile = fixture.target.profile.clone();
     interrupt(move |point| {
         if point == commit::Boundary::BeforeRecord {
-            set_fixture_acl(&fs::File::open(&profile)?, true);
+            set_fixture_acl(&profile, true);
         }
         Ok(())
     });
@@ -1216,7 +1205,7 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
     assert!(!fixture.manifest().exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl ProfileFixture {
     /// The companion store this fixture's hooks and status run against, absent until a hook reports.
     fn state(&self) -> std::path::PathBuf {
@@ -1241,7 +1230,7 @@ impl ProfileFixture {
         json_output::decode(command.output().unwrap())
     }
 }
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile() {
     for agent in [
@@ -1411,7 +1400,7 @@ fn hook_status_leaves_the_local_event_unchecked_when_the_store_cannot_be_read_sa
     assert_eq!(fs::read(&elsewhere).unwrap(), b"");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn executable_namespaces_admit_owned_and_root_parents_but_refuse_mutable_and_linked_routes() {
     use std::{
@@ -1474,7 +1463,7 @@ fn executable_namespaces_admit_owned_and_root_parents_but_refuse_mutable_and_lin
     assert!(!fixture.manifest().exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn source_namespace_changes_at_each_commit_cutoff_never_publish_provider_hooks() {
     use std::{fs, os::unix::fs::PermissionsExt};
@@ -1596,7 +1585,7 @@ fn gemini_and_cursor_configuration_preserves_disable_policy_and_exact_native_env
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn cursor_schema_preparation_recovers_explicitly_and_edited_version_never_gets_adopted() {
     use std::fs;
@@ -1641,7 +1630,7 @@ fn cursor_schema_preparation_recovers_explicitly_and_edited_version_never_gets_a
     assert!(!unowned.target.profile.join(".lazysh-hooks.lock").exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn droid_standalone_hooks_preserve_fallback_profiles_and_refuse_shadowing_or_replacement() {
     use std::{fs, os::unix::fs::symlink};
@@ -1837,7 +1826,7 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
     );
     assert_eq!(result["schemaVersion"], 1);
     assert_eq!(result["supported"], true);
-    assert_eq!(result["managedSetupSupported"], cfg!(target_os = "linux"));
+    assert_eq!(result["managedSetupSupported"], true);
     assert_eq!(result["agents"].as_array().unwrap().len(), 11);
     assert_eq!(result["truncated"], false);
     assert!(discovered(&result, "claude")["executable"].is_null());
@@ -2233,6 +2222,7 @@ fn discovery_distinguishes_unavailable_profile_metadata_and_never_searches_cwd()
     assert_eq!(result["agents"].as_array().unwrap().len(), 1);
 }
 
+// Darwin's PATH_MAX is 1024 bytes, so no path can make a result large enough to reach the cap.
 #[cfg(target_os = "linux")]
 #[test]
 fn discovery_caps_serialized_result_bytes_and_marks_partial_metadata() {
@@ -2400,7 +2390,7 @@ fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
     assert!(!result.to_string().contains("PRIVATE"));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_hooks() {
     use files::Action;
@@ -2539,7 +2529,7 @@ fn discovery_v3_amp_preserves_raw_xdg_and_never_promotes_old_schemas() {
     assert!(!marker.exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn amp_foreign_shadow_blocks_install_but_never_blocks_exact_owned_removal() {
     use files::Action;
@@ -2596,7 +2586,7 @@ fn amp_foreign_shadow_blocks_install_but_never_blocks_exact_owned_removal() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn amp_shadow_changes_at_each_write_boundary_stale_the_plan_and_keep_recovery_removable() {
     use files::Action;
@@ -2680,7 +2670,7 @@ fn amp_shadow_changes_at_each_write_boundary_stale_the_plan_and_keep_recovery_re
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn amp_shadow_snapshot_is_ephemeral_and_does_not_rewrite_old_agent_plan_or_record_shapes() {
     for agent in WHOLE_FILE_AGENTS {
