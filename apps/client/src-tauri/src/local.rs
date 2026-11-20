@@ -300,6 +300,28 @@ pub(crate) fn tmux_server(
 ) -> Result<Option<crate::tmux_server::TmuxServer>, String> {
     desktop::tmux_server(state, id, lease)
 }
+/// The guarded Herdr binding of an adopted local terminal, if it has one, and its close signal.
+pub(crate) fn herdr_binding(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<
+    (
+        Option<crate::herdr_guard::Binding>,
+        tokio::sync::watch::Receiver<bool>,
+    ),
+    String,
+> {
+    #[cfg(desktop)]
+    {
+        desktop::binding(state, id, lease, |bindings| &bindings.herdr)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (state, id, lease);
+        Err("Local terminals are unavailable".into())
+    }
+}
 pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Result<bool, String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
@@ -802,12 +824,53 @@ mod desktop {
         }
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut command = attach_command(&entry).await?;
+        // As over SSH, a Herdr that does not positively admit the guard stays an ordinary attach.
+        let guard = crate::herdr_guard::Local {
+            #[cfg(test)]
+            env: state.test_env(),
+        };
+        let guarded = matches!(entry.kind, crate::multiplexer::MultiplexerKind::Herdr) && {
+            let (_open, mut cancel) = watch::channel(false);
+            crate::herdr_guard::available_local(guard.clone(), &entry.name, &creation, &mut cancel)
+                .await
+        };
+        creation.check()?;
+        if guarded {
+            command.arg(crate::herdr_guard::GUARDED_ATTACH);
+        }
         #[cfg(test)]
         for (name, value) in state.test_env() {
             command.env(name, value);
         }
-        let connected =
-            start_with_access(state, creation.clone(), command, cols, rows, events).await?;
+        let (ticket, tickets) = oneshot::channel();
+        let connected = start_with_launcher(
+            state,
+            creation.clone(),
+            command,
+            cols,
+            rows,
+            events,
+            launch,
+            guarded.then_some(ticket),
+        )
+        .await?;
+        if guarded {
+            // A failed or uncertain private start closes this terminal; it never falls back
+            // to an ordinary attach.
+            if let Err(error) = bind_herdr(
+                state,
+                &connected.session_id,
+                guard,
+                &entry.name,
+                tickets,
+                &creation,
+            )
+            .await
+            {
+                disconnect(state, &connected.session_id);
+                return Err(error);
+            }
+        }
         if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Tmux) {
             // As over SSH, a client that cannot be verified leaves the terminal without
             // navigation; the attach itself stands.
@@ -920,7 +983,7 @@ mod desktop {
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
-        start_with_launcher(state, creation, command, cols, rows, events, launch).await
+        start_with_launcher(state, creation, command, cols, rows, events, launch, None).await
     }
     #[cfg(all(test, unix))]
     pub(super) async fn start_with_held_launch(
@@ -942,9 +1005,11 @@ mod desktop {
                 held(parts.0.child.as_ref().unwrap().process_id().unwrap());
                 Ok(parts)
             },
+            None,
         )
         .await
     }
+    #[allow(clippy::too_many_arguments)]
     async fn start_with_launcher(
         state: &LocalState,
         creation: AccessLease,
@@ -953,6 +1018,8 @@ mod desktop {
         rows: u32,
         events: Channel<SshEvent>,
         launcher: impl FnOnce(CommandBuilder, u32, u32) -> Result<PtyParts, String> + Send + 'static,
+        // The guarded Herdr's private first frame is taken off the display and sent here.
+        startup: Option<oneshot::Sender<crate::herdr_guard::Ticket>>,
     ) -> Result<Connected, String> {
         size(cols, rows)?;
         if state.0.stopped.load(Ordering::SeqCst) {
@@ -965,7 +1032,7 @@ mod desktop {
             .map_err(|_| "At most 20 local terminals may be open")?;
         let launch_access = creation.clone();
         let owner = state.0.clone();
-        let (process, mut reader, mut writer) =
+        let (process, reader, mut writer) =
             tauri::async_runtime::spawn_blocking(move || -> Result<PtyParts, String> {
                 launch_access.check()?;
                 if owner.stopped.load(Ordering::SeqCst) {
@@ -983,6 +1050,10 @@ mod desktop {
             })
             .await
             .map_err(|_| "Local terminal worker failed")??;
+        let mut reader: Box<dyn Read + Send> = match startup {
+            Some(ticket) => Box::new(crate::herdr_guard::StartupReader::new(reader, ticket)),
+            None => reader,
+        };
         if state.0.stopped.load(Ordering::SeqCst) {
             tauri::async_runtime::spawn_blocking(move || drop(process));
             return Err("Local terminals are shutting down".into());
@@ -1306,21 +1377,31 @@ mod desktop {
         let process = session.process.lock().ok()?;
         process.as_ref()?.display_identity()
     }
+    /// One of an adopted, live terminal's bindings, if it has one, and its close signal.
+    pub(super) fn binding<T: Clone>(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+        slot: impl FnOnce(&crate::bindings::Bindings) -> &Mutex<Option<T>>,
+    ) -> Result<(Option<T>, watch::Receiver<bool>), String> {
+        live_session(state, id, lease, |session| {
+            let bound = slot(&session.bindings)
+                .lock()
+                .map_err(|_| "Local terminal lock failed")?
+                .clone();
+            Ok((bound, session.cancel.subscribe()))
+        })
+    }
     pub(super) fn tmux_binding(
         state: &LocalState,
         id: &str,
         lease: &AccessLease,
     ) -> Result<(crate::tmux_jump::Binding, watch::Receiver<bool>), String> {
-        live_session(state, id, lease, |session| {
-            let binding = session
-                .bindings
-                .tmux
-                .lock()
-                .map_err(|_| "Local terminal lock failed")?
-                .clone()
-                .ok_or("This terminal has no tmux navigation binding")?;
-            Ok((binding, session.cancel.subscribe()))
-        })
+        let (binding, cancel) = binding(state, id, lease, |bindings| &bindings.tmux)?;
+        Ok((
+            binding.ok_or("This terminal has no tmux navigation binding")?,
+            cancel,
+        ))
     }
     pub(super) fn tmux_server(
         state: &LocalState,
@@ -1370,6 +1451,37 @@ mod desktop {
             .lock()
             .map_err(|_| "Local terminal lock failed")? =
             Some(crate::tmux_jump::start(control, session.cancel.subscribe()));
+        Ok(())
+    }
+    /// Claims the guard of the Herdr client that runs in this terminal and keeps it for chat.
+    async fn bind_herdr(
+        state: &LocalState,
+        id: &str,
+        guard: crate::herdr_guard::Local,
+        name: &str,
+        tickets: oneshot::Receiver<crate::herdr_guard::Ticket>,
+        lease: &AccessLease,
+    ) -> Result<(), String> {
+        let session = state.0.session(id)?;
+        let startup = crate::herdr_guard::acquire_local(
+            guard.clone(),
+            lease,
+            name,
+            tickets,
+            &mut session.cancel.subscribe(),
+        )
+        .await
+        .map_err(|error| error.message().to_owned())?;
+        lease.check()?;
+        *session
+            .bindings
+            .herdr
+            .lock()
+            .map_err(|_| "Local terminal lock failed")? = Some(crate::herdr_guard::start(
+            startup,
+            crate::herdr_guard::Route::Local(guard),
+            session.cancel.subscribe(),
+        ));
         Ok(())
     }
     pub(super) fn adopt(

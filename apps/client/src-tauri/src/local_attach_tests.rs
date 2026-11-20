@@ -110,11 +110,13 @@ mod runtime {
     /// runtime and socket directories.
     struct Isolated {
         temp: tempfile::TempDir,
+        /// Searched before the inherited PATH, for a specific build of a tool.
+        tools: Option<std::path::PathBuf>,
     }
     impl Isolated {
         fn new() -> Self {
             let temp = tempfile::tempdir().unwrap();
-            for directory in ["tmux", "zellij-sockets"] {
+            for directory in ["tmux", "zellij-sockets", "runtime"] {
                 let path = temp.path().join(directory);
                 std::fs::create_dir(&path).unwrap();
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -130,7 +132,15 @@ mod runtime {
                 "[update]\nversion_check = false\nmanifest_check = false\n",
             )
             .unwrap();
-            Self { temp }
+            Self { temp, tools: None }
+        }
+        /// Makes `binary` the `herdr` every command of this home and every local terminal runs.
+        fn with_herdr(mut self, binary: &std::path::Path) -> Self {
+            let tools = self.temp.path().join("tools");
+            std::fs::create_dir(&tools).unwrap();
+            std::os::unix::fs::symlink(binary, tools.join("herdr")).unwrap();
+            self.tools = Some(tools);
+            self
         }
         fn env(&self) -> Vec<(String, String)> {
             let at = |name: &str| self.temp.path().join(name).to_str().unwrap().to_owned();
@@ -140,13 +150,23 @@ mod runtime {
                 ("ZDOTDIR".into(), home.clone()),
                 ("XDG_CONFIG_HOME".into(), home.clone()),
                 ("XDG_CACHE_HOME".into(), home.clone()),
-                ("XDG_DATA_HOME".into(), home),
+                ("XDG_DATA_HOME".into(), home.clone()),
+                ("XDG_STATE_HOME".into(), home),
+                ("XDG_RUNTIME_DIR".into(), at("runtime")),
                 ("TMUX_TMPDIR".into(), at("tmux")),
                 ("ZELLIJ_SOCKET_DIR".into(), at("zellij-sockets")),
                 ("HERDR_CONFIG_PATH".into(), at("config.toml")),
                 ("SHELL".into(), "/bin/sh".into()),
                 // Not the login PATH: CI installs these tools beside the runner's own PATH.
-                ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+                (
+                    "PATH".into(),
+                    std::env::join_paths(self.tools.iter().cloned().chain(std::env::split_paths(
+                        &std::env::var_os("PATH").unwrap_or_default(),
+                    )))
+                    .unwrap()
+                    .into_string()
+                    .unwrap(),
+                ),
             ]
         }
         fn state(&self) -> LocalState {
@@ -191,6 +211,49 @@ mod runtime {
     }
     fn unique(prefix: &str) -> String {
         format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+    }
+    /// One guard action on a local terminal, as the `herdr_chat` command takes it.
+    async fn guard(
+        app: &AppState,
+        state: &LocalState,
+        id: &str,
+        lease: &crate::app_lock::AccessLease,
+        action: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        crate::herdr_guard::chat(
+            lease,
+            app,
+            state,
+            id,
+            serde_json::from_value(action).unwrap(),
+        )
+        .await
+        .map(|reply| serde_json::to_value(reply).unwrap())
+        .map_err(|error| error.kind().to_owned())
+    }
+    /// Closes the terminal and waits for its guard to report unavailable.
+    async fn guard_ends_with_the_terminal(
+        app: &AppState,
+        state: &LocalState,
+        id: &str,
+        lease: &crate::app_lock::AccessLease,
+    ) {
+        desktop::disconnect(state, id);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while guard(app, state, id, lease, json!({"kind":"status"}))
+                .await
+                .is_ok_and(|status| status["available"] == true)
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the closed terminal kept its guard");
+    }
+    fn app_state() -> (tempfile::TempDir, AppState) {
+        let directory = tempfile::tempdir().unwrap();
+        let app = AppState::new(directory.path().into()).unwrap();
+        (directory, app)
     }
     async fn attach(
         state: &LocalState,
@@ -377,7 +440,7 @@ mod runtime {
         let home = Isolated::new();
         let state = home.state();
         let name = unique("lazysh-");
-        let (id, mut rx, _lease) = attach(&state, json!({"kind":"herdr","name":name})).await;
+        let (id, mut rx, lease) = attach(&state, json!({"kind":"herdr","name":name})).await;
         // The stock client switches to the alternate screen once it is attached.
         until(&mut rx, "\u{1b}[?1049h").await;
         let snapshot = eventually("the attached Herdr session never answered", || {
@@ -393,8 +456,307 @@ mod runtime {
         })
         .await;
         assert!(snapshot.contains("session_snapshot"), "{snapshot}");
+        // Stock Herdr has no guard: the attach is ordinary and offers no guarded input.
+        let (_directory, app) = app_state();
+        let status = guard(&app, &state, &id, &lease, json!({"kind":"status"})).await;
+        assert_eq!(status.unwrap()["available"], false);
         desktop::disconnect(&state, &id);
         home.quiet("herdr", &["--session", &name, "server", "stop"]);
+    }
+
+    /// A `herdr` that admits the guard, opens its display with the private first frame and
+    /// then shows `PUBLIC_SCREEN`; the claim names `owner_boot` as the connection's boot.
+    /// It logs each invocation's arguments, with `--guarded-attach` for an attach.
+    fn guarded_herdr_script(owner_boot: &str) -> String {
+        let (boot, ticket, ownership) = ("ab".repeat(32), "cd".repeat(32), "ef".repeat(32));
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/invocations"
+case "$*" in
+  *"api guarded"*)
+    body=$(cat)
+    case "$body" in
+      *cancel_preparation*)
+        printf '{{"id":"guard","error":{{"code":"guard_invalid","message":"guard_invalid"}}}}' >&2; exit 1;;
+      *lazysh.guard.claim*)
+        printf '{{"id":"guard","result":{{"type":"guard_claimed","owner":{{"boot":"{owner_boot}","ownership":"{ownership}","last_preparation":0}}}}}}';;
+    esac;;
+  *--guarded-attach*)
+    body='{{"boot":"{boot}","ticket":"{ticket}"}}'
+    printf '\036LAZYSH-GUARD-1:%08x:%s\037PUBLIC_SCREEN\n' "${{#body}}" "$body"
+    exec sleep 30;;
+  *) printf 'ORDINARY_SCREEN\n'; exec sleep 30;;
+esac
+"#
+        )
+    }
+    /// Connects a local Herdr terminal to a `herdr` that runs `script`.
+    async fn attach_scripted(
+        script: &str,
+    ) -> (
+        Isolated,
+        LocalState,
+        Result<String, String>,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+        crate::app_lock::AccessLease,
+    ) {
+        let home = Isolated::new();
+        let path = home.temp.path().join("herdr-script");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = home.with_herdr(&path);
+        let state = home.state();
+        let lease = access_lease();
+        let (channel, rx) = events();
+        let connected = desktop::connect(
+            &state,
+            lease.clone(),
+            None,
+            Some(entry(json!({"kind":"herdr","name":"scripted"})).unwrap()),
+            None,
+            80,
+            24,
+            channel,
+        )
+        .await
+        .map(|connected| connected.session_id);
+        (home, state, connected, rx, lease)
+    }
+    fn invocations(home: &Isolated) -> Vec<String> {
+        std::fs::read_to_string(home.temp.path().join("invocations"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_guarded_local_herdr_keeps_its_first_frame_off_the_terminal_and_binds_the_guard() {
+        let (home, state, connected, mut rx, lease) =
+            attach_scripted(&guarded_herdr_script(&"ab".repeat(32))).await;
+        let id = connected.unwrap();
+        desktop::adopt(&state, &id, &lease).unwrap();
+        let shown = until(&mut rx, "PUBLIC_SCREEN").await;
+        for private in ["LAZYSH-GUARD-1", &"ab".repeat(32), &"cd".repeat(32)] {
+            assert!(!shown.contains(private), "the terminal showed {private}");
+        }
+        let (_directory, app) = app_state();
+        let status = guard(&app, &state, &id, &lease, json!({"kind":"status"})).await;
+        assert_eq!(status.unwrap()["available"], true);
+        // The guard probe, the attach and the claim; never an ordinary attach.
+        let ran = invocations(&home);
+        assert_eq!(
+            ran.iter()
+                .filter(|line| line.contains("api guarded"))
+                .count(),
+            2,
+            "{ran:?}"
+        );
+        assert_eq!(
+            ran.iter()
+                .filter(|line| !line.contains("api guarded"))
+                .collect::<Vec<_>>(),
+            ["--session scripted --guarded-attach"]
+        );
+        guard_ends_with_the_terminal(&app, &state, &id, &lease).await;
+    }
+
+    #[tokio::test]
+    async fn a_guard_claim_the_host_does_not_confirm_closes_the_terminal_without_an_ordinary_attach(
+    ) {
+        // The claim answers for a different boot than the ticket named.
+        let (home, _state, connected, mut rx, _lease) =
+            attach_scripted(&guarded_herdr_script(&"12".repeat(32))).await;
+        assert!(connected.is_err(), "the unconfirmed guard attached anyway");
+        loop {
+            let event = rx.recv().await.unwrap();
+            if event["type"] == "closed" {
+                break;
+            }
+        }
+        let ran = invocations(&home);
+        assert!(
+            ran.iter().all(|line| line != "--session scripted"),
+            "fell back to an ordinary attach: {ran:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_local_herdr_without_the_guard_stays_an_ordinary_attach() {
+        // Stock Herdr rejects the unknown `api guarded` subcommand.
+        let script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/invocations\"\ncase \"$*\" in\n  *\"api guarded\"*) cat >/dev/null; echo 'unknown subcommand' >&2; exit 2;;\nesac\nprintf 'ORDINARY_SCREEN\\n'; exec sleep 30\n";
+        let (home, state, connected, mut rx, lease) = attach_scripted(script).await;
+        let id = connected.unwrap();
+        desktop::adopt(&state, &id, &lease).unwrap();
+        until(&mut rx, "ORDINARY_SCREEN").await;
+        let (_directory, app) = app_state();
+        let status = guard(&app, &state, &id, &lease, json!({"kind":"status"})).await;
+        assert_eq!(status.unwrap()["available"], false);
+        assert!(invocations(&home)
+            .iter()
+            .any(|line| line == "--session scripted"));
+        desktop::disconnect(&state, &id);
+    }
+
+    fn source(selector: &str) -> serde_json::Value {
+        json!({"agent":"hermes","path":"/owned/{literal}<transcript>","view":"records","inlineImages":false,"transcriptSessionId":selector})
+    }
+    async fn captured(path: &std::path::Path, expected: &[u8]) {
+        eventually("the guarded input never reached the pane", || {
+            let bytes = std::fs::read(path).unwrap_or_default();
+            assert!(
+                bytes.len() <= expected.len(),
+                "extra or repeated input reached the pane"
+            );
+            (bytes == expected).then_some(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires LAZYSH_TEST_HERDR built from the guarded source; runs an isolated Herdr server and a local PTY"]
+    async fn guarded_herdr_input_on_a_local_pty_reaches_only_the_confirmed_pane() {
+        let binary =
+            std::path::PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").expect("guarded Herdr"));
+        let home = Isolated::new().with_herdr(&binary);
+        std::fs::write(
+            home.temp.path().join("config.toml"),
+            "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n",
+        )
+        .unwrap();
+        let state = home.state();
+        // A Unix socket path holds at most 107 bytes, and these live in the home directory.
+        let name = unique("g")[..9].to_owned();
+        let herdr = |args: &[&str]| {
+            let mut command = home.command("herdr");
+            command.args(["--session", &name]).args(args);
+            command
+        };
+        // An owned server with one workspace that the terminal then attaches to.
+        // Stops the owned server and its panes when the test ends, including by a failed assertion.
+        struct Server(std::process::Child, Command);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                let _ = self.1.output();
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let _server = Server(
+            herdr(&["server"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+            herdr(&["server", "stop"]),
+        );
+        eventually("the owned Herdr server never answered", || {
+            herdr(&["api", "snapshot"])
+                .output()
+                .unwrap()
+                .status
+                .success()
+                .then_some(())
+        })
+        .await;
+        let directory = home.temp.path().to_str().unwrap();
+        text(&mut herdr(&[
+            "workspace",
+            "create",
+            "--label",
+            "GUARD_LOCAL",
+            "--cwd",
+            directory,
+        ]));
+        let (id, mut rx, lease) = attach(&state, json!({"kind":"herdr","name":name})).await;
+        let shown = until(&mut rx, "GUARD_LOCAL").await;
+        // The private first frame never reaches the terminal.
+        assert!(!shown.contains("LAZYSH-GUARD-1"), "{shown}");
+        let (_directory, app) = app_state();
+        let guard = |action| guard(&app, &state, &id, &lease, action);
+        assert_eq!(
+            guard(json!({"kind":"status"})).await.unwrap()["available"],
+            true
+        );
+        let context = source("A{literal}<selector>");
+        let inspected = guard(json!({"kind":"prepare","source":context}))
+            .await
+            .unwrap();
+        let pane = inspected["destination"]["pane"].as_str().unwrap();
+        // The pane runs a process that records the bytes it receives.
+        let bytes = home.temp.path().join("input-bytes");
+        let pid = home.temp.path().join("input-pid");
+        let quote = |path: &std::path::Path| crate::ssh::quote(path.to_str().unwrap());
+        let script = format!(
+            "stty raw -echo; echo $$ > {}; exec cat > {}",
+            quote(&pid),
+            quote(&bytes)
+        );
+        let command = format!("sh -c {}", crate::ssh::quote(&script));
+        text(&mut herdr(&["pane", "run", pane, &command]));
+        eventually("the pane process never started", || {
+            pid.exists().then_some(())
+        })
+        .await;
+        let prepared = guard(json!({"kind":"prepare","source":context}))
+            .await
+            .unwrap();
+        let bound =
+            guard(json!({"kind":"confirm","candidate":prepared["candidate"],"source":context}))
+                .await
+                .unwrap();
+        assert_eq!(
+            bound["destination"]["pane"],
+            inspected["destination"]["pane"]
+        );
+        let text_in = "literal{safe}<text>\nsecond\t";
+        guard(
+            json!({"kind":"input","receipt":bound["receipt"],"source":context,"operation":1,
+            "input":{"kind":"send","text":text_in}}),
+        )
+        .await
+        .unwrap();
+        let mut expected = format!("{text_in}\r").into_bytes();
+        captured(&bytes, &expected).await;
+        let input = |receipt: &serde_json::Value, operation: u32, input: serde_json::Value| {
+            guard(
+                json!({"kind":"input","receipt":receipt,"source":context,"operation":operation,"input":input}),
+            )
+        };
+        // A dialog answer has no guard input and never reaches the pane.
+        assert!(input(&bound["receipt"], 2, json!({"kind":"cycle_mode"}))
+            .await
+            .is_err());
+        input(&bound["receipt"], 2, json!({"kind":"request_stop"}))
+            .await
+            .unwrap();
+        expected.push(0x1b);
+        captured(&bytes, &expected).await;
+        // A spent operation number is refused, and that refusal retires the receipt.
+        assert!(input(&bound["receipt"], 2, json!({"kind":"request_stop"}))
+            .await
+            .is_err());
+        assert!(input(&bound["receipt"], 3, json!({"kind":"request_stop"}))
+            .await
+            .is_err());
+        captured(&bytes, &expected).await;
+        // A released receipt delivers nothing either.
+        let prepared = guard(json!({"kind":"prepare","source":context}))
+            .await
+            .unwrap();
+        let fresh =
+            guard(json!({"kind":"confirm","candidate":prepared["candidate"],"source":context}))
+                .await
+                .unwrap();
+        guard(json!({"kind":"release","receipt":fresh["receipt"]}))
+            .await
+            .unwrap();
+        assert!(input(&fresh["receipt"], 1, json!({"kind":"request_stop"}))
+            .await
+            .is_err());
+        captured(&bytes, &expected).await;
+        guard_ends_with_the_terminal(&app, &state, &id, &lease).await;
     }
 
     #[tokio::test]

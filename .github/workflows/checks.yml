@@ -819,6 +819,14 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
           printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
+      - name: Exercise the guarded Herdr input on a local PTY with the same guarded binary
+        env:
+          CASE_NAME: local::attach_tests::runtime::guarded_herdr_input_on_a_local_pty_reaches_only_the_confirmed_pane
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
       # The two published companions that real hosts still run. The owned SSH case updates a host that has each one.
       - name: Fetch the pinned published 1.28.0 and 1.33.4 companions for the owned update hosts
         run: |
