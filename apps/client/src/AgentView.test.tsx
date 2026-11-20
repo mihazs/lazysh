@@ -9,6 +9,7 @@ import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogScreens';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
+import {copilotRecords,droidRecords,kimiRecords} from './test/recordsOnlyRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -26,6 +27,17 @@ function host(agent:string,rows:unknown[],history:'available'|'missing'|('availa
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
     if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return (Array.isArray(history)?history.length>1?history.shift():history[0]:history)==='available'?{schemaVersion:1,sessionId:id,status:'available',path:`/home/owner/${agent} 世界.jsonl`,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'}:{schemaVersion:1,sessionId:id,status:'missing'};}
     if(command==='agent_transcript')return page(agent,pages.length>1?pages.shift()!:pages[0]);
+    throw new Error(`Unexpected ${command}`);
+  });
+}
+/** A pane whose agent's records the host finds by session id (OpenCode's database, a records-only adapter's files) and reads as the pages given, the last one repeated. */
+function discoveryHost(rows:unknown[],discovered:unknown,pages:unknown[]) {
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='tmux_chat')return tmuxChatReply(command,args);
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
+    if(command==='agent_transcripts')return discovered;
+    if(command==='agent_transcript')return pages.length>1?pages.shift():pages[0];
+    if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
     throw new Error(`Unexpected ${command}`);
   });
 }
@@ -218,6 +230,78 @@ it('labels a detected agent without a reported conversation as partial and never
   expect(screen.getByText(/^The last Codex report names this pane, but its conversation is unavailable/)).toBeTruthy();
   expect(screen.getByText('Attention').getAttribute('title')).toBe('Last reported: Attention');
   expect(calls('agent_transcript')).toEqual([]);
+});
+
+// An agent the view has no reader for: turning on reported history cannot help, so the label says it shows state only.
+// Pi has no hooks, Cursor CLI and Amp keep records the report cannot be tied to (no session id in the path): none is claimed.
+it.each(['Pi','Cursor CLI','Amp'])('labels %s, a records-only adapter whose records are not tied to the report, as state only with Show terminal and no composer',async agent=>{
+  host('codex',[row(agent,'%3','needs_attention')],'missing',[[]]);
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(`This view shows only the last reported state of ${agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+  expect(screen.queryByText(/Turn on reported history/)).toBeNull();
+  expect(screen.getByTitle('Last reported: Waiting for you')).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+  expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  expect(calls('agent_transcript')).toEqual([]);expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcripts')).toEqual([]);
+});
+
+describe.each([copilotRecords,kimiRecords,droidRecords])('$agent pane (records-only)',records=>{
+  const reported=(id=records.session)=>({...row(records.agent,'%3','needs_attention'),sessionId:id});
+  const mount=async(rows:unknown[],discovered:unknown=records.discovery,pages:unknown[]=[records.page])=>{discoveryHost(rows,discovered,pages);await mountTmux();};
+  const texts=(page:{messages:{blocks:{type:string;text?:string}[]}[]})=>page.messages.flatMap(message=>message.blocks).filter(block=>block.type==='text').map(block=>block.text!);
+
+  it('shows the records of the reported session read-only under the partial label, with Show terminal and no composer',async()=>{
+    await mount([reported()]);
+    expect(screen.getByText(`Partial: these are the records ${records.agent} wrote for this pane, read-only, so they can lag behind the terminal and leave out what it does not record. Answer in the terminal.`)).toBeTruthy();
+    // The turn the adapter's records hold, and the state the hook reported, which the records do not carry.
+    const turn=screen.getByRole('region',{name:'Turn'});
+    for(const text of texts(records.page as never))expect(within(turn).getByText(text)).toBeTruthy();
+    expect(screen.getByTitle('Last reported: Waiting for you')).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Send to the agent'})).toBeNull();
+    // Records are found by the session id the discovery names, never through reported history, and are read as records of this adapter, not as a conversation.
+    expect(calls('agent_transcripts')[0]).toEqual({sessionId:'ssh',agent:records.adapter});
+    expect(calls('agent_reported_history')).toEqual([]);
+    expect(calls('agent_transcript')[0]).toEqual({sessionId:'ssh',agent:records.adapter,path:records.path,offset:0});
+    expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+  });
+
+  it('reads on from the cursor while the records grow, and writes nothing to the terminal',async()=>{
+    const page=records.page as {nextOffset:number;messages:unknown[]};
+    const added={id:'later',role:'assistant',blocks:[{type:'text',text:'A line written after the first read'}]};
+    await mount([reported()],records.discovery,[page,{...page,nextOffset:page.nextOffset+10,messages:[added]}]);
+    expect(screen.queryByText('A line written after the first read')).toBeNull();
+    await advance(5000);
+    expect(screen.getByText('A line written after the first read')).toBeTruthy();
+    expect(calls('agent_transcript').map(args=>(args as {offset:number}).offset)).toEqual([0,page.nextOffset]);
+    expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
+  });
+
+  it('keeps the state-only label when the records do not name the reported session',async()=>{
+    await mount([reported('another-session')]);
+    expect(screen.getByText(`This view shows only the last reported state of ${records.agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+    expect(calls('agent_transcript')).toEqual([]);
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  });
+
+  it('shows none of two records that claim the same session',async()=>{
+    const discovery=records.discovery as {sessions:{path:string}[]};
+    await mount([reported()],{...discovery,sessions:[...discovery.sessions,{...discovery.sessions[0],path:`${discovery.sessions[0].path}.copy`}]});
+    expect(screen.getByText(`This view shows only the last reported state of ${records.agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+    expect(calls('agent_transcript')).toEqual([]);
+  });
+
+  it('falls back to the state-only label when the records can no longer be read',async()=>{
+    await mount([reported()]);
+    expect(screen.getByText(texts(records.page as never)[0])).toBeTruthy();
+    discoveryHost([reported()],{...(records.discovery as object),sessions:[]},[records.page]);
+    await advance(5000);
+    expect(screen.getByText(`This view shows only the last reported state of ${records.agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+    expect(screen.queryByText(texts(records.page as never)[0])).toBeNull();
+  });
 });
 
 it('keeps a detected tmux agent visible when its history lookup fails',async()=>{
@@ -816,17 +900,7 @@ describe('session info sheet',()=>{
 describe('OpenCode pane',()=>{
   // The companion's own output for a real OpenCode session; the hook report names the same session id.
   const opencodeRow=(session=opencodeSession)=>({...row('OpenCode','%3'),sessionId:session});
-  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery,page:unknown=opencodePage)=>{
-    vi.mocked(invoke).mockImplementation(async(command,args)=>{
-      if(command==='tmux_chat')return tmuxChatReply(command,args);
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
-      if(command==='agent_transcripts')return discovered;
-      if(command==='agent_transcript')return page;
-      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
-      throw new Error(`Unexpected ${command}`);
-    });
-    await mountTmux();
-  };
+  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery,page:unknown=opencodePage)=>{discoveryHost(rows,discovered,[page]);await mountTmux();};
 
   it('binds from the hook report of this pane through its database and reads the session',async()=>{
     await mount([opencodeRow()]);
