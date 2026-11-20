@@ -69,6 +69,20 @@ it('does not rewrite persistent storage for unchanged snapshots', async () => {
   writes.mockRestore();
 });
 
+it('focuses the Zellij pane that raised an event only in the Zellij session its terminal is attached to', async () => {
+  const invoke = vi.fn().mockResolvedValue(undefined);
+  const zellij = { id: 'ssh1', attached: { kind: 'zellij', name: 'my:odd name' } };
+  await focusInboxPane(invoke, zellij, 'zellij:my:odd name:12');
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('zellij_action', { sessionId: 'ssh1', name: 'my:odd name', action: { type: 'focusPane', pane: 12 } });
+  invoke.mockClear();
+  // Another Zellij session, a terminal in another multiplexer, a tmux or malformed pane id and no pane select nothing.
+  for (const [session, pane] of [[zellij, 'zellij:other:12'], [zellij, '%12'], [zellij, 'zellij:my:odd name:terminal_1'], [zellij, null], [{ ...zellij, attached: { kind: 'tmux', name: 'my:odd name' } }, 'zellij:my:odd name:12'], [{ ...zellij, attached: { kind: 'herdr', name: 'my:odd name' } }, 'zellij:my:odd name:12'], [{ id: 'ssh1' }, 'zellij:my:odd name:12']] as const) await focusInboxPane(invoke, session, pane);
+  expect(invoke).not.toHaveBeenCalled();
+  // A pane that no longer exists must not stop the session from opening.
+  invoke.mockRejectedValueOnce(new Error('no such pane'));
+  await expect(focusInboxPane(invoke, zellij, 'zellij:my:odd name:12')).resolves.toBeUndefined();
+});
+
 it('selects the pane that raised an event only in the tmux terminal it is attached to', async () => {
   const invoke = vi.fn().mockResolvedValue(undefined);
   const on = (kind: string) => ({ id: 'ssh1', attached: { kind, name: 'work' } });
