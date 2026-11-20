@@ -223,12 +223,7 @@ fn next_jpeg(reader: &mut impl BufRead) -> Result<Vec<u8>> {
     Ok(jpeg)
 }
 fn screenshot(runner: &mut impl Runner, id: &str) -> Result<Value> {
-    let png = runner.output(
-        Tool::Adb,
-        &args(&["-s", id, "exec-out", "screencap", "-p"]),
-        MAX_PNG,
-    )?;
-    frame(Platform::Android, id, &png)
+    frame(Platform::Android, id, &screencap(runner, id)?)
 }
 fn pipeline(
     mut capture: Command,
@@ -342,6 +337,7 @@ pub fn stream(id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::devices::tests::{png, FakeRunner};
     #[test]
     fn unavailable_device_protocol_or_decoder_never_claims_video_support() {
         struct Fake {
@@ -393,6 +389,16 @@ mod tests {
         };
         assert!(probe(&mut hostile, "-unexpected").is_err());
         assert_eq!(hostile.calls, 0);
+    }
+    #[test]
+    fn the_idle_screenshot_skips_a_warning_line_before_the_image() {
+        let warning = b"/vendor/etc/hwdata/amdgpu.ids: No such file or directory\n";
+        let mut runner = FakeRunner::new(vec![Ok([warning.as_slice(), &png(300, 200)].concat())]);
+        let frame = screenshot(&mut runner, "emulator-5554").unwrap();
+        assert_eq!(
+            (frame["width"].as_u64(), frame["height"].as_u64()),
+            (Some(300), Some(200))
+        );
     }
     #[test]
     fn multipart_framing_bounds_lengths_and_rejects_ambiguous_headers() {

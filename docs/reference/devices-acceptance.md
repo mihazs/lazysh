@@ -44,7 +44,19 @@ lifted for that run: the first frame arrived 2.9 s after the stream started (abo
 the companion's own probe), then one screenshot about every 1.1 s while the screen was idle (54 KB
 each), and about eight video frames a second from the moment Settings opened. No physical device, no
 Android emulator run and no iOS video was observed. Waydroid's `screencap` output and `adb features`
-list need the reading fixes of [#1859](https://github.com/mihazs/lazysh/pull/1859).
+list need the reading fixes of [#1859](https://github.com/mihazs/lazysh/pull/1859), and the idle
+screenshot reads the PNG through the same helper ([#1860](https://github.com/mihazs/lazysh/issues/1860)):
+before that, the production companion on the idle Waydroid launcher ended in `DeviceTimeout` without a frame
+because the warning line made every idle screenshot an invalid image.
+
+Why the stream sends screenshots and does not flush the held video frame
+([#1860](https://github.com/mihazs/lazysh/issues/1860)): with FFmpeg 9.0.2 and one 1280x720 IDR
+(20 KB) followed by silence, no output appeared with the companion's arguments, nor with
+`-probesize 4096`, `-flags low_delay` or `-fflags +nobuffer` alone. A frame appeared (in 0.05 s) only
+with all three of an access unit delimiter (`00 00 00 01 09 10`) written after the IDR, a `-probesize`
+of 4096 and no `fps=8` filter, which holds a frame until the next one. That means relaying the stream
+and writing a delimiter after a pause, with the risk of cutting a unit that is still arriving, and
+giving up the 8 fps cap, so the screenshots stay.
 
 ## Device panel on the owned emulator
 
