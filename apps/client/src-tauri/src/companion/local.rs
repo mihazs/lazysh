@@ -1,6 +1,6 @@
 //! The companion on this device: no SSH and no POSIX probe. The builders' one-line commands are
 //! split back into argv and run on the executable found here, never through a shell.
-use super::{error, Result};
+use super::{error, words, Result};
 use crate::host::Cmd;
 use serde::Serialize;
 use std::{
@@ -13,43 +13,6 @@ const NAME: &str = if cfg!(windows) {
 } else {
     "lazysh-agent"
 };
-
-/// A command line made only of bare safe words and `ssh::quote`d text, the form every companion
-/// builder writes, as the words it stands for. Anything a shell would interpret is refused.
-fn words(line: &str) -> Result<Vec<String>> {
-    let (mut words, mut word, mut started, mut quoted) = (Vec::new(), String::new(), false, false);
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match (quoted, c) {
-            (true, '\'') => quoted = false,
-            (true, c) => word.push(c),
-            (false, '\'') => (quoted, started) = (true, true),
-            // `quote` writes a literal single quote as `'\''`.
-            (false, '\\') if chars.as_str().starts_with('\'') => {
-                chars.next();
-                word.push('\'');
-                started = true;
-            }
-            (false, ' ') if started => {
-                words.push(std::mem::take(&mut word));
-                started = false;
-            }
-            (false, ' ') => {}
-            (false, c) if c.is_ascii_alphanumeric() || "-_./:,+@=".contains(c) => {
-                word.push(c);
-                started = true;
-            }
-            _ => return Err(error("companion_command", "Invalid companion command")),
-        }
-    }
-    if quoted {
-        return Err(error("companion_command", "Invalid companion command"));
-    }
-    if started {
-        words.push(word);
-    }
-    Ok(words)
-}
 
 fn runnable(path: &Path) -> bool {
     #[cfg(unix)]

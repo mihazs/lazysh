@@ -143,6 +143,7 @@ impl Operation {
         self.work_stage(&mut work.phase, Stage::Detecting);
         resolve::detect(&self.session, &self.lease)
             .await?
+            .and_then(resolve::Host::unix)
             .ok_or_else(|| {
                 error(
                     "companion_install_unsupported",

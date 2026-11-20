@@ -1,4 +1,4 @@
-//! Explicit companion installation and positive-Unix-only executable resolution.
+//! Explicit companion installation (Linux and macOS hosts) and executable resolution on positively identified Unix and Windows hosts.
 use crate::{
     app_lock::{AccessLease, Guarded, GuardedError},
     ssh::{self, AppState, Result, Session, SshError},
@@ -10,15 +10,16 @@ pub mod hooks;
 pub(crate) mod install;
 #[cfg(desktop)]
 pub(crate) mod local;
+mod powershell;
 mod release;
 mod resolve;
 mod transfer;
-/// A connection's positive-Unix probe result (see `resolve::detect`), shared by every companion command on it.
+/// A connection's host probe result (see `resolve::detect`), shared by every companion command on it.
 #[derive(Default)]
-pub(crate) struct HostProbe(tokio::sync::OnceCell<Option<resolve::Unix>>);
+pub(crate) struct HostProbe(tokio::sync::OnceCell<Option<resolve::Host>>);
 impl HostProbe {
     /// Runs `probe` unless this connection already has an answer. Concurrent first callers share one probe.
-    async fn resolve<F, Fut>(&self, probe: F) -> Result<Option<resolve::Unix>>
+    async fn resolve<F, Fut>(&self, probe: F) -> Result<Option<resolve::Host>>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<resolve::Probed>>,
@@ -41,7 +42,10 @@ impl HostProbe {
     }
 }
 pub(crate) async fn positive_unix(session: &Session, lease: &AccessLease) -> Result<bool> {
-    Ok(resolve::detect(session, lease).await?.is_some())
+    Ok(resolve::detect(session, lease)
+        .await?
+        .and_then(resolve::Host::unix)
+        .is_some())
 }
 fn error(kind: &'static str, message: &'static str) -> SshError {
     SshError::new(kind, message)
@@ -52,11 +56,11 @@ pub(crate) async fn command(
     lease: &AccessLease,
 ) -> Result<String> {
     match resolve::detect(session, lease).await? {
-        Some(unix) => unix.command(&command),
+        Some(host) => host.command(&command),
         None => Ok(command),
     }
 }
-// Only a positively identified Unix shell classifies absent/older companions.
+// Only a positively identified Unix or Windows host classifies absent/older companions.
 pub(crate) const USAGE_COMPANION_REQUIRED: &str = "lazysh-account-usage-companion-required-v1";
 pub(crate) async fn account_usage_command(
     session: &Session,
@@ -87,14 +91,45 @@ pub(crate) async fn required_command_with_diagnostics(
     diagnostics: bool,
 ) -> Result<String> {
     match resolve::detect(session, lease).await? {
-        Some(unix) => {
-            let resolved = unix.command(&original)?;
-            let redirect = if diagnostics { "" } else { "2>/dev/null" };
-            let script=format!("{resolved} {redirect}; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
-            Ok(format!("sh -c {}", ssh::quote(&script)))
-        }
+        Some(host) => host.required(&original, marker, diagnostics),
         None => Ok(original),
     }
+}
+/// A command line made only of bare safe words and `ssh::quote`d text, the form every companion
+/// builder writes, as the words it stands for. Anything a shell would interpret is refused.
+fn words(line: &str) -> Result<Vec<String>> {
+    let (mut words, mut word, mut started, mut quoted) = (Vec::new(), String::new(), false, false);
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (true, '\'') => quoted = false,
+            (true, c) => word.push(c),
+            (false, '\'') => (quoted, started) = (true, true),
+            // `quote` writes a literal single quote as `'\''`.
+            (false, '\\') if chars.as_str().starts_with('\'') => {
+                chars.next();
+                word.push('\'');
+                started = true;
+            }
+            (false, ' ') if started => {
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+            (false, ' ') => {}
+            (false, c) if c.is_ascii_alphanumeric() || "-_./:,+@=".contains(c) => {
+                word.push(c);
+                started = true;
+            }
+            _ => return Err(error("companion_command", "Invalid companion command")),
+        }
+    }
+    if quoted {
+        return Err(error("companion_command", "Invalid companion command"));
+    }
+    if started {
+        words.push(word);
+    }
+    Ok(words)
 }
 
 pub(crate) async fn exec(
@@ -279,16 +314,16 @@ impl InstallFailure {
 mod probe_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    fn linux() -> resolve::Unix {
-        resolve::Unix {
+    fn linux() -> resolve::Host {
+        resolve::Host::Unix(resolve::Unix {
             os: "linux",
             arch: "x64",
             uid: 1000,
             home: "/home/owner".into(),
             data: "/home/owner/.local/share".into(),
-        }
+        })
     }
-    async fn known(asked: &AtomicUsize, host: Option<resolve::Unix>) -> Result<resolve::Probed> {
+    async fn known(asked: &AtomicUsize, host: Option<resolve::Host>) -> Result<resolve::Probed> {
         asked.fetch_add(1, Ordering::SeqCst);
         tokio::task::yield_now().await;
         Ok(resolve::Probed::Known(host))
@@ -302,16 +337,11 @@ mod probe_tests {
             probe.resolve(|| known(&asked, Some(linux())))
         );
         for answer in [a, b, c] {
-            assert_eq!(answer.unwrap().unwrap().uid, 1000);
+            assert_eq!(answer.unwrap(), Some(linux()));
         }
         assert_eq!(
-            probe
-                .resolve(|| known(&asked, None))
-                .await
-                .unwrap()
-                .unwrap()
-                .home,
-            "/home/owner"
+            probe.resolve(|| known(&asked, None)).await.unwrap(),
+            Some(linux())
         );
         assert_eq!(asked.load(Ordering::SeqCst), 1);
     }
