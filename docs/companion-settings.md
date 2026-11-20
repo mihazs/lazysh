@@ -21,6 +21,11 @@ Under the three switches, **Host browser** has its own row and its own **Save ho
 - A companion that predates the command shows the row as unavailable with a message to update the companion, and the app writes nothing. If another client changed the revision, the app asks you to refresh before saving again.
 - Nothing in this row starts a browser: it only allows one. The browser view itself ships with the Chrome viewer ([#1254](https://github.com/mihazs/lazysh/issues/1254)).
 
+The same panel has a second form, **Quiet notifications**, with two switches that decide which events may notify your phone: **Do not notify for nested agents** and **Do not notify while this desktop is unlocked**. Both are **off** by default. They are kept in their own file with their own revision, so **Save notification switches** saves only them and **Save host settings** saves only the three switches above; a conflict on one never discards edits to the other. The form appears only when the companion answers `lazysh-agent settings notifications show`; a companion that predates it shows an update message instead, and a read that fails for another reason shows the companion's own error.
+
+- The unlocked-desktop switch works on **Linux hosts only**. On macOS, Windows or an unknown lock state the setting is ignored and you are always notified.
+- The nested-agent switch relies on process ancestry on Linux and macOS, and on `LAZYSH_PARENT_SESSION_ID` on every host.
+
 ## Change settings from the host terminal
 
 These shell commands require a PATH installation. For a managed-only installation, use the app controls above or substitute its verified [absolute executable path](how-to/configure-companion.md#install-on-the-remote-host). Run `lazysh-agent settings show` and note its revision. To disable recorded usage only when that revision is `0`, run:

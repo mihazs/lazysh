@@ -2,6 +2,7 @@ import {useEffect,useId,useRef,useState} from 'react';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useProtectedInvoke} from './access';
+import {useHostSwitchStatus} from './hostSwitchStatus';
 import {confirmHostBrowser,isHostBrowserConfirmed} from './hostBrowserConfirmation';
 
 type HostBrowser={schemaVersion:1;revision:number;hostBrowserEnabled:boolean};
@@ -34,10 +35,7 @@ export default function HostBrowserSwitch({sessionId,hostKey,visible,reload}:{se
   const invoke=useProtectedInvoke();
   const [settings,setSettings]=useState<HostBrowser>();
   const [draft,setDraft]=useState(false);
-  const [outdatedCompanion,setOutdatedCompanion]=useState(false);
-  const [error,setError]=useState<UiErrorCause | {refresh:UiErrorCause}>('');
-  const [busy,setBusy]=useState(false);
-  const [saved,setSaved]=useState(false);
+  const {outdatedCompanion,setOutdatedCompanion,error,setError,busy,setBusy,saved,setSaved}=useHostSwitchStatus();
   const [confirming,setConfirming]=useState(false);
   const request=useRef(0);
   const loadedFor=useRef<number|undefined>(undefined);

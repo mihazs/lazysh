@@ -12,6 +12,7 @@ mod auth_tunnel;
 mod bindings;
 mod clipboard;
 mod companion;
+mod companion_notifications;
 mod companion_settings;
 mod desktop_launch;
 mod devices;
@@ -392,6 +393,8 @@ pub fn run() {
                 companion_settings::update_companion_settings,
                 companion_settings::get_host_browser_settings,
                 companion_settings::update_host_browser_settings,
+                companion_notifications::get_notification_policy,
+                companion_notifications::update_notification_policy,
                 ssh::agent_transcript,
                 ssh::agent_usage,
                 ssh::agent_transcripts,

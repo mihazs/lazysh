@@ -69,9 +69,9 @@ it("discards settings arriving after the selected SSH session changes",async()=>
 it('preserves the loaded settings draft across hide/reopen without another host read',async()=>{
   answer({get_companion_settings:[settings],update_companion_settings:[settings]});const view=render(<CompanionSettingsPanel sessionId="draft-owner"/>);
   const usage=await screen.findByLabelText('Recorded usage inspection');fireEvent.click(usage);
-  view.rerender(<CompanionSettingsPanel sessionId="draft-owner" visible={false}/>);fireEvent.submit(usage.closest('form')!);expect(vi.mocked(invoke)).toHaveBeenCalledTimes(2);
+  view.rerender(<CompanionSettingsPanel sessionId="draft-owner" visible={false}/>);fireEvent.submit(usage.closest('form')!);expect(calls('update_companion_settings')).toHaveLength(0);
   view.rerender(<CompanionSettingsPanel sessionId="draft-owner"/>);
-  expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(calls('get_companion_settings')).toHaveLength(1);
+  expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(calls('get_companion_settings')).toHaveLength(1);expect(calls('get_notification_policy')).toHaveLength(1);
   fireEvent.click(screen.getByRole('button',{name:'Save host settings'}));await waitFor(()=>expect(calls('update_companion_settings')).toHaveLength(1));
   expect(calls('update_companion_settings')[0][1]).toMatchObject({sessionId:'draft-owner',settings:{expectedRevision:0,recordedUsageEnabled:false}});
 });
