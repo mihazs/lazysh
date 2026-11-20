@@ -3946,7 +3946,7 @@ pub async fn attach_multiplexer(
             if let Some(startup) = startup {
                 let child = state.session(&connected.session_id).await?;
                 *child.bindings.herdr.lock().map_err(|_| SshError::new("herdr_chat_unavailable", "Cannot bind Herdr display"))? =
-                    Some(crate::herdr_guard::start(startup, child.handle.clone(), child.cancel.subscribe()));
+                    Some(crate::herdr_guard::start(startup, crate::herdr_guard::Route::Ssh(child.handle.clone()), child.cancel.subscribe()));
             }
             Ok(connected)
         })
