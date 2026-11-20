@@ -10,8 +10,8 @@ wdio.conf.ts          shared: Mocha, reporters, timeouts, the browser.pause guar
 wdio.android.conf.ts  Appium service, UiAutomator2 capabilities, device lock and baseline
 specs/{smoke,regression,journeys}/   the tier is the directory; files are *.e2e.ts
 pageobjects/          one object per screen or component, no assertions; connect-owned-host.ts signs in for `before` hooks
-support/              device.ts (the only module that changes device state), hosts.ts (owned hosts), app.ts (lifecycle),
-                      contexts.ts, artifacts.ts, guards.ts, data.ts, setup.ts
+support/              device.ts (the only module that changes device state), hosts.ts (owned hosts), webdav.ts (owned HTTPS WebDAV for
+                      the sync case), app.ts (lifecycle), contexts.ts, artifacts.ts, guards.ts, data.ts, setup.ts
 data/                 static inputs with a {nonce} placeholder, no secrets, no keys
 reports/  .appium/    generated and git-ignored (JUnit, failure artifacts, Appium log; Appium home)
 ```

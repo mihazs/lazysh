@@ -134,8 +134,8 @@ export interface DeviceSession {
   adb: Adb;
   baseline: Baseline;
   journal: string;
-  /** Restores the baseline, removes the journal only when that succeeded, and always releases the lock. */
-  release(): Promise<void>;
+  /** Restores the baseline unless ownership was lost; preserves the journal on failure and always releases the lock. */
+  release(options?: {restore?: boolean}): Promise<void>;
 }
 
 async function takeLock(path: string, timeoutMs: number, pollMs: number, log: (message: string) => void) {
@@ -192,8 +192,8 @@ export async function acquireDevice(serial: string, options: AcquireOptions = {}
     await writeFile(journal, JSON.stringify(baseline), {mode: 0o600});
     return {
       adb, baseline, journal,
-      async release() {
-        try { await restoreBaseline(adb, baseline); await rm(journal, {force: true}); } finally { await rm(lock, {force: true}); }
+      async release({restore = true} = {}) {
+        try { if (restore) { await restoreBaseline(adb, baseline); await rm(journal, {force: true}); } } finally { await rm(lock, {force: true}); }
       },
     };
   } catch (error) {

@@ -1,4 +1,6 @@
 [
   {"pattern": "\"content\":\"[A-Za-z0-9+/=]{40,}\"", "flags": "g", "replaceWith": "\"content\":\"[redacted clipboard]\""},
-  {"pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{0,8000}?-----END [A-Z ]*PRIVATE KEY-----", "flags": "g", "replaceWith": "[redacted private key]"}
+  {"pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{0,8000}?-----END [A-Z ]*PRIVATE KEY-----", "flags": "g", "replaceWith": "[redacted private key]"},
+  {"pattern": "LAZYSH-SYNC-V1-[0-9a-f]{1,64}", "flags": "gi", "replaceWith": "[redacted sync recovery key]"},
+  {"pattern": "\\[\\s*\"L\"\\s*,\\s*\"A\"\\s*,\\s*\"Z\"\\s*,\\s*\"Y\"\\s*,\\s*\"S\"\\s*,\\s*\"H\"\\s*,\\s*\"-\"\\s*,\\s*\"S\"\\s*,\\s*\"Y\"\\s*,\\s*\"N\"\\s*,\\s*\"C\"\\s*,\\s*\"-\"\\s*,\\s*\"V\"\\s*,\\s*\"1\"\\s*,\\s*\"-\"(?:\\s*,\\s*\"[0-9a-f]\"){1,64}\\s*\\]", "flags": "gi", "replaceWith": "[\"[redacted sync recovery key]\"]"}
 ]

@@ -43,6 +43,7 @@ export async function attestQrCamera(env:NodeJS.ProcessEnv,root:string,io=files,
   try{
     const pidFile=env.LAZYSH_ANDROID_QR_EMULATOR_PID_FILE,sdk=env.ANDROID_HOME;
     if(uid===undefined||!pidFile||!sdk||!isAbsolute(pidFile)||!isAbsolute(sdk)||!/^emulator-[0-9]{4,5}$/.test(env.ANDROID_SERIAL??''))throw error();
+    const stablePidFile=pidFile;
     check='pid-file-owner';
     if(await io.uid(pidFile)!==uid)throw error();
     check='pid-file';
@@ -65,7 +66,7 @@ export async function attestQrCamera(env:NodeJS.ProcessEnv,root:string,io=files,
     const original=await identity();
     async function verify(){
       check='pid-file-stability';
-      if((await io.read(pidFile,32)).toString('utf8').trim()!==raw||await io.uid(pidFile)!==uid)throw error();
+      if((await io.read(stablePidFile,32)).toString('utf8').trim()!==raw||await io.uid(stablePidFile)!==uid)throw error();
       const current=await identity();check='process-continuity';if(current!==original)throw error();
       check='executable';
       if(!binaries.includes(await io.link(`${proc}/exe`)))throw error();
@@ -75,7 +76,7 @@ export async function attestQrCamera(env:NodeJS.ProcessEnv,root:string,io=files,
       const args=bytes.toString('utf8').split('\0').slice(0,-1);
       function one(flag:string,value:string){const positions=args.flatMap((arg,index)=>arg===flag?[index]:[]);if(positions.length!==1||args[positions[0]+1]!==value)throw error();}
       check='port';one('-port',env.ANDROID_SERIAL!.slice('emulator-'.length));check='avd';one('-avd','lazysh-runtime-api36');
-      check='camera-back';one('-camera-back',`imagefile:${asset}`);check='camera-front';one('-camera-front','none');check='pid-argument';one('-pidfile',pidFile);
+      check='camera-back';one('-camera-back',`imagefile:${asset}`);check='camera-front';one('-camera-front','none');check='pid-argument';one('-pidfile',stablePidFile);
       const admitted=new Set(['-port','-avd','-camera-back','-camera-front']);
       check='option-aliases';
       if(args.some(arg=>/^--?(?:camera[-_](?:front|back)|ports?|android-ports|avd)(?:=|$)/.test(arg)&&!admitted.has(arg)))throw error();
