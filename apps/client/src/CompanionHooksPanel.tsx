@@ -33,9 +33,8 @@ export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3|4=1):Disc
   if(new TextEncoder().encode(JSON.stringify(result)).length>65536)throw new LocalUiError('hooksInvalid');
   return result;
 }
-<<<<<<< HEAD
 type LocalEvent={state:'received';lastEventAt:number}|{state:'none'|'notChecked'};
-type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;localEvent?:LocalEvent};
+type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksKimiConfigRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;localEvent?:LocalEvent};
 /** Additive and advisory: an absent, newer or malformed report from the companion reads as not checked and never fails the status. */
 function parseLocalEvent(value:unknown):LocalEvent|undefined{
   const report=value as {schemaVersion?:unknown;localEvent?:{state?:unknown;lastEventAt?:unknown}}|null|undefined;
@@ -44,9 +43,6 @@ function parseLocalEvent(value:unknown):LocalEvent|undefined{
   const at=event?.state==='received'&&typeof event.lastEventAt==='string'?Date.parse(event.lastEventAt):NaN;
   return Number.isFinite(at)?{state:'received',lastEventAt:at}:undefined;
 }
-=======
-type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksKimiConfigRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string};
->>>>>>> refs/remotes/pr/1947
 export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
   if(!value || typeof value!=='object')throw new LocalUiError('hooksInvalid');
   const v=value as Record<string,unknown>;
@@ -161,15 +157,11 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     {agent==='amp'&&!ampSupported&&<p className="agent-note" role="status">{t('hooksAmpCapability')}</p>}
     {agent==='kimi-code'&&!kimiSupported&&<p className="agent-note" role="status">{t('hooksKimiCodeCapability')}</p>}
     {status?.reason==='HooksAmpShadow'&&<p className="agent-note" role="status">{t('hooksAmpShadow')}</p>}
-<<<<<<< HEAD
-    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':status.reason==='HooksKimiConfigRequired'?'hooksKimiCodeConfigRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
     {status?.supported && <ul className="agent-note" aria-label={t('hooksReadinessTitle')} style={{margin:0,paddingLeft:'1.2em'}}>
       {([['hooksReadinessCompanion',t('hooksReadinessYes')],['hooksReadinessHooks',t(status.state==='configured'?'hooksReadinessYes':status.state==='conflict'?'hooksReadinessConflict':'hooksReadinessNo')],['hooksReadinessReloaded',t('hooksReadinessNotChecked')],['hooksReadinessTrusted',t('hooksReadinessNotChecked')],['hooksReadinessEvent',status.localEvent?.state==='received'?t('hooksReadinessLastEvent',{time:formatDateTime(status.localEvent.lastEventAt)}):t(status.localEvent?.state==='none'?'hooksReadinessNone':'hooksReadinessNotChecked')],['hooksReadinessPane',t('hooksReadinessNotChecked')],['hooksReadinessRemote',t('hooksReadinessNotChecked')]] as const).map(([label,value])=><li key={label}>{t(label)}: {value}</li>)}
     </ul>}
     {status?.supported && status.state==='configured' && status.localEvent?.state==='none' && <p className="agent-note">{t('hooksReadinessSilent')}</p>}
-=======
-    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':status.reason==='HooksKimiConfigRequired'?'hooksKimiCodeConfigRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
->>>>>>> refs/remotes/pr/1947
     {status?.supported && providerAllowed && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy||!status.installPlan} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy||!status.removePlan} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}

@@ -344,7 +344,6 @@ it('keeps manual Amp exact-owned removal enabled through a same-name shadow with
   expect(hooks.mock.calls.map(call=>call[1].action)).toEqual(['status','remove','status']);
 });
 
-<<<<<<< HEAD
 const readiness=(localEvent:unknown)=>({schemaVersion:1,localEvent,providerReloaded:'notChecked',projectTrusted:'notChecked',paneBound:'notChecked',remoteDelivery:'notChecked'});
 const lastEventAt='2026-11-15T10:20:30.123456Z';
 it('reads the additive readiness report and keeps an older or newer companion working',()=>{
@@ -388,7 +387,7 @@ it.each([['pt-BR','Prontidão','Nenhum registrado'],['es','Preparación','Ningun
   fireEvent.change(screen.getByLabelText(language==='pt-BR'?'Diretório do perfil no servidor':'Directorio del perfil del servidor'),{target:{value:'/owned/profile'}});
   fireEvent.click(screen.getByRole('button',{name:language==='pt-BR'?'Verificar configuração':'Inspeccionar configuración'}));
   expect((await screen.findByRole('list',{name:title})).textContent).toContain(none);
-=======
+});
 const kimiRow={agent:'kimi',setup:'managed',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[{path:'/owned/.kimi-code',source:'HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'directory'}]};
 it('admits managed Kimi only in schema 4 and keeps every earlier schema manual',()=>{
   for(const version of [1,2,3] as const){
@@ -434,5 +433,4 @@ it('reports a missing Kimi Code config.toml only for the kimi-code provider and 
   fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
   expect(await screen.findByText(/has no config\.toml/)).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();
->>>>>>> refs/remotes/pr/1947
 });

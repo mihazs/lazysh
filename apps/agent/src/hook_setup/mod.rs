@@ -7,11 +7,9 @@ mod files;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod json;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-<<<<<<< HEAD
-mod readiness;
-=======
 mod kimi_toml;
->>>>>>> refs/remotes/pr/1947
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod readiness;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod record;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
