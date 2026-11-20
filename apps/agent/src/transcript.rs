@@ -50,6 +50,7 @@ mod snapshot;
 mod source_snapshot;
 pub mod watch;
 pub mod window;
+pub(crate) use conversation::interrupted;
 pub use conversation::{
     claude_conversation_images, codex_conversation_images, conversation, conversation_window,
     conversation_window_large,

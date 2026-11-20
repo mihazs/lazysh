@@ -422,6 +422,24 @@ impl Queue {
     }
 }
 
+/// Whether a user record is the marker Claude Code writes when the person interrupts a turn, which includes
+/// rejecting a permission dialog (`[Request interrupted by user for tool use]`).
+pub(crate) fn interrupted(record: &Value) -> bool {
+    let content = &record["message"]["content"];
+    record["type"] == "user"
+        && content
+            .as_str()
+            .into_iter()
+            .chain(
+                content
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|part| part["text"].as_str()),
+            )
+            .any(|text| text.starts_with("[Request interrupted"))
+}
+
 /// Turn state at the selected leaf. Claude Code records `system/turn_duration`
 /// after a turn ends; an unanswered question or plan approval waits for the
 /// user; an assistant `tool_use` stop or a user record means a turn is running.
@@ -462,17 +480,7 @@ fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
     let content = &record["message"]["content"];
     if record["type"] == "user" {
         // An interruption marker is not a recorded running turn.
-        let interrupted = content.as_str().into_iter().chain(
-            content
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|part| part["text"].as_str()),
-        );
-        return (!interrupted
-            .into_iter()
-            .any(|text| text.starts_with("[Request interrupted")))
-        .then_some("working");
+        return (!interrupted(record)).then_some("working");
     }
     let asks = content.as_array().into_iter().flatten().any(|part| {
         part["type"] == "tool_use"

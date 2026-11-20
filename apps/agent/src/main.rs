@@ -908,13 +908,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             None
         }
-        Command::Snapshot { limit } => Some(
-            serde_json::to_value(
-                Store::open(&lazysh_agent::state_directory()?)?
-                    .snapshot(limit, chrono::Utc::now())?,
+        Command::Snapshot { limit } => {
+            let mut store = Store::open(&lazysh_agent::state_directory()?)?;
+            // Claude Code sends no hook when a permission dialog is rejected (#1795).
+            store.settle_rejected_dialogs(chrono::Utc::now())?;
+            Some(
+                serde_json::to_value(store.snapshot(limit, chrono::Utc::now())?)
+                    .map_err(|_| Error::InvalidEvent)?,
             )
-            .map_err(|_| Error::InvalidEvent)?,
-        ),
+        }
     };
     if let Some(output) = output {
         let mut stdout = io::stdout().lock();
