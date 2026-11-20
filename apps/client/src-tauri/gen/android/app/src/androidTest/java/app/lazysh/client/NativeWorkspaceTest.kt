@@ -3146,9 +3146,11 @@ class NativeWorkspaceTest {
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
-    // from the Sessions panel, tab-close detach and reattach. The host independently proves the remote
+    // from the Sessions panel, a two-finger pinch zoom and unzoom and window swipes on the display,
+    // tab-close detach and reattach. The host independently proves the remote
     // window state, the Chat draft in the original pane, that the split left the original pane untouched
-    // and the zoom returned, and that the original server and panes survived.
+    // and the zoom returned, that the gestures changed the zoom flag and active window in order,
+    // and that the original server and panes survived.
     private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
@@ -3350,6 +3352,29 @@ class NativeWorkspaceTest {
             stripShows(renamed, false, "tab strip no longer shows the closed window")
             listed(stage = "Workspaces panel lists only the original windows again")
         }
+        // Two real fingers on the attached display run the default gestures against the real tmux client behind it. The split's pane is beta's active pane (the
+        // Sessions panel's zoom made it so), so a pinch zooms it and hides beta's original marker, a second pinch returns it, then a two-finger swipe left selects
+        // the next window and a swipe right the previous one. Each state is held long enough for the host's tmux sampler (about every 100 ms) to read the active window and zoom flag.
+        fun gestures() {
+            val canvas = "Array.from(document.querySelectorAll('.terminal-pane')).filter(p=>p.style.display!=='none').map(p=>p.querySelector('.terminal-canvas')).find(Boolean)"
+            fun at(vararg points: Double) = listOf(doubleArrayOf(points[0], points[1]), doubleArrayOf(points[2], points[3]))
+            val together = at(-40.0, 0.0, 40.0, 0.0)
+            val apart = at(-110.0, 0.0, 110.0, 0.0)
+            fun swipe(dx: Double) = twoFingerGesture(scenario, canvas, together, at(-40.0 + dx, 0.0, 40.0 + dx, 0.0))
+            val seen = 1_000L
+            markerOnScreen(true, "beta's original pane shown before the pinch")
+            twoFingerGesture(scenario, canvas, together, apart)
+            markerOnScreen(false, "a pinch out zooms the split pane")
+            Thread.sleep(seen)
+            twoFingerGesture(scenario, canvas, apart, together)
+            markerOnScreen(true, "a second pinch returns the split layout")
+            Thread.sleep(seen)
+            swipe(-120.0)
+            visible(alpha, beta, "a two-finger swipe left shows the next window")
+            Thread.sleep(seen)
+            swipe(120.0)
+            visible(beta, alpha, "a two-finger swipe right returns to beta")
+        }
         val lifecycle = tmux.getJSONArray("lifecycle")
         require(lifecycle.length() == 2) { "Owned tmux window names required" }
         var primaryFailure: Throwable? = null
@@ -3380,8 +3405,9 @@ class NativeWorkspaceTest {
             visible(beta, alpha, "reattached tmux shows the same selected window and pane")
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
+            gestures()
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -6799,26 +6825,62 @@ class NativeWorkspaceTest {
         checkNotNull(callback)(Result.success("late"))
     }
 
-    private fun sendOwnedFinger(pointer: android.view.MotionEvent.PointerProperties, epoch: Long, action: Int, point: FloatArray) {
-        val coordinate = android.view.MotionEvent.PointerCoords().apply { x=point[0];y=point[1];pressure=1f;size=1f }
-        val event = android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,1,
-            arrayOf(pointer),arrayOf(coordinate),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
+    private fun sendOwnedFinger(pointer: android.view.MotionEvent.PointerProperties, epoch: Long, action: Int, point: FloatArray) =
+        sendOwnedFingers(listOf(pointer), epoch, action, listOf(point))
+
+    /** One MotionEvent of a touch stream with these pointers (ids 0, 1, ...) at these screen points. */
+    private fun sendOwnedFingers(pointers: List<android.view.MotionEvent.PointerProperties>, epoch: Long, action: Int, points: List<FloatArray>) {
+        val coordinates = points.map { android.view.MotionEvent.PointerCoords().apply { x=it[0];y=it[1];pressure=1f;size=1f } }
+        val event = android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,pointers.size,
+            pointers.toTypedArray(),coordinates.toTypedArray(),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
         try {
-            assertEquals("One owned native pointer identity",0,event.getPointerId(0))
+            assertEquals("Owned native pointer identities",pointers.indices.toList(),pointers.indices.map { event.getPointerId(it) })
             assertEquals("One owned native DOWN epoch",epoch,event.downTime)
             InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
         } finally {event.recycle()}
     }
 
-    /** One real finger held on the element's centre: its DOM geometry mapped to the screen, DOWN, the hold, then UP. */
-    private fun holdFinger(scenario: ActivityScenario<MainActivity>, selector: String, holdMillis: Long) {
-        val geometry = JSONArray(evaluate(scenario, "(()=>{const r=document.querySelector(${JSONObject.quote(selector)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
+    /** The centre of the element a JavaScript expression returns, in screen pixels, and the WebView's pixels per CSS pixel. */
+    private fun elementOnScreen(scenario: ActivityScenario<MainActivity>, element: String): Pair<FloatArray, Double> {
+        val geometry = JSONArray(evaluate(scenario, "(()=>{const r=($element).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
         val origin = IntArray(2); var scale = 0.0
         scenario.onActivity { activity ->
             val web = requireNotNull(webView(activity.window.decorView))
             web.getLocationOnScreen(origin); scale = web.width / geometry.getDouble(2)
         }
-        val point = floatArrayOf((origin[0] + geometry.getDouble(0) * scale).toFloat(), (origin[1] + geometry.getDouble(1) * scale).toFloat())
+        return floatArrayOf((origin[0] + geometry.getDouble(0) * scale).toFloat(), (origin[1] + geometry.getDouble(1) * scale).toFloat()) to scale
+    }
+
+    /**
+     * Two real fingers on the element, as one touch stream (DOWN, POINTER_DOWN, paced MOVEs, POINTER_UP, UP): finger 0 and 1 start at `from`
+     * and end at `to`, in CSS pixels from the element's centre. A pinch changes their distance; a swipe moves both the same way.
+     */
+    private fun twoFingerGesture(scenario: ActivityScenario<MainActivity>, element: String, from: List<DoubleArray>, to: List<DoubleArray>) {
+        val (centre, scale) = elementOnScreen(scenario, element)
+        val fingers = (0..1).map { android.view.MotionEvent.PointerProperties().apply { id = it; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER } }
+        val shift = android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT
+        fun screen(progress: Double) = from.indices.map { finger ->
+            floatArrayOf((centre[0] + (from[finger][0] + (to[finger][0] - from[finger][0]) * progress) * scale).toFloat(),
+                (centre[1] + (from[finger][1] + (to[finger][1] - from[finger][1]) * progress) * scale).toFloat())
+        }
+        val epoch = android.os.SystemClock.uptimeMillis()
+        var held = 0; var last = screen(0.0)
+        fun send(action: Int, points: List<FloatArray>, count: Int = 2) { last = points; sendOwnedFingers(fingers.take(count), epoch, action, points.take(count)) }
+        try {
+            send(android.view.MotionEvent.ACTION_DOWN, screen(0.0), 1); held = 1
+            send(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl shift), screen(0.0)); held = 2
+            for (step in 1..8) { Thread.sleep(16); send(android.view.MotionEvent.ACTION_MOVE, screen(step / 8.0)) }
+            send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl shift), screen(1.0)); held = 1
+            send(android.view.MotionEvent.ACTION_UP, screen(1.0), 1); held = 0
+        } finally {
+            // Never leave a touch stream open: the next real gesture would start inside it.
+            if (held > 0) runCatching { send(android.view.MotionEvent.ACTION_CANCEL, last, held) }
+        }
+    }
+
+    /** One real finger held on the element's centre: its DOM geometry mapped to the screen, DOWN, the hold, then UP. */
+    private fun holdFinger(scenario: ActivityScenario<MainActivity>, selector: String, holdMillis: Long) {
+        val point = elementOnScreen(scenario, "document.querySelector(${JSONObject.quote(selector)})").first
         val pointer = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }
         val epoch = android.os.SystemClock.uptimeMillis()
         sendOwnedFinger(pointer, epoch, android.view.MotionEvent.ACTION_DOWN, point)

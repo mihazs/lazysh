@@ -711,8 +711,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       await tmux.verifyWindowLifecycle();
       await tmux.verifySplitAndZoom();
       await tmux.verifyCopied();
+      await tmux.verifyGestures();
       await tmux.verifyDetachedAndReattached();
-      console.log('Owned packaged tmux: discovery, numbered window, Jump To, copy mode and copied line, a created, renamed and closed window, split, zoom, detach and reattach verified against the original server and pane processes');
+      console.log('Owned packaged tmux: discovery, numbered window, Jump To, copy mode and copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom and two-finger window swipes, detach and reattach verified against the original server and pane processes');
       if(tmux.metadata().chat) {
         await tmux.verifyChatInput();
         console.log('Owned packaged tmux Chat: the confirmed draft reached the original pane once, with no extra display client');

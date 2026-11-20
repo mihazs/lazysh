@@ -18,15 +18,15 @@ export function tmuxPaneRows(text:string,extra=0) {
     return {windowId:row[1],index:Number(row[2]),name:row[3] as 'alpha'|'beta',active:row[4]==='1',paneId:row[5],pid:Number(row[6]),dead:row[7]==='1'};
   });
 }
-const windowRow=/^(@[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})$/;
-/** Parses one bounded `list-windows` readback of the owned session. */
+const windowRow=/^(@[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})\|([01])\|([01])$/;
+/** Parses one bounded `list-windows` readback of the owned session: id, name, `#{window_active}` and `#{window_zoomed_flag}`. */
 export function tmuxWindowRows(text:string) {
   const lines=text.trim().split('\n');
   if(text.length>1024 || lines.length>8)throw new Error('Owned tmux window topology changed');
   return lines.map(line=>{
     const row=windowRow.exec(line);
     if(!row)throw new Error('Owned tmux window topology changed');
-    return {windowId:row[1],name:row[2]};
+    return {windowId:row[1],name:row[2],active:row[3]==='1',zoomed:row[4]==='1'};
   });
 }
 /** The one window beyond the originals that the app adds: every name it showed, in order, and whether it is gone. */
@@ -43,6 +43,25 @@ export function tmuxWindowLifecycle(rows:ReturnType<typeof tmuxWindowRows>,origi
   if(!extra.length)return seen && {...seen,closed:true};
   if(!seen)return {windowId:extra[0].windowId,names:[extra[0].name],closed:false};
   return seen.names.at(-1)===extra[0].name?seen:{...seen,names:[...seen.names,extra[0].name]};
+}
+/** What the display of the original windows shows: the active window and whether its panes are zoomed. */
+export type TmuxView={window:'alpha'|'beta'|'other';zoomed:boolean};
+/** Appends the active window's view to a history that keeps only changes, so the host sees each state the app left the server in. */
+export function tmuxViewHistory(rows:ReturnType<typeof tmuxWindowRows>,originals:readonly {windowId:string;name:string}[],history:readonly TmuxView[]) {
+  const active=rows.filter(row=>row.active);
+  if(active.length!==1)throw new Error('Owned tmux window topology changed');
+  const name=originals.find(original=>original.windowId===active[0].windowId)?.name;
+  const view:TmuxView={window:name==='alpha' || name==='beta'?name:'other',zoomed:active[0].zoomed};
+  const last=history.at(-1);
+  if(last?.window===view.window && last.zoomed===view.zoomed)return history;
+  if(history.length>=24)throw new Error('Owned tmux view history exceeded');
+  return [...history,view];
+}
+/** The gesture phase ends the history in this order: beta unzoomed, a pinch zooms it, a pinch unzooms it, a swipe left shows the next window (alpha), a swipe right returns to beta. */
+export function tmuxGesturesVerified(history:readonly TmuxView[]) {
+  const expected:TmuxView[]=[{window:'beta',zoomed:false},{window:'beta',zoomed:true},{window:'beta',zoomed:false},{window:'alpha',zoomed:false},{window:'beta',zoomed:false}];
+  return history.length>=expected.length
+    && expected.every((view,index)=>history[history.length-expected.length+index].window===view.window && history[history.length-expected.length+index].zoomed===view.zoomed);
 }
 /** The names the app gives the window it creates and renames, and the host expects in that order. */
 export const tmuxLifecycleNames=['scratch','renamed'] as const;
@@ -131,6 +150,7 @@ export class TmuxFixture {
   private serverPid:OwnedPid|undefined;
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
+  private views:TmuxView[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
   private extraPanes=0;
   private chat:OwnedChat|undefined;
@@ -220,11 +240,13 @@ export class TmuxFixture {
     const current=saved && await identity(saved.pid);
     return !!current && current.start===saved?.start && current.parent===saved?.parent && !['Z','X'].includes(current.state);
   }
-  /** One host sample: the original server and both pane processes, plus display clients. Returns the current display-client count. */
+  /** One host sample: the original server and both pane processes, the active window and its zoom flag, plus display clients. Returns the current display-client count. */
   async observe() {
     if(!await this.server?.liveIdentity() || !await this.alive(this.serverPid) || !this.windows.length)throw new Error('Owned tmux server identity changed');
     for(const window of this.windows)if(!await this.alive(window.pane))throw new Error('Owned tmux pane identity changed');
-    this.lifecycle=tmuxWindowLifecycle(tmuxWindowRows(await this.run(['list-windows','-t',`=${this.name}`,'-F','#{window_id}|#{window_name}'])),this.windows,this.lifecycle);
+    const windows=tmuxWindowRows(await this.run(['list-windows','-t',`=${this.name}`,'-F','#{window_id}|#{window_name}|#{window_active}|#{window_zoomed_flag}']));
+    this.lifecycle=tmuxWindowLifecycle(windows,this.windows,this.lifecycle);
+    this.views=[...tmuxViewHistory(windows,this.windows,this.views)];
     const count=tmuxDisplayClients(await this.run(['list-clients','-t',`=${this.name}`,'-F','#{client_control_mode}']));
     if(this.history.at(-1)!==count) {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
@@ -239,7 +261,7 @@ export class TmuxFixture {
     return count;
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
-  diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
+  diagnostic() {return {schemaVersion:1,history:[...this.history],views:this.views.map(view=>`${view.window}${view.zoomed?'+zoom':''}`),windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
   async verifyDetachedAndReattached() {
     const deadline=performance.now()+5000;
     while(true) {
@@ -302,6 +324,11 @@ export class TmuxFixture {
     if(!tmuxCopyModeVerified(this.modes))throw new Error('Owned tmux copy mode was not entered and left');
     // A selected line carries its newline.
     if(await this.run(['show-buffer'])!==`${this.windows[0].marker}\n`)throw new Error('Owned tmux copied line differs');
+  }
+  /** After the split, the app pinched the zoom on and off and swiped to the next window and back: the monitor saw those states last, in that order. */
+  async verifyGestures() {
+    await this.observe();
+    if(!tmuxGesturesVerified(this.views))throw new Error('Owned tmux pinch zoom, unzoom and two-finger window swipes were not observed');
   }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
