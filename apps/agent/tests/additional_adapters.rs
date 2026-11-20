@@ -1,6 +1,9 @@
 use lazysh_agent::transcript::{discover, read_page, TranscriptAgent};
 use serde_json::json;
-use std::fs;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[path = "support/jsonl.rs"]
 mod jsonl;
@@ -88,6 +91,26 @@ fn kimi_cli_context_filters_metadata_and_normalizes_plaintext_thinking_and_tools
         .all(|message| message.get("usage").is_none()));
 }
 
+/// Writes `relative` (and any `others`) under a root of its own and returns that root with what discovery lists in it.
+fn discover_layout(
+    dir: &Path,
+    agent: TranscriptAgent,
+    relative: &str,
+    others: &[&str],
+) -> (PathBuf, serde_json::Value) {
+    let root = dir.join(format!("{agent:?}"));
+    let path = root.join(relative);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, b"do not parse").unwrap();
+    for other in others {
+        let other = root.join(other);
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::write(other, b"private debug").unwrap();
+    }
+    let found = serde_json::to_value(discover(agent, Some(&root), 50).unwrap()).unwrap();
+    (path, found)
+}
+
 #[test]
 fn discovery_only_includes_expected_agent_transcript_files() {
     let dir = tempfile::tempdir().unwrap();
@@ -108,16 +131,42 @@ fn discovery_only_includes_expected_agent_transcript_files() {
             "project/debug.jsonl",
         ),
     ] {
-        let root = dir.path().join(format!("{agent:?}"));
-        let path = root.join(relative);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, b"do not parse").unwrap();
-        let other = root.join(other);
-        fs::create_dir_all(other.parent().unwrap()).unwrap();
-        fs::write(other, b"private debug").unwrap();
-        let found = serde_json::to_value(discover(agent, Some(&root), 50).unwrap()).unwrap();
+        let (path, found) = discover_layout(dir.path(), agent, relative, &[other]);
         assert_eq!(found["sessions"].as_array().unwrap().len(), 1);
         assert_eq!(found["sessions"][0]["path"], path.to_str().unwrap());
+    }
+}
+
+/// The Agent view ties a hook-reported session to its records by this id, so it must be exact where it is given
+/// and absent everywhere else: a guess from a file name would show another session's records.
+#[test]
+fn discovery_names_the_session_only_where_the_path_carries_its_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let droid_id = "00893aaf-19fa-41d2-8238-13269b9b3ca0";
+    let droid_file = format!("{droid_id}.jsonl");
+    for (agent, relative, expected) in [
+        (
+            TranscriptAgent::Copilot,
+            "session1/events.jsonl",
+            Some("session1"),
+        ),
+        (
+            TranscriptAgent::Kimi,
+            "work/session1/context.jsonl",
+            Some("session1"),
+        ),
+        (TranscriptAgent::Droid, droid_file.as_str(), Some(droid_id)),
+        (
+            TranscriptAgent::QoderIde,
+            "project/transcript/session1.jsonl",
+            None,
+        ),
+        (TranscriptAgent::Pi, "project/session1.jsonl", None),
+    ] {
+        let (_, found) = discover_layout(dir.path(), agent, relative, &[]);
+        let sessions = found["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1, "{agent:?}");
+        assert_eq!(sessions[0]["sessionId"].as_str(), expected, "{agent:?}");
     }
 }
 

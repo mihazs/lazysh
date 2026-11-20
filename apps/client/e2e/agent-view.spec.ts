@@ -6,6 +6,7 @@ import {connectHost} from './fixtures/connectHost';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from '../src/test/opencodeRecorded';
+import {copilotRecords,droidRecords,kimiRecords} from '../src/test/recordsOnlyRecorded';
 
 type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean;transcriptSessionId?:string}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
@@ -78,9 +79,16 @@ async function open(page:Page) {
       if(command==='upload_file'){fixture.uploads.push(String(args.path));return {path:`/tmp/lazysh-fixture/${String(args.path)}`};}
       // An OpenCode pane keeps its session in one database: the host lists it, and the report names no transcript file.
       const opencode=(window as unknown as {opencodeFixture?:{session:string;database:string;discovery:unknown;page:unknown}}).opencodeFixture;
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??'codex-thread',agent:opencode?'OpenCode':(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
+      // A records-only adapter's pane: the host lists the adapter's records, which name the reported session, and reads them as records.
+      const recordsOnly=(window as unknown as {recordsFixture?:{agent:string;adapter:string;session:string;path:string;discovery:unknown;page:unknown}}).recordsFixture;
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??recordsOnly?.session??'codex-thread',agent:opencode?'OpenCode':recordsOnly?.agent??(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_transcripts' && opencode && args.agent==='opencode')return opencode.discovery;
-      if(command==='agent_reported_history' && !opencode)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
+      if(command==='agent_transcripts' && recordsOnly && args.agent===recordsOnly.adapter)return recordsOnly.discovery;
+      if(command==='agent_transcript' && recordsOnly){
+        if(args.path!==recordsOnly.path || args.agent!==recordsOnly.adapter || args.view!==undefined)throw new Error('Unexpected records read');
+        fixture.polls++;return recordsOnly.page;
+      }
+      if(command==='agent_reported_history' && !opencode && !recordsOnly)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript' && opencode){
         if(args.path!==opencode.database || args.agent!=='opencode' || args.view!=='conversation' || args.transcriptSessionId!==opencode.session)throw new Error('Unexpected OpenCode transcript');
         fixture.polls++;return opencode.page;
@@ -1184,18 +1192,41 @@ test('OpenCode live: the stream is opened for the pane\'s database session and a
   await expect(agent.getByText('ok, and more',{exact:true})).toBeVisible();
   expect((await fixture(page)).polls).toBe(polls);
 });
-
-test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
-  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Kimi CLI';});
-  await open(page);
-  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
-  const agent=agentView(page);
-  await expect(agent.locator('header')).toContainText('Kimi CLI');
+/** A view that only names or reads: Show terminal, no composer, nothing typed into the terminal, and Show terminal goes back to it. */
+async function expectShowTerminalOnly(page:Page,agent:Locator) {
   await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
-  await expect(agent.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveCount(0);
+  await expect(agent.getByRole('textbox')).toHaveCount(0);
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);
   await agent.getByRole('button',{name:'Show terminal',exact:true}).click();
   await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
+}
+for(const records of [copilotRecords,kimiRecords,droidRecords]) {
+  test(`${records.agent}: the records of the pane's session show read-only under the partial label, with the state, Show terminal and no composer`,async({page})=>{
+    await page.addInitScript(fixture=>{(window as unknown as {recordsFixture:unknown}).recordsFixture=fixture;},records);
+    await open(page);
+    await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+    const agent=agentView(page);
+    await expect(agent.locator('header')).toContainText(records.agent);
+    await expect(agent.locator('header')).toContainText('Working');
+    const turn=agent.getByRole('region',{name:'Turn'});
+    // The prompt and the final answer; the lines the agent wrote between tool calls fold into the turn's activity.
+    const lines=(records.page.messages as {blocks:{type:string;text?:string}[]}[]).flatMap(message=>message.blocks).filter(block=>block.type==='text').map(block=>block.text!);
+    for(const line of [lines[0],lines.at(-1)!])await expect(turn.getByText(line,{exact:true})).toBeVisible();
+    await expect(agent.getByText(`Partial: these are the records ${records.agent} wrote for this pane`,{exact:false})).toBeVisible();
+    await expect(agent.getByRole('button',{name:'Send to the agent',exact:true})).toHaveCount(0);
+    await expectInViewport(page,agent.getByText(`Partial: these are the records ${records.agent} wrote for this pane`,{exact:false}));
+    await expectShowTerminalOnly(page,agent);
+  });
+}
+
+test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
+  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Amp';});
+  await open(page);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.locator('header')).toContainText('Amp');
+  await expect(agent.getByText('This view shows only the last reported state of Amp. Its conversation stays in the terminal.',{exact:true})).toBeVisible();
+  await expectShowTerminalOnly(page,agent);
 });
 
 test('Enter sends from a hardware keyboard and stays a line break on a touch keyboard; Stop reaches the terminal once',async({page},testInfo)=>{
