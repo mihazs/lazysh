@@ -1236,6 +1236,11 @@ focus fields. Navigation retires prior guarded Chat confirmation; sending input
 still requires a fresh, separately validated confirmation. Pane navigation is
 bounded and never falls back to terminal input or another pane after a failure.
 
+The companion's `herdr-pane-input` command is the separate transport for typing into
+one named pane of a stock Herdr, pinned to one server process
+([details](multiplexers.md#pane-input-on-a-stock-herdr-pinned-to-one-server-process)).
+The app does not call it yet, and navigation never does.
+
 ### Recorded Codex Conversation
 
 Choose Codex → Latest branch to reconstruct recorded display history, or run

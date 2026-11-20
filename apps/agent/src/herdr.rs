@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     process::Command,
+    sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -78,7 +79,7 @@ fn session_name(bytes: &[u8], socket: &str) -> Result<String> {
     }
     Ok(session.name)
 }
-fn session_list(cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<Vec<u8>> {
+fn session_list(cancelled: Arc<AtomicBool>) -> Result<Vec<u8>> {
     let mut command = Command::new("herdr");
     command.args(["session", "list", "--json"]);
     crate::devices::bounded_command(command, MAX_OUTPUT, cancelled, BUDGET)
@@ -172,6 +173,17 @@ async fn focus(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), pane: &str) -
         }
     }
 }
+/// The endpoint (Unix socket path or Windows pipe name) of the one running Herdr server called
+/// `name`, from Herdr's own session list.
+pub(crate) fn running_endpoint(name: &str, cancelled: Arc<AtomicBool>) -> Result<String> {
+    let bytes = session_list(cancelled)?;
+    let endpoint: fn(&str) -> Option<String> = if cfg!(windows) {
+        pipe_name
+    } else {
+        unix_socket
+    };
+    socket_path(&bytes, name, endpoint)
+}
 pub fn focus_pane(name: &str, pane: &str) -> Result<Value> {
     if name.is_empty()
         || name.len() > 200
@@ -182,13 +194,7 @@ pub fn focus_pane(name: &str, pane: &str) -> Result<Value> {
     }
     let started = Instant::now();
     let cancelled = crate::devices::cancellation_signal()?;
-    let bytes = session_list(cancelled.clone())?;
-    let endpoint: fn(&str) -> Option<String> = if cfg!(windows) {
-        pipe_name
-    } else {
-        unix_socket
-    };
-    let path = socket_path(&bytes, name, endpoint)?;
+    let path = running_endpoint(name, cancelled.clone())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
