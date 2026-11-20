@@ -13,6 +13,16 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+/// Named open modes shared with the Windows module, so callers never spell a libc flag.
+pub(crate) mod open {
+    pub const READ: i32 = libc::O_RDONLY;
+    /// Only the metadata of the entry itself, never its contents and never through a link.
+    #[cfg(target_os = "linux")]
+    pub const ENTRY: i32 = libc::O_PATH;
+    pub const CREATE_NEW: i32 = libc::O_RDWR | libc::O_CREAT | libc::O_EXCL;
+    pub const LOCK: i32 = libc::O_RDWR | libc::O_CREAT;
+}
+
 pub(crate) struct Directory {
     pub(crate) file: File,
     pub(crate) path: PathBuf,
@@ -205,6 +215,10 @@ impl Directory {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+    /// Makes the directory's entries durable.
+    pub(crate) fn sync(&self) -> io::Result<()> {
+        self.file.sync_all()
     }
     pub(crate) fn remove(&self, basename: &str, directory: bool) -> io::Result<()> {
         let basename = name(OsStr::new(basename))?;

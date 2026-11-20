@@ -77,13 +77,50 @@ and [plugin lifecycle](https://docs.cline.bot/sdk/plugins).
 Managed writes currently support qualified local Linux filesystems without
 extended access/default ACLs. Special file permission bits, unsafe links,
 read-only files, unhandled ACLs and uncertain ownership are refused. Existing
-ordinary file permissions and group ID are retained. macOS/Windows writes
-remain unsupported; preview is available without accessing a profile. Preview
-labels POSIX shell, Bun JavaScript or Cline JavaScript dialect. On Windows it returns the
-existing unbound print-only templates, explicitly without an executable
-binding or managed-setup support; it does not quote a Windows executable as
-a POSIX command. These
+ordinary file permissions and group ID are retained. macOS writes remain
+unsupported; preview is available without accessing a profile. Preview
+labels POSIX shell, Bun JavaScript or Cline JavaScript dialect. These
 limits do not disable the existing print-only configuration commands below.
+
+### Windows hosts
+
+On a Windows host `lazysh-agent hooks status`, `install` and `remove` manage only the
+three providers whose hook is a JavaScript plugin that spawns the companion as an argument
+vector: OpenCode, Cline and Amp. The plugin holds the absolute `lazysh-agent.exe` path as a
+JSON string literal, so no shell dialect quotes it, and `hooks preview` reports
+`binaryBinding: currentExecutable` for these three. Every other provider (Claude Code,
+Codex, Droid, Gemini CLI, Cursor CLI, GitHub Copilot CLI) keeps the unbound print-only
+template (`binaryBinding: unboundTemplate`, `managedSetupSupported: false`), `hooks status`
+answers `HooksAclUnsupported` and `install` and `remove` refuse: a Windows path is never
+quoted as a POSIX command, and no launcher of those providers has been shown to run a path
+with spaces yet (tracked in #1959 and #1960).
+
+The same admission and commit rules as on Linux hold, expressed in Windows terms, on a local
+NTFS volume (another volume answers `HooksAclUnsupported`):
+
+- The profile directory is retained by a handle that denies rename and deletion, so neither
+  it nor an ancestor can be moved or replaced while a setup runs, and every path component
+  is checked for a symbolic link, junction or other reparse point, an alternate data stream
+  name (`name:stream`), a device name (`NUL`, `COM1`) and a trailing dot or space.
+- The profile directory, the provider file and the companion executable are admitted by owner
+  SID and DACL: the owner is the current user or an administrator, and no other account holds
+  a right that changes the object. The record and the lock file are private: no other account
+  has any access. A foreign owner, an Everyone-writable file, a hard link, a reparse point or
+  an ACL that cannot be read refuses the setup before anything is written. A staged file is
+  created with a private DACL, and a replaced provider file keeps the DACL it had.
+- The plugin is published by an exclusive rename that never replaces an existing name, or by
+  a replacing rename of the staged file when the previous plugin is the one lazysh owns. A
+  provider created between inspection and commit is preserved and reported as uncertain.
+- The companion must be a `.exe` regular file with one link, at most 64 MiB, in a directory
+  that other accounts cannot change.
+
+Qualified by `apps/agent/tests/hook_setup_windows.rs` on a hosted Windows runner (`windows-latest`,
+x86_64, NTFS, elevated), with the real `lazysh-agent.exe` and the real Bun launcher on a path
+with spaces, an apostrophe and non-ASCII characters. Not exercised: the real OpenCode, Cline
+and Amp CLIs on Windows (Bun stands for the plugin host), a non-elevated user, ReFS, FAT, a
+network drive, 32-bit and ARM64 Windows, and a Windows host reached from the app, which cannot
+discover or offer Windows profiles yet (#1961). A directory handle has no durability barrier on
+Windows, so the same no-atomic-compare-and-swap and no power-loss limits below apply.
 
 Configuration is separate from live reporting. Provider disable settings,
 selected-layer overrides and Codex trust review still apply. Lazysh never

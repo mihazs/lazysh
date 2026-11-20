@@ -29,6 +29,8 @@ use serde_json::{json, Value};
 mod binary;
 #[path = "support/json_output.rs"]
 mod json_output;
+#[path = "support/plugin_cases.rs"]
+mod plugin_cases;
 #[path = "support/process.rs"]
 mod process;
 
@@ -304,67 +306,19 @@ fn rendered_plugins_execute_their_absolute_companion_with_an_empty_path() {
     assert!(runtime.status.success());
     let runtime = std::path::PathBuf::from(String::from_utf8(runtime.stdout).unwrap().trim());
     assert!(runtime.is_absolute());
-    for (agent, script, expected_agent, expected_session) in [
-        (
-            record::Agent::Opencode,
-            r#"
-            const { LazyshPlugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
-            const hooks = await LazyshPlugin({ directory: '/owned/opencode-project' });
-            await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'owned-plugin', status: { type: 'busy' } } } });
-        "#,
-            "OpenCode",
-            "owned-plugin".to_string(),
-        ),
-        (
-            record::Agent::Cline,
-            r#"
-            const { default: plugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
-            plugin.setup({}, { cwd: '/owned/cline-project' });
-            await plugin.hooks.beforeRun({ snapshot: { agentId: 'owned-root', conversationId: 'owned-conversation', runId: 'owned-run' } });
-        "#,
-            "Cline CLI",
-            format!(
-                "cline:{}",
-                record::hash(b"cline-v1\0owned-root\0owned-conversation")
-            ),
-        ),
-        (
-            record::Agent::Amp,
-            r#"
-            const { default: plugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
-            const callbacks = new Map();
-            plugin({ system: { workspaceRoot: 'file:///owned/amp-project' }, helpers: { filePathFromURI: () => '/owned/amp-project' }, on: (event, callback) => { callbacks.set(event, callback); return { unsubscribe() {} }; }, onDispose() {} });
-            callbacks.get('session.start')({}, { thread: { id: 'owned-amp-thread', state: { subscribe(callback) { callback('running'); return { unsubscribe() {} }; }, get: async () => 'running' } } });
-        "#,
-            "Amp",
-            "owned-amp-thread".to_string(),
-        ),
-    ] {
+    for (agent, script, expected_agent, expected_session) in plugin_cases::cases() {
         let directory = tempfile::tempdir().unwrap();
         let companion = directory.path().join("Plugin's companion $ with spaces");
         fs::copy(binary::path(), &companion).unwrap();
         let plugin = directory.path().join("lazysh.js");
         fs::write(&plugin, render::owned_file(agent, &companion).unwrap()).unwrap();
         let state = directory.path().join("state");
-        let output = Command::new(&runtime)
-            .args(["-e", script])
-            .env_clear()
-            .env("PATH", "")
-            .env("LAZYSH_OWNED_PLUGIN", plugin)
-            .env("LAZYSH_STATE_DIR", &state)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+        plugin_cases::load(&runtime, script, &plugin, &state, true);
+        plugin_cases::assert_working(
+            &snapshot(&companion, &state),
+            expected_agent,
+            &expected_session,
         );
-        assert!(output.stdout.is_empty());
-        assert!(output.stderr.is_empty());
-        let report = snapshot(&companion, &state);
-        assert_eq!(report["sessions"][0]["sessionId"], expected_session);
-        assert_eq!(report["sessions"][0]["agent"], expected_agent);
-        assert_eq!(report["sessions"][0]["state"], "working");
     }
 }
 
