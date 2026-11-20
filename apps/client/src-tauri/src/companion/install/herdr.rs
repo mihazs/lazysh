@@ -218,6 +218,7 @@ pub(crate) async fn remove(session: Arc<Session>, lease: &AccessLease) -> Result
     });
     let unix = resolve::detect(&session, lease)
         .await?
+        .and_then(resolve::Host::unix)
         .ok_or_else(unsupported)?;
     let reply = call(&session, lease, flight, "remove", &[&unix.herdr_dir()]).await?;
     let status = match reply.outcome.as_str() {
