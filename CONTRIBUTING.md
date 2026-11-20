@@ -105,6 +105,20 @@ Matrices fail fast on pull requests and keep every verdict on `main`. The script
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
 new input, and map an uncertain path to more jobs, never fewer.
 
+### Required checks
+
+A pull request merges when these eleven jobs pass: `client`, `agent`, `native-linux`, `native-linux-runtimes`, `native-android`,
+`native-android-runtime`, `native-android-ssh-parity`, `native-android-tmux`, `native-android-biometric`, `release-tools` (in
+`version.yml`) and `headers` (in `conventional-commits.yml`).
+
+The repository ruleset on `main` does not enforce them: it has the `deletion`, `non_fast_forward` and `pull_request` rules (no approvals)
+and no required-status-checks rule. The gate is the pull request driver's `REQUIRED` set (`/tmp/lazysh-driver/driver.py`), which merges a
+pull request once those jobs pass, and the manual-merge rule in [AGENTS.md](AGENTS.md). Two consequences:
+
+- A job name is a contract. Renaming a job or moving it to another workflow silently drops its gate until the driver's set changes.
+- Promoting a report-only check (for example the Android Appium job) means adding it to the driver's set. A ruleset rule would make GitHub
+  enforce it for manual merges too; adding one is a maintainer change.
+
 ### Main verdict
 
 Two pull requests can each pass `checks` and still break `main` together (the v1.49.0 release failed
