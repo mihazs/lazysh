@@ -30,7 +30,7 @@ export function liftCodexDialog(screen: readonly string[]): Lift {
   const text = lines.flatMap((line, index) => line ? [index] : []);
   // A question's footer is spelled out from its first row to the row that completes it (a narrow terminal wraps it); a multiplexer's status row may follow.
   const asked = text.slice(-1 - 2 * rowsBelowFooter).find(index => notesFooter.test(lines[index]) || questionStart.test(lines[index]));
-  let footer = asked, question = false;
+  let footer = asked, last = asked, question = false;
   if (asked !== undefined) {
     if (notesFooter.test(lines[asked])) return unliftable;
     let spelled = '', complete: number | undefined;
@@ -40,11 +40,13 @@ export function liftCodexDialog(screen: readonly string[]): Lift {
     }
     if (complete === undefined || text.filter(row => row > complete).length > rowsBelowFooter) return unliftable;
     question = true;
+    last = complete;
   } else {
     // The footer is the last row of the screen except for a status row a multiplexer draws below it.
     footer = text.slice(-1 - rowsBelowFooter).find(index => keyRow.test(lines[index]));
     if (footer === undefined) return none;
     if (!footers.some(pattern => pattern.test(lines[footer!]))) return unliftable;
+    last = footer;
   }
   // The options end above the footer and a blank row, and run up as numbered rows with deeper-indented continuations.
   let end = footer! - 1;
@@ -63,12 +65,12 @@ export function liftCodexDialog(screen: readonly string[]): Lift {
   if (!numbered || items.length < 2 || items.length > limits.options || items.filter(item => item.marked).length !== 1) return unliftable;
   // Above the options: the explaining text in paragraphs a blank row apart, up to the first gap of two blank rows (the history is above it).
   const about: string[] = [];
-  let first = top;
+  let first = top, start = top;
   while (first >= 0 && !lines[first]) first--;
   if (top - first > 2) return unliftable;
   let gap = 0;
   for (let index = first; index >= 0 && gap < 2; index--) {
-    if (lines[index]) {about.unshift(lines[index].trim()); gap = 0;} else gap++;
+    if (lines[index]) {about.unshift(lines[index].trim()); gap = 0; start = index;} else gap++;
     if (about.length > limits.body + 1) return unliftable;
   }
   const [head, ...rest] = about;
@@ -93,5 +95,5 @@ export function liftCodexDialog(screen: readonly string[]): Lift {
   });
   const hint = question ? [] : [lines[footer!].trim()];
   return {kind: 'dialog', dialog: Object.freeze({title: clip(title), body: body.map(clip), options: Object.freeze(options), highlighted: items.findIndex(item => item.marked), hint,
-    ...(question ? {interrupts: true as const} : {}), signature: JSON.stringify([title, body, options, hint, question])})};
+    ...(question ? {interrupts: true as const} : {}), signature: JSON.stringify([title, body, options, hint, question]), rows: Object.freeze(lines.slice(start, last! + 1))})};
 }

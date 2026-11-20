@@ -8,8 +8,9 @@ export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';i
   {agent:Exclude<TranscriptAgentId,'hermes'|'opencode'>;transcriptSessionId?:never}
   | {agent:'hermes'|'opencode';transcriptSessionId:string}
 )>;
-/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, a free-text answer, a move of a list dialog's highlight (with Enter to take the row) and Escape to leave it. */
-export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'type';text:string}|{kind:'cycle_mode'}|{kind:'pick';rows:number;enter:boolean}|{kind:'request_stop'}>;
+/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, a free-text answer, a move of a list dialog's highlight (with Enter to take the row) and Escape to leave it.
+ * A `pick` names the rows of the dialog it was read from (`seen`): the host reads the pane again right before the key and sends nothing unless the pane shows exactly that dialog, once. */
+export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'type';text:string}|{kind:'cycle_mode'}|{kind:'pick';rows:number;enter:boolean;seen:readonly string[]}|{kind:'dismiss';seen:readonly string[]}|{kind:'request_stop'}>;
 /** Where Shift+Tab landed, as the agent's status line showed it; `unconfirmed` when the screen was not recognised. */
 export const permissionModes=['default','acceptEdits','plan','auto','bypassPermissions','unconfirmed'] as const;
 export type PermissionMode=typeof permissionModes[number];
@@ -26,11 +27,13 @@ export type StockTarget=Readonly<{herdrSession:string;pane:string;terminal:strin
 export type ZellijTarget=Readonly<{zellijSession:string;pane:number;agent:'claude'|'codex'}>;
 type FailureKey='chatTerminalInvalidReply'|'chatTerminalInvalidDraft'|'chatTerminalInvalid'|'chatTerminalStale'|'chatTerminalBusy'|'chatHerdrUnavailable'|'chatHerdrUncertain'|'chatHerdrBlocked'|'chatHerdrRejected'|'chatHerdrOffline';
 class InputFailure extends Error {constructor(readonly key:FailureKey,readonly raw?:string){super(key);}}
+/** The host read the pane again before a `pick` and it no longer shows the dialog the pick was read from: nothing was written, and the binding stands. */
+class ScreenChanged extends Error {}
 type Problem={key:FailureKey;raw?:string}|{raw:string};
 /** Failures that prove nothing was written; after any other failure of a send, delivery is unknown. */
 const refusals:readonly FailureKey[]=['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy','chatHerdrBlocked','chatHerdrRejected','chatHerdrOffline'];
 /** The dialog answers Herdr's own agent input takes: named keys, or one typed line. */
-const herdrKeys:readonly string[]=['select','submit','pick','type'];
+const herdrKeys:readonly string[]=['select','submit','pick','dismiss','type'];
 const offline=['disconnected','timeout','ssh_error','ssh_host_tools_closed','ssh_open_busy','app_locked'];
 const invalid=()=>new InputFailure('chatTerminalInvalidReply');
 const wellFormed=(value:string)=>!/[\uD800-\uDFFF]/u.test(value);
@@ -126,7 +129,7 @@ function nativeFailure(error:unknown,backend:TerminalInputLabels['backend'],stoc
     // Stock input reports a connection failure as such only before it sent anything; later ones arrive as `uncertain`.
     if(stock && typeof kind==='string' && offline.includes(kind))return new InputFailure('chatHerdrOffline',message);
   }
-  return code==='invalid'?new InputFailure('chatTerminalInvalid'):code==='stale'?new InputFailure('chatTerminalStale'):code==='busy'?new InputFailure('chatTerminalBusy'):error;
+  return code==='screen'?new ScreenChanged():code==='invalid'?new InputFailure('chatTerminalInvalid'):code==='stale'?new InputFailure('chatTerminalStale'):code==='busy'?new InputFailure('chatTerminalBusy'):error;
 }
 
 export type TerminalDestination=Destination|HerdrDestination;
@@ -288,6 +291,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       if(kind==='send')onSent(text,revision);
       return true;
     } catch(error) {
+      if(error instanceof ScreenChanged)return false;
       failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && (utf8(text)>SEND_BYTES || /[\n\t]/.test(text)),stocked);
       if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && refusals.includes(error.key)?'refused':'unknown');
       return false;

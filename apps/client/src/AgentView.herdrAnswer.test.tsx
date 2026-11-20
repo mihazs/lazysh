@@ -6,7 +6,7 @@ import {herdrNavigationTree} from './test/herdrNavigation';
 import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react';
 import {advance,ask,calls,color,typeOwnAnswer,useAgentViewHarness} from './test/agentViewHarness';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
-import {dialogScreen,modelScreen,onTmux} from './test/agentDialogScreens';
+import {dialogScreen,modelScreen,onTmux,withoutSeen} from './test/agentDialogScreens';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const SESSION='00000001-0000-4000-8000-000000000000';
@@ -37,7 +37,7 @@ function herdr(host:Partial<Host>={}) {
   return state;
 }
 const mount=async()=>{render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);await advance(0);};
-const keys=()=>calls('herdr_agent_input').map(args=>(args as {input:object}).input);
+const keys=()=>calls('herdr_agent_input').map(args=>withoutSeen((args as {input:object}).input));
 
 describe('permission requests of the agent followed in a Herdr pane',()=>{
   const dock=()=>screen.getByRole('region',{name:'Pending approvals'});
@@ -105,7 +105,7 @@ describe('the open question of the agent followed in a Herdr pane',()=>{
 
 describe('a dialog open on the pane of the agent followed in Herdr',()=>{
   const dialog=()=>screen.getByRole('region',{name:'Dialog in the terminal'});
-  const pressed=()=>calls('herdr_agent_input').map(args=>(args as {input:object}).input);
+  const pressed=()=>calls('herdr_agent_input').map(args=>withoutSeen((args as {input:object}).input));
   /** The picker draws its highlight where the arrows put it and closes on Enter, as the TUI does. */
   const picker=(host:Host,at:number)=>{let ahead=0;host.screen=modelScreen(at);host.press=input=>{if(input.enter)host.screen=dialogScreen('model-closed');else{ahead+=input.rows!;host.screen=modelScreen(at+ahead);}};};
   const settle=async()=>{await mount();await advance(3000);await advance(400);};

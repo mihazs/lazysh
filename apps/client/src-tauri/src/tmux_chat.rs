@@ -177,15 +177,35 @@ pub enum Input {
     /// One Shift+Tab, Claude Code's permission-mode cycle (profile `claude-2.1`). The reply reads the mode back off the status line.
     CycleMode {},
     /// Moves the highlight of a list dialog by `rows` (negative is up) and, with `enter`, presses Enter: how a person chooses a row.
+    /// `seen` is the dialog block the card drew, row by row: the pane is read again right before the key and must show that
+    /// block exactly once, else nothing is sent.
     Pick {
         rows: i8,
         enter: bool,
+        seen: Vec<String>,
     },
     /// One line typed into the free-text row a dialog has open, then Enter. Only Herdr's own agent input has this kind (its `prompt`
     /// refuses an agent that waits for an answer); tmux sends the same line as `Send`.
     Type {
         text: String,
     },
+    /// Escapes a dialog only if the pane still shows the captured dialog block once.
+    Dismiss {
+        seen: Vec<String>,
+    },
+}
+#[cfg(test)]
+impl Input {
+    /// A pick whose dialog block passes validation, for tests of the paths that never compare `seen` with a pane.
+    pub(crate) fn pick_for_test(rows: i8, enter: bool) -> Self {
+        Self::Pick {
+            rows,
+            enter,
+            seen: ["Pick one", "1. Yes", "Enter to confirm"]
+                .map(String::from)
+                .to_vec(),
+        }
+    }
 }
 /// What `Send` takes in one tmux command.
 const SEND_MAX: usize = 4096;
@@ -197,6 +217,41 @@ const CHUNK: usize = 4096;
 const PICK_ROWS: i8 = 30;
 /// The longest line a `Type` takes: what the Agent view's answer field allows.
 const TYPE_MAX: usize = 1000;
+/// What the block of a dialog a `pick` was read from may hold: far more than any list dialog draws.
+const SEEN_ROWS: usize = 100;
+const SEEN_ROW_BYTES: usize = 2000;
+const SEEN_BYTES: usize = 64 * 1024;
+/// A block that is a title and a footer around too little cannot tell one dialog from another.
+const SEEN_TEXT_ROWS: usize = 3;
+
+/// A dialog block a screen can be compared with: bounded, printable, starting and ending on text.
+fn seen_valid(seen: &[String]) -> bool {
+    let text = |row: &String| !row.trim().is_empty();
+    seen.len() <= SEEN_ROWS
+        && seen.iter().map(String::len).sum::<usize>() <= SEEN_BYTES
+        && seen
+            .iter()
+            .all(|row| row.len() <= SEEN_ROW_BYTES && !row.chars().any(char::is_control))
+        && seen.first().is_some_and(text)
+        && seen.last().is_some_and(text)
+        && seen.iter().filter(|row| text(row)).count() >= SEEN_TEXT_ROWS
+}
+/// Whether `screen` shows `seen` as one run of rows exactly once (compared without trailing blanks): a dialog that is gone,
+/// changed, or drawn twice is not the one the card was read from.
+fn shows_once(screen: &[String], seen: &[String]) -> bool {
+    let rows = |rows: &[String]| {
+        rows.iter()
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let (screen, seen) = (rows(screen), rows(seen));
+    !seen.is_empty()
+        && screen
+            .windows(seen.len())
+            .filter(|run| *run == seen)
+            .count()
+            == 1
+}
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
         if let Self::Send { text } | Self::SendLong { text } = self {
@@ -229,11 +284,14 @@ impl Input {
                 return Err(invalid())
             }
             Self::Submit { of } if !(1..=8).contains(of) => return Err(invalid()),
-            Self::Pick { rows, enter }
-                if !(-PICK_ROWS..=PICK_ROWS).contains(rows) || (*rows == 0 && !enter) =>
+            Self::Pick { rows, enter, seen }
+                if !(-PICK_ROWS..=PICK_ROWS).contains(rows)
+                    || (*rows == 0 && !enter)
+                    || !seen_valid(seen) =>
             {
                 return Err(invalid())
             }
+            Self::Dismiss { seen } if !seen_valid(seen) => return Err(invalid()),
             _ => {}
         }
         Ok(())
@@ -274,7 +332,7 @@ impl Input {
                 // Enter in one bounded send-keys command.
                 format!("send-keys -t {pane} -H {bytes} 0d")
             }
-            Self::RequestStop => format!("send-keys -t {pane} Escape"),
+            Self::RequestStop | Self::Dismiss { .. } => format!("send-keys -t {pane} Escape"),
             Self::Select { option, .. } => format!("send-keys -t {pane} -H {:02x}", b'0' + option),
             Self::SendLong { .. } | Self::Type { .. } => return Err(invalid()),
             Self::CycleMode {} => format!("send-keys -t {pane} -H 1b 5b 5a"),
@@ -292,7 +350,9 @@ impl Input {
             Self::Submit { of } => rows("Down", usize::from(*of) + 1)
                 .chain(["Enter".to_owned()])
                 .collect(),
-            Self::Pick { rows: moved, enter } => rows(
+            Self::Pick {
+                rows: moved, enter, ..
+            } => rows(
                 if *moved < 0 { "Up" } else { "Down" },
                 usize::from(moved.unsigned_abs()),
             )
@@ -469,6 +529,13 @@ fn invalid() -> SshError {
 }
 fn stale() -> SshError {
     SshError::new("tmux_chat_stale", "Confirm the terminal destination again")
+}
+/// The pane does not show the dialog the key was meant for: nothing was sent and the destination still stands.
+fn screen() -> SshError {
+    SshError::new(
+        "tmux_chat_screen",
+        "The terminal no longer shows this dialog",
+    )
 }
 
 impl Control {
@@ -655,6 +722,18 @@ impl Control {
         }
         Ok(mode)
     }
+    /// Read the pane again, right before a key, and tell whether it still shows `seen` once.
+    async fn screen_shows(
+        &mut self,
+        pane: &str,
+        seen: &[String],
+        budget: &mut usize,
+    ) -> Result<bool> {
+        let rows = self
+            .command(&format!("capture-pane -p -t {pane}"), budget)
+            .await?;
+        Ok(shows_once(&rows, seen))
+    }
     pub(super) async fn chat_action(
         &mut self,
         lease: &AccessLease,
@@ -722,6 +801,17 @@ impl Control {
                 bound.owner.check().map_err(|_| stale())?;
                 input.validate_for(&bound.source)?;
                 self.chat_ready(&bound.destination, budget).await?;
+                // A pick is a person's keys: they go only to a pane that shows the dialog it was chosen from, once, right now.
+                // Nothing was sent, so a refusal keeps the destination and the operation number.
+                if let Input::Pick { seen, .. } | Input::Dismiss { seen } = &input {
+                    if !self
+                        .screen_shows(&bound.destination.pane_id, seen, budget)
+                        .await?
+                    {
+                        self.chat = Some(bound);
+                        return Err(screen());
+                    }
+                }
                 bound.owner.check().map_err(|_| stale())?;
                 lease.check()?;
                 bound.next = bound.next.checked_add(1).ok_or_else(stale)?;
@@ -902,6 +992,26 @@ pub(crate) const READER_FIXTURE_IDS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A list dialog as a card reads it: the rows from its text down to its footer.
+    fn dialog() -> Vec<String> {
+        [
+            "  Select model",
+            "",
+            "  ❯ 1. Haiku  Fast",
+            "    2. Opus   Smart",
+            "",
+            "  Enter to select · Esc to cancel",
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+    fn pick(rows: i8, enter: bool) -> Input {
+        Input::Pick {
+            rows,
+            enter,
+            seen: dialog(),
+        }
+    }
     fn ordinary_source() -> Source {
         Source {
             agent: Agent::Claude,
@@ -911,6 +1021,149 @@ mod tests {
             transcript_session_id: None,
         }
     }
+    #[test]
+    fn a_pick_needs_a_dialog_block_a_screen_can_be_checked_against() {
+        let with = |seen: Vec<String>| Input::Pick {
+            rows: 1,
+            enter: true,
+            seen,
+        };
+        assert!(with(dialog()).validate().is_ok());
+        assert!(Input::Dismiss { seen: dialog() }.validate().is_ok());
+        let rows = |rows: &[&str]| rows.iter().map(|row| row.to_string()).collect::<Vec<_>>();
+        for (name, seen) in [
+            ("nothing", vec![]),
+            ("one row", rows(&["1. Yes"])),
+            ("two rows", rows(&["Title", "Enter to select"])),
+            ("a blank first row", rows(&["", "Title", "1. Yes", "Esc"])),
+            ("a blank last row", rows(&["Title", "1. Yes", "Esc", ""])),
+            ("only blanks", rows(&["", "", "", ""])),
+            (
+                "a control character",
+                rows(&["Title", "1. Yes\u{1b}[2J", "Esc"]),
+            ),
+            ("too many rows", vec!["row".to_owned(); SEEN_ROWS + 1]),
+            (
+                "a row that is too long",
+                rows(&["Title", &"x".repeat(SEEN_ROW_BYTES + 1), "Esc"]),
+            ),
+        ] {
+            assert!(with(seen.clone()).validate().is_err(), "{name}");
+            assert!(Input::Dismiss { seen }.validate().is_err(), "{name}");
+        }
+        assert!(with(vec!["x".repeat(SEEN_ROW_BYTES); SEEN_ROWS])
+            .validate()
+            .is_err());
+    }
+
+    /// The pane is compared with the dialog the card was read from, row by row without trailing blanks, and it must show it once.
+    #[test]
+    fn a_screen_shows_a_dialog_only_when_it_is_there_once_and_unchanged() {
+        let screen = |dialogs: &[Vec<String>]| {
+            let mut rows = vec!["• Running touch note.txt   ".to_owned(), String::new()];
+            for dialog in dialogs {
+                rows.extend(dialog.iter().map(|row| format!("{row}   ")));
+                rows.push(String::new());
+            }
+            rows
+        };
+        let dialog = dialog();
+        assert!(shows_once(&screen(std::slice::from_ref(&dialog)), &dialog));
+        // Another row of the screen may change (a spinner, a clock) without changing the dialog.
+        let mut busy = screen(std::slice::from_ref(&dialog));
+        busy[0] = "• Running touch note.txt (3s)".into();
+        assert!(shows_once(&busy, &dialog));
+        // Answered, or closed: no dialog.
+        assert!(!shows_once(&screen(&[]), &dialog));
+        // The highlight moved, an option changed, or the prompt is another one with the same title.
+        for (row, text) in [
+            (2, "    1. Haiku  Fast"),
+            (3, "  ❯ 2. Opus   Smart"),
+            (3, "    2. Opus   Smarter"),
+            (0, "  Select effort"),
+        ] {
+            let mut changed = dialog.clone();
+            changed[row] = text.into();
+            assert!(!shows_once(&screen(&[changed]), &dialog), "{text}");
+        }
+        // Two prompts that both match are not one request.
+        assert!(!shows_once(
+            &screen(&[dialog.clone(), dialog.clone()]),
+            &dialog
+        ));
+        // Part of a dialog, or a block longer than the screen, is not the dialog.
+        assert!(!shows_once(&dialog[..4], &dialog));
+        assert!(!shows_once(&dialog, &[]));
+    }
+
+    /// The text a real tmux pane gives back for a recorded dialog is what the card compared: glyphs, indentation and trailing blanks included.
+    #[test]
+    fn a_real_pane_shows_the_recorded_dialogs_the_cards_were_read_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("tmux.sock");
+        let tmux = |args: &[&str]| private_tmux(&socket, args);
+        for (name, first, last) in [
+            (
+                "codex-approval",
+                "Would you like to run the following command?",
+                "Press enter to confirm or esc to cancel",
+            ),
+            ("model", "Select model", "Enter to set as default"),
+            ("trust", "Quick safety check", "Enter to confirm"),
+        ] {
+            let path = format!(
+                "{}/../src/test/agentDialogs/{name}.txt",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let recorded = std::fs::read_to_string(&path).unwrap();
+            let rows: Vec<&str> = recorded.lines().collect();
+            let from = rows
+                .iter()
+                .position(|row| row.trim().starts_with(first))
+                .unwrap();
+            let to = rows
+                .iter()
+                .rposition(|row| row.trim().starts_with(last))
+                .unwrap();
+            let seen: Vec<String> = rows[from..=to].iter().map(|row| row.to_string()).collect();
+            match tmux(&[
+                "new-session",
+                "-d",
+                "-x",
+                "100",
+                "-y",
+                "40",
+                "-s",
+                name,
+                &format!("cat {}; sleep 5", path),
+            ]) {
+                Ok(started) if started.status.success() => {}
+                _ => {
+                    eprintln!("tmux is not available; skipped");
+                    return;
+                }
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let shown = tmux(&["capture-pane", "-p", "-t", name]).unwrap();
+                let screen: Vec<String> = String::from_utf8_lossy(&shown.stdout)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect();
+                if shows_once(&screen, &seen) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{name}: the pane never showed the recorded dialog:\n{screen:#?}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let _ = tmux(&["kill-session", "-t", name]);
+        }
+        let _ = tmux(&["kill-server"]);
+    }
+
     #[test]
     fn the_mode_cycle_is_one_shift_tab_for_claude_only() {
         assert_eq!(
@@ -1029,7 +1282,7 @@ mod tests {
             (3, false, "send-keys -t %12 Down Down Down"),
             (-2, false, "send-keys -t %12 Up Up"),
         ] {
-            assert_eq!(Input::Pick { rows, enter }.keys("%12").unwrap(), keys);
+            assert_eq!(pick(rows, enter).keys("%12").unwrap(), keys);
         }
         // Nothing to send, or further than any list is long, is refused.
         for (rows, enter) in [
@@ -1039,18 +1292,30 @@ mod tests {
             (i8::MIN, true),
             (i8::MAX, true),
         ] {
-            assert!(
-                Input::Pick { rows, enter }.keys("%12").is_err(),
-                "{rows} {enter}"
-            );
+            assert!(pick(rows, enter).keys("%12").is_err(), "{rows} {enter}");
         }
+        let seen = r#""seen":["Select model","1. One","2. Two","Enter to select"]"#;
+        let dismiss =
+            serde_json::from_str::<Input>(&format!(r#"{{"kind":"dismiss",{seen}}}"#)).unwrap();
+        assert_eq!(dismiss.keys("%12").unwrap(), "send-keys -t %12 Escape");
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"dismiss"}"#).is_err());
+        assert!(serde_json::from_str::<Input>(&format!(
+            r#"{{"kind":"pick","rows":1,"enter":true,{seen}}}"#
+        ))
+        .is_ok());
+        assert!(serde_json::from_str::<Input>(&format!(
+            r#"{{"kind":"pick","rows":128,"enter":true,{seen}}}"#
+        ))
+        .is_err());
         assert!(
-            serde_json::from_str::<Input>(r#"{"kind":"pick","rows":128,"enter":true}"#).is_err()
+            serde_json::from_str::<Input>(&format!(r#"{{"kind":"pick","rows":1,{seen}}}"#))
+                .is_err()
         );
-        assert!(serde_json::from_str::<Input>(r#"{"kind":"pick","rows":1}"#).is_err());
-        assert!(serde_json::from_str::<Input>(
-            r#"{"kind":"pick","rows":1,"enter":true,"keys":"x"}"#
-        )
+        // A pick without the dialog block it was read from has nothing to be checked against.
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"pick","rows":1,"enter":true}"#).is_err());
+        assert!(serde_json::from_str::<Input>(&format!(
+            r#"{{"kind":"pick","rows":1,"enter":true,{seen},"keys":"x"}}"#
+        ))
         .is_err());
         assert!(
             serde_json::from_str::<Input>(r#"{"kind":"select","option":1,"of":2,"keys":"x"}"#)
@@ -1062,21 +1327,24 @@ mod tests {
         );
     }
 
+    /// One command to a tmux server of its own at `socket`: no user configuration, and never the server this test runs in.
+    fn private_tmux(
+        socket: &std::path::Path,
+        args: &[&str],
+    ) -> std::io::Result<std::process::Output> {
+        std::process::Command::new("tmux")
+            .args(["-f", "/dev/null", "-S"])
+            .arg(socket)
+            .args(args)
+            .env_remove("TMUX")
+            .output()
+    }
     /// The bytes a program reading raw input in a real tmux pane receives when `input` is sent to it.
     fn bytes_received_by_a_real_pane(input: Input, expected: usize) -> Option<String> {
-        use std::{
-            process::Command,
-            time::{Duration, Instant},
-        };
+        use std::time::{Duration, Instant};
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("tmux.sock");
-        let tmux = |args: &[&str]| {
-            Command::new("tmux")
-                .arg("-S")
-                .arg(&socket)
-                .args(args)
-                .output()
-        };
+        let tmux = |args: &[&str]| private_tmux(&socket, args);
         let (ready, output) = (dir.path().join("ready"), dir.path().join("keys.txt"));
         let program = format!(
             "stty raw -echo; touch {}; head -c {expected} | od -An -tx1 > {}; sleep 2",
@@ -1140,22 +1408,10 @@ mod tests {
     /// Arrows, then Enter only when asked, and nothing else: the keys a person presses to choose a row of a list dialog.
     #[test]
     fn pick_reaches_a_real_pane_as_arrows_then_enter() {
-        if let Some(received) = bytes_received_by_a_real_pane(
-            Input::Pick {
-                rows: 2,
-                enter: true,
-            },
-            7,
-        ) {
+        if let Some(received) = bytes_received_by_a_real_pane(pick(2, true), 7) {
             assert_eq!(received, "1b 5b 42 1b 5b 42 0d");
         }
-        if let Some(received) = bytes_received_by_a_real_pane(
-            Input::Pick {
-                rows: -1,
-                enter: false,
-            },
-            3,
-        ) {
+        if let Some(received) = bytes_received_by_a_real_pane(pick(-1, false), 3) {
             assert_eq!(received, "1b 5b 41");
         }
     }

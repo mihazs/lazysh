@@ -1045,6 +1045,13 @@ jobs:
           case_name=ssh::tmux_jump_fixture::agent_session::real_tmux_agent_session_runs_from_the_guarded_agent_view_inputs_only
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      - name: Answer a recorded dialog only while the pane still shows it, on supported tmux
+        shell: bash
+        run: |
+          test "$(tmux -V)" = 'tmux 3.4'
+          case_name=ssh::tmux_jump_fixture::pick_screen::real_tmux_pick_is_delivered_only_to_the_dialog_it_was_read_from
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Reject unsupported apt tmux loops without binding authority and report it degraded
         shell: bash
         env:

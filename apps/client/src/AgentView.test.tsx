@@ -1179,7 +1179,8 @@ describe('a list dialog open on the terminal',()=>{
     await advance(0);await advance(0);await advance(400);
     return screenOf;
   }
-  const keys=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:object}}).action).filter(action=>action.kind==='input').map(action=>action.input);
+  // Without the rows a pick names (`seen`), which the Dock tests check.
+  const keys=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:object}}).action).filter(action=>action.kind==='input').map(({input})=>{const {seen,...key}=input as {seen?:unknown};return key;});
   const dialog=()=>screen.getByRole('region',{name:'Dialog in the terminal'});
   it('answers the /model picker with the keys a person would press, through the pane the report names, once',async()=>{
     await open(modelScreen(5));

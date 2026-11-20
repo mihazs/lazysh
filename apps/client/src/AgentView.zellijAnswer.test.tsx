@@ -4,7 +4,7 @@ import {describe,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import {act,fireEvent,render,screen,within} from '@testing-library/react';
 import {advance,ask,calls,color,typeOwnAnswer,useAgentViewHarness} from './test/agentViewHarness';
-import {dialogScreen,modelScreen,onTmux} from './test/agentDialogScreens';
+import {dialogScreen,modelScreen,onTmux,withoutSeen} from './test/agentDialogScreens';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 useAgentViewHarness();
@@ -24,7 +24,7 @@ function zellij(host:Partial<Host>={}) {
   return state;
 }
 const mount=async()=>{render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={{backend:'zellij',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);await advance(0);};
-const keys=()=>calls('zellij_agent_input').map(args=>(args as {input:object}).input);
+const keys=()=>calls('zellij_agent_input').map(args=>withoutSeen((args as {input:object}).input));
 const target=(agent:'claude'|'codex')=>({zellijSession:'work',pane:7,agent});
 
 describe('a dialog open in the pane of the agent followed in Zellij',()=>{

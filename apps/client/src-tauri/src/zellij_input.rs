@@ -119,7 +119,9 @@ fn steps(target: &Target, input: &Input) -> Option<Vec<String>> {
                 enter,
             ])
         }
-        Input::RequestStop => Some(vec![target.action(&format!("write {pane} 27"))]),
+        Input::RequestStop | Input::Dismiss { .. } => {
+            Some(vec![target.action(&format!("write {pane} 27"))])
+        }
         // Named keys, not bytes: Zellij writes an arrow as the pane's program asked for it (`ESC [ B`, or `ESC O B` in application mode).
         Input::Select { .. } | Input::Submit { .. } | Input::Pick { .. } => Some(vec![target
             .action(&format!(
@@ -238,20 +240,8 @@ mod tests {
         for (input, keys) in [
             (Input::Select { option: 3, of: 4 }, "3"),
             (Input::Submit { of: 2 }, "down down down enter"),
-            (
-                Input::Pick {
-                    rows: -2,
-                    enter: false,
-                },
-                "up up",
-            ),
-            (
-                Input::Pick {
-                    rows: 0,
-                    enter: true,
-                },
-                "enter",
-            ),
+            (Input::pick_for_test(-2, false), "up up"),
+            (Input::pick_for_test(0, true), "enter"),
         ] {
             assert_eq!(
                 steps(&target(), &input).unwrap(),
@@ -498,15 +488,9 @@ mod tests {
         received(b"it's $(not run) -x\n--help\n\x1btwo\nlines\n");
         // A dialog answer reaches the pane as the keys a person presses: Zellij writes the arrows for this pane's cursor-key mode, and a typed
         // answer is its line and Enter. The terminal holds them until the Enter, as it holds any line.
-        deliver(Input::Pick {
-            rows: 2,
-            enter: false,
-        });
+        deliver(Input::pick_for_test(2, false));
         deliver(Input::Select { option: 2, of: 3 });
-        deliver(Input::Pick {
-            rows: 0,
-            enter: true,
-        });
+        deliver(Input::pick_for_test(0, true));
         deliver(Input::Type {
             text: "-x it's".into(),
         });

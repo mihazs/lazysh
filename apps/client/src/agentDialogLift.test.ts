@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {liftDialog} from './agentDialogLift';
-import {dialogScreen, onTmux} from './test/agentDialogScreens';
+import {dialogScreen, onTmux, runsOn} from './test/agentDialogScreens';
 
 /** Screens captured from Claude Code 2.1.318 in a real 100x40 tmux pane. */
 const screen = dialogScreen;
@@ -98,6 +98,18 @@ describe('liftDialog on recorded Claude Code screens', () => {
   it.each(['model', 'trust', 'theme', 'plan', 'resume', 'rewind-list'])('reads the %s dialog the same under tmux, with blank rows and a status row below its footer', name => {
     expect(liftDialog(onTmux(screen(name)))).toEqual(lift(name));
     expect(liftDialog(onTmux(screen('rewind-confirm'))).kind).toBe('unliftable');
+  });
+
+  it.each(['model', 'trust', 'theme', 'plan', 'resume', 'rewind-list'])('names the rows of the %s dialog, from its text to its footer, once on the screen', name => {
+    const found = dialog(name);
+    expect(found.rows.length).toBeGreaterThanOrEqual(4);
+    expect(found.rows[0].trim()).not.toBe('');
+    expect(found.rows.at(-1)!.trim()).toMatch(/Esc to (?:cancel|close|go back|dismiss)|ctrl\+g to edit/i);
+    expect(runsOn(screen(name), found.rows)).toBe(1);
+    // A status row of the multiplexer below the dialog, or a spinner above it, is not part of what a key is sent to.
+    expect(runsOn(onTmux(screen(name)), found.rows)).toBe(1);
+    // Moving the highlight changes a row of the block, so the host's comparison tells the dialogs apart.
+    expect(runsOn(screen(name).map(row => row.replace('❯', ' ')), found.rows)).toBe(0);
   });
 
   it('is the same dialog when only the highlight moves, and another when an option changes', () => {

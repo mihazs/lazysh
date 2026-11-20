@@ -393,6 +393,19 @@ transcript, so it works for dialogs no hook or transcript record describes.
   then sends the guarded `pick` input: arrow keys that move the highlight to the chosen option. It reads the screen back and presses Enter
   (a second `pick`) only once the dialog shows the chosen option highlighted. Nothing is sent when the screen no longer shows the dialog
   that was tapped, and a dialog that does not move gets no Enter. **Cancel the dialog** sends Escape. On a desktop keyboard the digits 1 to 9 choose.
+- **The host captures the pane again before each key.** Reading the app's copy of the screen is not enough for a key that cannot be recalled,
+  so each `pick` carries the rows of the dialog it was read from (the tap's read for the move, the read-back for the Enter) and the tmux
+  connection captures the pane right before pressing it ([Confirmed terminal input](chat-terminal-input.md)). It sends nothing unless those rows
+  appear exactly once: a dialog answered at the terminal first, another prompt in the same pane, a pane whose process was replaced, a
+  prompt drawn twice and a dialog that is gone all get no key. The card then says "The dialog changed. Nothing was sent." (or "The answer was
+  not sent" while this screen still shows the dialog), and the connection stays bound. The request this answers is the dialog on the pane, so
+  there is no listed record to expire: a card is read again at each tap, and the Enter is sent to a read-back that is at most the 3 second
+  read-back window old. The result is the card's note and the pane itself; nothing is stored.
+  The capture is tmux's check: a pane followed through Herdr or Zellij gets the same keys after that backend's own destination check, without it.
+- **Which agents.** Exactly those with a recorded profile below, Claude Code and Codex, through the one reader this card already has (there is no
+  second reader). An agent with no profile has no reader, so its prompt is not answered from here and stays in the terminal: OpenCode (colour-only
+  highlight; its own channel is [#1656](https://github.com/mihazs/lazysh/issues/1656)), Grok Build, Gemini CLI and the records-only agents wait for
+  a captured corpus from a real session.
 - **Authority.** Terminal output never grants authority: `pick` has no key path other than Up, Down and Enter, at most 30 rows, tmux only
   (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**; see **Herdr panes** below for what a Herdr pane can answer). A dialog an approval or question card
   already answers shows no second card (Claude's permission request and every agent's question); Codex has no approval hook here, so its
