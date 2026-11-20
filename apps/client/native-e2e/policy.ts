@@ -20,6 +20,23 @@ export function guiEnvironment(directory:string,bus:string,display?:number):Node
   };
 }
 
+/** The real IBus input method for one owned GUI: its UTF-8 locale and the GTK/XIM module choice, on the daemon's own private address. */
+export function inputMethodEnvironment(env:NodeJS.ProcessEnv,address:string):NodeJS.ProcessEnv {
+  if(!/^unix:path=\/[A-Za-z0-9_./-]+$/.test(address))throw new Error('Invalid owned input-method address');
+  return {...env,LANG:'C.UTF-8',LC_ALL:'C.UTF-8',GTK_IM_MODULE:'ibus',XMODIFIERS:'@im=ibus',IBUS_ADDRESS:address};
+}
+
+/** The daemon and its engines read their own dictionaries from the system data directory, which the GUI's private `XDG_DATA_DIRS` hides (Ubuntu 22.04's libpinyin then never starts). */
+export function ibusEnvironment(env:NodeJS.ProcessEnv):NodeJS.ProcessEnv {
+  return {...env,XDG_DATA_DIRS:'/usr/share'};
+}
+
+/** No panel or emoji extension, and the in-memory config service every engine waits for; the daemon stays in the foreground. */
+export function ibusDaemonArguments(address:string,config:string):string[] {
+  if(!path.isAbsolute(config)||!address.startsWith('unix:path=/'))throw new Error('Invalid owned IBus daemon paths');
+  return ['--panel','disable','--emoji-extension','disable','--config',config,'--address',address];
+}
+
 export function listenerInode(table:string,port:number):string|undefined {
   if(!Number.isInteger(port)||port<1||port>65535||table.length>256*1024)throw new Error('Invalid owned GUI socket inventory');
   const expected=port.toString(16).padStart(4,'0').toUpperCase();
