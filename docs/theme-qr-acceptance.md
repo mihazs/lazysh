@@ -78,6 +78,15 @@ Executed, with the evidence each check produces:
   alone is not evidence. At the time of writing, main run 43493222104 (commit
   `a21f4b21`, 2026-11-13) reports 1 executed, 0 failed, 0 skipped. See
   [Android testing](android-testing.md) for the procedure.
+- **Android image fallback through the real system picker.**
+  `NativeWorkspaceTest.qrImageFallbackChoosesAFileThroughTheRealSystemPicker`
+  taps the enabled `Choose PNG or JPEG QR image` input with a real finger tap,
+  selects the owned `theme-qr.png` in DocumentsUI by its visible name and requires
+  the natively decoded `QR fixture` preview with preferences unchanged and no
+  Apply. Executed on Waydroid (Android 13, AOSP DocumentsUI), two runs, method
+  executed and not skipped. The hosted API 36 run (`native-android-runtime`) is
+  not recorded yet, so that image is unverified; see
+  [Android testing](android-testing.md#real-system-file-picker-for-the-qr-image-fallback-1752).
 - **Browser lifecycle.** `apps/client/e2e/theme-qr.spec.ts` covers scan, mandatory
   Apply, cancel, deadline and track cleanup with synthetic media and mocked native
   decoding. It is not OS permission or Tauri marshalling evidence.
