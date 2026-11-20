@@ -1120,6 +1120,26 @@ Measured with `cargo run --release --example selection_bench` in `packages/termi
 
 Extraction and a missing search are linear in the rows read (about 5 microseconds a row for the text, 1.7 to 1.9 for the search); a word under a finger reads one row. An earlier invocation taken at load 22.8 gave 25.1 and 100.8 ms for the text and 8.2 and 33.1 ms for the search. It does not say what a phone costs, and a single invocation under load is not a regression threshold.
 
+### Build cost of the wgpu renderer as an app dependency (build host, not a device)
+
+The app depends on [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) behind its optional `native-terminal` feature ([#2201](https://github.com/mihazs/lazysh/issues/2201)). Nothing in the app calls the renderer yet, so these figures are what the dependency costs a build with the feature on, not what a renderer in use will cost. Builds without the feature compile none of it. Raw output: [`benchmarks/terminal-renderer-app-dependency-build-1.txt`](benchmarks/terminal-renderer-app-dependency-build-1.txt). One run each on an AMD Ryzen 9 5900X shared with other work (load average 1 to 5), four Cargo jobs.
+
+**Linux x86_64, measured.** `cargo build --release --locked --features native-terminal` of the app (rustc 1.99.0, the root release profile: LTO, one codegen unit, stripped), with the feature first without and then with the renderer dependency, twice:
+
+| Artifact | Without the renderer | With the renderer | Delta |
+| --- | --- | --- | --- |
+| `lazysh` executable | 57,207,792 bytes | 57,205,872 bytes | -1,920 bytes |
+| `liblazysh_lib.so` | 3,951,496 bytes | 3,951,496 bytes | 0 |
+| `liblazysh_lib.a` | 404,486,146 bytes | 404,544,512 bytes | +58,366 bytes |
+
+The sizes were identical in both runs of each state. The executable is not byte-identical and is 1.9 KiB smaller, because the dependency turns on features of crates the app already had (`bytemuck` derive, `zerocopy` derive, `num-traits` with `libm`, `hashbrown` 0.17.1 with its default hasher), which recompiles their dependents; no renderer code is linked.
+
+A clean build without the renderer took 526 s. Adding it took 352 s in the same target directory, against 252 to 256 s for the app crate's own recompile and link alone, so about 98 s more: 62 CPU-seconds in the 29 crates the renderer adds on Linux (naga 18.5 s, wgpu-core 16.1 s, wgpu-hal 7.4 s, ash 6.6 s) and the one-off rebuild of 74 crates whose features changed.
+
+**Android arm64 and x86_64, compile time measured, package size not measured.** The renderer and the crates it adds (wgpu with the Vulkan and OpenGL ES backends) compile and archive for both ABIs with NDK r29.0.14206865 in 26 s (aarch64) and 24 s (x86_64) on top of the runtime crate, in the renderer's own release profile (no LTO, rustc 1.96.1); the renderer's `rlib` is 0.45 MiB per ABI. No Android package was built with the feature here, so the size delta of the shipped `.so` is **not measured**; the Linux result (no renderer code linked while nothing calls it) is the only evidence for it. The delta that matters, with the renderer drawing on a surface, belongs to [#1327](https://github.com/mihazs/lazysh/issues/1327).
+
+Not shown: macOS, iOS and Windows (their backends, Metal and Direct3D 12, were not compiled here; the root lock file pins their crates), a build on a CI runner, and any binary that calls the renderer.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.

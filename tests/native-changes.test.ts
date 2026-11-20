@@ -180,7 +180,7 @@ test.each([
   ['Herdr', ['packages/herdr-guard/client.rs'], herdrRun],
   // The app bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt with the native-terminal feature.
   ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1 }],
-  ['the terminal renderer, which the app does not link', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1 }],
+  ['the terminal renderer, which the app compiles with the same feature', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1 }],
   ...(['packages/herdr-upstream/crates/ghostty-vt/src/lib.rs', 'packages/herdr-upstream/vendor/libghostty-vt/build.zig'] as const).map(path => [
     `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'terminal-perf': 1, 'native-terminal-bridge': 1 }] as const),
   ['the Linux composition probe, a standalone prototype crate', ['packages/terminal-runtime/prototypes/linux-surface/scripts/check.py'], { ...alwaysRun, 'native-linux-surface': 1 }],

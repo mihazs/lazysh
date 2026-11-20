@@ -989,9 +989,10 @@ jobs:
 
   # The app bridge (terminal_core.rs, local.rs, ssh.rs) links the shared terminal core only with the optional
   # `native-terminal` feature, which no other job enables, so a change to the core crate's API could break the
-  # bridge unnoticed (#1620). This job compiles the app library and its tests with the feature and runs the
-  # real-core cases. It provisions Zig 0.16.0 and the admitted Ghostty archives with the steps of herdr-native
-  # (aliases), in the checkout's own libghostty-vt directory, and leaves herdr-native's checks as they are.
+  # bridge unnoticed (#1620). This job compiles the app library and its tests with the feature, which also
+  # compiles the wgpu renderer from the root lock file (#2201), and runs the real-core cases. It provisions Zig
+  # 0.16.0 and the admitted Ghostty archives with the steps of herdr-native (aliases), in the checkout's own
+  # libghostty-vt directory, and leaves herdr-native's checks as they are.
   native-terminal-bridge:
     needs: changes
     if: needs.changes.outputs.terminal_bridge == 'true'
@@ -1028,7 +1029,15 @@ jobs:
       # Pull requests restore main's entry and never save their own, like the other Rust caches.
       - uses: Swatinem/rust-cache@v2
         with: *rust-cache-main
-      - name: Build the app library and its tests with the native terminal core
+      # The feature must bring the wgpu renderer in, and a build without it must not compile wgpu: `cargo tree -i`
+      # fails when the package is not in the selected graph.
+      - name: Check that only the native-terminal feature brings the wgpu renderer into the app
+        run: |
+          cargo tree --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal -e normal -i lazysh-terminal-renderer-wgpu
+          if cargo tree --manifest-path apps/client/src-tauri/Cargo.toml --locked --target all -e normal -i wgpu; then
+            echo "::error::a build without the native-terminal feature would compile wgpu"; exit 1
+          fi
+      - name: Build the app library and its tests with the native terminal core and the wgpu renderer
         run: sh .github/scripts/retry-zig-fetch.sh cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib --no-run
       # The real-core cases exist only with the feature, so each guard case must be listed before the run: a rename
       # or a missing feature must not turn this step into a partial pass. The filters select every bridge case that

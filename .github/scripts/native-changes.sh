@@ -33,7 +33,7 @@ package() {
     herdr-guard/*) add herdr ;;
     terminal-runtime/prototypes) add linux_surface ;; # a standalone prototype crate with its own lock file: only its own job builds it.
     terminal-runtime/*) add terminal_runtime terminal_bridge ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
-    terminal-renderer-wgpu/*) add terminal_runtime ;;
+    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge ;; # the app compiles it with the native-terminal feature.
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.

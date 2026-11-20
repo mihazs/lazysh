@@ -7,9 +7,11 @@ license = "GPL-3.0-or-later"
 publish = false
 rust-version = "1.96"
 
-# Nested workspace beside the runtime crate: the runtime builds libghostty-vt with Zig, and wgpu must
-# not reach the root workspace, the runtime crate's own lock file or the integrity-checked Ghostty
-# sources. Not wired into the app yet (the Android surface is #1327).
+# Nested workspace beside the runtime crate, with its own lock file for its own tests: the runtime builds
+# libghostty-vt with Zig, and wgpu must not reach the runtime crate's lock file or the integrity-checked
+# Ghostty sources. The app depends on this crate by path behind its optional `native-terminal` feature
+# (#2201), so the root Cargo.lock pins wgpu a second time: bump both lock files together. Nothing in the
+# app calls it yet (the Android surface is #1327).
 [workspace]
 
 [dependencies]
