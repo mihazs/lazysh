@@ -203,13 +203,19 @@ impl<'a> Host<'a> {
             MultiplexerKind::Tmux => Self::Tmux(
                 &entry.name,
                 match session {
-                    Some(session) => {
-                        TmuxServer::for_session(&session.bindings, entry.tmux_server.as_deref())?
-                    }
+                    Some(session) => TmuxServer::for_session(
+                        &session.bindings,
+                        entry.tmux_server.as_deref(),
+                        entry.kind.binary(),
+                    )?,
                     None => entry.server()?,
                 },
             ),
             MultiplexerKind::Zellij => Self::Zellij(&entry.name),
+            // shortcut: rmux agent launch needs its own verified plan (#1679).
+            MultiplexerKind::Rmux => {
+                return Err(invalid("Starting agents in rmux is not available yet"))
+            }
         })
     }
 }

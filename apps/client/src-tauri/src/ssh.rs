@@ -3800,6 +3800,7 @@ pub async fn list_multiplexer_sessions(
     local: State<'_, crate::local::LocalState>,
     session_id: String,
     tmux_server: Option<String>,
+    kind: Option<crate::multiplexer::MultiplexerKind>,
 ) -> AccessResult<Vec<MuxSession>> {
     lease
         .run(async {
@@ -3808,6 +3809,7 @@ pub async fn list_multiplexer_sessions(
                 &local,
                 &session_id,
                 tmux_server.as_deref(),
+                kind,
                 &lease,
             )
             .await?;
@@ -3893,12 +3895,13 @@ pub async fn attach_multiplexer(
             }
             // Both public tmux attachment entry points must establish the same
             // native display binding; frontend routing is not the authority.
-            if matches!(kind, crate::multiplexer::MultiplexerKind::Tmux) {
-                return attach_tmux_inner(
+            if let Some(binary) = kind.binary() {
+                return attach_family_inner(
                     &state,
                     lease.clone(),
                     session_id,
                     tmux_server,
+                    binary,
                     name,
                     cols,
                     rows,
@@ -3909,7 +3912,7 @@ pub async fn attach_multiplexer(
             if tmux_server.is_some() {
                 return Err(SshError::new(
                     "invalid_tmux_server",
-                    "tmux server context is only valid for tmux",
+                    "tmux server context is only valid for tmux and rmux",
                 ));
             }
             check_size(cols, rows)?;
@@ -3963,6 +3966,33 @@ async fn attach_tmux_inner(
     rows: u32,
     events: Channel<SshEvent>,
 ) -> Result<Connected> {
+    let binary = crate::tmux_server::Binary::Tmux;
+    attach_family_inner(
+        state,
+        creation,
+        session_id,
+        tmux_server,
+        binary,
+        name,
+        cols,
+        rows,
+        events,
+    )
+    .await
+}
+/// Attaches a tmux-family server: tmux gets its Jump To control client, rmux a plain terminal on its labelled server.
+#[allow(clippy::too_many_arguments)]
+async fn attach_family_inner(
+    state: &AppState,
+    creation: AccessLease,
+    session_id: String,
+    tmux_server: Option<String>,
+    binary: crate::tmux_server::Binary,
+    name: String,
+    cols: u32,
+    rows: u32,
+    events: Channel<SshEvent>,
+) -> Result<Connected> {
     check_size(cols, rows)?;
     if name.is_empty() || name.len() > 200 || name.chars().any(char::is_control) {
         return Err(SshError::new(
@@ -3971,17 +4001,18 @@ async fn attach_tmux_inner(
         ));
     }
     let parent = state.session(&session_id).await?;
-    let server = crate::tmux_server::TmuxServer::parse(tmux_server.as_deref())?;
+    let server = crate::tmux_server::TmuxServer::parse_for(binary, tmux_server.as_deref())?;
     let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
     let command = crate::tmux_jump::attach_command(&name, &marker, &server);
     let (mut channel, mut initial) =
         open_terminal_for(&parent.handle, &creation, cols, rows, Some(command)).await?;
     let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker).await;
     let control = match identity {
-        Some(identity) => {
+        // The Jump To control client waits for a real rmux to verify it (#1675); rmux attaches as a plain terminal.
+        Some(identity) if matches!(binary, crate::tmux_server::Binary::Tmux) => {
             crate::tmux_jump::prepare(&parent.handle, identity, &name, &server, &creation).await
         }
-        None => None,
+        _ => None,
     };
     let connected = spawn_terminal(
         state,
