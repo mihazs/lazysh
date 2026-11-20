@@ -53,6 +53,7 @@ impl AgentProfile {
             Self::Cline => "Cline CLI",
             Self::Copilot => "GitHub Copilot CLI",
             Self::Amp => "Amp",
+            Self::KimiCode => crate::kimi_code::AGENT,
         }
     }
     fn agent(self) -> record::Agent {
