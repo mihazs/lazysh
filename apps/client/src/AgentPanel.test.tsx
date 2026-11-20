@@ -1053,3 +1053,23 @@ describe('project groups and archive', () => {
     expect(within(screen.getByRole('region',{name:'Working'})).getByRole('region',{name:'api'})).toBeTruthy();
   });
 });
+it('tells a local session to place lazysh-agent on this device instead of offering an SSH install',async()=>{
+  const {invoke}=await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='agent_snapshot')throw new Error('lazysh-agent is not available on this device');
+    if(command==='get_companion_settings')throw new Error('lazysh-agent is not available on this device');
+    return undefined;
+  });
+  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local />);
+  expect(await screen.findByText(t('agentsSetupLocal'))).toBeTruthy();
+  expect(screen.getByText(t('companionLocalNote'))).toBeTruthy();
+  expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
+  expect(screen.queryByText(t('agentsSetup'))).toBeNull();
+});
+it.each([['bundled','Bundled'],['managed','Managed copy'],['path','On PATH']] as const)('names the %s companion a local session runs',async(source,label)=>{
+  const {invoke}=await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockResolvedValue({schemaVersion:1,sessions:[]});
+  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local companionSource={source}/>);
+  expect(await screen.findByText(`The companion runs on this device, with no SSH install. Source: ${label}.`)).toBeTruthy();
+  expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
+});
