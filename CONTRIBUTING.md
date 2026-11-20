@@ -80,7 +80,7 @@ auxiliary, ntfy, the terminal core and renderer on macOS (`terminal-macos`, repo
 terminal performance gate (`terminal-perf`, report-only) is the exception: it also runs on a pull request that selects the
 terminal runtime area, so a regression shows on the pull request that causes it. The
 table below lists what a change can affect, and a pull request runs only the required jobs of
-that list plus `terminal-perf`.
+that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface.yml`, report-only) is its own workflow rather than a job here: it runs on a pull request or a push that changes the probe or the workflow, and not otherwise.
 
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
