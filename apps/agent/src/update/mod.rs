@@ -10,7 +10,7 @@ use report::{Failure, Fault, Latest, Output, Report};
 use serde_json::{json, Value};
 use std::{io::IsTerminal, process::ExitCode, time::Duration};
 
-mod current;
+pub(crate) mod current;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod install;
 mod process;

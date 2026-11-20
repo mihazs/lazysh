@@ -19,12 +19,67 @@ pub fn run(command: Command) -> Result<Value> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
+        // Windows installation stays unsupported; what lands is the admission of its namespace, so an unsafe one
+        // is named before the capability is.
+        #[cfg(windows)]
+        let namespace = windows::admit()?;
+        #[cfg(not(windows))]
+        let namespace = serde_json::Map::new();
         match command {
-            Command::Inspect => Ok(
-                json!({"schemaVersion":1,"supported":false,"reason":"windowsInstallerUnsupported"}),
-            ),
+            Command::Inspect => {
+                let mut value = serde_json::Map::from_iter([
+                    ("schemaVersion".to_owned(), json!(1)),
+                    ("supported".to_owned(), json!(false)),
+                    ("reason".to_owned(), json!("windowsInstallerUnsupported")),
+                ]);
+                value.extend(namespace);
+                Ok(Value::Object(value))
+            }
             Command::Install { .. } => Err(Error::Installation("windowsInstallerUnsupported")),
         }
+    }
+}
+
+/// The managed namespace on Windows, admitted by owner, DACL and reparse point before it is reported or used.
+#[cfg(windows)]
+mod windows {
+    use super::*;
+    use crate::{
+        storage_filesystem, storage_namespace,
+        update::current::{self, MANAGED, NAME},
+    };
+    use lazysh_common::windows_acl::Unsafe;
+
+    /// The destination and the executable there (the same `existing` as on Unix), or the class of what is unsafe.
+    pub(super) fn admit() -> Result<serde_json::Map<String, Value>> {
+        let root = current::data_root().map_err(|_| Error::Installation("InstallNoUserData"))?;
+        let parent = MANAGED
+            .iter()
+            .fold(root.clone(), |path, name| path.join(name));
+        let destination = parent.join(NAME);
+        let text = destination.to_str().ok_or_else(|| unsafe_namespace(()))?;
+        storage_namespace::resolve(&parent).map_err(unsafe_namespace)?;
+        storage_filesystem::require_local(&parent).map_err(unsafe_namespace)?;
+        let present = current::admit_namespace(&root).map_err(|refused| {
+            Error::Installation(match refused {
+                Unsafe::Directory => "InstallUnsafeNamespace",
+                Unsafe::Executable => "InstallUnsafeFile",
+            })
+        })?;
+        let existing = if present {
+            let (sha256, bytes) = current::hash(&destination)
+                .map_err(|_| Error::Installation("InstallUnsafeFile"))?;
+            json!({"state":"present","sha256":sha256,"bytes":bytes})
+        } else {
+            json!({"state":"missing"})
+        };
+        Ok(serde_json::Map::from_iter([
+            ("destination".to_owned(), json!(text)),
+            ("existing".to_owned(), existing),
+        ]))
+    }
+    fn unsafe_namespace(_: impl std::fmt::Debug) -> Error {
+        Error::Installation("InstallUnsafeNamespace")
     }
 }
 

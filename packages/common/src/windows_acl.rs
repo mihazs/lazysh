@@ -6,6 +6,8 @@
 //! the ACEs itself instead of going through SDDL text, which prints well-known accounts as aliases (`LA` for the
 //! built-in Administrator) that would otherwise have to be mapped back to SIDs.
 
+use std::{fs, io, path::Path};
+
 /// The system account.
 pub const SYSTEM: &str = "S-1-5-18";
 /// The local administrators group. Anything an elevated process creates is owned by it.
@@ -104,6 +106,55 @@ pub fn admit(descriptor: &Descriptor, user: &str, need: Need) -> Result<(), Refu
         }
     }
     Ok(())
+}
+
+/// Which kind of object of a managed namespace was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unsafe {
+    /// A directory is a link, not a directory, owned by another account, or open to change by one.
+    Directory,
+    /// The executable is a link, not a regular file, owned by another account, or open to access by one.
+    Executable,
+}
+
+/// Admits a managed namespace: `root`, each of `below` under it in turn, and `executable` in the last one.
+/// Directories must be free of foreign change and the executable private, as [`Need`] says. `Ok(true)` when
+/// the executable exists and passed, `Ok(false)` when it or a directory above it does not exist yet.
+///
+/// `admit` decides one existing path, as [`admit_path`] does: an error of kind `NotFound` means it is not there,
+/// any other error refuses it, so a path that cannot be read is never admitted. Nothing under a refused or
+/// missing directory is looked at.
+pub fn admit_namespace(
+    root: &Path,
+    below: &[&str],
+    executable: &str,
+    admit: impl Fn(&Path, Need) -> io::Result<()>,
+) -> Result<bool, Unsafe> {
+    let directory = |path: &Path| match admit(path, Need::NoForeignChange) {
+        Ok(()) if is_a(path, fs::FileType::is_dir) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        _ => Err(Unsafe::Directory),
+    };
+    let mut path = root.to_owned();
+    if !directory(&path)? {
+        return Ok(false);
+    }
+    for name in below {
+        path.push(name);
+        if !directory(&path)? {
+            return Ok(false);
+        }
+    }
+    path.push(executable);
+    match admit(&path, Need::Private) {
+        Ok(()) if is_a(&path, fs::FileType::is_file) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        _ => Err(Unsafe::Executable),
+    }
+}
+/// Whether `path` is itself a file of the kind `of` asks for; a link is not.
+fn is_a(path: &Path, of: fn(&fs::FileType) -> bool) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| of(&metadata.file_type()))
 }
 
 #[cfg(windows)]
@@ -312,7 +363,7 @@ mod native {
     /// Admits an existing file or directory that is no link and whose owner and DACL satisfy `need` for the
     /// current user. Parents are the caller's to check, each the same way.
     pub fn admit_path(path: &Path, need: Need) -> io::Result<()> {
-        if crate::storage_namespace::is_link(&std::fs::symlink_metadata(path)?) {
+        if crate::storage_namespace::is_link(&fs::symlink_metadata(path)?) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "the path is a symbolic link, junction or other reparse point",
@@ -551,6 +602,150 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod namespace_tests {
+    use super::*;
+    use std::{cell::RefCell, path::PathBuf};
+
+    const BELOW: [&str; 2] = ["lazysh", "companion"];
+    const EXECUTABLE: &str = "lazysh-agent.exe";
+
+    /// A root holding `lazysh/companion/lazysh-agent.exe`.
+    fn namespace() -> (tempfile::TempDir, [PathBuf; 4]) {
+        let root = tempfile::tempdir().unwrap();
+        let paths = [
+            root.path().to_owned(),
+            root.path().join("lazysh"),
+            root.path().join("lazysh/companion"),
+            root.path().join("lazysh/companion").join(EXECUTABLE),
+        ];
+        fs::create_dir_all(&paths[2]).unwrap();
+        fs::write(&paths[3], b"x").unwrap();
+        (root, paths)
+    }
+    /// Walks `root` with an `admit` that follows the filesystem (a missing path is `NotFound`) except for the
+    /// paths it refuses, and reports every decision it was asked for.
+    fn walk(root: &Path, refused: &[&Path]) -> (Result<bool, Unsafe>, Vec<(PathBuf, Need)>) {
+        let asked = RefCell::new(Vec::new());
+        let result = admit_namespace(root, &BELOW, EXECUTABLE, |path, need| {
+            asked.borrow_mut().push((path.to_owned(), need));
+            if refused.contains(&path) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "refused"));
+            }
+            fs::symlink_metadata(path).map(|_| ())
+        });
+        (result, asked.into_inner())
+    }
+    fn paths(asked: &[(PathBuf, Need)]) -> Vec<&Path> {
+        asked.iter().map(|(path, _)| path.as_path()).collect()
+    }
+
+    #[test]
+    fn every_directory_from_the_root_down_is_unchangeable_and_the_executable_is_private() {
+        let (_root, all) = namespace();
+        let (result, asked) = walk(&all[0], &[]);
+        assert_eq!(result, Ok(true));
+        assert_eq!(
+            paths(&asked),
+            all.iter().map(PathBuf::as_path).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            asked.iter().map(|(_, need)| *need).collect::<Vec<_>>(),
+            [
+                Need::NoForeignChange,
+                Need::NoForeignChange,
+                Need::NoForeignChange,
+                Need::Private
+            ]
+        );
+    }
+
+    #[test]
+    fn a_namespace_that_is_not_there_yet_is_admitted_as_absent_and_nothing_under_it_is_read() {
+        let (_root, all) = namespace();
+        fs::remove_file(&all[3]).unwrap();
+        let (result, asked) = walk(&all[0], &[]);
+        assert_eq!((result, asked.len()), (Ok(false), 4));
+        fs::remove_dir(&all[2]).unwrap();
+        let (result, asked) = walk(&all[0], &[]);
+        assert_eq!(
+            (result, paths(&asked)),
+            (Ok(false), all[..3].iter().map(PathBuf::as_path).collect())
+        );
+        fs::remove_dir(&all[1]).unwrap();
+        assert_eq!(walk(&all[0], &[]).0, Ok(false));
+        assert_eq!(walk(&all[0].join("absent"), &[]).1.len(), 1);
+    }
+
+    #[test]
+    fn a_refused_component_is_named_by_its_kind_and_nothing_below_it_is_read() {
+        let (_root, all) = namespace();
+        for (index, kind) in [
+            (0, Unsafe::Directory),
+            (1, Unsafe::Directory),
+            (2, Unsafe::Directory),
+            (3, Unsafe::Executable),
+        ] {
+            let (result, asked) = walk(&all[0], &[&all[index]]);
+            assert_eq!((result, asked.len()), (Err(kind), index + 1), "{index}");
+        }
+    }
+
+    #[test]
+    fn a_file_where_a_directory_belongs_and_a_directory_where_the_executable_belongs_are_refused() {
+        let (_root, all) = namespace();
+        fs::remove_dir_all(&all[2]).unwrap();
+        fs::write(&all[2], b"not a directory").unwrap();
+        assert_eq!(walk(&all[0], &[]).0, Err(Unsafe::Directory));
+        fs::remove_file(&all[2]).unwrap();
+        fs::create_dir_all(&all[3]).unwrap();
+        assert_eq!(walk(&all[0], &[]).0, Err(Unsafe::Executable));
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_read_is_refused_and_never_taken_for_an_absent_one() {
+        let (_root, all) = namespace();
+        let unreadable = |_: &Path, _| Err(io::Error::other("unreadable"));
+        assert_eq!(
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, unreadable),
+            Err(Unsafe::Directory)
+        );
+        let unreadable_executable = |path: &Path, _| {
+            if path.ends_with(EXECUTABLE) {
+                return Err(io::Error::other("unreadable"));
+            }
+            Ok(())
+        };
+        assert_eq!(
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, unreadable_executable),
+            Err(Unsafe::Executable)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_place_of_a_directory_or_the_executable_is_refused_even_when_admit_follows_it()
+    {
+        let (root, all) = namespace();
+        let follows = |path: &Path, _| fs::metadata(path).map(|_| ());
+        let elsewhere = root.path().join("elsewhere");
+        fs::rename(&all[2], &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &all[2]).unwrap();
+        assert_eq!(
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, follows),
+            Err(Unsafe::Directory)
+        );
+        fs::remove_file(&all[2]).unwrap();
+        fs::rename(&elsewhere, &all[2]).unwrap();
+        fs::rename(&all[3], root.path().join("target")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("target"), &all[3]).unwrap();
+        assert_eq!(
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, follows),
+            Err(Unsafe::Executable)
+        );
+    }
+}
+
 /// Real ACLs set through `icacls`, for this module's tests and for the crates whose storage checks use it.
 #[cfg(all(windows, any(test, feature = "test-support")))]
 pub mod fixtures {
@@ -612,11 +807,7 @@ mod native_tests {
         match admit_path(path, need) {
             Ok(()) => true,
             Err(error) => {
-                assert_eq!(
-                    error.kind(),
-                    std::io::ErrorKind::PermissionDenied,
-                    "{error}"
-                );
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
                 false
             }
         }
@@ -721,6 +912,6 @@ mod native_tests {
     fn a_missing_path_is_an_error_not_a_refusal() {
         let directory = tempfile::tempdir().unwrap();
         let error = admit_path(&directory.path().join("absent"), Need::Private).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }
