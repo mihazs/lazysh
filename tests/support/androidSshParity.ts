@@ -27,6 +27,7 @@ export const sshParityCases=[
   'ownedSshMoshCustomServerPathAndPortRangeThroughRealUi',
   'ownedSshClientEnvironmentThroughRealUi',
   'ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi',
+  'ownedSshTerminalSelectionCopyReachesTheSystemClipboardThroughRealUi',
 ] as const;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
 type ParityServer='primary'|'bastion'|'rotated'|'preview'|'files'|'devices';
