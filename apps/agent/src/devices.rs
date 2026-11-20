@@ -742,6 +742,18 @@ fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
         json!({"schemaVersion":1,"platform":platform,"id":id,"operation":operation,"status":"requested"}),
     )
 }
+/// Send one `adb` input command to the device and answer that it was requested.
+fn adb_requested(
+    runner: &mut impl Runner,
+    id: &str,
+    operation: &str,
+    arguments: &[String],
+) -> Result<Value> {
+    runner.output(Tool::Adb, arguments, MAX_SDK_TEXT)?;
+    Ok(
+        json!({"schemaVersion":1,"platform":"android","id":id,"operation":operation,"status":"requested"}),
+    )
+}
 fn tap_args(id: &str, x: u32, y: u32) -> Vec<String> {
     args(&[
         "-s",

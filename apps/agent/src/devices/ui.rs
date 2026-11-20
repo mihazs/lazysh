@@ -303,10 +303,7 @@ pub(super) fn execute(runner: &mut impl Runner, id: &str, command: UiCommand) ->
             ]),
         ),
     };
-    runner.output(Tool::Adb, &arguments, MAX_SDK_TEXT)?;
-    Ok(
-        json!({"schemaVersion":1,"platform":"android","id":id,"operation":operation,"status":"requested"}),
-    )
+    adb_requested(runner, id, operation, &arguments)
 }
 
 #[cfg(test)]

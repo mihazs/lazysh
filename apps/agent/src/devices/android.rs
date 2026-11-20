@@ -171,10 +171,7 @@ pub(super) fn execute(runner: &mut impl Runner, id: &str, action: AndroidAction)
             ..
         } => ("swipe", swipe_args(id, [x, y, to_x, to_y], duration_ms)),
     };
-    runner.output(Tool::Adb, &arguments, MAX_SDK_TEXT)?;
-    Ok(
-        json!({"schemaVersion":1,"platform":"android","id":id,"operation":operation,"status":"requested"}),
-    )
+    adb_requested(runner, id, operation, &arguments)
 }
 
 fn line(reader: &mut impl BufRead) -> Result<Vec<u8>> {
