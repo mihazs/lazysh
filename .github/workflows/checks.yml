@@ -1197,6 +1197,9 @@ jobs:
         run: "cargo test --locked -p lazysh-common --lib windows_acl::"
       - name: Exercise native companion WAL admission and recovery
         run: bun run test:storage
+      - name: Exercise managed hook setup against native macOS ACLs, links and replacement races
+        if: runner.os == 'macOS'
+        run: cargo test --locked -p lazysh-agent --test hook_setup
       - name: Build pinned Parakeet runtime and exercise native ACL storage
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Exercise native desktop launch parsing and original-lease admission
