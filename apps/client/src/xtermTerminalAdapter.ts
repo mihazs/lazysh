@@ -10,7 +10,7 @@ import {createTerminal, keepViewportScrolls, observeTerminalInput, syncTerminalV
 import {inclusiveEnd} from './terminalTouchSelection';
 import {TerminalEvents} from './terminalEvents';
 import {cwdFromOsc7, searchRows} from './terminalText';
-import {selectTerminalRange, terminalCellAt, terminalWordAt} from './xterm/selection';
+import {selectedTerminalText, selectTerminalRange, terminalCellAt, terminalWordAt} from './xterm/selection';
 import type {
   CanonicalResize, Disposable, TerminalAdapter, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
   TerminalModes, TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalScrollAction, TerminalSearchHit,
@@ -190,7 +190,7 @@ export class XtermTerminalAdapter implements TerminalAdapter {
 
   getSelection(): TerminalSelection | undefined {
     const range = this.selectionRange();
-    return range && {range, text: this.xterm.getSelection()};
+    return range && {range, text: selectedTerminalText(this.xterm)};
   }
 
   selectionRange(): TerminalRange | undefined {
@@ -199,7 +199,7 @@ export class XtermTerminalAdapter implements TerminalAdapter {
   }
 
   hasSelection() { return this.xterm.hasSelection(); }
-  selectedText() { return this.xterm.getSelection(); }
+  selectedText() { return selectedTerminalText(this.xterm); }
 
   select(range: TerminalRange) { selectTerminalRange(this.xterm, range); }
   selectWordAt(cell: TerminalCell) { return terminalWordAt(this.xterm, cell); }
