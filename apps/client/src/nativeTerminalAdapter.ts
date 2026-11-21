@@ -1,6 +1,7 @@
 import {isAndroidApp} from './isAndroidApp';
 import type {NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeInputCapture} from './nativeInputCapture';
+import {SurfaceInput} from './nativeSurfaceInput';
 import {attachPointerSelection} from './nativePointerSelection';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
@@ -12,7 +13,7 @@ import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 import {searchRows} from './terminalText';
 
-/** Honest for a core without a renderer: it parses, scrolls and answers questions about the screen, and draws nothing. */
+/** Honest for a core without a renderer (`ime` is xterm.js' input observation, which this backend does not have: its keyboards are the capture and the Android input view): it parses, scrolls and answers questions about the screen, and draws nothing. */
 export const nativeCapabilities: TerminalCapabilities = {
   nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: false, accessibility: false,
   screenInspection: true, canonicalMoshResize: false, customBoldColor: false,
@@ -51,7 +52,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private asking = false;
   private askAgain = false;
   private anchor: HTMLElement | undefined;
-  private capture: NativeInputCapture | undefined;
+  private capture: {readonly element?: HTMLTextAreaElement; focus(): void; blur(): void; dispose(): void} | undefined;
   private pointer: Disposable | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
   private preferences: TerminalPreferences | undefined;
@@ -88,7 +89,8 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.capture?.dispose(); this.pointer?.dispose();
     this.pointer = attachPointerSelection(this, anchor);
     // Android types through a native input connection (#1328), not a DOM editor.
-    this.capture = isAndroidApp() ? undefined : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences: () => this.preferences});
+    const preferences = () => this.preferences;
+    this.capture = isAndroidApp() ? (target.kind === 'native' && target.surface ? new SurfaceInput(this, target.surface, anchor, preferences) : undefined) : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences});
   }
 
   async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.pointer = this.capture = this.anchor = undefined; }

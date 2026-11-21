@@ -290,6 +290,8 @@ pub fn run() {
                 native_terminal_surface::native_terminal_surface_place,
                 native_terminal_surface::native_terminal_surface_remove,
                 native_terminal_surface::native_terminal_surface_state,
+                native_terminal_surface::native_terminal_surface_input,
+                native_terminal_surface::native_terminal_surface_focus,
                 session_background::open_notification_settings,
                 session_background::request_notification_permission,
                 voice::voice_models,

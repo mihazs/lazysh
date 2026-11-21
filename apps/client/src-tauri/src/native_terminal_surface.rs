@@ -191,6 +191,50 @@ pub async fn native_terminal_surface_state(
     }
 }
 
+/// What the surface's keyboard editor delivered since the last call, once and in order: committed text, keys (as the core takes them)
+/// and the composing text to draw at the cursor. Waits until there is something. The page forwards it to the core under its own
+/// lease, so a locked app is refused here (the command is not allowed while locked) and a replaced renderer's keys are refused there.
+#[tauri::command]
+pub async fn native_terminal_surface_input(
+    app: AppHandle,
+    session: String,
+) -> Result<serde_json::Value, String> {
+    validate_session(&session)?;
+    #[cfg(target_os = "android")]
+    {
+        call(&app, "input", serde_json::json!({ "session": session })).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("This build has no native terminal input.".into())
+    }
+}
+
+/// Gives the session's keyboard editor focus and opens the soft keyboard, or takes both away.
+#[tauri::command]
+pub async fn native_terminal_surface_focus(
+    app: AppHandle,
+    session: String,
+    focused: bool,
+) -> Result<(), String> {
+    validate_session(&session)?;
+    #[cfg(target_os = "android")]
+    {
+        call::<()>(
+            &app,
+            "focus",
+            serde_json::json!({ "session": session, "focused": focused }),
+        )
+        .await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, focused);
+        Err("This build has no native terminal input.".into())
+    }
+}
+
 #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
 fn unavailable() -> String {
     "This build has no native terminal surface.".into()
@@ -340,6 +384,8 @@ mod tests {
         for protected in [
             "native_terminal_surface_place",
             "native_terminal_surface_state",
+            "native_terminal_surface_input",
+            "native_terminal_surface_focus",
         ] {
             assert!(!allowed_while_locked(protected), "{protected}");
         }
