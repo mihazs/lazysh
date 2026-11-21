@@ -207,6 +207,7 @@ as the paged commands (the last `--limit` messages of the recorded branch, at mo
 partial last line ignored until its newline arrives), so an idle conversation costs one
 `open` and `fstat` per interval. After a projection that took *t*, the next check waits at
 least 3*t*, which keeps a very large transcript below about a quarter of one core.
+Heartbeats are still sent during that wait; only a single projection that itself runs longer than 5 s delays one.
 
 | Frame | Fields | Meaning |
 | --- | --- | --- |
