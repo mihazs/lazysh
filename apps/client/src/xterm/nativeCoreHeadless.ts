@@ -9,6 +9,7 @@ import {decodeClipboardRequest} from '../preferences';
 import type {NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from '../nativeCoreBridge';
 import {cwdFromOsc7} from '../terminalText';
 import type {TerminalModes} from '../terminalAdapter';
+import type {CoreKeyInput} from '../terminalPlatformKeys';
 
 export type HeadlessCoreOptions = {
   columns?: number; rows?: number; scrollbackLines?: number;
@@ -26,6 +27,8 @@ export type HeadlessCore = NativeCoreBridge & {
   readonly calls: string[];
   /** What the adapter sent the program. */
   readonly inputs: {data: string | Uint8Array; origin: string}[];
+  /** The keys the adapter sent, as the core would encode them. */
+  readonly keys: CoreKeyInput[];
 };
 
 export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 200, window = 256, feed = true}: HeadlessCoreOptions = {}): HeadlessCore {
@@ -36,7 +39,7 @@ export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 20
   terminal.onBell(() => send({type: 'bell'}));
   terminal.parser.registerOscHandler(7, data => { const path = cwdFromOsc7(data); if (path !== undefined) send({type: 'cwd', path}); return true; });
   terminal.parser.registerOscHandler(52, data => { const text = decodeClipboardRequest(data); if (text !== undefined) send({type: 'clipboard', text}); return true; });
-  const calls: string[] = [], inputs: HeadlessCore['inputs'] = [];
+  const calls: string[] = [], inputs: HeadlessCore['inputs'] = [], keys: CoreKeyInput[] = [];
   let closed = false;
 
   const snapshot = (): NativeCoreSnapshot => {
@@ -53,7 +56,7 @@ export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 20
   };
   const parse = (bytes: Uint8Array) => new Promise<void>(resolve => terminal.write(bytes, resolve));
   const core: HeadlessCore = {
-    calls, inputs,
+    calls, inputs, keys,
     get closed() { return closed; },
     async snapshot() { calls.push('snapshot'); return snapshot(); },
     async scroll(action) {
@@ -66,6 +69,7 @@ export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 20
       return snapshot();
     },
     async input(data, origin) { inputs.push({data, origin}); },
+    async key(input) { keys.push(input); },
     subscribe(listener) { listeners.add(listener); return {dispose: () => { listeners.delete(listener); }}; },
     async close() { closed = true; terminal.dispose(); },
     async output(bytes) { await parse(bytes); send({type: 'changed'}); },
