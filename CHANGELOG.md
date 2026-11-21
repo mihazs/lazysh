@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.91.3] - 2026-11-21
+
+### Under the hood
+
+- **terminal:** stop the daemons a program test starts when the test ends ([#2269](https://github.com/mihazs/lazysh/pull/2269))
+
 ## [1.91.2] - 2026-11-21
 
 ### New

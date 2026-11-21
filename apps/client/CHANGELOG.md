@@ -1,5 +1,11 @@
 # @lazysh/client
 
+## 1.91.3
+
+### Patch Changes
+
+- test(terminal): stop the daemons a program test starts when the test ends ([#2269](https://github.com/mihazs/lazysh/pull/2269))
+
 ## 1.91.2
 
 ### Patch Changes
