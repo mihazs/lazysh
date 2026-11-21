@@ -110,7 +110,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
         if (current === request.current) setContent({ path: next, text });
       }
     } catch (e) {
-      if (current === request.current) setError(captureUiError(e));
+      // A refused file must not leave the previous file's preview (and its media frame) on screen under the refusal.
+      if (current === request.current) { setContent(null); setError(captureUiError(e)); }
     } finally {
       if (current === request.current) setBusy(false);
     }
