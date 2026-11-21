@@ -36,10 +36,9 @@ export function AccountUsageDetails({model,onRestoreHostTools,onOpenCompanion}:{
     {problem&&<p role="status">{problem}</p>}
     {response?.state==='disconnected'&&onRestoreHostTools&&<button type="button" onClick={()=>onRestoreHostTools(refresh)}>{t('accountUsageRestore')}</button>}
     {onOpenCompanion&&(response?.state==='companion_required'||response?.state==='invalid_report')&&<button type="button" onClick={onOpenCompanion}><Download size={16} aria-hidden="true"/>{t('accountUsageInstall')}</button>}
-    {entry&&response?.source&&<p>{t(response.source==='builtin'?'accountUsageBuiltin':'accountUsageExternal')}</p>}
     {response?.report?.entries.length===0&&<p>{t('accountUsageEmpty')}</p>}
     {entry&&<>
-      <p>{t('accountUsageDescription')}</p>
+      <details className="usage-help"><summary>{t('accountUsageAbout')}</summary><p>{t('accountUsageDescription')}</p>{response?.source&&<p>{t(response.source==='builtin'?'accountUsageBuiltin':'accountUsageExternal')}</p>}</details>
       <label>{t('accountUsageAccount')}<select value={entry.id} onChange={e=>select(e.target.value)}>{response?.report?.entries.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select></label>
       <p>{entry.plan??t('accountUsagePlanUnknown')} · {t(entry.status==='error'?'accountUsageProviderUnavailable':accountUsageStale(entry)||response?.state!=='ready'?'accountUsageStale':'accountUsageLatest')}{entry.fetchedAt&&<> · <time dateTime={entry.fetchedAt}>{formatDateTime(new Date(entry.fetchedAt))}</time></>}</p>
       <dl>{entry.rows.map((row,index)=>{

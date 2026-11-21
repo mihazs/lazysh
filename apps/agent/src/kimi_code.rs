@@ -73,6 +73,7 @@ fn observe(payload: &Value, pane: Option<&str>) -> Result<Option<Observation>> {
             // Asked, not confirmed waiting: the request may already be answered or cancelled.
             summary: "Approval requested".into(),
             pane_id: pane.map(str::to_owned),
+            pane_server: None,
             waiting: Some(Waiting::Approval),
         },
         request,
@@ -86,6 +87,7 @@ impl Store {
         &mut self,
         observation: &Observation,
         reported_at: DateTime<Utc>,
+        admission: crate::notification_policy::Admission,
     ) -> Result<()> {
         let now = reported_at.timestamp_micros() as f64 / 1_000_000.0;
         let phase = StoragePhase::SessionWrite;
@@ -110,7 +112,7 @@ impl Store {
                     )
                     .map_err(fail)?;
                 if new == 1 {
-                    write_event(&transaction, event, now)?;
+                    write_event(&transaction, event, now, admission)?;
                 }
                 None
             }

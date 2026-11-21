@@ -7,6 +7,8 @@ mod commit;
 mod files;
 #[path = "../src/hook_setup/json.rs"]
 mod json;
+#[path = "../src/hook_setup/kimi_toml.rs"]
+mod kimi_toml;
 #[cfg(unix)]
 #[path = "../src/managed_directory.rs"]
 mod managed_directory;
@@ -17,7 +19,7 @@ mod render;
 #[path = "../src/hook_setup/state.rs"]
 mod state;
 use json::{rewrite, Entry, Fault};
-use lazysh_agent::{claude_config, hooks, Error, Result};
+use lazysh_agent::{claude_config, hooks, kimi_code, Error, Result};
 const WHOLE_FILE_AGENTS: [record::Agent; 4] = [
     record::Agent::Opencode,
     record::Agent::Cline,
@@ -231,10 +233,44 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
     }
 }
 
+/// Runs a rendered shell hook with an empty `PATH` and asserts it delivered silently.
+#[cfg(unix)]
+fn run_shell_hook(command: &str, state: &std::path::Path, payload: &Value) {
+    let output = process::run(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", command])
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", state),
+        &serde_json::to_vec(payload).unwrap(),
+    );
+    assert!(
+        output.status.success(),
+        "status={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
+/// A provider file the companion must not create: inspection refuses and status reports why, writing nothing.
+#[cfg(unix)]
+fn assert_missing_provider_is_unsupported(fixture: &ProfileFixture, reason: &'static str) {
+    std::fs::remove_file(fixture.provider()).unwrap();
+    assert!(matches!(
+        files::inspect(fixture.target.clone(), &fixture.companion),
+        Err(Error::Installation(refused)) if refused == reason
+    ));
+    let status = fixture.cli("status", None);
+    assert_eq!(status["supported"], false);
+    assert_eq!(status["reason"], reason);
+    assert!(!fixture.provider().exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_path() {
-    use std::{fs, process::Command};
+    use std::fs;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("companion with ' and $ spaces");
     fs::copy(binary::path(), &path).unwrap();
@@ -271,21 +307,7 @@ fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_
             "/hooks/0/command"
         };
         let command = hook.group.pointer(pointer).unwrap().as_str().unwrap();
-        let output = process::run(
-            Command::new("/bin/sh")
-                .args(["-c", command])
-                .env_clear()
-                .env("PATH", "")
-                .env("LAZYSH_STATE_DIR", &state),
-            &serde_json::to_vec(&payload).unwrap(),
-        );
-        assert!(
-            output.status.success(),
-            "status={:?} stderr={}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+        run_shell_hook(command, &state, &payload);
         let report = snapshot(&path, &state);
         assert_eq!(report["sessions"][0]["sessionId"], "owned-hook");
         assert_eq!(report["sessions"][0]["state"], "working");
@@ -563,12 +585,26 @@ struct ProfileFixture {
 impl ProfileFixture {
     fn new(agent: record::Agent) -> Self {
         use std::{fs, os::unix::fs::PermissionsExt};
-        let root = tempfile::tempdir().unwrap();
+        // The companion namespace must be physical: macOS keeps its temp dir behind the
+        // /var symlink, which admission refuses to follow.
+        let root = tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let profile = root.path().join("selected profile");
         fs::create_dir(&profile).unwrap();
         fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
         if agent == record::Agent::Droid {
             fs::write(profile.join("hooks.json"), "{}\n").unwrap();
+        }
+        if agent == record::Agent::KimiCode {
+            fs::write(
+                profile.join("config.toml"),
+                "default_model = \"synthetic\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(
+                profile.join("config.toml"),
+                fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
         }
         let companion = root.path().join("private companion's $ path");
         fs::copy(binary::path(), &companion).unwrap();
@@ -635,10 +671,6 @@ impl Drop for ProfileFixture {
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_foreign_values_or_modes(
 ) {
     use files::Action;
@@ -706,10 +738,6 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection() {
     for agent in WHOLE_FILE_AGENTS {
         use files::Action;
@@ -766,10 +794,6 @@ fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection()
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fresh_explicit_plan() {
     use commit::Boundary;
     use files::Action;
@@ -819,10 +843,6 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone() {
     for agent in WHOLE_FILE_AGENTS {
         use files::Action;
@@ -842,10 +862,6 @@ fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn provider_changes_at_both_commit_cutoffs_are_preserved_and_never_replayed() {
     use files::Action;
     use std::fs;
@@ -886,10 +902,6 @@ fn provider_changes_at_both_commit_cutoffs_are_preserved_and_never_replayed() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn source_and_profile_replacements_before_provider_commit_cannot_change_the_replacement_namespace()
 {
     use files::Action;
@@ -938,10 +950,6 @@ fn source_and_profile_replacements_before_provider_commit_cannot_change_the_repl
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_named_root_file() {
     for agent in WHOLE_FILE_AGENTS {
         use files::Action;
@@ -970,10 +978,6 @@ fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_nam
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "managed writes require native ACL qualification; unsupported before mutation"
-)]
 fn unsafe_provider_files_locks_and_oversized_binaries_are_refused_without_mutating_user_files() {
     use files::Action;
     use std::{
@@ -1083,46 +1087,65 @@ fn actual_different_provider_group_is_plan_bound_and_preserved_through_install_a
         .contains("foreign private value"));
 }
 
-#[cfg(target_os = "linux")]
-fn set_fixture_acl(file: &std::fs::File, default: bool) {
-    use std::os::fd::AsRawFd;
-    // Linux UAPI POSIX_ACL_XATTR_VERSION=2 and five little-endian entries.
-    // A named group read entry remains masked on a 0600 inherited stage.
-    let mut acl = 2_u32.to_le_bytes().to_vec();
-    for (tag, permissions, id) in [
-        (1_u16, 7_u16, u32::MAX),
-        (4, 0, u32::MAX),
-        (8, 4, 3),
-        (16, 4, u32::MAX),
-        (32, 0, u32::MAX),
-    ] {
-        acl.extend(tag.to_le_bytes());
-        acl.extend(permissions.to_le_bytes());
-        acl.extend(id.to_le_bytes());
+/// Adds one ACL the installer cannot preserve: an access ACL on a file, or an entry
+/// that new children of a directory would inherit when `default` is set.
+fn set_fixture_acl(path: &std::path::Path, default: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // Linux UAPI POSIX_ACL_XATTR_VERSION=2 and five little-endian entries.
+        // A named group read entry remains masked on a 0600 inherited stage.
+        let mut acl = 2_u32.to_le_bytes().to_vec();
+        for (tag, permissions, id) in [
+            (1_u16, 7_u16, u32::MAX),
+            (4, 0, u32::MAX),
+            (8, 4, 3),
+            (16, 4, u32::MAX),
+            (32, 0, u32::MAX),
+        ] {
+            acl.extend(tag.to_le_bytes());
+            acl.extend(permissions.to_le_bytes());
+            acl.extend(id.to_le_bytes());
+        }
+        let name = if default {
+            c"system.posix_acl_default"
+        } else {
+            c"system.posix_acl_access"
+        };
+        let file = std::fs::File::open(path).unwrap();
+        // SAFETY: this is an owned fixture descriptor and a complete Linux ACL value.
+        assert_eq!(
+            unsafe {
+                libc::fsetxattr(
+                    file.as_raw_fd(),
+                    name.as_ptr(),
+                    acl.as_ptr().cast(),
+                    acl.len(),
+                    0,
+                )
+            },
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
     }
-    let name = if default {
-        c"system.posix_acl_default"
-    } else {
-        c"system.posix_acl_access"
-    };
-    // SAFETY: this is an owned fixture descriptor and a complete Linux ACL value.
-    assert_eq!(
-        unsafe {
-            libc::fsetxattr(
-                file.as_raw_fd(),
-                name.as_ptr(),
-                acl.as_ptr().cast(),
-                acl.len(),
-                0,
-            )
-        },
-        0,
-        "{}",
-        std::io::Error::last_os_error()
-    );
+    #[cfg(target_os = "macos")]
+    {
+        let entry = if default {
+            "everyone allow read,file_inherit"
+        } else {
+            "everyone allow read"
+        };
+        let status = std::process::Command::new("/bin/chmod")
+            .args(["+a", entry])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "chmod +a {entry} failed");
+    }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_intact() {
     use std::{fs, os::unix::fs::PermissionsExt};
@@ -1134,7 +1157,7 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
         } else {
             &fixture.provider()
         };
-        set_fixture_acl(&fs::File::open(path).unwrap(), default);
+        set_fixture_acl(path, default);
         let error = match files::inspect(fixture.target.clone(), &fixture.companion) {
             Err(error) => error,
             Ok(_) => panic!("ACL was accepted"),
@@ -1169,7 +1192,7 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
     let profile = fixture.target.profile.clone();
     interrupt(move |point| {
         if point == commit::Boundary::BeforeRecord {
-            set_fixture_acl(&fs::File::open(&profile)?, true);
+            set_fixture_acl(&profile, true);
         }
         Ok(())
     });
@@ -1182,16 +1205,22 @@ fn actual_acls_and_special_modes_refuse_mutation_and_late_acl_keeps_provider_int
     assert!(!fixture.manifest().exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl ProfileFixture {
+    /// The companion store this fixture's hooks and status run against, absent until a hook reports.
+    fn state(&self) -> std::path::PathBuf {
+        self._root.path().join("state")
+    }
     fn cli(&self, action: &str, plan: Option<&str>) -> Value {
+        self.cli_in(&self.state(), action, plan)
+    }
+    fn cli_in(&self, state: &std::path::Path, action: &str, plan: Option<&str>) -> Value {
         let mut command = std::process::Command::new(&self.companion);
-        command.env_clear().env("PATH", "").args([
-            "hooks",
-            action,
-            "--agent",
-            self.target.agent.name(),
-        ]);
+        command
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", state)
+            .args(["hooks", action, "--agent", self.target.agent.name()]);
         if action != "preview" {
             command.arg("--profile-root").arg(&self.target.profile);
         }
@@ -1201,7 +1230,7 @@ impl ProfileFixture {
         json_output::decode(command.output().unwrap())
     }
 }
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile() {
     for agent in [
@@ -1214,6 +1243,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         record::Agent::Cline,
         record::Agent::Copilot,
         record::Agent::Amp,
+        record::Agent::KimiCode,
     ] {
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
@@ -1240,7 +1270,137 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
     }
 }
 
+/// The store's file names and the bytes of its database and write-ahead log; the shared-memory
+/// index is left out because merely reading a write-ahead-log database touches it.
 #[cfg(target_os = "linux")]
+fn store_fingerprint(state: &std::path::Path) -> (Vec<String>, Vec<Vec<u8>>) {
+    let mut names: Vec<String> = std::fs::read_dir(state)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    let bytes = ["events.sqlite3", "events.sqlite3-wal"]
+        .map(|name| std::fs::read(state.join(name)).unwrap_or_default());
+    (names, bytes.into())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn hook_status_tells_configured_but_silent_from_a_received_local_event_and_never_writes_the_store()
+{
+    let prompt = json!({"hook_event_name":"UserPromptSubmit","session_id":"ready","cwd":"/work"});
+    let cases = [
+        (record::Agent::Claude, prompt.clone()),
+        (record::Agent::Codex, prompt.clone()),
+        (record::Agent::Droid, prompt.clone()),
+        (record::Agent::Copilot, prompt),
+        (
+            record::Agent::Gemini,
+            json!({"hook_event_name":"BeforeAgent","session_id":"ready","cwd":"/work"}),
+        ),
+        (
+            record::Agent::Cursor,
+            json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"ready","cwd":"/work"}),
+        ),
+        (
+            record::Agent::Opencode,
+            json!({"type":"session.status","properties":{"sessionID":"ready","status":{"type":"busy"}},"directory":"/work"}),
+        ),
+        (
+            record::Agent::Cline,
+            json!({"schemaVersion":1,"agentId":"a","conversationId":"ready","runId":"r","status":"start","directory":"/work"}),
+        ),
+        (
+            record::Agent::Amp,
+            json!({"schemaVersion":1,"threadId":"ready","state":"running","directory":"/work"}),
+        ),
+    ];
+    let bystanders = [
+        ProfileFixture::new(record::Agent::Claude),
+        ProfileFixture::new(record::Agent::Codex),
+    ];
+    for (agent, payload) in cases {
+        let fixture = ProfileFixture::new(agent);
+        let state = fixture.state();
+        let status = fixture.cli("status", None);
+        assert_eq!(status["readiness"]["localEvent"], json!({"state":"none"}));
+        assert!(!state.exists(), "status created the store for {agent:?}");
+        // Configured but silent: the hook files exist and no event has arrived.
+        fixture.cli("install", status["installPlan"].as_str());
+        let silent = fixture.cli("status", None);
+        assert_eq!(silent["state"], "configured");
+        assert_eq!(silent["readiness"]["localEvent"], json!({"state":"none"}));
+        assert!(!state.exists());
+        // The companion binary the hook runs records one lifecycle event.
+        let mut ingest = std::process::Command::new(&fixture.companion);
+        ingest
+            .args(["ingest", "--agent", agent.name()])
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", &state);
+        assert!(
+            process::run(&mut ingest, &serde_json::to_vec(&payload).unwrap())
+                .status
+                .success()
+        );
+        let reported = snapshot(&fixture.companion, &state)["sessions"][0]["updatedAt"].clone();
+        let before = store_fingerprint(&state);
+        let received = fixture.cli("status", None);
+        assert_eq!(received["state"], "configured");
+        assert_eq!(
+            received["readiness"]["localEvent"],
+            json!({"state":"received","lastEventAt":reported})
+        );
+        assert_eq!(store_fingerprint(&state), before, "status wrote the store");
+        // What this host cannot observe is never guessed, and the old fields stay as they were.
+        for key in [
+            "providerReloaded",
+            "projectTrusted",
+            "paneBound",
+            "remoteDelivery",
+        ] {
+            assert_eq!(received["readiness"][key], "notChecked");
+        }
+        assert_eq!(received["readiness"]["schemaVersion"], 1);
+        assert_eq!(received["reporting"], "notChecked");
+        assert_eq!(received["trust"], "notChecked");
+        // The event is the agent's own: another agent on the same store has reported nothing.
+        let other = &bystanders[usize::from(agent == record::Agent::Claude)];
+        assert_eq!(
+            other.cli_in(&state, "status", None)["readiness"]["localEvent"],
+            json!({"state":"none"})
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn hook_status_leaves_the_local_event_unchecked_when_the_store_cannot_be_read_safely() {
+    use std::{fs, os::unix::fs::symlink};
+    let unchecked = json!({"state":"notChecked"});
+    let fixture = ProfileFixture::new(record::Agent::Claude);
+    let state = fixture.state();
+    fs::create_dir(&state).unwrap();
+    let database = state.join("events.sqlite3");
+    fs::write(&database, "not a database").unwrap();
+    assert_eq!(
+        fixture.cli("status", None)["readiness"]["localEvent"],
+        unchecked
+    );
+    assert_eq!(fs::read(&database).unwrap(), b"not a database");
+    // A linked database is never followed, so whatever it points at is never read or changed.
+    fs::remove_file(&database).unwrap();
+    let elsewhere = state.join("elsewhere");
+    fs::write(&elsewhere, "").unwrap();
+    symlink(&elsewhere, &database).unwrap();
+    assert_eq!(
+        fixture.cli("status", None)["readiness"]["localEvent"],
+        unchecked
+    );
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"");
+}
+
+#[cfg(unix)]
 #[test]
 fn executable_namespaces_admit_owned_and_root_parents_but_refuse_mutable_and_linked_routes() {
     use std::{
@@ -1303,7 +1463,7 @@ fn executable_namespaces_admit_owned_and_root_parents_but_refuse_mutable_and_lin
     assert!(!fixture.manifest().exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn source_namespace_changes_at_each_commit_cutoff_never_publish_provider_hooks() {
     use std::{fs, os::unix::fs::PermissionsExt};
@@ -1425,7 +1585,7 @@ fn gemini_and_cursor_configuration_preserves_disable_policy_and_exact_native_env
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn cursor_schema_preparation_recovers_explicitly_and_edited_version_never_gets_adopted() {
     use std::fs;
@@ -1470,7 +1630,7 @@ fn cursor_schema_preparation_recovers_explicitly_and_edited_version_never_gets_a
     assert!(!unowned.target.profile.join(".lazysh-hooks.lock").exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn droid_standalone_hooks_preserve_fallback_profiles_and_refuse_shadowing_or_replacement() {
     use std::{fs, os::unix::fs::symlink};
@@ -1550,15 +1710,7 @@ fn droid_standalone_hooks_preserve_fallback_profiles_and_refuse_shadowing_or_rep
         )
         .is_err());
     }
-    fs::remove_file(fixture.provider()).unwrap();
-    assert!(matches!(
-        files::inspect(fixture.target.clone(), &fixture.companion),
-        Err(Error::Installation("HooksDroidStandaloneRequired"))
-    ));
-    let status = fixture.cli("status", None);
-    assert_eq!(status["supported"], false);
-    assert_eq!(status["reason"], "HooksDroidStandaloneRequired");
-    assert!(!fixture.provider().exists());
+    assert_missing_provider_is_unsupported(&fixture, "HooksDroidStandaloneRequired");
     symlink(&settings, fixture.provider()).unwrap();
     assert!(files::inspect(fixture.target.clone(), &fixture.companion).is_err());
     assert_eq!(fs::read_to_string(&settings).unwrap(), fallback);
@@ -1674,7 +1826,7 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
     );
     assert_eq!(result["schemaVersion"], 1);
     assert_eq!(result["supported"], true);
-    assert_eq!(result["managedSetupSupported"], cfg!(target_os = "linux"));
+    assert_eq!(result["managedSetupSupported"], true);
     assert_eq!(result["agents"].as_array().unwrap().len(), 11);
     assert_eq!(result["truncated"], false);
     assert!(discovered(&result, "claude")["executable"].is_null());
@@ -2070,6 +2222,7 @@ fn discovery_distinguishes_unavailable_profile_metadata_and_never_searches_cwd()
     assert_eq!(result["agents"].as_array().unwrap().len(), 1);
 }
 
+// Darwin's PATH_MAX is 1024 bytes, so no path can make a result large enough to reach the cap.
 #[cfg(target_os = "linux")]
 #[test]
 fn discovery_caps_serialized_result_bytes_and_marks_partial_metadata() {
@@ -2237,7 +2390,7 @@ fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
     assert!(!result.to_string().contains("PRIVATE"));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_hooks() {
     use files::Action;
@@ -2376,7 +2529,7 @@ fn discovery_v3_amp_preserves_raw_xdg_and_never_promotes_old_schemas() {
     assert!(!marker.exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn amp_foreign_shadow_blocks_install_but_never_blocks_exact_owned_removal() {
     use files::Action;
@@ -2433,7 +2586,7 @@ fn amp_foreign_shadow_blocks_install_but_never_blocks_exact_owned_removal() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn amp_shadow_changes_at_each_write_boundary_stale_the_plan_and_keep_recovery_removable() {
     use files::Action;
@@ -2517,7 +2670,7 @@ fn amp_shadow_changes_at_each_write_boundary_stale_the_plan_and_keep_recovery_re
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn amp_shadow_snapshot_is_ephemeral_and_does_not_rewrite_old_agent_plan_or_record_shapes() {
     for agent in WHOLE_FILE_AGENTS {
@@ -2533,4 +2686,283 @@ fn amp_shadow_snapshot_is_ephemeral_and_does_not_rewrite_old_agent_plan_or_recor
         assert_eq!(record.encode().unwrap(), encoded);
         assert!(!String::from_utf8(encoded).unwrap().contains("ampShadows"));
     }
+}
+
+#[cfg(unix)]
+fn kimi_hooks(text: &str) -> Vec<(String, String, i64)> {
+    let document = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .parse::<toml_edit::DocumentMut>()
+        .expect("the managed config stays valid TOML");
+    document
+        .get("hooks")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .map(|tables| {
+            tables
+                .iter()
+                .map(|table| {
+                    (
+                        table["event"].as_str().unwrap().into(),
+                        table["command"].as_str().unwrap().into(),
+                        table
+                            .get("timeout")
+                            .and_then(toml_edit::Item::as_integer)
+                            .unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+#[cfg(unix)]
+fn kimi_write(fixture: &ProfileFixture, text: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(fixture.provider(), text).unwrap();
+    std::fs::set_permissions(fixture.provider(), std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "managed writes require native ACL qualification; unsupported before mutation"
+)]
+fn kimi_code_install_appends_only_the_owned_suffix_and_remove_restores_every_foreign_byte() {
+    use files::Action;
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let foreign_hook = "[[hooks]]\r\nevent = \"Stop\"\r\ncommand = \"echo foreign\"\r\n";
+    for original in [
+        // CRLF line endings, a secret and a foreign hook.
+        format!("# keep\r\napi_key = \"sk-PRIVATE\"\r\n\r\n{foreign_hook}"),
+        // No trailing newline, and a table header as the last line.
+        "x = 1\n[providers.local]\nname = \"a\"".to_string(),
+        String::new(),
+    ] {
+        let fixture = ProfileFixture::new(record::Agent::KimiCode);
+        kimi_write(&fixture, &original);
+        let entries = render::entries(record::Agent::KimiCode, &fixture.companion).unwrap();
+        let suffix = kimi_toml::suffix(&entries).unwrap();
+        assert_eq!(fixture.apply_current(Action::Install).status, "configured");
+        let installed = fs::read_to_string(fixture.provider()).unwrap();
+        assert_eq!(installed, format!("{original}{suffix}"));
+        assert_eq!(
+            fs::metadata(fixture.provider())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let foreign = kimi_hooks(&original);
+        let hooks = kimi_hooks(&installed);
+        assert_eq!(hooks[..foreign.len()], foreign[..]);
+        let ours = &hooks[foreign.len()..];
+        assert_eq!(
+            ours.iter()
+                .map(|(event, ..)| event.as_str())
+                .collect::<Vec<_>>(),
+            kimi_code::EVENTS
+        );
+        assert!(ours.iter().all(|(_, command, timeout)| *timeout == 5
+            && command.ends_with("' ingest --agent kimi-code")));
+        let manifest = fs::read_to_string(fixture.manifest()).unwrap();
+        assert!(!manifest.contains("sk-PRIVATE"));
+        assert_eq!(fixture.apply_current(Action::Install).status, "reused");
+        assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+        assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), original);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "managed writes require native ACL qualification; unsupported before mutation"
+)]
+fn kimi_code_conflicts_when_the_owned_suffix_is_not_the_exact_end_of_the_file() {
+    use files::Action;
+    use state::Observation;
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::KimiCode);
+    kimi_write(&fixture, "# keep\nkey = \"secret\"\n");
+    fixture.apply_current(Action::Install);
+    let installed = fs::read_to_string(fixture.provider()).unwrap();
+    assert_eq!(fixture.inspect().observation, Some(Observation::Configured));
+    // A foreign edit before the suffix is kept, and removal only truncates the suffix.
+    kimi_write(&fixture, &installed.replacen("# keep", "# edited", 1));
+    assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+    assert_eq!(
+        fs::read_to_string(fixture.provider()).unwrap(),
+        "# edited\nkey = \"secret\"\n"
+    );
+    fixture.apply_current(Action::Install);
+    let installed = fs::read_to_string(fixture.provider()).unwrap();
+    let suffix =
+        kimi_toml::suffix(&render::entries(record::Agent::KimiCode, &fixture.companion).unwrap())
+            .unwrap();
+    for tampered in [
+        format!("{installed}[extra]\nforeign = true\n"),
+        format!("{installed}\n"),
+        installed.replacen("timeout = 5", "timeout = 6", 1),
+        installed.replacen("PermissionResult", "Stop", 1),
+        // The same owned block moved to the front of the file.
+        format!("{suffix}{}", installed.strip_suffix(&suffix).unwrap()),
+    ] {
+        kimi_write(&fixture, &tampered);
+        assert_eq!(
+            fixture.inspect().observation,
+            Some(Observation::Conflict),
+            "{tampered:?}"
+        );
+        assert!(matches!(
+            fixture.inspect().plan(Action::Remove),
+            Err(Error::Installation("HooksConflict"))
+        ));
+        assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), tampered);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "managed writes require native ACL qualification; unsupported before mutation"
+)]
+fn kimi_code_interrupted_install_is_prepared_or_configured_and_a_fresh_plan_completes() {
+    use files::Action;
+    use state::Observation;
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::KimiCode);
+    let original = fs::read_to_string(fixture.provider()).unwrap();
+    fixture.prepare_without_provider(&fixture.plan(Action::Install));
+    assert_eq!(fixture.inspect().observation, Some(Observation::Prepared));
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), original);
+    assert_eq!(fixture.apply_current(Action::Install).status, "configured");
+    assert_eq!(fixture.inspect().observation, Some(Observation::Configured));
+    // The provider write landed but the final check was cut short: the file is exactly the configured one.
+    assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+    interrupt(|point| {
+        if point == commit::Boundary::AfterProvider {
+            Err(Error::Installation("HooksInterrupted"))
+        } else {
+            Ok(())
+        }
+    });
+    let plan = fixture.plan(Action::Install);
+    assert_eq!(
+        fixture.apply(Action::Install, &plan).unwrap().status,
+        "uncertain"
+    );
+    clear_interrupt();
+    assert_eq!(fixture.inspect().observation, Some(Observation::Configured));
+    assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn kimi_code_refuses_a_missing_config_and_a_config_the_suffix_cannot_extend() {
+    use files::Action;
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::KimiCode);
+    let entries = render::entries(record::Agent::KimiCode, &fixture.companion).unwrap();
+    let twin = &entries[0].group;
+    let twin = format!(
+        "[[hooks]]\nevent = {}\ncommand = {}\ntimeout = 5\n",
+        twin["event"], twin["command"]
+    );
+    for original in [
+        "\u{feff}telemetry = false\n",
+        "hooks = []\n",
+        "[hooks]\nevent = \"Stop\"\n",
+        "key = [unterminated\n",
+        "key = \"unterminated\n",
+        &twin,
+    ] {
+        kimi_write(&fixture, original);
+        assert!(
+            matches!(
+                fixture.inspect().plan(Action::Install),
+                Err(Error::Installation("HooksConflict"))
+            ),
+            "{original:?}"
+        );
+        assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), original);
+        assert!(!fixture.manifest().exists());
+    }
+    // A BOM introduced after a reviewed valid plan is still refused before creating a manifest.
+    kimi_write(&fixture, "telemetry = false\n");
+    let valid_plan = fixture.plan(Action::Install);
+    let bom = "\u{feff}telemetry = false\n";
+    kimi_write(&fixture, bom);
+    assert!(matches!(
+        fixture.apply(Action::Install, &valid_plan),
+        Err(Error::Installation("HooksConflict"))
+    ));
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), bom);
+    assert!(!fixture.manifest().exists());
+    assert_missing_provider_is_unsupported(&fixture, "HooksKimiConfigRequired");
+    assert!(!fixture.manifest().exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn kimi_code_installed_hook_runs_the_quoted_companion_and_matches_the_printed_fragment() {
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::KimiCode);
+    let configured = fixture.cli(
+        "install",
+        fixture.cli("status", None)["installPlan"].as_str(),
+    );
+    assert_eq!(configured["outcome"]["status"], "configured");
+    let hooks = kimi_hooks(&fs::read_to_string(fixture.provider()).unwrap());
+    let printed = kimi_hooks(hooks::kimi_code_config()["content"].as_str().unwrap());
+    assert_eq!(
+        hooks.iter().map(|(e, _, t)| (e, t)).collect::<Vec<_>>(),
+        printed.iter().map(|(e, _, t)| (e, t)).collect::<Vec<_>>()
+    );
+    let (_, command, _) = hooks
+        .iter()
+        .find(|(e, ..)| e == "PermissionRequest")
+        .unwrap();
+    let payload = json!({"hook_event_name":"PermissionRequest","session_id":"owned-session","agent_id":"main","cwd":"/owned/project","id":"approval_a","turn_id":0,"tool_call_id":"call_1","tool_name":"Bash","tool_input":{"command":"PRIVATE-COMMAND"}});
+    let state = fixture._root.path().join("state");
+    run_shell_hook(command, &state, &payload);
+    let report = snapshot(&fixture.companion, &state);
+    assert_eq!(report["sessions"][0]["state"], "needs_attention");
+    assert!(!report.to_string().contains("PRIVATE-COMMAND"));
+}
+
+#[test]
+fn discovery_v4_promotes_only_the_current_kimi_code_profile_and_keeps_older_schemas_unchanged() {
+    use std::fs;
+    let (root, bin, _marker) = metadata_fixture("kimi");
+    let home = root.path();
+    fs::create_dir(home.join(".kimi-code")).unwrap();
+    fs::create_dir(home.join(".kimi")).unwrap();
+    for (version, setup) in [
+        (None, "manual"),
+        (Some(2), "manual"),
+        (Some(3), "manual"),
+        (Some(4), "managed"),
+    ] {
+        let result = discover_metadata_version(home, bin.as_os_str(), &[], version);
+        assert_eq!(result["schemaVersion"], version.unwrap_or(1));
+        let kimi = discovered(&result, "kimi");
+        assert_eq!(kimi["setup"], setup, "{version:?}");
+        // The current Kimi Code profile is always listed first; the legacy one is never selectable as current.
+        assert_eq!(kimi["profiles"][0]["path"], json!(home.join(".kimi-code")));
+        assert_eq!(kimi["profiles"][1]["path"], json!(home.join(".kimi")));
+    }
+    // A newer schema keeps the providers every earlier schema made managed.
+    let discovery = |agent: &str| {
+        let (root, bin, _marker) = metadata_fixture(agent);
+        fs::create_dir_all(root.path().join(".copilot")).unwrap();
+        fs::create_dir_all(root.path().join(".config/amp")).unwrap();
+        let result = discover_metadata_version(root.path(), bin.as_os_str(), &[], Some(4));
+        discovered(&result, agent)["setup"].clone()
+    };
+    assert_eq!(discovery("copilot"), "managed");
+    assert_eq!(discovery("amp"), "managed");
 }

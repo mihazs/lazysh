@@ -1,5 +1,6 @@
 //! Fixture-only Jump To investigation. No product API, helper installation or IPC.
 use super::*;
+use crate::tmux_jump::Target;
 use std::{
     io::Read,
     os::unix::fs::PermissionsExt,
@@ -14,6 +15,8 @@ type Probe<T> = std::result::Result<T, String>;
 mod agent_session;
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
+#[path = "tmux_pick_fixture.rs"]
+mod pick_screen;
 #[path = "tmux_retirement_fixture.rs"]
 mod retirement;
 #[cfg(target_os = "linux")]
@@ -272,29 +275,12 @@ impl Fixture {
         })
         .await
         .unwrap();
-        let host = Host {
-            default_multiplexer: None,
-            default_multiplexer_next: None,
-            transport: None,
-            mosh: None,
-            et: None,
-            id: "tmux-probe".into(),
-            name: "Owned tmux fixture".into(),
-            hostname: "127.0.0.1".into(),
+        let host = crate::ssh::test_support::owned_host(
+            "tmux-probe",
+            "Owned tmux fixture",
             port,
-            username: std::env::var("USER").unwrap(),
-            fingerprint: Some(
-                host_key
-                    .public_key()
-                    .fingerprint(HashAlg::Sha256)
-                    .to_string(),
-            ),
-            jump_host_id: None,
-            credentials_stored: false,
-            client_environment: false,
-            biometric_unlock: false,
-            forward_agent: false,
-        };
+            &host_key,
+        );
         let handle = Arc::new(
             authenticate(
                 &state,
@@ -415,9 +401,13 @@ impl Fixture {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
     async fn display(&self, session: &str) -> Display {
+        self.display_with_prefix(session, "").await
+    }
+    async fn display_with_prefix(&self, session: &str, prefix: &str) -> Display {
         let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
         let command = format!(
-            "printf '{}\\t%s\\t%s\\n' \"$$\" \"$(tty)\"; exec {} attach-session -t {}",
+            "{}printf '{}\\t%s\\t%s\\n' \"$$\" \"$(tty)\"; exec {} attach-session -t {}",
+            prefix,
             marker,
             self.prefix(),
             quote(session)
@@ -425,40 +415,20 @@ impl Fixture {
         let (mut channel, mut bytes) = open_terminal(self.handle(), 80, 24, Some(command))
             .await
             .unwrap();
-        let identity = timeout(BOUND, async {
-            loop {
-                assert!(bytes.len() < 8192, "attach frame exceeded bound");
-                if let Some(end) = bytes.iter().position(|b| *b == b'\n') {
-                    let line = std::str::from_utf8(&bytes[..end])
-                        .unwrap()
-                        .trim_end_matches('\r');
-                    let fields = line.split('\t').collect::<Vec<_>>();
-                    assert_eq!(fields.len(), 3);
-                    assert_eq!(fields[0], marker);
-                    let pid = fields[1].parse::<u32>().unwrap();
-                    assert!(pid > 0);
-                    let tty = fields[2].to_owned();
-                    assert!(
-                        tty.starts_with("/dev/")
-                            && tty.len() < 128
-                            && tty
-                                .bytes()
-                                .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    );
-                    return Identity {
-                        pid,
-                        tty,
-                        live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-                    };
-                }
-                match channel.wait().await {
-                    Some(ChannelMsg::Data { data }) => bytes.extend_from_slice(&data),
-                    message => panic!("attach ended before owned frame: {message:?}"),
-                }
-            }
-        })
-        .await
-        .unwrap();
+        // The terminal can emit output before the nonce frame; use the same bounded,
+        // exact-marker and PID/TTY validation as the product attachment.
+        let frame = crate::tmux_jump::handshake(&mut channel, &mut bytes, &marker)
+            .await
+            .expect("owned attach identity frame missing or invalid");
+        assert!(
+            frame.tty.len() < 128,
+            "owned attach TTY exceeds fixture bound"
+        );
+        let identity = Identity {
+            pid: frame.pid,
+            tty: frame.tty,
+            live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
         Display { channel, identity }
     }
     async fn control(&self, session: &str) -> Control {
@@ -874,6 +844,33 @@ async fn jump_probe() {
 }
 
 #[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.4+"]
+async fn real_tmux_display_accepts_output_before_owned_identity() {
+    let fixture = Fixture::new().await;
+    let session = fixture.local(&[
+        "new-session",
+        "-d",
+        "-s",
+        "owned",
+        "-P",
+        "-F",
+        "#{session_id}",
+    ]);
+    let mut display = fixture
+        .display_with_prefix("owned", "printf 'owned banner\\n'; ")
+        .await;
+    let mut control = fixture.control("owned").await;
+    control.wait_display(&display.identity, true).await.unwrap();
+    assert_eq!(
+        control.position(&display.identity).await.unwrap().0,
+        session
+    );
+    control.close().await;
+    display.close().await;
+    fixture.local(&["kill-server"]);
+}
+
+#[tokio::test]
 #[ignore = "requires owned local OpenSSH sshd and tmux 3.4+; fixture-only prototype"]
 async fn real_tmux_jump_identity_guard_and_replacement() {
     timeout(Duration::from_secs(30), jump_probe())
@@ -1018,7 +1015,12 @@ async fn product_actor_probe() {
         .call(
             &lease,
             &mut cancellation,
-            Some((generation.clone(), bid.into(), bwid.into()))
+            Some(Target::new(
+                generation.clone(),
+                bid.into(),
+                bwid.into(),
+                None
+            ))
         )
         .await
         .is_err());
@@ -1028,7 +1030,7 @@ async fn product_actor_probe() {
         .call(
             &fresh,
             &mut cancellation,
-            Some((generation, bid.into(), bwid.into())),
+            Some(Target::new(generation, bid.into(), bwid.into(), None)),
         )
         .await
         .unwrap();
@@ -1090,10 +1092,11 @@ async fn product_actor_probe() {
         .call(
             &fresh,
             &mut epoch_cancel,
-            Some((
+            Some(Target::new(
                 prior["generation"].as_str().unwrap().into(),
                 reused,
-                "@0".into()
+                "@0".into(),
+                None
             ))
         )
         .await
@@ -1133,6 +1136,204 @@ async fn product_actor_probe() {
     assert!(partial.call(&fresh, &mut live, None).await.is_err());
     let _ = channel.eof().await;
     let _ = channel.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.4+; pane-level Jump To acceptance"]
+async fn real_tmux_jump_pane_exact_target() {
+    timeout(Duration::from_secs(30), pane_target_probe())
+        .await
+        .expect("bounded pane Jump To fixture");
+}
+/// The product commands against a real tmux server: the tree lists every pane, and choosing a pane
+/// moves the displayed client to that exact pane, in any window or session.
+async fn pane_target_probe() {
+    use serde_json::{json, Value};
+    let f = Fixture::new().await;
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec!["chat-a".into()],
+    };
+    let tmux = |args: &[&str]| servers.direct("chat-a", args);
+    // work: @0 with %0 %1, and @1 "build" with %2 %3 where %2 is zoomed. other: $1 @2 %4.
+    // `exec` so a pane runs sleep itself: a plain command can leave it on the `sh` tmux started it with.
+    let sleep = "exec sleep 120";
+    tmux(&["new-session", "-d", "-s", "work", sleep]);
+    tmux(&["split-window", "-d", "-t", "%0", sleep]);
+    tmux(&["new-window", "-d", "-t", "$0", "-n", "build", sleep]);
+    tmux(&["split-window", "-d", "-t", "%2", sleep]);
+    tmux(&["resize-pane", "-Z", "-t", "%2"]);
+    tmux(&["new-session", "-d", "-s", "other", sleep]);
+    let (state, app, _access, lease) = chat_fixture_app(f.dir.path().join("pane-config"));
+    let parent = f.neutral(&state, &lease).await;
+    let display = chat_fixture_attach(&app, &lease, &parent.session_id, "work").await;
+    // The window, session and pane the displayed (not the control) client shows, as tmux itself reports them.
+    let shown = || {
+        let rows = tmux(&[
+            "list-clients",
+            "-F",
+            "#{client_control_mode}|#{session_id}|#{window_id}|#{pane_id}",
+        ]);
+        let shown = rows
+            .lines()
+            .filter_map(|row| row.strip_prefix("0|"))
+            .collect::<Vec<_>>();
+        assert_eq!(shown.len(), 1, "{rows}");
+        shown[0].to_owned()
+    };
+    let read = || async {
+        let snapshot = crate::tmux_jump::tmux_jump_snapshot(
+            lease.clone(),
+            app.state(),
+            app.state(),
+            display.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        serde_json::to_value(snapshot).unwrap()
+    };
+    let go = |generation: &Value, session: &str, window: &str, pane: Option<&str>| {
+        crate::tmux_jump::tmux_jump(
+            lease.clone(),
+            app.state(),
+            app.state(),
+            display.clone(),
+            generation.as_str().unwrap().into(),
+            session.into(),
+            window.into(),
+            pane.map(Into::into),
+        )
+    };
+    let tree = read().await;
+    assert_eq!(shown(), "$0|@0|%0");
+    assert_eq!(
+        tree["current"],
+        json!({"sessionId": "$0", "windowId": "@0", "paneId": "%0"})
+    );
+    let windows = &tree["sessions"][0]["windows"];
+    let panes = |window: &Value| {
+        window["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pane| {
+                (
+                    pane["id"].as_str().unwrap().to_owned(),
+                    pane["active"].as_bool().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        panes(&windows[0]),
+        [("%0".into(), true), ("%1".into(), false)]
+    );
+    // The zoomed window shows only its active pane, and that is the one it keeps marking active.
+    assert_eq!(
+        panes(&windows[1]),
+        [("%2".into(), true), ("%3".into(), false)]
+    );
+    assert_eq!(
+        (windows[0]["zoomed"].clone(), windows[1]["zoomed"].clone()),
+        (json!(false), json!(true))
+    );
+    // A pane still on tmux's default title (the host name) has none; the running command names it.
+    assert_eq!(windows[0]["panes"][0]["title"], "");
+    assert_eq!(windows[0]["panes"][0]["command"], "sleep");
+    let generation = &tree["generation"];
+    // Another pane of the shown window.
+    let moved = serde_json::to_value(
+        go(generation, "$0", "@0", Some("%1"))
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$0|@0|%1");
+    assert_eq!(moved["current"]["paneId"], "%1");
+    assert_eq!(
+        panes(&moved["sessions"][0]["windows"][0]),
+        [("%0".into(), false), ("%1".into(), true)]
+    );
+    // A hidden pane of another window brings that window forward, and un-zooms it so the pane shows.
+    let moved = serde_json::to_value(
+        go(generation, "$0", "@1", Some("%3"))
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$0|@1|%3");
+    assert_eq!(
+        moved["current"],
+        json!({"sessionId": "$0", "windowId": "@1", "paneId": "%3"})
+    );
+    assert_eq!(moved["sessions"][0]["windows"][1]["zoomed"], false);
+    assert_eq!(
+        tmux(&["display-message", "-p", "-t", "@1", "#{window_zoomed_flag}"]),
+        "0"
+    );
+    // A pane of another session.
+    let moved = serde_json::to_value(
+        go(generation, "$1", "@2", Some("%4"))
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$1|@2|%4");
+    assert_eq!(moved["current"]["sessionId"], "$1");
+    // A window row, with no pane, still lands on that window's active pane.
+    let moved = serde_json::to_value(
+        go(generation, "$0", "@0", None)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown(), "$0|@0|%1");
+    assert_eq!(moved["current"]["paneId"], "%1");
+    // A pane that is not in that window, or no longer exists, is refused without moving the client or retiring the binding.
+    for (window, pane) in [("@0", "%3"), ("@1", "%99")] {
+        let refused = go(generation, "$0", window, Some(pane))
+            .await
+            .unwrap_err()
+            .into_inner()
+            .unwrap();
+        assert_eq!(refused.kind(), "tmux_pane_gone");
+        assert_eq!(shown(), "$0|@0|%1");
+    }
+    tmux(&["kill-pane", "-t", "%1"]);
+    let refused = go(generation, "$0", "@0", Some("%1"))
+        .await
+        .unwrap_err()
+        .into_inner()
+        .unwrap();
+    assert_eq!(refused.kind(), "tmux_pane_gone");
+    // A forged pane id never reaches tmux.
+    let forged = go(generation, "$0", "@0", Some("%0; kill-server"))
+        .await
+        .unwrap_err()
+        .into_inner()
+        .unwrap();
+    assert_eq!(forged.kind(), "tmux_stale");
+    let after = read().await;
+    assert_eq!(
+        after["current"],
+        json!({"sessionId": "$0", "windowId": "@0", "paneId": "%0"})
+    );
+    assert_eq!(
+        panes(&after["sessions"][0]["windows"][0]),
+        [("%0".into(), true)]
+    );
+    assert_eq!(shown(), "$0|@0|%0");
+    disconnect(app.state(), display).await.unwrap();
 }
 
 #[tokio::test]
@@ -1265,6 +1466,15 @@ struct NamedServers<'a> {
     fixture: &'a Fixture,
     names: Vec<String>,
 }
+impl<'a> NamedServers<'a> {
+    /// The one owned tmux server, `chat-a`, that the Chat input fixtures drive.
+    fn chat_a(fixture: &'a Fixture) -> Self {
+        Self {
+            fixture,
+            names: vec!["chat-a".into()],
+        }
+    }
+}
 impl NamedServers<'_> {
     fn stop(&mut self) -> Vec<teardown::Stop> {
         std::mem::take(&mut self.names)
@@ -1390,6 +1600,7 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
         name: "must-not-create".into(),
         tmux_server: Some("absent-mosh".into()),
         create_if_missing: true,
+        backend: None,
     };
     let error = crate::mosh::bootstrap_entry(&parent, &lease, options, entry)
         .await
@@ -1460,6 +1671,7 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 name: "owned-direct-mosh".into(),
                 tmux_server: None,
                 create_if_missing,
+                backend: None,
             };
             let (display, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
             if matches!(kind, MultiplexerKind::Herdr) {
@@ -1548,6 +1760,7 @@ async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_boo
         name: name.into(),
         tmux_server: Some(server.into()),
         create_if_missing: create,
+        backend: None,
     };
     for create in [true, false] {
         let (source, _) = herdr_echo_source(&f, &state, &lease).await;
@@ -1863,19 +2076,20 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         ("default", "same"),
     ] {
         if name == hostile {
-            multiplexer::tmux_action(
-                app.state(),
-                child.session_id.clone(),
+            tmux_act(
+                &app,
+                &child.session_id,
                 TmuxAction::RenameSession {
                     target: "$0".into(),
                     name: "selected".into(),
                 },
                 None,
-                lease.clone(),
+                &lease,
             )
             .await
             .unwrap();
             multiplexer::tmux_action(
+                app.state(),
                 app.state(),
                 child.session_id.clone(),
                 TmuxAction::SplitPane {
@@ -1904,17 +2118,23 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
             if name == hostile { 2 } else { 1 }
         );
     }
-    let tree =
-        multiplexer::multiplexer_tree(app.state(), child.session_id.clone(), None, lease.clone())
-            .await
-            .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
-            .into_inner()
-            .unwrap();
+    let tree = multiplexer::multiplexer_tree(
+        app.state(),
+        app.state(),
+        child.session_id.clone(),
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
+    .into_inner()
+    .unwrap();
     assert_eq!(
         serde_json::to_value(tree).unwrap()["sessions"][0]["name"],
         "selected"
     );
     assert!(multiplexer::tmux_action(
+        app.state(),
         app.state(),
         child.session_id.clone(),
         TmuxAction::SelectPane {
@@ -1927,28 +2147,28 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     .is_err());
     let snapshot = snapshot_value(&app, &lease, &child.session_id).await;
     assert_eq!(snapshot["sessions"][0]["name"], "selected");
-    multiplexer::tmux_action(
-        app.state(),
-        child.session_id.clone(),
+    tmux_act(
+        &app,
+        &child.session_id,
         TmuxAction::CreateWindow {
             target: "$0".into(),
             name: "added".into(),
             directory: f.dir.path().to_str().unwrap().into(),
         },
         None,
-        lease.clone(),
+        &lease,
     )
     .await
     .unwrap();
-    multiplexer::tmux_action(
-        app.state(),
-        child.session_id.clone(),
+    tmux_act(
+        &app,
+        &child.session_id,
         TmuxAction::CreateSession {
             name: "destination".into(),
             directory: f.dir.path().to_str().unwrap().into(),
         },
         None,
-        lease.clone(),
+        &lease,
     )
     .await
     .unwrap();
@@ -1967,6 +2187,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         navigation["generation"].as_str().unwrap().into(),
         destination["id"].as_str().unwrap().into(),
         destination["windows"][0]["id"].as_str().unwrap().into(),
+        None,
     )
     .await
     .unwrap()
@@ -2934,6 +3155,45 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     );
 }
 
+fn snapshot_failure(error: GuardedError<SshError>) -> ! {
+    let category = match error.into_inner() {
+        Err(_) => "access_changed",
+        Ok(error) => match error.kind() {
+            "tmux_stale" => "tmux_stale",
+            "tmux_unavailable" => "tmux_unavailable",
+            "tmux_protocol" => "tmux_protocol",
+            "tmux_pane_gone" => "tmux_pane_gone",
+            _ => "other",
+        },
+    };
+    panic!("owned tmux snapshot failed: {category}");
+}
+
+#[test]
+fn snapshot_failure_reports_only_fixed_categories() {
+    let (access, lease) = unlocked_authority();
+    let diagnostic = |error| {
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| snapshot_failure(error)))
+                .expect_err("snapshot errors must fail the fixture");
+        panic.downcast_ref::<String>().unwrap().clone()
+    };
+    assert_eq!(
+        diagnostic(lease.error(SshError::new("tmux_stale", "private detail"))),
+        "owned tmux snapshot failed: tmux_stale"
+    );
+    assert_eq!(
+        diagnostic(lease.error(SshError::new("private kind", "private detail"))),
+        "owned tmux snapshot failed: other"
+    );
+    let revoked = lease.error(SshError::new("tmux_stale", "private detail"));
+    access.lock().unwrap();
+    assert_eq!(
+        diagnostic(revoked),
+        "owned tmux snapshot failed: access_changed"
+    );
+}
+
 /// `tmux_jump_snapshot` as the renderer calls it, serialized.
 async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
     app: &M,
@@ -2948,7 +3208,7 @@ async fn snapshot_value<M: tauri::Manager<tauri::test::MockRuntime>>(
             id.to_owned(),
         )
         .await
-        .unwrap()
+        .unwrap_or_else(|error| snapshot_failure(error))
         .into_inner()
         .unwrap(),
     )
@@ -2960,7 +3220,14 @@ struct HerdrServers<'a> {
     binary: &'a std::path::Path,
     processes: Vec<(&'static str, Process)>,
 }
-impl HerdrServers<'_> {
+impl<'a> HerdrServers<'a> {
+    fn new(fixture: &'a Fixture, binary: &'a std::path::Path) -> Self {
+        Self {
+            fixture,
+            binary,
+            processes: Vec::new(),
+        }
+    }
     fn command(&self, name: &str) -> Command {
         let mut command = Command::new(self.binary);
         command
@@ -3213,6 +3480,42 @@ async fn herdr_source_probe(
         "attachment command reached source foreground"
     );
 }
+/// The tmux action command, as the renderer invokes it.
+async fn tmux_act(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session: &str,
+    action: crate::multiplexer::TmuxAction,
+    server: Option<&str>,
+    lease: &AccessLease,
+) -> crate::ssh::AccessResult<()> {
+    crate::multiplexer::tmux_action(
+        app.state(),
+        app.state(),
+        session.to_owned(),
+        action,
+        server.map(str::to_owned),
+        lease.clone(),
+    )
+    .await
+}
+/// Discovery of the default tmux server, plus Herdr and Zellij, as the renderer asks for it.
+async fn discover(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session: &str,
+    lease: &AccessLease,
+) -> crate::multiplexer::MultiplexerTree {
+    crate::multiplexer::multiplexer_tree(
+        app.state(),
+        app.state(),
+        session.to_owned(),
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap()
+}
 fn herdr_native_app(fixture: &Fixture) -> (tauri::App<tauri::test::MockRuntime>, AppState) {
     let state = AppState::new(fixture.dir.path().join("herdr-hosts")).unwrap();
     state.config().unwrap().hosts.push(fixture.host.clone());
@@ -3263,6 +3566,7 @@ async fn multiplexer_child(
         24,
         events,
         Some(default_entry),
+        None,
     )
     .await
     .unwrap()
@@ -3426,11 +3730,17 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     .unwrap();
     herdr_source_probe(&app, &lease, &source, &mut source_events, "SOURCE_BEFORE").await;
     let rows = serde_json::to_value(
-        multiplexer_sessions(app.state(), source.session_id.clone(), kind, lease.clone())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap(),
+        multiplexer_sessions(
+            app.state(),
+            app.state(),
+            source.session_id.clone(),
+            kind,
+            lease.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap(),
     )
     .unwrap();
     let rows = rows.as_array().unwrap();
@@ -3596,6 +3906,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         24,
         super::test_support::counting_events(&calls),
         None,
+        None,
     )
     .await
     .is_err());
@@ -3653,7 +3964,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
 #[tokio::test]
 #[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR_STOCK binary"]
 async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
-    use crate::multiplexer::{multiplexer_sessions, multiplexer_tree, MultiplexerKind};
+    use crate::multiplexer::MultiplexerKind;
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap());
     let f = Fixture::with_mosh_mode_and_user_install(Some(&binary), false, true).await;
     owned_herdr_shell_config(&f);
@@ -3682,31 +3993,10 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
     let parent = state.session(&source.session_id).await.unwrap();
     assert_eq!(crate::herdr_path::cached(&parent.handle), None);
-    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
+    assert!(herdr_discovery_reports_herdr(&app, &lease, &source).await);
+    assert!(herdr_server_names(&app, &lease, &source)
         .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
-    assert_eq!(
-        serde_json::to_value(discovery).unwrap()["herdrAvailable"],
-        true
-    );
-    let rows = multiplexer_sessions(
-        app.state(),
-        source.session_id.clone(),
-        MultiplexerKind::Herdr,
-        lease.clone(),
-    )
-    .await
-    .unwrap()
-    .into_inner()
-    .unwrap();
-    assert!(serde_json::to_value(rows)
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["name"] == "owned-default"));
+        .contains(&"owned-default".to_owned()));
     let (child, mut events) = multiplexer_child(
         &app,
         &lease,
@@ -3748,10 +4038,222 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     servers.stop().await;
 }
 
+async fn herdr_discovery_reports_herdr(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+) -> bool {
+    let discovery = discover(app, &source.session_id, lease).await;
+    serde_json::to_value(discovery).unwrap()["herdrAvailable"] == true
+}
+async fn herdr_server_names(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+) -> Vec<String> {
+    let rows = crate::multiplexer::multiplexer_sessions(
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+        crate::multiplexer::MultiplexerKind::Herdr,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let rows = serde_json::to_value(rows).unwrap();
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+/// A user-install fixture whose `~/.local/bin/herdr` is a decoy that records its use and fails. With `install`, the
+/// real binary is at the managed path instead; without it, no managed Herdr exists on the host.
+async fn managed_herdr_fixture(binary: &std::path::Path, install: bool) -> (Fixture, PathBuf) {
+    let f = Fixture::with_mosh_mode_and_user_install(Some(binary), false, true).await;
+    owned_herdr_shell_config(&f);
+    let system = f.dir.path().join(".local/bin/herdr");
+    if install {
+        let managed = f.dir.path().join(crate::herdr_path::MANAGED_EXECUTABLE);
+        fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        fs::set_permissions(managed.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::rename(&system, &managed).unwrap();
+    }
+    let used = f.dir.path().join("system-herdr-used");
+    let decoy = format!("#!/bin/sh\necho \"$@\" >> {}\nexit 99\n", used.display());
+    fs::write(&system, decoy).unwrap();
+    fs::set_permissions(&system, fs::Permissions::from_mode(0o700)).unwrap();
+    (f, used)
+}
+/// Starts the named server with one workspace whose label the attached terminal shows.
+async fn start_labeled_server(servers: &mut HerdrServers<'_>, name: &'static str, label: &str) {
+    servers.start(name).await;
+    let directory = servers.fixture.dir.path().to_str().unwrap().to_owned();
+    let create = [
+        "workspace",
+        "create",
+        "--no-focus",
+        "--label",
+        label,
+        "--cwd",
+    ];
+    servers
+        .json(name, &[&create[..], &[&directory]].concat())
+        .await;
+}
+/// A native app on the fixture with one connection that has captured the managed Herdr.
+async fn managed_herdr_source(
+    fixture: &Fixture,
+    lease: &AccessLease,
+) -> (tauri::App<tauri::test::MockRuntime>, Connected) {
+    let (app, state) = herdr_native_app(fixture);
+    let (source, _) = herdr_echo_source(fixture, &state, lease).await;
+    let selected = crate::herdr_backend::herdr_backend_select(
+        app.state(),
+        source.session_id.clone(),
+        crate::herdr_backend::HerdrBackend::Managed,
+        lease.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        selected.into_inner().unwrap(),
+        crate::herdr_backend::HerdrBackend::Managed
+    );
+    (app, source)
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR_STOCK binary"]
+async fn real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one() {
+    use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap());
+    let (_authority, lease) = unlocked_authority();
+    {
+        let (f, system_used) = managed_herdr_fixture(&binary, true).await;
+        let mut servers = HerdrServers::new(&f, &binary);
+        start_labeled_server(&mut servers, "owned-managed", "OWNED_MANAGED").await;
+        let (app, source) = managed_herdr_source(&f, &lease).await;
+        assert!(herdr_discovery_reports_herdr(&app, &lease, &source).await);
+        assert!(herdr_server_names(&app, &lease, &source)
+            .await
+            .contains(&"owned-managed".to_owned()));
+        let tree = crate::herdr::herdr_tree(
+            app.state(),
+            source.session_id.clone(),
+            "owned-managed".into(),
+            lease.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        let action = crate::herdr::HerdrAction::FocusWorkspace {
+            target: tree.workspaces[0].workspace_id.clone(),
+        };
+        crate::herdr::herdr_action(
+            app.state(),
+            source.session_id.clone(),
+            "owned-managed".into(),
+            action,
+            lease.clone(),
+        )
+        .await
+        .unwrap();
+        let (child, mut events) = multiplexer_child(
+            &app,
+            &lease,
+            &source,
+            "owned-managed",
+            MultiplexerKind::Herdr,
+            true,
+        )
+        .await;
+        owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_MANAGED").await;
+        // The connection keeps the Herdr it captured.
+        let other = crate::herdr_backend::herdr_backend_select(
+            app.state(),
+            source.session_id.clone(),
+            crate::herdr_backend::HerdrBackend::System,
+            lease.clone(),
+        )
+        .await;
+        assert_eq!(
+            other.err().unwrap().into_inner().unwrap().kind(),
+            "herdr_backend_captured"
+        );
+        assert!(
+            !system_used.exists(),
+            "the host's own Herdr ran: {:?}",
+            fs::read_to_string(&system_used)
+        );
+        servers.stop().await;
+    }
+    // No managed Herdr on the host: it reads as absent, every call fails, and the host's own Herdr is never run in its place.
+    let (f, system_used) = managed_herdr_fixture(&binary, false).await;
+    let (app, source) = managed_herdr_source(&f, &lease).await;
+    assert!(!herdr_discovery_reports_herdr(&app, &lease, &source).await);
+    assert!(crate::herdr::herdr_tree(
+        app.state(),
+        source.session_id.clone(),
+        "owned-managed".into(),
+        lease.clone()
+    )
+    .await
+    .is_err());
+    assert!(multiplexer_sessions(
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+        MultiplexerKind::Herdr,
+        lease.clone()
+    )
+    .await
+    .is_err());
+    assert!(
+        !system_used.exists(),
+        "the host's own Herdr ran: {:?}",
+        fs::read_to_string(&system_used)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR guarded binary (Herdr 0.9.3 to 0.9.5)"]
+async fn real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_executable() {
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
+    let (_authority, lease) = unlocked_authority();
+    let (f, system_used) = managed_herdr_fixture(&binary, true).await;
+    let mut servers = HerdrServers::new(&f, &binary);
+    start_labeled_server(&mut servers, "owned-guarded", "OWNED_GUARDED").await;
+    let (app, source) = managed_herdr_source(&f, &lease).await;
+    let state = app.state::<AppState>();
+    let parent = state.session(&source.session_id).await.unwrap();
+    assert!(crate::herdr_guard::available(&parent, "owned-guarded", &lease).await);
+    let (child, mut events) = multiplexer_child(
+        &app,
+        &lease,
+        &source,
+        "owned-guarded",
+        crate::multiplexer::MultiplexerKind::Herdr,
+        false,
+    )
+    .await;
+    owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_GUARDED").await;
+    let display = state.session(&child.session_id).await.unwrap();
+    assert!(display.bindings.herdr.lock().unwrap().is_some());
+    assert!(
+        !system_used.exists(),
+        "the host's own Herdr ran: {:?}",
+        fs::read_to_string(&system_used)
+    );
+    servers.stop().await;
+}
+
 #[tokio::test]
 #[ignore = "requires owned OpenSSH, LAZYSH_TEST_TMUX and LAZYSH_EXPECT_MUX_SUPPORT; optional LAZYSH_TEST_ZELLIJ and LAZYSH_TEST_HERDR_STOCK"]
 async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
-    use crate::multiplexer::multiplexer_tree;
     // For example `tmux=full zellij=full herdr=full`; each named tool must be supplied.
     let expected = std::env::var("LAZYSH_EXPECT_MUX_SUPPORT").unwrap();
     let tools = tempfile::tempdir().unwrap();
@@ -3782,11 +4284,7 @@ async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
     let (_authority, lease) = unlocked_authority();
     let (app, state) = herdr_native_app(&f);
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
-    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let discovery = discover(&app, &source.session_id, &lease).await;
     let discovery = serde_json::to_value(discovery).unwrap();
     eprintln!("owned discovery tools: {}", discovery["tools"]);
     for pair in expected.split_whitespace() {

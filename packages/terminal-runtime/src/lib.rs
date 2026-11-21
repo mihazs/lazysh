@@ -9,18 +9,28 @@
 //! Rendering is behind [`TerminalRenderer`] (#1322): [`Frame`]s in, pixels on an opaque surface out,
 //! with a deterministic CPU [`ReferenceRenderer`] for golden-image tests.
 
+mod blink;
+mod clipboard;
+mod colors;
+mod doorbell;
 mod frame;
 mod hub;
 mod ingress;
 mod input;
 mod keymap;
 pub mod layout;
+mod links;
 mod mosh;
 mod reference;
 mod render;
 mod runtime;
+mod selection;
 mod size;
+mod titles;
 
+pub use blink::{BlinkClock, FramePacer, BLINK_HALF_PERIOD};
+pub use clipboard::{clipboard_consent_text, MAX_CLIPBOARD_TEXT_BYTES};
+pub use doorbell::Doorbell;
 pub use frame::{Cell, Frame, Row};
 pub use hub::{
     Hooks, Hub, HubConfig, HubError, Origin, PtyWriter, Refused, Session, SessionError, Stats,
@@ -28,6 +38,7 @@ pub use hub::{
 pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
 pub use keymap::{dom_mods, DomKey};
+pub use links::{PathLink, UrlLink};
 pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
 pub use reference::{Image, ReferenceRenderer};
 pub use render::{
@@ -35,11 +46,16 @@ pub use render::{
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
 pub use runtime::{
-    Config, Error, Events, Geometry, Modes, TerminalRuntime, Viewport, MAX_READ_ROWS,
+    control_window, scrollback_bytes_for_lines, Config, ControlAnswer, ControlCursor, ControlEvent,
+    ControlModes, ControlQuery, ControlSnapshot, ControlState, Error, Events, Geometry, Modes,
+    MouseTracking, RowWindow, ScrollAction, TerminalRuntime, Viewport, CONTROL_WINDOW_DEFAULT,
+    CONTROL_WINDOW_MAX, MAX_READ_ROWS,
 };
+pub use selection::{CellPos, CellRange, Direction, SearchHit, MAX_QUERY_BYTES};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
 // Re-exported so consumers never depend on the binding crate (or a second VT engine) directly.
 pub use ghostty_vt::{
-    ffi, ActiveScreen, CellStyle, CellWide, CursorVisualStyle, RenderCursor, RgbColor,
+    default_palette, ffi, ActiveScreen, CellColor, CellStyle, CellWide, CursorVisualStyle,
+    RenderCursor, RgbColor,
 };

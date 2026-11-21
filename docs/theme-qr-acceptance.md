@@ -43,8 +43,9 @@ does not make camera hardware a distribution requirement. Installed Wry's
 `isMediaCaptureSupported` checks whether CAMERA is declared or already granted.
 Adding the declaration can therefore make the existing explicit Attachment Photo
 action request camera permission too; the ordinary file-picker branch is
-unchanged. This is a source-supported interaction, not executed OS permission
-proof. The QR component never requests media without Scan. See
+unchanged. The denial branch is added to the owned Mosh attachment case (see
+[Android testing](android-testing.md)) and has not run on `main` yet; the Allow
+branch (camera capture) has no executed proof. The QR component never requests media without Scan. See
 [Android's feature filtering contract](https://developer.android.com/guide/topics/manifest/uses-feature-element).
 Apple builds include camera purpose strings in English, Brazilian Portuguese
 and Spanish for both explicit QR scans and attachment-photo capture. Only QR
@@ -77,6 +78,15 @@ Executed, with the evidence each check produces:
   alone is not evidence. At the time of writing, main run 43493222104 (commit
   `a21f4b21`, 2026-11-13) reports 1 executed, 0 failed, 0 skipped. See
   [Android testing](android-testing.md) for the procedure.
+- **Android image fallback through the real system picker.**
+  `NativeWorkspaceTest.qrImageFallbackChoosesAFileThroughTheRealSystemPicker`
+  taps the enabled `Choose PNG or JPEG QR image` input with a real finger tap,
+  selects the owned `theme-qr.png` in DocumentsUI by its visible name and requires
+  the natively decoded `QR fixture` preview with preferences unchanged and no
+  Apply. Executed on Waydroid (Android 13, AOSP DocumentsUI), two runs, method
+  executed and not skipped. The hosted API 36 run (`native-android-runtime`) is
+  not recorded yet, so that image is unverified; see
+  [Android testing](android-testing.md#real-system-file-picker-for-the-qr-image-fallback-1752).
 - **Browser lifecycle.** `apps/client/e2e/theme-qr.spec.ts` covers scan, mandatory
   Apply, cancel, deadline and track cleanup with synthetic media and mocked native
   decoding. It is not OS permission or Tauri marshalling evidence.
@@ -101,9 +111,13 @@ Not executed, so unverified:
 - **Windows and Linux desktop.** WebView camera permission, capture and the
   absent-device case. The desktop GUI QR image-scan row is tracked in
   [#995](https://github.com/mihazs/lazysh/issues/995).
-- **Android emulator gaps.** The existing explicit Attachment Photo action after
-  the CAMERA declaration, the ordinary file chooser (DocumentsUI) and cancelling an
-  already granted active capture are tracked in
+- **Android emulator gaps.** Choosing a file inside the ordinary file chooser
+  (DocumentsUI, [#1752](https://github.com/mihazs/lazysh/issues/1752)) and allowing
+  the Attachment Photo camera permission so the action captures are not executed.
+  The Photo denial and the ordinary chooser opening
+  ([#1751](https://github.com/mihazs/lazysh/issues/1751)) are added to the Mosh
+  attachment case and, like cancelling an already granted active capture, have not
+  run on `main` yet; all are slices of
   [#1521](https://github.com/mihazs/lazysh/issues/1521). Apply to preferences is
   covered only by the browser tests; the emulator case stops at preview.
 

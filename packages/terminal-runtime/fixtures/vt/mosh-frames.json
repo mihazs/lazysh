@@ -1,0 +1,270 @@
+[
+  {
+    "id": "mosh-frame-2",
+    "about": "Captured Mosh display frame 2 (state 1) from apps/client/e2e/fixtures/mosh-resize-frames.json, replayed after a plain resize to the envelope's 40x12. The canonical (non-reflowing, host-applied) resize of #1317 is not what this compares.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          40,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-2.bin"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_00",
+        "OWNED_ROW_01_0123456789ABCDEFGHIJKLMN",
+        "OWNED_ROW_02",
+        "OWNED_ROW_03",
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05",
+        "OWNED_ROW_06",
+        "OWNED_ROW_07",
+        "OWNED_ROW_08",
+        "OWNED_ROW_09",
+        "OWNED_ROW_10",
+        "OWNED_ROW_11"
+      ],
+      "cursor": {
+        "x": 32,
+        "y": 11
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "mosh-frame-3",
+    "about": "Captured Mosh display frame 3 (state 2) from apps/client/e2e/fixtures/mosh-resize-frames.json, replayed after a plain resize to the envelope's 40x6. The canonical (non-reflowing, host-applied) resize of #1317 is not what this compares.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          40,
+          6
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-3.bin"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_00",
+        "OWNED_ROW_01_0123456789ABCDEFGHIJKLMN",
+        "OWNED_ROW_02",
+        "OWNED_ROW_03",
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05"
+      ],
+      "cursor": {
+        "x": 32,
+        "y": 5
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "mosh-frame-6",
+    "about": "Captured Mosh display frame 6 (state 5) from apps/client/e2e/fixtures/mosh-resize-frames.json, replayed after a plain resize to the envelope's 20x12. The canonical (non-reflowing, host-applied) resize of #1317 is not what this compares.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          20,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-6.bin"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_00",
+        "OWNED_ROW_01_0123456",
+        "OWNED_ROW_02",
+        "OWNED_ROW_03",
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05",
+        "OWNED_ROW_06",
+        "OWNED_ROW_07",
+        "OWNED_ROW_08",
+        "OWNED_ROW_09",
+        "OWNED_ROW_10",
+        "OWNED_ROW_11"
+      ],
+      "cursor": {
+        "x": 19,
+        "y": 11
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "mosh-frames-in-order",
+    "about": "All six captured Mosh display frames (2 to 7) in the order the e2e spec feeds them, each after a plain resize to the envelope's size (40x12, 40x6, 40x12, 41x12, 20x12, 40x12), then a plain resize to 40x8. This is the history the canonical resize of #1317 replaces; the fixture records what a plain resize does with it in both engines.",
+    "cols": 80,
+    "rows": 24,
+    "scrollback": 100,
+    "steps": [
+      {
+        "resize": [
+          40,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-2.bin"
+      },
+      {
+        "resize": [
+          40,
+          6
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-3.bin"
+      },
+      {
+        "resize": [
+          40,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-4.bin"
+      },
+      {
+        "resize": [
+          41,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-5.bin"
+      },
+      {
+        "resize": [
+          20,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-6.bin"
+      },
+      {
+        "resize": [
+          40,
+          12
+        ]
+      },
+      {
+        "writeFile": "captures/mosh-frame-7.bin"
+      },
+      {
+        "resize": [
+          40,
+          8
+        ]
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OWNED_ROW_04_世界",
+        "OWNED_ROW_05",
+        "OWNED_ROW_06",
+        "OWNED_ROW_07",
+        "OWNED_ROW_08",
+        "OWNED_ROW_09",
+        "OWNED_ROW_10",
+        "OWNED_ROW_11"
+      ],
+      "cursor": {
+        "x": 19,
+        "y": 7
+      },
+      "scrollbackRows": 5,
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  }
+]

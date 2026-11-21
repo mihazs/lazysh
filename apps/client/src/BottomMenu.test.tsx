@@ -45,6 +45,15 @@ describe('bottom menu',()=>{
     fireEvent.pointerDown(scrim);fireEvent.pointerCancel(scrim);expect(state()).toBe('open');
     fireEvent.click(scrim);expect(state()).toBe('closed');
   });
+  it('draws no gesture line by default, draws it once the setting is on, and keeps the handle working either way',()=>{
+    const line=()=>document.querySelector('.gesture-handle > span');
+    const view=render(<Harness start={false} />);
+    expect(line()).toBeNull();expect(document.querySelector('.gesture-handle')).not.toBeNull();
+    view.unmount();
+    savePreferences({...defaults,edgeGestures:{leftMenu:true,bottomMenu:true,viewSwitch:true,zoneWidth:40,mode:'auto',showLines:true}});
+    render(<Harness start={false} />);
+    expect(line()).not.toBeNull();
+  });
   it('shows the handle where the swipe starts, and a visible button instead when the swipe is switched off',()=>{
     const view=render(<Harness start={false} />);
     expect(document.querySelector('.gesture-handle')).not.toBeNull();

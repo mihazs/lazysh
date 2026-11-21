@@ -38,6 +38,7 @@ fn draw(out: &mut Vec<u8>, d: &Draw<'_>) {
             text,
             color,
             bold,
+            ..
         }) => {
             out.push(1);
             put(out, &[*x as u16, *y as u16]);

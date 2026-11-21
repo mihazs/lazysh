@@ -3,7 +3,10 @@
 mod binary;
 #[path = "support/jsonl.rs"]
 mod jsonl;
+#[path = "support/recorded_conversations.rs"]
+mod recorded_conversations;
 
+use rusqlite::params;
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -47,14 +50,21 @@ impl Watch {
             lines,
         }
     }
+    /// Any frame, a heartbeat included, within the 20 s of silence after which the app calls the channel
+    /// dead. A heartbeat can be late by one projection, and the 17 MiB one takes 3 to 6 s in a debug build.
     fn next(&self) -> Value {
         self.lines
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(20))
             .expect("a frame")
     }
+    /// The next frame of `kind`; heartbeats and other frames on the way do not extend the wait.
     fn next_of(&self, kind: &str) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let frame = self.next();
+            let frame = self
+                .lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or_else(|_| panic!("no {kind} frame within 10 s"));
             if frame["type"] == kind {
                 return frame;
             }
@@ -101,6 +111,149 @@ fn an_append_reaches_the_stream_within_one_interval_and_closing_stdin_ends_it() 
     drop(watch.stdin.take());
     let status = watch.child.wait().unwrap();
     assert!(status.success());
+}
+
+#[test]
+fn codex_watch_crosses_the_size_limit_without_admitting_a_partial_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rollout.jsonl");
+    jsonl::write(
+        &path,
+        &[
+            json!({"type":"session_meta","payload":{"id":ID,"history_mode":"legacy"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"before crossing"}}),
+        ],
+    );
+    let mut watch = Watch::start(
+        &[
+            "--agent",
+            "codex",
+            "--path",
+            path.to_str().unwrap(),
+            "--interval-ms",
+            "50",
+            "--allow-large-history",
+        ],
+        &[],
+    );
+    watch.next_of("hello");
+    let initial = watch.next_of("snapshot");
+    assert_ne!(initial["earlierOmitted"], true);
+    assert!(initial.to_string().contains("before crossing"));
+
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let padding = "x".repeat(1024 * 1024);
+        for _ in 0..17 {
+            writeln!(
+                file,
+                "{}",
+                json!({"type":"event_msg","payload":{"type":"token_count","padding":padding}})
+            )
+            .unwrap();
+        }
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"after crossing"}})
+        )
+        .unwrap();
+    }
+    let mut received_after = false;
+    let crossing_deadline = Instant::now() + Duration::from_secs(30);
+    while !received_after {
+        assert!(
+            Instant::now() < crossing_deadline,
+            "missing post-crossing message"
+        );
+        let frame = watch.next();
+        assert_ne!(frame["type"], "end", "watch ended while crossing the limit");
+        assert_ne!(frame["earlierOmitted"], true);
+        received_after |= frame.to_string().contains("after crossing");
+    }
+    let output = Command::new(binary::path())
+        .args([
+            "transcript",
+            "--agent",
+            "codex",
+            "--path",
+            path.to_str().unwrap(),
+            "--view",
+            "conversation",
+            "--allow-large-history",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let page: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_ne!(page["earlierOmitted"], true);
+    let page_text = page.to_string();
+    assert!(page_text.contains("before crossing"));
+    assert!(page_text.contains("after crossing"));
+
+    let record =
+        json!({"type":"event_msg","payload":{"type":"agent_message","message":"completed append"}})
+            .to_string();
+    let split = record.len() / 2;
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&record.as_bytes()[..split]).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_millis(800);
+    while let Ok(frame) = watch
+        .lines
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    {
+        assert!(!frame.to_string().contains("completed append"));
+        assert_ne!(frame["earlierOmitted"], true);
+        assert_ne!(frame["type"], "end", "watch ended on an incomplete record");
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&record.as_bytes()[split..]).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+    loop {
+        let frame = watch.next();
+        assert_ne!(
+            frame["type"], "end",
+            "watch ended after completing the record"
+        );
+        assert_ne!(frame["earlierOmitted"], true);
+        if frame.to_string().contains("completed append") {
+            break;
+        }
+    }
+    drop(watch.stdin.take());
+    assert!(watch.child.wait().unwrap().success());
+
+    let mut old = Watch::start(
+        &[
+            "--agent",
+            "codex",
+            "--path",
+            path.to_str().unwrap(),
+            "--interval-ms",
+            "50",
+        ],
+        &[],
+    );
+    old.next_of("hello");
+    assert_eq!(old.next_of("end")["reason"], "TooLarge");
+    assert!(!old.child.wait().unwrap().success());
 }
 
 #[test]
@@ -204,4 +357,101 @@ fn previews_of_attached_images_ride_the_stream_only_when_asked_for_and_only_for_
         .output()
         .unwrap();
     assert!(!status.status.success());
+}
+
+#[test]
+fn an_opencode_write_reaches_the_stream_while_its_rows_still_sit_in_the_write_ahead_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().canonicalize().unwrap().join("opencode.db");
+    let db = recorded_conversations::opencode_database(&path, "v2");
+    // Write-ahead logging with no checkpoint, as a running OpenCode: new rows move the log, not the file.
+    db.pragma_update(None, "journal_mode", "WAL").unwrap();
+    db.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    let message = |id: &str, seq: i64, role: &str, data: Value| {
+        db.execute(
+            "INSERT INTO session_message VALUES(?1,'selected',?2,?3,?4,?3)",
+            params![id, role, seq, data.to_string()],
+        )
+        .unwrap();
+    };
+    message("msg_a", 1, "user", json!({"text":"question"}));
+    let file = std::fs::metadata(&path).unwrap();
+    let mut watch = Watch::start(
+        &[
+            "--agent",
+            "opencode",
+            "--path",
+            path.to_str().unwrap(),
+            "--database-session",
+            "selected",
+        ],
+        &[],
+    );
+    assert_eq!(watch.next_of("hello")["agent"], "opencode");
+    let snapshot = watch.next_of("snapshot");
+    assert_eq!(snapshot["branchId"], "selected");
+    assert_eq!(snapshot["entries"][0]["id"], "msg_a");
+    message(
+        "msg_b",
+        2,
+        "assistant",
+        json!({"content":[{"type":"text","text":"answer"}]}),
+    );
+    let appended = Instant::now();
+    let delta = watch.next_of("delta");
+    assert_eq!(delta["upserts"][0]["id"], "msg_b");
+    assert_eq!(
+        delta["upserts"][0]["message"]["blocks"][0]["text"],
+        "answer"
+    );
+    assert!(appended.elapsed() < Duration::from_secs(2));
+    let after = std::fs::metadata(&path).unwrap();
+    assert_eq!(
+        (file.len(), file.modified().unwrap()),
+        (after.len(), after.modified().unwrap()),
+        "the row must have reached the stream through the log alone"
+    );
+    drop(watch.stdin.take());
+    assert!(watch.child.wait().unwrap().success());
+}
+
+#[test]
+fn an_opencode_stream_needs_its_database_session_and_no_other_agent_takes_one() {
+    let run = |args: &[&str]| {
+        Command::new(binary::path())
+            .arg("transcript-watch")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    // Without a session the database cannot be read; a Claude Code file has none to name.
+    assert!(!run(&["--agent", "opencode", "--path", "a"])
+        .status
+        .success());
+    assert_eq!(
+        run(&[
+            "--agent",
+            "claude",
+            "--path",
+            "a",
+            "--database-session",
+            "s"
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+    assert_eq!(
+        run(&[
+            "--agent",
+            "opencode",
+            "--session-id",
+            ID,
+            "--database-session",
+            "s"
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
 }

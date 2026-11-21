@@ -16,6 +16,8 @@ pub(super) enum Agent {
     Cline,
     Copilot,
     Amp,
+    #[serde(rename = "kimi-code")]
+    KimiCode,
 }
 impl Agent {
     pub(super) fn is_whole_file(self) -> bool {
@@ -34,6 +36,7 @@ impl Agent {
             Self::Codex | Self::Droid | Self::Cursor => "hooks.json",
             Self::Opencode | Self::Cline | Self::Amp => "lazysh.js",
             Self::Copilot => "lazysh.json",
+            Self::KimiCode => "config.toml",
         }
     }
     pub(super) fn name(self) -> &'static str {
@@ -47,6 +50,7 @@ impl Agent {
             Self::Cline => "cline",
             Self::Copilot => "copilot",
             Self::Amp => "amp",
+            Self::KimiCode => "kimi-code",
         }
     }
 }
@@ -163,7 +167,12 @@ impl Record {
                             .plugin_sha256
                             .as_ref()
                             .is_some_and(|digest| lazysh_common::valid_sha256(digest)) => {}
-                Agent::Claude | Agent::Codex | Agent::Droid | Agent::Gemini | Agent::Cursor
+                Agent::Claude
+                | Agent::Codex
+                | Agent::Droid
+                | Agent::Gemini
+                | Agent::Cursor
+                | Agent::KimiCode
                     if owned.plugin_sha256.is_none()
                         && !owned.entries.is_empty()
                         && owned.entries.len() <= 16 =>

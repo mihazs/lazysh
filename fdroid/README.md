@@ -54,8 +54,11 @@ Bun lockfile rather than that application's versions.
   source scanner still examines every remaining input without an ignore rule.
   No source or binary scan bypass is authorized.
 - Mosh/Whisper and other app-native libraries must be compiled from source.
-  Android's normal feature graph does not enable Parakeet/ONNX Runtime. No
-  speech models or provider accounts are required for this build.
+  Parakeet's pinned ONNX Runtime is a prebuilt publisher archive, so this recipe
+  never passes the Cargo feature `parakeet-android` that the Google builds use
+  (`build:android`, `build:android:emulator` and the Google release flavor): the
+  `fdroid` graph does not link Parakeet/ONNX Runtime and reports it unavailable.
+  No speech models or provider accounts are required for this build.
 
 This recipe is not offline or hermetic. Preparation downloads the pinned Bun
 tool and public source dependencies. The build also fetches Tauri CLI's Cargo

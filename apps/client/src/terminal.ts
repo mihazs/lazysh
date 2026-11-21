@@ -5,9 +5,13 @@ export type LiveSession = {
   destination: string;
   /** The session's terminal state; the pane and every other consumer reach the terminal only through it. */
   adapter: import('./terminalAdapter').TerminalAdapter;
+  /** Which engine this session got and why (preference, developer override, fallback and its reasons), fixed when the session was created. */
+  selection: import('./terminalBackendRegistry').BackendSelection;
   connected: boolean;
   disposed?: true;
   local?: true;
+  /** The local target a local session runs in; absent or `default` is the login shell. */
+  target?: string;
   moshResize?: import('./terminalAdapter').CanonicalResize;
   mosh?: {serverPath: string; portMin: number; portMax: number};
   et?: {serverPath: string; port: number};

@@ -1,12 +1,23 @@
+use crate::colors::ColorQueries;
 use crate::frame::{Frame, Renderer};
 use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::mosh::{self, Action, Display, DisplayFailure};
+use crate::render::Theme;
 use crate::size::{Size, SizeAuthority, SizeOutcome};
-use ghostty_vt::{ActiveScreen, CellWide, Terminal};
+use crate::titles::Titles;
+use ghostty_vt::{ActiveScreen, CellWide, Terminal, TerminalCompressionResult};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Range;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+mod control;
+pub use control::{
+    control_window, ControlAnswer, ControlCursor, ControlEvent, ControlModes, ControlQuery,
+    ControlSnapshot, ControlState, MouseTracking, RowWindow, ScrollAction, CONTROL_WINDOW_DEFAULT,
+    CONTROL_WINDOW_MAX,
+};
 
 /// Terminal-generated replies (DSR, DA, ...) waiting for the transport. A peer can spam queries,
 /// so the queue is capped; overflow is counted, not silent.
@@ -28,13 +39,33 @@ const MODE_ORIGIN: u16 = 6;
 const MODE_WRAPAROUND: u16 = 7;
 /// What JavaScript's `String.prototype.trimEnd` strips (the xterm backend's `readRows` uses it):
 /// Rust's `White_Space` plus U+FEFF, minus U+0085.
-fn js_space(c: char) -> bool {
+pub(crate) fn js_space(c: char) -> bool {
     (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
+}
+
+/// How the right edge of a row's text is trimmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Trim {
+    /// Every trailing Unicode space, as JavaScript's `trimEnd` (the adapter's `readRows`).
+    Spaces,
+    /// Only cells nothing was written to; written spaces stay (xterm's `translateToString(true)`,
+    /// which selection and search read).
+    EmptyCells,
 }
 
 /// Most rows one [`TerminalRuntime::read_rows`] call returns, so a text query over the bridge stays bounded.
 pub const MAX_READ_ROWS: usize = 4096;
 const DEFAULT_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
+/// A scrollback cell costs 8 bytes in libghostty-vt plus page overhead: 8.9 to 9.2 bytes per cell
+/// measured at 20 to 279 columns, the same for plain, SGR-coloured and syntax-highlighted output
+/// (`examples/scrollback_budget.rs`). 10 leaves margin; see [`scrollback_bytes_for_lines`].
+const SCROLLBACK_BYTES_PER_CELL: usize = 10;
+/// libghostty-vt frees whole pages (about half a MiB each), so a budget of a few pages keeps up to
+/// a page and a half fewer rows than its byte size suggests; two pages of slack make up for it.
+const SCROLLBACK_PAGE_SLACK_BYTES: usize = 1024 * 1024;
+/// Narrower terminals are budgeted as this wide, so a phone that opens in portrait still keeps its
+/// history after the grid widens.
+const SCROLLBACK_REFERENCE_COLS: usize = 80;
 /// Matches the current transport credit window (OUTPUT_WINDOW/WINDOW in the Rust workers).
 const DEFAULT_INGRESS_BYTES: usize = 256 * 1024;
 
@@ -63,6 +94,22 @@ impl From<ghostty_vt::Error> for Error {
     }
 }
 
+/// The scrollback byte budget that keeps at least `lines` rows of ordinary output (plain text,
+/// SGR colours, syntax highlighting) for a terminal `cols` wide: lazysh's History lines setting counts
+/// lines, libghostty-vt budgets bytes, and the rows one byte budget holds depend on the width.
+///
+/// The width is the one at open and is not revisited: output written after a later widening takes
+/// more bytes per row and keeps fewer rows, and content that defeats cell sharing (a different
+/// truecolor foreground and background on every cell: 5.5 times the plain cost at 80 columns) or
+/// leans on graphemes and hyperlinks keeps fewer rows too. The hub clamps the request to its
+/// per-session cap and remaining global budget, so either can reduce the granted history.
+pub fn scrollback_bytes_for_lines(lines: usize, cols: u16) -> usize {
+    lines
+        .saturating_mul(usize::from(cols).max(SCROLLBACK_REFERENCE_COLS))
+        .saturating_mul(SCROLLBACK_BYTES_PER_CELL)
+        .saturating_add(SCROLLBACK_PAGE_SLACK_BYTES)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     pub size: Size,
@@ -73,6 +120,11 @@ pub struct Config {
     /// [`crate::mosh`]) and UI sizes are only intent from the first byte, as with the xterm
     /// backend's `enableCanonicalResize`.
     pub canonical_frames: bool,
+    /// The colours the terminal reports to programs that ask: the default foreground, background and
+    /// cursor (`OSC 10`, `11`, `12`) and the 256-colour palette (`OSC 4`). Pass the theme the
+    /// renderer draws with, so a program that probes it to pick a light or dark scheme sees what is
+    /// on screen. The theme the session opens with; [`TerminalRuntime::set_theme`] changes it later.
+    pub theme: Theme,
 }
 
 impl Default for Config {
@@ -82,6 +134,7 @@ impl Default for Config {
             scrollback_bytes: DEFAULT_SCROLLBACK_BYTES,
             ingress_bytes: DEFAULT_INGRESS_BYTES,
             canonical_frames: false,
+            theme: Theme::default(),
         }
     }
 }
@@ -103,6 +156,8 @@ pub struct Events {
     pub clipboard_writes: Vec<Vec<u8>>,
     /// OSC 7 directory changes, oldest first; at most 8 wait, the oldest are dropped.
     pub pwd_changes: Vec<Vec<u8>>,
+    /// The latest `OSC 0` or `OSC 2` title; an earlier one nobody took is replaced.
+    pub title: Option<String>,
     /// Clipboard writes and directory changes refused because the host had not taken earlier ones.
     pub dropped: u64,
     /// The latest grid size the runtime applied since the last take (local or transport).
@@ -119,7 +174,7 @@ pub struct Geometry {
 }
 
 /// Where the visible rows sit in the buffer, in absolute rows (the adapter's `TerminalViewport`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Viewport {
     /// The first visible absolute row.
     pub top: usize,
@@ -136,12 +191,29 @@ struct Replies {
     dropped: u64,
 }
 
+impl Replies {
+    fn push(&mut self, bytes: &[u8]) {
+        if self.bytes.len() + bytes.len() > MAX_REPLY_BYTES {
+            self.dropped += bytes.len() as u64;
+        } else {
+            self.bytes.extend_from_slice(bytes);
+        }
+    }
+
+    /// Bytes queued or dropped so far: it moves whenever the VT answers something.
+    fn seen(&self) -> u64 {
+        self.bytes.len() as u64 + self.dropped
+    }
+}
+
 pub struct TerminalRuntime {
     terminal: Terminal,
     renderer: Renderer,
     encoders: Encoders,
     ingress: IngressHandle,
     replies: Arc<Mutex<Replies>>,
+    colors: ColorQueries,
+    titles: Titles,
     events: Events,
     size: Size,
     authority: SizeAuthority,
@@ -163,19 +235,19 @@ impl TerminalRuntime {
         let replies = Arc::new(Mutex::new(Replies::default()));
         let sink = Arc::clone(&replies);
         terminal.set_write_pty_callback(move |bytes| {
-            let mut replies = sink.lock().unwrap_or_else(PoisonError::into_inner);
-            if replies.bytes.len() + bytes.len() > MAX_REPLY_BYTES {
-                replies.dropped += bytes.len() as u64;
-            } else {
-                replies.bytes.extend_from_slice(bytes);
-            }
+            sink.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(bytes);
         })?;
+        terminal.set_default_palette(&config.theme.palette)?;
         Ok(Self {
             terminal,
             renderer: Renderer::new()?,
             encoders: Encoders::new()?,
             ingress: IngressHandle::new(config.ingress_bytes),
             replies,
+            colors: ColorQueries::new(&config.theme),
+            titles: Titles::default(),
             events: Events::default(),
             size,
             authority: if config.canonical_frames {
@@ -187,6 +259,15 @@ impl TerminalRuntime {
             display: config.canonical_frames.then(Display::new),
             processed: 0,
         })
+    }
+
+    /// Report `theme`'s colours to the queries that arrive from now on, for a user who changed the app's theme while the
+    /// session runs (see [`Config::theme`]). A reply already queued keeps the colour it was made with. A palette colour a
+    /// program set itself (`OSC 4`) stays; the others follow the new palette.
+    pub fn set_theme(&mut self, theme: &Theme) -> Result<(), Error> {
+        self.terminal.set_default_palette(&theme.palette)?;
+        self.colors.set(theme);
+        Ok(())
     }
 
     /// Queue transport bytes. Rejected chunks come back untouched; nothing is dropped or reordered.
@@ -214,9 +295,33 @@ impl TerminalRuntime {
         bytes
     }
 
-    /// Feed one chunk to the VT. On a Mosh session the chunk is cut after each envelope so its
-    /// geometry is applied between the bytes before it and the bytes after it.
+    fn replies(&self) -> MutexGuard<'_, Replies> {
+        self.replies.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Feed one chunk to the VT. A default colour query (see [`crate::colors`]) is answered from
+    /// the theme right after the byte the VT dispatches it on, behind the replies to the bytes
+    /// before it, unless the VT answered it itself.
     fn write_chunk(&mut self, chunk: &[u8]) {
+        if let Some(title) = self.titles.scan(chunk) {
+            self.events.title = Some(title);
+        }
+        let mut at = 0;
+        while let Some((end, reply)) = self.colors.find(chunk, at) {
+            self.write_segment(&chunk[at..end - 1]);
+            let before = self.replies().seen();
+            self.write_segment(&chunk[end - 1..end]);
+            if self.replies().seen() == before {
+                self.replies().push(reply.as_bytes());
+            }
+            at = end;
+        }
+        self.write_segment(&chunk[at..]);
+    }
+
+    /// Feed bytes to the VT. On a Mosh session they are cut after each envelope so its geometry
+    /// is applied between the bytes before it and the bytes after it.
+    fn write_segment(&mut self, chunk: &[u8]) {
         let mut at = 0;
         while let Some((end, signal)) = self
             .display
@@ -440,7 +545,7 @@ impl TerminalRuntime {
 
     /// Bytes the terminal wants written back to the peer, in order, and the count dropped to the cap.
     pub fn take_replies(&mut self) -> (Vec<u8>, u64) {
-        let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut replies = self.replies();
         (
             std::mem::take(&mut replies.bytes),
             std::mem::take(&mut replies.dropped),
@@ -516,6 +621,54 @@ impl TerminalRuntime {
             .read_text_screen((0, 0), (self.size.cols - 1, last), false)?)
     }
 
+    /// The text of one absolute row over the columns of `span`, as xterm's `translateToString`
+    /// builds it: a blank cell reads as a space, a wide character's spacer as nothing (a span that
+    /// opens on a wide character's second cell reads it as a blank, and a wrapped wide character's
+    /// head as a blank), a grapheme cluster whole. A row past the end or past `u32` is empty.
+    pub(crate) fn row_text(
+        &self,
+        row: usize,
+        span: &Range<u16>,
+        trim: Trim,
+    ) -> Result<String, Error> {
+        let mut text = String::new();
+        let Ok(row) = u32::try_from(row) else {
+            return Ok(text);
+        };
+        let (mut column, mut content, mut written) = (0u16, 0, 0u16);
+        self.terminal
+            .for_each_screen_row_cell(row, |wide, graphemes| {
+                // The row's own length, as xterm trims it: one past its last cell with content.
+                if !graphemes.is_empty() || wide == CellWide::SpacerTail {
+                    written = column + 1;
+                }
+                if span.contains(&column) {
+                    let spacer = wide == CellWide::SpacerTail && column != span.start
+                        || wide == CellWide::SpacerHead;
+                    if graphemes.is_empty() && !spacer {
+                        text.push(' ');
+                    }
+                    text.extend(graphemes.iter().filter_map(|&code| char::from_u32(code)));
+                    // xterm counts a wide character's second cell in the row's length, so a span that
+                    // opens on it keeps its blank even when nothing follows.
+                    if !graphemes.is_empty()
+                        || (wide == CellWide::SpacerTail && column == span.start)
+                    {
+                        content = text.len();
+                    }
+                }
+                column += 1;
+            })?;
+        match trim {
+            Trim::Spaces => text.truncate(text.trim_end_matches(js_space).len()),
+            // xterm cuts a span at the end of the row's content, not at the span's own last
+            // content: the empty cells of a gap (a tab, a cursor move) stay while text follows them.
+            Trim::EmptyCells if written < span.end => text.truncate(content),
+            Trim::EmptyCells => {}
+        }
+        Ok(text)
+    }
+
     /// Text of absolute rows (scrollback first, as `screen_text`), trimmed on the right, optionally
     /// of a column span `[start, end)`: the adapter's `readRows`, text only, never cells. A blank
     /// cell reads as a space, a wide character's spacer as nothing, a grapheme cluster whole. Rows
@@ -530,30 +683,7 @@ impl TerminalRuntime {
     ) -> Result<Vec<String>, Error> {
         let span = columns.unwrap_or(0..u16::MAX);
         (first..first.saturating_add(count.min(MAX_READ_ROWS)))
-            .map(|row| {
-                let mut text = String::new();
-                if let Ok(row) = u32::try_from(row) {
-                    let mut column = 0u16;
-                    self.terminal
-                        .for_each_screen_row_cell(row, |wide, graphemes| {
-                            if span.contains(&column) {
-                                // A span that opens on a wide character's second cell reads it as a
-                                // blank, as xterm does; anywhere else the spacer adds nothing.
-                                let spacer = wide == CellWide::SpacerTail && column != span.start
-                                    || wide == CellWide::SpacerHead;
-                                if graphemes.is_empty() && !spacer {
-                                    text.push(' ');
-                                }
-                                text.extend(
-                                    graphemes.iter().filter_map(|&code| char::from_u32(code)),
-                                );
-                            }
-                            column += 1;
-                        })?;
-                }
-                text.truncate(text.trim_end_matches(js_space).len());
-                Ok(text)
-            })
+            .map(|row| self.row_text(row, &span, Trim::Spaces))
             .collect()
     }
 
@@ -565,6 +695,17 @@ impl TerminalRuntime {
             length: bar.total,
             following: bar.offset + bar.len >= bar.total,
         })
+    }
+
+    /// One bounded step of libghostty-vt's idle scrollback compression; `true` while more work
+    /// remains. Meant for a session nobody is looking at once its input has stopped.
+    pub fn compress_scrollback(&mut self) -> Result<bool, Error> {
+        Ok(self.terminal.compress_incremental()? == TerminalCompressionResult::Pending)
+    }
+
+    /// The VT state, for the text queries of sibling modules.
+    pub(crate) fn vt(&self) -> &Terminal {
+        &self.terminal
     }
 
     pub fn scrollback_rows(&self) -> Result<usize, Error> {

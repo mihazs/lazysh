@@ -74,23 +74,28 @@ hook and CI structure tests, client type check); every native job waits for it, 
 PR that fails the gate never queues emulator, macOS or Windows work. Pushes to `main`
 skip the gate and run every job with the full matrix, which is the parity evidence.
 
-Jobs that are not required to merge never run on a pull request, whatever its paths:
+Most jobs that are not required to merge never run on a pull request, whatever its paths:
 companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Herdr navigation,
-auxiliary and ntfy. They run on pushes to `main`, and `main-verdict.yml` reports them there; the
+auxiliary, ntfy and the terminal core and renderer on macOS (`terminal-macos`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there. The
+terminal performance gate (`terminal-perf`, report-only) is the exception: it also runs on a pull request that selects the
+terminal runtime area, so a regression shows on the pull request that causes it. The
 table below lists what a change can affect, and a pull request runs only the required jobs of
-that list.
+that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface.yml`, report-only) is its own workflow rather than a job here: it runs on a pull request or a push that changes the probe or the workflow, and not otherwise.
 
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
 | Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |
-| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android tmux, Appium suite |
+| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android terminal core, Android tmux, Appium suite |
 | Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
-| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
+| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, terminal core, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
-| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers |
-| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr only: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan) |
+| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime, Herdr navigation and Appium consumers (`herdr-upstream/{crates,vendor}` also selects the native terminal bridge and the Windows terminal job, because the runtime builds on that binding) |
+| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` (not `terminal-runtime/prototypes/`) | Herdr: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan), and so does the client's adapter contract suite over the runtime's stdio harness; `terminal-perf` (report-only); both also run the native terminal bridge job, which compiles them into the app; both also run `terminal-windows`, which runs on pull requests (unlike the desktop job): the same crates built and tested on `windows-latest`, the renderer on Direct3D 12 with WARP |
+| Native terminal bridge: `apps/client/src-tauri/**` (except `gen/android`, `apple` and `src/apple_*`), `packages/terminal-runtime/**` (not `prototypes/`), `packages/terminal-renderer-wgpu/**`, `packages/herdr-upstream/{crates,vendor}/**` | native terminal bridge: the app library built with the `native-terminal` feature (the core and the wgpu renderer) and its real-core tests (Zig 0.16.0, about 15 to 25 minutes on a cold cache) |
+| Linux composition probe: `packages/terminal-runtime/prototypes/linux-surface/**` | Linux composition probe only (`native-linux-surface`: headless sway and Xvfb, the compositor's pixels read back) |
+| The probe's harness: `packages/terminal-runtime/prototypes/linux-surface/scripts/**` | Linux composition probe, and the native-terminal bridge (`native-terminal-bridge` runs the harness against the real app's surface host) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
-| Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
+| Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | every required job and `terminal-perf`, with both ntfy variants |
 
 The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its
 `journeys` tier) and in a nightly `checks` run that starts only that job, and it is not a required check until it has passed 20
@@ -100,6 +105,21 @@ separate, never-gating `native-android-appium-quarantine` job.
 Matrices fail fast on pull requests and keep every verdict on `main`. The script and
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
 new input, and map an uncertain path to more jobs, never fewer.
+A Changesets version bump (every changed line a version line, root `package.json` bumped) selects no native job on a pull request; `main` still runs everything.
+
+### Required checks
+
+A pull request merges when these eleven jobs pass: `client`, `agent`, `native-linux`, `native-linux-runtimes`, `native-android`,
+`native-android-runtime`, `native-android-ssh-parity`, `native-android-tmux`, `native-android-biometric`, `release-tools` (in
+`version.yml`) and `headers` (in `conventional-commits.yml`).
+
+The repository ruleset on `main` does not enforce them: it has the `deletion`, `non_fast_forward` and `pull_request` rules (no approvals)
+and no required-status-checks rule. The gate is the pull request driver's `REQUIRED` set (`/tmp/lazysh-driver/driver.py`), which merges a
+pull request once those jobs pass, and the manual-merge rule in [AGENTS.md](AGENTS.md). Two consequences:
+
+- A job name is a contract. Renaming a job or moving it to another workflow silently drops its gate until the driver's set changes.
+- Promoting a report-only check (for example the Android Appium job) means adding it to the driver's set. A ruleset rule would make GitHub
+  enforce it for manual merges too; adding one is a maintainer change.
 
 ### Main verdict
 
@@ -108,7 +128,7 @@ Two pull requests can each pass `checks` and still break `main` together (the v1
 per ref, and GitHub keeps one running and one pending run per group, so on a busy trunk the run of an
 older merge commit is cancelled while pending and never reports. The `main-verdict` workflow closes
 that gap: every push to `main` gets its own run (group `main-verdict-<sha>`, never cancelled) of three
-parallel jobs, `verdict-client` (`moon run client:build`, which is `tsc -b && vite build`),
+parallel jobs, `verdict-client` (`moon run client:build client:check`: the Bun build, then the `tsc -b` type check),
 `verdict-agent` (`moon run '#companion:check-rust'`) and `verdict-release-tools` (`bun run test:release`).
 It completes within minutes, runs no native, emulator or end-to-end job, and its check names differ
 from the required `client`, `agent` and `release-tools` jobs on purpose: it is not a required status
@@ -130,6 +150,14 @@ entry and requeues the ones behind it. "Require branches to be up to date" has t
 request. `main-verdict` detects the same class of break within minutes, so the
 queue stays an option to revisit if post-merge breaks recur; it would then run only the fast verdict
 set on `merge_group`.
+
+## Bug fixes
+
+A `fix(...)` pull request adds a regression test that fails on the parent commit, adds or updates its row in
+[`docs/regression-tests.md`](docs/regression-tests.md), and ticks "Added" under "Regression test" in the pull request
+template, or ticks "Not applicable" with the reason. The `regression-test` check of the `conventional-commits` workflow fails a fix
+without one (`sh .githooks/regression-check pr '<title>' '<body>'` runs it locally). The lowest layer that can fail on the
+bug owns the test; see [Write and run Appium tests](docs/how-to/write-and-run-appium-tests.md#add-a-regression-test-for-a-bug).
 
 ## Conventional Commits
 
@@ -206,17 +234,53 @@ release bump covers them. Empty fragments are suitable only for follow-up work
 covered by a planned release; an empty-only plan cannot deliver a milestone.
 
 Add a Changesets fragment with `bun run changeset` for the selected release
-impact, alongside the required root changelog entry below. The private workspace
+impact; the fragment is also the change's changelog entry (see [Changelog
+entries](#changelog-entries)). The private workspace
 packages release together; generated package changelogs and synchronized
 Bun/Cargo/Tauri versions are prepared in a separate reviewed release PR. See
 [versioning and milestone releases](docs/versioning.md) for tooling, native version
 inheritance and the GitHub PR-creation/CI-approval prerequisites. This does not
 configure registry or application-store publishing.
 
-User-facing changes require an entry under `[Unreleased]` in `CHANGELOG.md`.
-Explicitly identify changed defaults. Internal refactors, dead-code removal and
-test-only changes are exempt. Pure repository workflow documentation is also
-exempt. Review and resolve findings, then merge ready changes autonomously.
+Explicitly identify changed defaults in the fragment's details. Internal
+refactors, dead-code removal and test-only changes need only an empty fragment
+(or none when no milestone depends on them). Pure repository workflow
+documentation is also exempt. Review and resolve findings, then merge ready
+changes autonomously.
+
+### Changelog entries
+
+The changeset fragment is the changelog entry. Do not also write a root
+`CHANGELOG.md` `[Unreleased]` entry: it is no longer required, and one that is
+still added is moved into the next release section when the version is prepared.
+A fragment's summary is
+
+```md
+---
+"@lazysh/client": minor
+---
+
+feat(ssh): keep the host binding when a connection is restored
+
+Details for people who want them: what changed, what did not, and every changed
+default. Any Markdown, including lists and code.
+```
+
+- The first line is `type(scope): headline`. `type` is one of `feat`, `fix`,
+  `perf`, `docs`, `refactor`, `build`, `ci`, `test`, `chore` or `revert`; the scope
+  is optional and `!` after it marks a breaking change. The headline is one
+  sentence written for the people who use lazysh, at most 110 characters.
+- Details, if any, follow after a blank line and are collapsed in the release.
+- Each release's notes group the lines as **New** (`feat`), **Improved** (`perf`,
+  `refactor`), **Fixed** (`fix`), **Documentation** (`docs`) and **Under the hood**
+  (`build`, `ci`, `test`, `chore`, `revert`), one line per change with a link to its
+  pull request, and the same text is written to the root `CHANGELOG.md` and the
+  GitHub release. `bun run changelog:preview` prints the pending fragments grouped
+  that way.
+- The pre-commit hook checks only the fragments you stage
+  (`bun .changeset/lint-fragments.ts <files>` runs it by hand) and prints the line
+  to fix. Fragments written before this format keep working: their first sentence
+  becomes the headline and the type is inferred.
 
 The code scan retains the existing vendored/build exclusions and excludes
 `packages/parakeet-runtime/licenses/**`: upstream legal text must remain verbatim.

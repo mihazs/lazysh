@@ -1,6 +1,6 @@
 import {ArrowLeft,ChevronDown,ChevronRight,RefreshCw,Settings2,Info} from 'lucide-react';
 import {StatusRing,agentKind,herdrTones} from './AgentStatus';
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useRef,useState,type Dispatch,type SetStateAction} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import {HerdrSpaceActions,HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
 import {workspaceDirectory} from './herdrCreate';
@@ -9,6 +9,7 @@ import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {herdrStatusKeys,homeRelativePath,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
+import {readMuxLayout,writeMuxLayout,type MuxLayout} from './muxLayout';
 import './HerdrNavigation.css';
 import './HerdrNavigationPresentation.css';
 import './HerdrSpaces.css';
@@ -16,18 +17,24 @@ import './HerdrSpaces.css';
 export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,navigationOnly=false}:{
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,navigationOnly=false,statusGroups,statusHostId=sessionId}:{
   sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;navigationOnly?:boolean;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onContentSettled?:(receipt:HerdrContentReceipt)=>void;
   onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
+  statusGroups?:[Set<string>,Dispatch<SetStateAction<Set<string>>>];statusHostId?:string;
 }) {
   useUi();
   useAccessSnapshot();
-  const model=useHerdrNavigation({sessionId,herdrSession,visible,reports});
+  const model=useHerdrNavigation({sessionId,herdrSession,visible,reports,clientFocus:true});
   const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
+  const [localStatusGroups,setLocalStatusGroups]=useState<Set<string>>(()=>new Set());
+  const [statusOverrides,setStatusOverrides]=statusGroups??[localStatusGroups,setLocalStatusGroups];
+  const [layout,setLayout]=useState(readMuxLayout);
+  /** A space the user opened or closed by hand wins over its layout's default until the layout changes. */
+  const [spaceOpen,setSpaceOpen]=useState<Record<string,boolean>>({});
   const [spaceMenu,setSpaceMenu]=useState<string>();
   const [setupView,setSetupView]=useState<{host:string;open:boolean}>();
   const setupTrigger=useRef<HTMLButtonElement>(null);
@@ -54,7 +61,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   /** The path a Spaces pane row shows; search matches it as well as the raw cwd. */
   const shownPath=(cwd?:string|null)=>cwd?homeRelativePath(cwd,hostLabel):undefined;
   const working=actionBusy || (busy && !data?.loaded);
-  function toggle(id:string) {setCollapsed(previous=>{const next=new Set(previous);if(!next.delete(id))next.add(id);return next;});}
+  function toggle(id:string,set:Dispatch<SetStateAction<Set<string>>>) {set(previous=>{const next=new Set(previous);if(!next.delete(id))next.add(id);return next;});}
   async function open(target?:HerdrNavigationTarget) {
     const server=data?.server;
     if(!server || !visible || !lease.current() || action.current)return;
@@ -77,8 +84,8 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {agentRow && <ChevronRight className="row-chevron" size={18} aria-hidden="true"/>}
     </button>;
   }
-  function disclosure(key:string,name:string,open:boolean) {
-    return <button type="button" className="herdr-disclosure" aria-expanded={open} aria-label={t('herdrNavigationCollapse',{name})} onClick={()=>toggle(key)}><ChevronDown size={18} aria-hidden="true"/></button>;
+  function disclosure(key:string,name:string,open:boolean,onToggle=()=>toggle(key,setCollapsed)) {
+    return <button type="button" className="herdr-disclosure" aria-expanded={open} aria-label={t('herdrNavigationCollapse',{name})} onClick={onToggle}><ChevronDown size={18} aria-hidden="true"/></button>;
   }
   function panes(tab:HerdrTree['tabs'][number],workspaceLabel:string) {
     return tree?.panes.filter(pane=>pane.tab_id===tab.tab_id && pane.workspace_id===tab.workspace_id).map(pane=>{
@@ -127,16 +134,17 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {data.server && <>
         <label><span className="sr-only">{t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')}</span><input type="search" placeholder={t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
+        {mode==='spaces' && tree && <label>{t('jumpLayout')}<select value={layout} onChange={event=>{const next=event.target.value as MuxLayout;setLayout(next);setSpaceOpen({});writeMuxLayout(next);}}><option value="list">{t('preferencesList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option></select></label>}
         {mode==='spaces' && tree && !navigationOnly && <HerdrWorkspaceCreate {...create}/>}
-        {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
+        {mode==='spaces' && tree && <ul className={`herdr-navigation-tree herdr-layout-${layout}`}>{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,shownPath(pane.cwd),pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
-          const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || !collapsed.has(key);
+          const key=JSON.stringify([sessionId,data.server,workspace.workspace_id]),open=!!term || (spaceOpen[key] ?? (layout!=='accordion' || workspace.focused));
           return <li key={workspace.workspace_id} className="herdr-space">
             <div className="herdr-navigation-heading" onContextMenu={event=>{if(!navigationOnly && !working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
               {row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status,t('herdrTabCount',{total:formatNumber(tabs.length),count:tabs.length}))}
               {!navigationOnly && <HerdrSpaceActions {...create} tree={tree} workspace={workspace} open={spaceMenu===workspace.workspace_id} onOpenChange={value=>setSpaceMenu(value?workspace.workspace_id:undefined)}/>}
-              {disclosure(key,workspace.label,open)}
+              {disclosure(key,workspace.label,open,()=>setSpaceOpen(previous=>({...previous,[key]:!open})))}
             </div>
             {open && <ul>{tabs.map(tab=>{
               const tabKey=JSON.stringify([data.server,tab.tab_id]),count=tree.panes.filter(pane=>pane.tab_id===tab.tab_id && pane.workspace_id===tab.workspace_id).length;
@@ -147,8 +155,8 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         })}</ul>}
         {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div className="herdr-status-groups">{statuses.map(status=>{
           const matching=rows.filter(agent=>agent.agent_status===status);
-          const key=JSON.stringify(['status',data.server,status]),folded=collapsed.has(key)&&!term,heading=`${t(herdrStatusKeys[status])} · ${matching.length}`;
-          return matching.length>0 && <section key={status} className="status-group" data-status={status} aria-label={t(herdrStatusKeys[status])}><h4 aria-label={heading}><button type="button" className="status-group-toggle" aria-label={heading} aria-expanded={!folded} onClick={()=>toggle(key)}><span>{t(herdrStatusKeys[status])}</span><span className="status-group-count">{matching.length}</span><ChevronDown size={16} aria-hidden="true"/></button></h4>{!folded && <div className="status-group-rows">{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '),agent.name?agent.agent:null)}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div>}</section>;
+          const key=JSON.stringify([statusHostId,data.server,status]),folded=!term && (status==='done'?!statusOverrides.has(key):statusOverrides.has(key)),heading=`${t(herdrStatusKeys[status])} · ${matching.length}`;
+          return matching.length>0 && <section key={status} className="status-group" data-status={status} aria-label={t(herdrStatusKeys[status])}><h4 aria-label={heading}><button type="button" className="status-group-toggle" aria-label={heading} aria-expanded={!folded} disabled={!!term} onClick={()=>toggle(key,setStatusOverrides)}><span>{t(herdrStatusKeys[status])}</span><span className="status-group-count">{matching.length}</span><ChevronDown size={16} aria-hidden="true"/></button></h4>{!folded && <div className="status-group-rows">{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '),agent.name?agent.agent:null)}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div>}</section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
       </div>

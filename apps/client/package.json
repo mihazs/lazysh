@@ -1,13 +1,17 @@
 {
   "name": "@lazysh/client",
-  "version": "1.66.1",
+  "version": "1.95.6",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
-    "test": "vitest run",
+    "build": "bun build/build.ts",
+    "test": "vitest run && bun test ./build",
     "test:e2e": "playwright test",
+    "test:e2e:kill-switch": "playwright test -c playwright.kill-switch.config.ts",
+    "test:e2e:terminal": "playwright test e2e/terminal-ime.spec.ts e2e/terminal-swiftkey.spec.ts e2e/terminal-selection.spec.ts e2e/terminal-clipboard.spec.ts e2e/herdr-switch-tap.spec.ts e2e/mosh-resize.spec.ts",
+    "test:e2e:multiplexers": "playwright test --project=desktop e2e/tmux-clipboard.spec.ts e2e/multiplexer-clipboard.spec.ts",
+    "test:osc52": "vitest run src/preferences.test.ts src/xtermTerminalAdapter.test.ts src/TerminalPane.test.tsx -t \"OSC ?52|remote clipboard write|OSC copy\"",
     "bench:terminal": "playwright test -c playwright.bench.config.ts",
     "bench:agent-view": "playwright test -c playwright.bench-agent.config.ts",
     "test:published-native-gui": "vitest run --config vitest.published-native.config.ts",
@@ -37,7 +41,8 @@
     "react-i18next": "17.1.9",
     "react-markdown": "^10.1.0",
     "rehype-raw": "7.0.0",
-    "rehype-sanitize": "6.0.0"
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@lazysh/apple-speech": "workspace:*",

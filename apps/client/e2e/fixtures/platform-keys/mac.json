@@ -18,6 +18,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 65,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "KeyA",
@@ -51,6 +55,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 67,
+      "altGraph": false
     },
     "input": {
       "type": "key",
@@ -86,6 +94,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 67,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "KeyC",
@@ -119,6 +131,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 76,
+      "altGraph": false
     },
     "input": {
       "type": "key",
@@ -154,6 +170,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 49,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "Digit1",
@@ -187,6 +207,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 76,
+      "altGraph": false
     },
     "input": {
       "type": "key",
@@ -222,6 +246,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 66,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "KeyB",
@@ -255,6 +283,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 49,
+      "altGraph": false
     },
     "input": {
       "type": "key",
@@ -290,6 +322,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 190,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "Period",
@@ -324,6 +360,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 37,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "KeyB",
@@ -357,6 +397,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 39,
+      "altGraph": false
     },
     "input": {
       "type": "key",

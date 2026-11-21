@@ -331,7 +331,11 @@ async fn fixture_data(
         home: "/owned".into(),
         data: "/owned/data".into(),
     };
-    (Staging::new(raw, &unix, &selection), peer, task)
+    (
+        Staging::new(raw, &unix, &selection, "lazysh-agent"),
+        peer,
+        task,
+    )
 }
 
 #[tokio::test(start_paused = true)]

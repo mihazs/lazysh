@@ -8,7 +8,7 @@ use crate::{managed_directory::Directory, Error, Result};
 use lazysh_common::storage_filesystem;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::fd::AsRawFd;
 use std::{
     io::{self, Read},
@@ -20,7 +20,7 @@ pub(super) fn rejected(kind: &'static str) -> Error {
     Error::Installation(kind)
 }
 /// Admission is intentionally limited to retained leaf descriptors, not ancestors.
-/// Native macOS ACL absence semantics still require runtime qualification.
+/// Any POSIX or macOS extended ACL is refused: the commit path cannot preserve one.
 pub(super) fn ordinary_acl(file: &std::fs::File) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -40,10 +40,26 @@ pub(super) fn ordinary_acl(file: &std::fs::File) -> Result<()> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = file;
-        Err(rejected("HooksAclUnsupported"))
+        // <sys/acl.h> is not exposed by libc. An entry-free file has no extended ACL:
+        // Darwin then returns NULL with ENOENT, while ENOTSUP and the like mean the
+        // filesystem cannot answer, which stays unsupported rather than assumed absent.
+        unsafe extern "C" {
+            fn acl_get_fd_np(fd: libc::c_int, kind: libc::c_uint) -> *mut libc::c_void;
+            fn acl_free(acl: *mut libc::c_void) -> libc::c_int;
+        }
+        const ACL_TYPE_EXTENDED: libc::c_uint = 0x100;
+        // SAFETY: the retained descriptor is valid; a returned ACL is released exactly once.
+        let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+        if !acl.is_null() {
+            unsafe { acl_free(acl) };
+            return Err(rejected("HooksUnhandledAcl"));
+        }
+        match io::Error::last_os_error().raw_os_error() {
+            Some(libc::ENOENT) => Ok(()),
+            _ => Err(rejected("HooksAclUnsupported")),
+        }
     }
 }
 pub(super) fn directory_admission(directory: &Directory) -> Result<()> {
@@ -205,6 +221,51 @@ pub(super) struct Inspection {
     pub binary: Binary,
     pub amp_shadows: Option<[Option<Identity>; 2]>,
 }
+/// Metadata of the entry itself: never follow a link or read a foreign same-name plugin.
+#[cfg(target_os = "linux")]
+fn entry_identity(directory: &Directory, name: &str) -> Result<Option<Identity>> {
+    match directory.open_file(name, libc::O_PATH) {
+        Ok(file) => Ok(Some(identity(&file.metadata()?))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+/// Darwin has no `O_PATH`; `fstatat` reads the same metadata without opening the entry.
+#[cfg(target_os = "macos")]
+fn entry_identity(directory: &Directory, name: &str) -> Result<Option<Identity>> {
+    let name = std::ffi::CString::new(name).map_err(io::Error::other)?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: the retained directory descriptor and NUL-terminated name are valid and
+    // the buffer is initialized only after a successful call.
+    let result = unsafe {
+        libc::fstatat(
+            directory.file.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(error.into())
+        };
+    }
+    // SAFETY: fstatat succeeded.
+    let stat = unsafe { stat.assume_init() };
+    Ok(Some(Identity {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino,
+        owner: stat.st_uid,
+        mode: u32::from(stat.st_mode),
+        links: u64::from(stat.st_nlink),
+        bytes: stat.st_size as u64,
+        modified: [stat.st_mtime, stat.st_mtime_nsec],
+        changed: [stat.st_ctime, stat.st_ctime_nsec],
+    }))
+}
 /// Metadata only: do not traverse or read a foreign same-name plugin.
 pub(super) fn amp_shadows(
     agent: Agent,
@@ -216,23 +277,11 @@ pub(super) fn amp_shadows(
     let Some(directory) = directory else {
         return Ok(Some([None, None]));
     };
-    #[cfg(target_os = "linux")]
-    {
-        let mut snapshot = [None, None];
-        for (slot, name) in snapshot.iter_mut().zip(["lazysh.ts", "lazysh"]) {
-            *slot = match directory.open_file(name, libc::O_PATH) {
-                Ok(file) => Some(identity(&file.metadata()?)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-        }
-        Ok(Some(snapshot))
+    let mut snapshot = [None, None];
+    for (slot, name) in snapshot.iter_mut().zip(["lazysh.ts", "lazysh"]) {
+        *slot = entry_identity(directory, name)?;
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = directory;
-        Err(rejected("HooksAclUnsupported"))
-    }
+    Ok(Some(snapshot))
 }
 impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
@@ -393,6 +442,10 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     // Creating a standalone Droid file could shadow settings/legacy fallback hooks.
     if target.agent == Agent::Droid && provider.state == FileState::Missing {
         return Err(rejected("HooksDroidStandaloneRequired"));
+    }
+    // Kimi's config.toml is foreign-owned and secret-bearing: appending to it never creates it.
+    if target.agent == Agent::KimiCode && provider.state == FileState::Missing {
+        return Err(rejected("HooksKimiConfigRequired"));
     }
     let manifest = read(
         &profile,

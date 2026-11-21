@@ -5,6 +5,8 @@ use super::{
     MAX_PAGE,
 };
 use serde_json::{json, Value};
+#[path = "codex_index.rs"]
+pub(super) mod index;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -419,6 +421,20 @@ pub(super) fn conversation(
     project(codex_lineage::read(path)?, limit, images, window)
 }
 
+pub(super) fn conversation_large(
+    path: &Path,
+    limit: u8,
+    images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    project(
+        codex_lineage::read_large(path, images)?,
+        limit,
+        images,
+        window,
+    )
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn anchored(
     root: &crate::managed_directory::Directory,
@@ -426,12 +442,13 @@ pub(super) fn anchored(
     limit: u8,
     expected: &super::SourceSnapshot,
     window: &Window,
+    allow_large: bool,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
     project(
-        codex_lineage::read_anchored(root, path, expected)?,
+        codex_lineage::read_anchored(root, path, expected, allow_large)?,
         limit,
         false,
         window,
@@ -444,6 +461,9 @@ fn project(
     images: bool,
     window: &Window,
 ) -> Result<TranscriptPage> {
+    if history.indexed.is_some() {
+        return project_indexed(history, limit, images, window);
+    }
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
@@ -463,10 +483,7 @@ fn project(
         if value["type"] == "compacted" {
             projection.turn(None).compacted = true;
             let id = format!("compacted-{}", record.key);
-            projection.put(
-                None,
-                super::events::codex_compacted(&id, &value["timestamp"]),
-            )?;
+            projection.put(None, super::events::compacted(&id, &value["timestamp"]))?;
             continue;
         }
         if value["type"] != "event_msg" {
@@ -595,5 +612,74 @@ fn project(
         queued: Vec::new(),
         work: agents.into_work(),
         session: session.into_value(),
+    })
+}
+
+/// Materialize only the requested page from a complete bounded index. Every selected
+/// record is checked against its indexed hash, then all source prefixes are reverified.
+fn project_indexed(
+    history: codex_lineage::History,
+    limit: u8,
+    images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    let state = history.indexed.as_ref().ok_or(Error::InvalidEvent)?;
+    let indexed = &state.messages;
+    let find = |id: &str| {
+        indexed
+            .iter()
+            .position(|item| item.id == id)
+            .ok_or(Error::InvalidArgument)
+    };
+    let (forward, at) = super::window::position(window, indexed.len(), find)?;
+    let (mut lo, mut hi) = (at, at);
+    let mut bytes = 0;
+    let mut messages = std::collections::VecDeque::new();
+    while hi - lo < usize::from(limit) {
+        let Some(next) = (if forward {
+            (hi < indexed.len()).then_some(hi)
+        } else {
+            lo.checked_sub(1)
+        }) else {
+            break;
+        };
+        let item = &indexed[next];
+        let record = history.read_indexed_record(&item.key, &item.record_hash)?;
+        let message = index::materialize(&record, &item.key, &item.turn_id, item.kind, images)?;
+        if message["id"].as_str() != Some(item.id.as_str()) {
+            return Err(Error::InvalidEvent);
+        }
+        let size = message_size(&message)?;
+        if bytes + size > MAX_PAGE {
+            break;
+        }
+        bytes += size;
+        if forward {
+            hi += 1;
+            messages.push_back(message);
+        } else {
+            lo = next;
+            messages.push_front(message);
+        }
+    }
+    if lo == hi && (if forward { hi < indexed.len() } else { lo > 0 }) {
+        return Err(Error::InvalidEvent);
+    }
+    history.verify()?;
+    Ok(TranscriptPage {
+        schema_version: 1,
+        view: "active_branch",
+        agent: TranscriptAgent::Codex,
+        messages: messages.into(),
+        next_offset: history.offset,
+        has_more: false,
+        branch_id: Some(history.thread),
+        truncated: lo > 0,
+        has_newer: hi < indexed.len(),
+        checkpoint: None,
+        activity: state.activity,
+        queued: Vec::new(),
+        work: state.work.clone(),
+        session: state.session.clone(),
     })
 }

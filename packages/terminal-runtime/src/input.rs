@@ -36,9 +36,58 @@ struct MouseHandle(MouseEncoder);
 // SAFETY: moved between threads, never shared: `Encoders` is only reachable through `&mut`.
 unsafe impl Send for MouseHandle {}
 
+/// A motion report's identity for repeat suppression: xterm.js (what lazysh ships) sends nothing when the
+/// pointer is still in the same cell (the same pixel in SGR-pixels mode) with the same button and
+/// modifiers, which keeps a stationary pointer from flooding the pty. libghostty-vt's encoder can do this
+/// (`track_last_cell`), but the binding exposes no setter and `setopt_from_terminal`, which every encode needs,
+/// clears that state, so the runtime keeps it.
+#[derive(PartialEq)]
+struct Motion {
+    surface: (u32, u32),
+    cell: (u32, u32),
+    pixels: bool,
+    button: Option<ffi::GhosttyMouseButton>,
+    mods: u16,
+    at: (i32, i32),
+}
+
+impl Motion {
+    fn of(
+        terminal: &Terminal,
+        surface: (u32, u32),
+        cell: (u32, u32),
+        input: &MouseInput,
+    ) -> Result<Self, Error> {
+        let pixels = terminal.mode_get(ghostty_vt::MODE_MOUSE_SGR_PIXELS)?;
+        let along = |position: f32, extent: u32, size: u32| {
+            // A zero cell size is accepted by `Config` (the encoder just ignores it); it must not divide.
+            let size = size.max(1);
+            if pixels {
+                position.round() as i32
+            } else {
+                let last = (extent / size).saturating_sub(1) as f32;
+                (position / size as f32).floor().clamp(0.0, last) as i32
+            }
+        };
+        Ok(Self {
+            surface,
+            cell,
+            pixels,
+            button: input.button,
+            mods: input.mods,
+            at: (
+                along(input.x, surface.0, cell.0),
+                along(input.y, surface.1, cell.1),
+            ),
+        })
+    }
+}
+
 pub(crate) struct Encoders {
     key: KeyEncoder,
     mouse: MouseHandle,
+    /// The last motion that produced a report; any other mouse event forgets it.
+    last_motion: Option<Motion>,
 }
 
 impl Encoders {
@@ -46,6 +95,7 @@ impl Encoders {
         Ok(Self {
             key: KeyEncoder::new()?,
             mouse: MouseHandle(MouseEncoder::new()?),
+            last_motion: None,
         })
     }
 
@@ -89,6 +139,11 @@ impl Encoders {
             event.set_consumed_mods(input.mods & MOD_SHIFT);
         }
         self.key.set_from_terminal(terminal);
+        // libghostty-vt built for macOS treats Alt as a text-composing Option unless told otherwise, and
+        // `set_from_terminal` resets that. The app decides per platform whether Option is Meta
+        // (`terminalPlatformKeys.ts` clears Alt when Option typed a character), so the core must send an Alt
+        // it is given as Alt everywhere: the same event, the same bytes on every platform.
+        self.key.set_macos_option_as_alt(true);
         let bytes = self.key.encode(&event)?;
         // A program that never asked for a protocol cannot read its escape codes: a shell would print
         // them as junk, and xterm.js sends nothing for these chords either.
@@ -106,6 +161,14 @@ impl Encoders {
         cell: (u32, u32),
         input: MouseInput,
     ) -> Result<Vec<u8>, Error> {
+        let motion = if input.action == ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION {
+            Some(Motion::of(terminal, surface, cell, &input)?)
+        } else {
+            None
+        };
+        if motion.is_some() && motion == self.last_motion {
+            return Ok(Vec::new());
+        }
         let mut event = MouseEvent::new()?;
         event.set_action(input.action);
         match input.button {
@@ -116,7 +179,9 @@ impl Encoders {
         event.set_position(input.x, input.y);
         self.mouse.0.set_from_terminal(terminal);
         self.mouse.0.set_size(surface.0, surface.1, cell.0, cell.1);
-        Ok(self.mouse.0.encode(&event)?)
+        let report = self.mouse.0.encode(&event)?;
+        self.last_motion = motion.filter(|_| !report.is_empty());
+        Ok(report)
     }
 }
 
@@ -192,7 +257,7 @@ fn unshifted_codepoint(input: &KeyInput) -> Option<u32> {
     from_key.or_else(|| {
         let mut chars = input.text.as_deref()?.chars();
         let only = chars.next().filter(|_| chars.next().is_none())?;
-        Some(only.to_lowercase().next().map_or(only, |c| c) as u32)
+        Some(only.to_lowercase().next().unwrap_or(only) as u32)
     })
 }
 

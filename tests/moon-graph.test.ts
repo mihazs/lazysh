@@ -55,11 +55,12 @@ const legacy: Record<string, string> = {
   'test:android-fdroid': 'client:test-android-fdroid', 'test:android-ntfy': 'client:test-android-ntfy', 'test:android': 'client:test-android',
   'test:android-theme-links': 'client:test-android-theme-links', 'test:android-ssh': 'client:test-android-ssh',
   'test:android-ssh-parity': 'client:test-android-ssh-parity', 'test:android-herdr-navigation': 'client:test-android-herdr-navigation',
-  'test:android-tmux': 'client:test-android-tmux', 'test:android-qr': 'client:test-android-qr', 'test:android-biometric': 'client:test-android-biometric',
+  'test:android-tmux': 'client:test-android-tmux', 'test:android-zellij': 'client:test-android-zellij', 'test:android-qr': 'client:test-android-qr', 'test:android-voice': 'client:test-android-voice', 'test:android-biometric': 'client:test-android-biometric',
   'init:ios': 'client:init-ios', 'build:ios': 'client:build-ios', 'test:ios-workspace': 'client:test-ios-workspace',
+  'test:ios-surface-poc': 'client:test-ios-surface-poc',
   'check:rust': 'client-native:check-rust', 'test:rust': 'client-native:test-rust', lint: 'client-native:lint', 'format:check': 'client-native:format-check',
   'test:resume-policy': 'client-native:test-resume-policy', 'test:openssh': 'client-native:test-openssh',
-  'test:openssh-connections': 'client-native:test-openssh-connections', 'test:host-clipboard': 'client-native:test-host-clipboard',
+  'test:openssh-connections': 'client-native:test-openssh-connections', 'test:openssh-auth-tunnel': 'client-native:test-openssh-auth-tunnel', 'test:host-clipboard': 'client-native:test-host-clipboard',
   'test:local': 'client-native:test-local', 'test:mosh': 'client-native:test-mosh', 'test:et': 'client-native:test-et',
   'test:multiplexers': 'client-native:test-multiplexers', 'test:connection-loss': 'client-native:test-connection-loss', 'test:tmux': 'client-native:test-tmux',
   'test:voice': 'client-native:test-voice', 'test:parakeet-product': 'client-native:test-parakeet-product',
@@ -79,6 +80,12 @@ test.each(Object.entries(legacy))('legacy task %s resolves to %s with the old ca
   expect(task.options.runInCI).toBe(!task.options.persistent); // dev servers are the only local-only tasks
 });
 
+test('the Android Appium CI task remains eligible and installs its driver', async () => {
+  expect((await moonTask('client:test-mobile-e2e-ci')).options.runInCI).toBe(true);
+  expect((await moonTask('client:setup-mobile-e2e')).options.runInCI).toBe(true);
+  expect((await moonTask('client:test-mobile-e2e-ci')).deps!.map(dependency => dependency.target)).toEqual(['client:setup-mobile-e2e']);
+});
+
 test('release builds, ordering and inline environment survive the port', async () => {
   expect(commandLine(await moonTask('agent:build'))).toBe('cargo build --release --locked');
   // The update tests need the local release-server seam; a command that repeats the inherited arguments would
@@ -94,7 +101,8 @@ test('release builds, ordering and inline environment survive the port', async (
   const android = await moonTask('client:build-android-emulator');
   expect(android.options.envOverride).toBe(true);
   expect(android.env).toEqual({ WHISPER_DONT_GENERATE_BINDINGS: '1', CMAKE_ANDROID_NDK: expect.any(String) });
-  expect(commandLine(android)).toBe('tauri android build --target x86_64 --debug --apk --ci');
+  expect(commandLine(android)).toBe('tauri android build --target x86_64 --debug --apk --ci --features sync-tls-acceptance,parakeet-android');
+  expect(commandLine(await moonTask('client:build-android-fdroid-emulator'))).not.toContain('parakeet-android');
   const fdroid = await moonTask('client:test-android-fdroid');
   expect(fdroid.deps!.map(dependency => dependency.target)).toEqual(['client:build-android-fdroid-emulator']);
   expect((await moonTask('client:test-android-ssh')).deps!.map(dependency => dependency.target)).toEqual(['client:test-android']);

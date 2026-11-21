@@ -30,6 +30,17 @@ export async function workspaceAction(gui:NativeGui,name:string) {
   return opener;
 }
 
+/** Names of every control in the visible Workspace tools menu, across its pages; leaves the menu closed. */
+export async function workspaceToolNames(gui:NativeGui) {
+  const browser=gui.browser!,opener=await browser.$('button[aria-label="Workspace tools"]');
+  await opener.click();
+  const menu=await browser.$('[role="dialog"][aria-label="Workspace tools"]');await menu.waitForDisplayed();
+  const names=await browser.execute(()=>Array.from(document.querySelectorAll('[role="dialog"][aria-label="Workspace tools"] .workspace-tools-page button'))
+    .map(button=>(button.getAttribute('aria-label')||button.textContent||'').trim()));
+  await browser.keys('Escape');await menu.waitForDisplayed({reverse:true});
+  return names;
+}
+
 export async function typeText(browser:NonNullable<NativeGui['browser']>,text:string) {
   const action=browser.action('key');
   // keys([...]) holds the entire sequence as a chord; controlled fields need individual presses.
@@ -109,7 +120,7 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   return {browser,terminal,owner};
 }
 
-export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'|'AFTER_SAVED_RECONNECT'|'AFTER_WORKSPACES'=false) {
+export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'|'AFTER_SAVED_RECONNECT'|'AFTER_WORKSPACES'|'AFTER_PALETTE'=false) {
   const browser=gui.browser!;
   const suffix=typeof checkpoint==='string'?`_${checkpoint}`:checkpoint?'_AFTER_INSTALL':'';
   const expected=ssh.expected+suffix;
@@ -139,14 +150,14 @@ async function cleanupOwnedSshGui(window:NativeGui|undefined,server:Pick<SshFixt
   if(failures.length)throw new AggregateError(failures,'Owned SSH GUI cleanup failed');
 }
 
-/** An owned SSH server whose managed companion path holds `image`, by default the current-source companion (`LAZYSH_TEST_AGENT_BIN`). */
-export async function ownedCompanionSsh(fixture:ReturnType<typeof ownedSshGui>,image?:Buffer) {
+/** An owned SSH server whose managed companion path holds `image`, by default the current-source companion (`LAZYSH_TEST_AGENT_BIN`); `tmux` adds a real tmux (the system one, or the binary it names) in the same owned root. */
+export async function ownedCompanionSsh(fixture:ReturnType<typeof ownedSshGui>,image?:Buffer,options:{tmux?:boolean|string}={}) {
   if(!image) {
     const source=process.env.LAZYSH_TEST_AGENT_BIN;
     if(!source?.startsWith('/'))throw new Error('An owned current-source companion binary is required');
     image=await readFile(source);
   }
-  const ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});fixture.ssh=ssh;
+  const ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true,...options});fixture.ssh=ssh;
   const companion=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
   await mkdir(dirname(companion),{recursive:true,mode:0o700});await writeFile(companion,image,{flag:'wx',mode:0o700});await chmod(companion,0o700);
   return {ssh,companion};

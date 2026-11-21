@@ -1,20 +1,7 @@
-#[path = "support/process.rs"]
-mod process;
+#[path = "support/pane.rs"]
+mod pane;
+use pane::run;
 use serde_json::{json, Value};
-use std::{
-    path::Path,
-    process::{Command, Output},
-};
-
-fn run(directory: &Path, args: &[&str], input: &Value) -> Output {
-    process::run(
-        Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
-            .args(args)
-            .env("LAZYSH_STATE_DIR", directory)
-            .env("TMUX_PANE", "%7"),
-        &serde_json::to_vec(input).unwrap(),
-    )
-}
 
 #[test]
 fn default_config_and_ingest_remain_unchanged_until_explicit_opt_in() {

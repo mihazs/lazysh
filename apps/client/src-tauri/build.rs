@@ -1,4 +1,37 @@
+/// The build-time kill switch of the native terminal engine (`vite.config.ts` reads the same variable): `off` leaves the real core
+/// out of the app (`native_terminal_disabled`); otherwise the `native-terminal` feature builds it (`native_terminal_core`).
+fn native_terminal_cfg() {
+    println!("cargo:rerun-if-env-changed=LAZYSH_NATIVE_TERMINAL");
+    println!("cargo:rustc-check-cfg=cfg(native_terminal_core, native_terminal_disabled)");
+    match std::env::var("LAZYSH_NATIVE_TERMINAL")
+        .unwrap_or_default()
+        .as_str()
+    {
+        "off" => println!("cargo:rustc-cfg=native_terminal_disabled"),
+        "" | "on" => {
+            if std::env::var_os("CARGO_FEATURE_NATIVE_TERMINAL").is_some() {
+                println!("cargo:rustc-cfg=native_terminal_core");
+            }
+        }
+        other => panic!("LAZYSH_NATIVE_TERMINAL must be \"on\" or \"off\", not \"{other}\""),
+    }
+}
+
 fn main() {
+    native_terminal_cfg();
+    // Parakeet runs on Linux and Windows x86_64 and, when the Google Android build opts in, on Android arm64/x86_64.
+    println!("cargo:rustc-check-cfg=cfg(parakeet_local)");
+    let (os, arch) = (
+        std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default(),
+    );
+    if (matches!(os.as_str(), "linux" | "windows") && arch == "x86_64")
+        || (os == "android"
+            && matches!(arch.as_str(), "aarch64" | "x86_64")
+            && std::env::var_os("CARGO_FEATURE_PARAKEET_ANDROID").is_some())
+    {
+        println!("cargo:rustc-cfg=parakeet_local");
+    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
         && (std::env::var_os("CARGO_FEATURE_PARAKEET_ACCEPTANCE").is_some()
             || std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64"))
@@ -35,7 +68,21 @@ fn main() {
         "terminal_core_open",
         "terminal_core_input",
         "terminal_core_text",
+        "terminal_core_snapshot",
+        "terminal_core_scroll",
+        "terminal_core_resize",
+        "terminal_core_set_active",
+        "terminal_core_theme",
+        "terminal_core_selection_text",
+        "terminal_core_search",
+        "terminal_core_word_at",
+        "terminal_core_line_at",
+        "terminal_core_buffer_range",
+        "terminal_core_copy_screen",
+        "terminal_core_select",
         "terminal_core_close",
+        "terminal_core_available",
+        "native_terminal_probe",
         "local_disconnect",
         "app_icon_status",
         "set_app_icon",
@@ -71,15 +118,27 @@ fn main() {
         "open_web_url",
         "inspect_auth_url",
         "open_auth_url",
+        "start_auth_tunnel",
+        "stop_auth_tunnel",
+        "list_auth_tunnels",
         "list_devices",
         "device_frame",
         "device_action",
         "ios_device_probe",
         "android_device_probe",
+        "android_ui_tree",
+        "android_ui_action",
+        "android_device_action",
         "ios_device_action",
         "device_stream_start",
         "device_stream_next",
         "device_stream_stop",
+        "host_browser_start",
+        "host_browser_next",
+        "host_browser_ack",
+        "host_browser_pause",
+        "host_browser_resume",
+        "host_browser_stop",
         "sync_status",
         "sync_configure",
         "sync_recovery_key",
@@ -98,6 +157,9 @@ fn main() {
         "notification_test",
         "edge_gesture_exclusion",
         "edge_gesture_insets",
+        "native_terminal_surface_place",
+        "native_terminal_surface_remove",
+        "native_terminal_surface_state",
         "open_notification_settings",
         "request_notification_permission",
         "voice_models",
@@ -136,12 +198,16 @@ fn main() {
         "repository_image",
         "repository_diff",
         "multiplexer_tree",
+        "multiplexer_history",
         "tmux_jump_snapshot",
         "tmux_jump",
         "tmux_chat",
+        "herdr_backend_select",
         "herdr_chat",
         "herdr_agent_input",
+        "herdr_agent_screen",
         "zellij_agent_input",
+        "zellij_agent_screen",
         "herdr_tree",
         "agent_herdr_conversation",
         "agent_watch_start",
@@ -149,10 +215,13 @@ fn main() {
         "herdr_action",
         "herdr_workspace_plan",
         "herdr_workspace_create",
+        "multiplexer_launch_plan",
+        "multiplexer_launch",
         "herdr_agent_kinds",
         "herdr_repository",
         "zellij_action",
         "zellij_tabs",
+        "zellij_panes",
         "multiplexer_sessions",
         "attach_multiplexer",
         "tmux_action",
@@ -160,6 +229,7 @@ fn main() {
         "stop_preview",
         "list_previews",
         "discover_preview_ports",
+        "check_auth_listener",
         "list_hosts",
         "save_host",
         "delete_host",
@@ -191,10 +261,17 @@ fn main() {
         "agent_reported_history",
         "install_companion",
         "install_companion_from_device",
+        "check_companion_update",
+        "install_managed_herdr",
+        "remove_managed_herdr",
         "companion_hooks",
         "companion_hook_discovery",
         "get_companion_settings",
         "update_companion_settings",
+        "get_host_browser_settings",
+        "update_host_browser_settings",
+        "get_notification_policy",
+        "update_notification_policy",
         "agent_transcript",
         "agent_usage",
         "account_usage",

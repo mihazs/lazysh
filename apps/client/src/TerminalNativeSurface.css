@@ -1,0 +1,9 @@
+/*
+ * A native terminal draws on a platform surface placed below the page (docs/architecture/android-native-surface-host.md), so while one is
+ * shown every ancestor of its container stops painting and lets the surface through. The pane's overlays (toolbar, composer, notices, search)
+ * are not ancestors: they keep their own backgrounds and stay above the surface. Nothing matches under xterm.js, which marks no container.
+ * `!important` because no ancestor's own rule, whatever its specificity, may paint over the surface.
+ */
+:has(.terminal-canvas[data-terminal-surface="native"]) {
+  background: transparent !important;
+}

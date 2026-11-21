@@ -1,6 +1,7 @@
 import {createPortal} from 'react-dom';
 import {useEdgeGestureMode, type Edge, type EdgeGestureId} from './edgeGestures';
 import {handleBox, useGestureInsets, useGestureMode, useViewport} from './gestureInsets';
+import {edgeGestureSettings, usePreferences} from './preferences';
 import './GestureHandle.css';
 
 /**
@@ -12,7 +13,7 @@ import './GestureHandle.css';
  * that takes no touch, so it never covers a key or a terminal line.
  */
 export default function GestureHandle({edge, gesture, label, onActivate, hidden}: {edge: Edge; gesture: EdgeGestureId; label: string; onActivate: () => void; hidden?: boolean}) {
-  const insets = useGestureInsets(), view = useViewport();
+  const showLines = edgeGestureSettings(usePreferences()).showLines, insets = useGestureInsets(), view = useViewport();
   const mode = useGestureMode(), enabled = useEdgeGestureMode(gesture) === 'gesture';
   const box = enabled && (mode === 'handles' || (mode === 'edges' && edge === 'bottom')) ? handleBox(edge, insets, view) : null;
   if (!box) return null;
@@ -20,5 +21,5 @@ export default function GestureHandle({edge, gesture, label, onActivate, hidden}
   // The terminal keeps its focus (and the soft keyboard) while the handle is touched.
   return createPortal(<button type="button" className="gesture-handle" data-gesture-handle={edge} data-edge-gestures-handle={hint ? undefined : edge} data-hint={hint || undefined} data-hidden={hidden || undefined}
     aria-label={label} aria-hidden={hint || undefined} tabIndex={hint ? -1 : undefined} style={{left: box.left, top: box.top, width: box.width, height: box.height}}
-    onPointerDown={event => event.preventDefault()} onClick={onActivate}><span aria-hidden="true" /></button>, document.body);
+    onPointerDown={event => event.preventDefault()} onClick={onActivate}>{showLines ? <span aria-hidden="true" /> : null}</button>, document.body);
 }

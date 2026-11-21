@@ -39,7 +39,7 @@ it('installs the published verified companion through the actual native GUI and 
   for(const [index,verb] of ['Installed host companion','Host companion'].entries()) {
     gui.stage=index===0?'published companion actual Install action':'published companion actual reuse action';
     if(!(await panel.getProperty('open')))await (await panel.$('summary')).click();
-    const button=await panel.$('button');await button.waitForEnabled({timeout:10_000});
+    const button=await panel.$('.tool-bar > button');await button.waitForEnabled({timeout:10_000});
     await browser.waitUntil(async()=>(await button.getText())===(index===0?'Install companion':'Update companion'),{timeout:20_000,timeoutMsg:'Published companion action was not ready'});
     expect(await button.getText()).toBe(index===0?'Install companion':'Update companion');
     await button.click();

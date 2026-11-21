@@ -133,7 +133,7 @@ Fixtures are seeded (`bench/workloads.ts`) and sized to the terminal's geometry,
 
 Seeded jitter is used because an early probe without it phase-locked every keystroke to the 60 Hz frame clock (idle p50 of about 15 ms in that probe, which was discarded and is not part of the tables).
 
-**Not implemented in this baseline:** W5 (vim/Neovim), W6 (tmux, Zellij), W7 (Mosh resize and reconnect; the frame fixture `apps/client/e2e/fixtures/mosh-resize-frames.json` exists but is not replayed here), W8 (agent streams), W11 (background, resume, surface recreation) and W13 (thermal). They need a real remote or a device and remain open on [#1303](https://github.com/mihazs/lazysh/issues/1303). **No Rust-side parse benchmark was added:** the baseline's VT parse runs in xterm.js, and the Rust workers only chunk bytes; a parse benchmark of the shared core belongs to [#1313](https://github.com/mihazs/lazysh/issues/1313) and [#1341](https://github.com/mihazs/lazysh/issues/1341).
+**Not in this baseline:** W5 to W8 and W11, which are now implemented as [program workloads](#program-workloads-w5-to-w8-and-w11) in their own spec, and W13 (thermal), which needs a device and remains open on [#1303](https://github.com/mihazs/lazysh/issues/1303). **No Rust-side parse benchmark was added here:** the baseline's VT parse runs in xterm.js, and the Rust workers only chunk bytes; the shared core's parse benchmarks are [on the baseline's own workloads](#parse-stage-on-the-baselines-own-workloads-native-core-versus-xtermjs-host-microbenchmark-not-a-device-baseline) ([#1313](https://github.com/mihazs/lazysh/issues/1313), [#1341](https://github.com/mihazs/lazysh/issues/1341)).
 
 ### Counters
 
@@ -515,6 +515,94 @@ The first-burst and context-loss specs run unchanged inside a real Android Syste
 
 Not shown: anything about Android, an Android WebView (which is Chromium, but its GPU, driver, memory pressure and context-loss behaviour are exactly what is unknown), the Linux desktop WebView (WebKitGTK, not Chromium), macOS or iOS (WKWebView), Windows (WebView2), energy, thermal behaviour, context loss caused by the platform in an Android WebView (the scripted loss above, in desktop Chromium and in the Waydroid WebView, is the only one run), background and resume (W11), accessibility with a canvas renderer, a phone GPU (the phone viewport above is emulated on the desktop one, and the Waydroid WebView sits on the same desktop GPU), W5 to W8 and W13. WebGL numbers here come from a discrete desktop GPU shared with other work; they do not transfer to a phone GPU.
 
+### Program workloads (W5 to W8 and W11)
+
+Recorded sessions of real programs, replayed a step at a time through the two engines ([#1303](https://github.com/mihazs/lazysh/issues/1303)). The workload definitions are renderer-neutral: `apps/client/bench/programWorkloads.ts` builds them from the conformance captures in `packages/terminal-runtime/fixtures` (their bytes, chunked as the Rust session workers chunk a pty, and the screen xterm.js 5.5.0 shows after them, which the core also shows: its divergences from xterm.js are terminal replies), from the captured Mosh display updates of `apps/client/e2e/fixtures/mosh-resize-frames.json`, and from a seeded agent stream (`agentStream` in `bench/workloads.ts`). Each workload carries its source, geometry, steps, the screen and cursor it must end on (after every step, for Mosh), its byte count and the SHA-256 of its bytes. A run that ends on any other screen fails.
+
+```sh
+cd apps/client
+bun run bench:terminal -- --project desktop e2e/terminal-programs.spec.ts   # xterm.js in Chromium, about 2 minutes; LAZYSH_BENCH_OUT=<file> names the result
+bun bench/programWorkloads.ts /tmp/programs.json                            # the same workloads as JSON, for the core
+cd ../../packages/terminal-runtime                                          # built as in its README
+cargo run --release --example program_workloads -- /tmp/programs.json 100   # the core, 100 fresh sessions per workload
+```
+
+The spec also runs in smoke mode inside the normal Playwright suite (two repetitions per workload, correctness only, no timing thresholds), and `bench/programWorkloads.test.ts` replays every stream workload through xterm.js headless (three times for a repeatable one) and checks its screen, rebuilds each captured Mosh update from its body and envelope, and checks the agent stream generator against xterm.js at several geometries (the canonical Mosh resize needs xterm.js's internals in a mounted terminal, so the page run and the core's example are what replay those). With `LAZYSH_BENCH_ANDROID` the spec drives the Android System WebView of that device, as the first-burst spec does; the [Waydroid lane runbook](waydroid-lane.md#the-program-workloads-on-the-lane) has the command. The core's example is a host binary: nothing runs it inside a guest.
+
+| Id | Workload | Source | Geometry | Steps | Bytes | What a step is |
+| --- | --- | --- | --- | --- | --- | --- |
+| W5 | vim 9 on a three-line file: insert, `:set number`, `gg`, `:q!` | `captures.json#capture-vim-edit` | 60x12 | 1 | 1600 | the whole recorded stream |
+| W6 | tmux 3: two splits and a coloured `printf` | `capture-tmux-splits` | 60x14 | 1 | 2100 | the whole recorded stream |
+| W6 | Zellij 0.46: a command, a new pane and a command in it | `capture-zellij-panes` | 100x16 | 2 | 18537 | a 16 KiB chunk |
+| W7 | Mosh resize: six captured display updates, five of which change the size | `mosh-resize-frames.json` | 40x12 at the start | 6 | 1966 | one update's body, inside its begin and end envelope (which names the size) |
+| W7 | Mosh reconnect: the first captured update on a fresh session | the same, first frame | 40x12 | 1 | 364 | as above |
+| W8 | Claude Code 2.1 first run: theme picker to login method | `capture-claude-onboarding` | 100x30 | 1 | 8291 | the whole recorded stream |
+| W8 | Codex 0.167 first run: sign-in menu | `capture-codex-login` | 100x30 | 1 | 1995 | the whole recorded stream |
+| W8 | OpenCode 2.2 home screen, text typed and cleared | `capture-opencode-home` | 100x30 | 1 | 14553 | the whole recorded stream |
+| W8 | Agent streaming, seeded: one to three words per write, a five-row live region (answer line, spinner, prompt box) erased and redrawn after each | `agentStream(300 tokens, seed 80)` | 100x30 | 300 | 272397 | one write |
+| W11 | Herdr 0.9 session redrawn 40 times while hidden, then resumed and its surface recreated | `capture-herdr-session` | 100x30 | 4 | 52508 (2.0 MiB delivered) | a 16 KiB chunk |
+
+#### What is simulated and what is real
+
+| Stage | Real | Simulated or missing |
+| --- | --- | --- |
+| Bytes | Real program output (vim, tmux, Zellij, Herdr, Claude Code, Codex, OpenCode) and real Mosh frames, replayed as recorded; the agent stream is generated | No transport: no remote, no timing between writes, no bridge (the JSON `number[]` decode of the baseline is not exercised). A capture's write boundaries are the harness's 16 KiB chunking, not the program's own |
+| xterm.js | The app's `createTerminal()` and `XtermTerminalAdapter` (and, for Mosh, `enableCanonicalResize()`, as `App.tsx` does) on the DOM renderer, resized to the recorded geometry; a fresh session per repetition | Not the `TerminalPane`: it fits to its container and would undo the geometry (a phone viewport cannot hold 100 columns), so there is no toolbar, input layer or React tree. Session creation is not timed. The phone project (390 by 844 at 3x, run once, raw file not kept) gave the same p50 of every workload within 0.2 ms: the sessions do not depend on the viewport |
+| The core | `TerminalRuntime` (with `canonical_frames` for Mosh), a fresh one per repetition, the bytes offered and pumped as the transport does | No renderer: a "frame" is the dirty-row frame a renderer would draw, not a draw. No bridge or surface |
+| Resume and surface | W11: the pane hidden with `display:none` while 40 deliveries are applied, then shown; then `detach` and `attach` of the adapter. Core: the same output with no frame taken, then `take_frame()` (rows changed), then `snapshot()` (every row, for a new surface) | A native surface lost and recreated by Android is not exercised on either engine. For the DOM renderer a detached and re-attached terminal keeps its rows, so nothing is redrawn (`recreatedWithRender` is 0 of 100): that is the baseline's cost of a "recreated surface", not a statement about the native one |
+
+#### Measured on the development host
+
+Same host and toolchain as the tables above: AMD Ryzen 9 5900X, Linux 7.3.3, node 26.6.0 and Bun 1.3.14, headless Chromium 156.0.8078.4, xterm.js 5.5.0 DOM renderer, release (minified) page, rustc 1.96.1 release for the core, the xterm.js run at commit `02c6e90d` and the core at `ec4ad0f5` (two unrelated commits apart: a docs rule and an iOS test), both with these changes uncommitted (`dirty: true`). The 1-minute load average was 3.3 at the end of the xterm.js run and 5.68 at the start of the core's: the host is shared, and an invocation of the core at another load gave the same order of every figure. Raw results: [`terminal-programs-xterm-dom-desktop.json`](benchmarks/terminal-programs-xterm-dom-desktop.json) (xterm.js; schema 1, with the fixtures' SHA-256 and the CDP counters per workload) and [`terminal-programs-core-host.txt`](benchmarks/terminal-programs-core-host.txt) (the core's output). Every repetition of every workload ended on the recorded screen, on both engines (the core panics otherwise; checked by corrupting a check in the workload file). Timestamps in the page have 0.1 ms resolution, so values near 0.1 ms are coarse. p50 / p95 / p99 in milliseconds.
+
+xterm.js, 100 fresh sessions per workload (5 for the 300-step agent stream, which gives 1500 step samples):
+
+| Workload | Variant | Geometry | Steps | Bytes | Write to applied | Write to the render that shows it | Session wall (p50) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W5 vim | insert, `:set number`, `gg`, `:q!` | 60x12 | 1 | 1600 | 0.5 / 0.9 / 1.3 | 16.7 / 16.9 / 17.0 | 16.7 |
+| W6 tmux | two splits | 60x14 | 1 | 2100 | 0.6 / 1.0 / 1.8 | 18.1 / 18.9 / 19.8 | 18.1 |
+| W6 Zellij | a new pane | 100x16 | 2 | 18537 | 1.0 / 1.5 / 2.3 | 17.7 / 19.7 / 21.0 | 34.7 |
+| W7 Mosh resize | six updates | 40x12 | 6 | 1966 | 0.7 / 1.3 / 1.6 | 16.6 / 17.9 / 18.3 | 100.1 |
+| W7 Mosh reconnect | first update | 40x12 | 1 | 364 | 0.3 / 0.5 / 0.7 | 17.9 / 18.8 / 21.2 | 17.9 |
+| W8 Claude Code | first run | 100x30 | 1 | 8291 | 0.3 / 0.7 / 1.2 | 20.1 / 21.3 / 27.8 | 20.1 |
+| W8 Codex | sign-in menu | 100x30 | 1 | 1995 | 0.3 / 0.7 / 1.1 | 18.3 / 19.5 / 20.2 | 18.4 |
+| W8 OpenCode | home screen | 100x30 | 1 | 14553 | 1.2 / 2.0 / 3.1 | 19.4 / 21.0 / 22.3 | 19.5 |
+| W8 agent streaming | 300 writes | 100x30 | 300 | 272397 | 0.5 / 0.9 / 1.2 | 16.7 / 16.9 / 17.2 | 5000.1 |
+
+Each step is written, then waited on until xterm renders it (at most 100 ms), so a session's wall time is its steps times a frame; no frame was dropped and no long task ran in any of them. The render column is the frame clock (16.7 ms at 60 Hz) plus the work, and the heavier screens (Claude Code, OpenCode) sit a few milliseconds above the rest; which part of xterm accounts for it was not isolated.
+
+The core, 100 fresh sessions per workload, from `program_workloads`:
+
+| Workload | Variant | Geometry | Steps | Bytes | Parse a step | Parse and take the frame | The same stream delivered back to back |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W5 vim | insert, `:set number`, `gg`, `:q!` | 60x12 | 1 | 1600 | 0.030 / 0.053 / 0.059 | 0.069 / 0.107 / 0.124 | 156.2 MiB/s (1311 deliveries) |
+| W6 tmux | two splits | 60x14 | 1 | 2100 | 0.033 / 0.039 / 0.047 | 0.088 / 0.098 / 0.111 | 107.1 MiB/s (999 deliveries) |
+| W6 Zellij | a new pane | 100x16 | 2 | 18537 | 0.097 / 0.119 / 0.138 | 0.236 / 0.280 / 0.331 | 196.2 MiB/s (114 deliveries) |
+| W7 Mosh resize | six updates | 40x12 | 6 | 1966 | 0.005 / 0.016 / 0.018 | 0.038 / 0.052 / 0.057 | not repeatable |
+| W7 Mosh reconnect | first update | 40x12 | 1 | 364 | 0.008 / 0.014 / 0.017 | 0.044 / 0.050 / 0.061 | not repeatable |
+| W8 Claude Code | first run | 100x30 | 1 | 8291 | 0.078 / 0.101 / 0.117 | 0.270 / 0.356 / 0.395 | 148.2 MiB/s (253 deliveries) |
+| W8 Codex | sign-in menu | 100x30 | 1 | 1995 | 0.029 / 0.036 / 0.041 | 0.203 / 0.217 / 0.232 | 163.4 MiB/s (1052 deliveries) |
+| W8 OpenCode | home screen | 100x30 | 1 | 14553 | 0.084 / 0.095 / 0.102 | 0.363 / 0.381 / 0.396 | 221.0 MiB/s (145 deliveries) |
+| W8 agent streaming | 300 writes | 100x30 | 300 | 272397 | 0.003 / 0.006 / 0.010 | 0.052 / 0.122 / 0.269 | not repeatable |
+
+The two tables measure different things and **no ratio between them is valid**: xterm.js's number is a page-clock interval from `write` to its write callback or to the next render, which includes the turn xterm schedules a write on and is bounded by a 0.1 ms clock and a 60 Hz frame; the core's is the parse, and the parse plus the dirty-row frame, on a nanosecond clock with no scheduling, no renderer and no frame clock. What they do say together: the same recorded bytes end on the same screens on both engines, including the five Mosh canonical resizes and the multiplexer and agent redraws, and the core's share of one step is a fraction of a millisecond on every workload here. Neither says what a phone costs.
+
+W11, 100 fresh sessions per engine, 40 deliveries (2.0 MiB) of the Herdr session while nothing is drawn, then resume, then a recreated surface:
+
+| Engine | Output applied while hidden | Resume | Recreated surface | Screen after each |
+| --- | --- | --- | --- | --- |
+| xterm.js, pane `display:none` | 32.7 / 38.1 / 41.0 ms for the 2.0 MiB (59 MiB/s over the run, with one macrotask yield per chunk) | 19.2 / 34.4 / 35.7 ms from showing the pane to the next render (a render followed in 100 of 100 sessions) | 16.7 / 16.8 / 16.9 ms from `attach` to the next frame; xterm did not redraw (0 of 100) | the recorded one, 100 of 100 |
+| The core, no frame taken | 111.0 MiB/s median (94.4 to 113.5) | `take_frame()` 0.345 / 0.405 / 0.485 ms | `snapshot()` 0.295 / 0.329 / 0.360 ms | the recorded one, 100 of 100 |
+
+State was preserved in every run: the hidden terminal parsed everything and showed the recorded screen on resume. The xterm.js resume time (19 ms at the median, a frame plus the repaint of the shown pane) is consistent with xterm parsing the output while the pane is hidden and drawing when it is shown; the split between the two was not isolated. The core's resume and recreate times are the cost of producing a frame, not of drawing it.
+
+#### What this does not show
+
+- **No Android number.** `waydroid session start` fails on the maintainer's machine (the container's network script needs root), so neither engine was run on the Waydroid lane; the spec is written to run in the guest's WebView and the command is in the [runbook](waydroid-lane.md#the-program-workloads-on-the-lane), but it has not been run there. No gate row moves. The core has no Android run of this example at all.
+- **Short recorded sessions.** The captures are scripted first-run and a few keystrokes, 0.4 to 52 KiB: they test a real program's escape sequences, not a long editing or multiplexer session, and the W5 vim session is 1.6 KiB. Neovim was not recorded (`nvim` is not installed here). The W8 captures stop at login screens: a signed-in Claude Code, Codex or OpenCode turn needs an account and a network, and a capture would hold a prompt and a reply. The streaming half of W8 is a seeded generator shaped like their live-region redraws, not a capture.
+- **No timing between writes and no remote.** Steps are delivered back to back (xterm.js: one per frame), not at the pace the program produced them, and there is no input: keystrokes are W12.
+- **No energy, no thermal behaviour (W13), no phone GPU, no native surface.**
+
 ### Android procedure (manual gate, not run)
 
 The harness cannot run on Android in this form: it drives desktop Chromium over CDP. Until an Android runner exists ([#1303](https://github.com/mihazs/lazysh/issues/1303), [#1340](https://github.com/mihazs/lazysh/issues/1340)), the Android measurement is a manual gate with this procedure. **None of it has been executed;** the tools named are standard Android tooling and the steps have not been validated on a device for this app.
@@ -531,7 +619,8 @@ The harness cannot run on Android in this form: it drives desktop Chromium over 
 | Workload | xterm DOM (desktop Chromium) | xterm optimized: WebGL addon, hardware GL | xterm canvas addon; WebGL software GL | Native candidate(s) | Winner (per device) |
 | --- | --- | --- | --- | --- | --- |
 | W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | measured, [shootout](#renderer-shootout-xtermjs-renderers-1323): on par or better except W3 frame pacing, W4 CPU and fixed memory | measured: much slower | host and Waydroid microbenchmarks only: [parse stage on these very workloads](#parse-stage-on-the-baselines-own-workloads-native-core-versus-xtermjs-host-microbenchmark-not-a-device-baseline), [wgpu prototype](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device), [Android Canvas replay](#android-canvas-drawing-of-the-shared-layout-waydroid-not-a-device), [WebAssembly parse](#webassembly-vt-versus-xtermjs-parse-only-host-microbenchmark-not-a-candidate); no text, no device | undecided; see [ADR 0001, amendments 1 and 2](adr-0001-terminal-runtime.md#amendment-1-2026-11-12-first-renderer-shootout-results) |
-| W5, W6, W7, W8, W11, W13 | not implemented | not measured | not measured | not measured | undecided |
+| W5, W6, W7, W8, W11 | measured on desktop Chromium, [program workloads](#program-workloads-w5-to-w8-and-w11); not on Android (the Waydroid lane could not start) | not measured | not measured | the core on the same bytes and screens, host microbenchmark, same section; no renderer, no device | undecided |
+| W13 | not implemented | not measured | not measured | not measured | undecided |
 | All workloads on Android | not measured | not measured | not measured | not measured (the Canvas replay ran on Waydroid, which is not a device) | undecided |
 
 ### Core parse throughput (host microbenchmark, not a device baseline)
@@ -566,7 +655,7 @@ What this says, and does not say:
 
 - The style-heavy and wide-character cases parse several times slower than plain text, so those workloads are the ones to compare first on devices.
 - Copying every dirty cell into owned `String`-carrying structs costs far more than parsing; the current frame type is a correctness vehicle, not a renderer format, and [#1322](https://github.com/mihazs/lazysh/issues/1322) and [#1337](https://github.com/mihazs/lazysh/issues/1337) must replace it before any rendering number is meaningful.
-- The byte budget does not map to lines. A 256 KiB and a 1 MiB budget kept the same number of rows, so the budget appears to be enforced in coarse steps below a few MiB, and for a fixed budget the rows kept fall with the column count (10,267, 5,280 and 2,610 at 40, 80 and 160 columns) and with content. The default 4 MiB budget keeps about lazysh's default 5000 lines at 80 columns and fewer than 3000 at 160, so the line setting of 100 to 20000 cannot be honoured by a fixed byte budget; the mapping is part of [#1338](https://github.com/mihazs/lazysh/issues/1338).
+- The byte budget does not map to lines. A 256 KiB and a 1 MiB budget kept the same number of rows, so the budget appears to be enforced in coarse steps below a few MiB, and for a fixed budget the rows kept fall with the column count (10,267, 5,280 and 2,610 at 40, 80 and 160 columns) and with content. The default 4 MiB budget keeps about lazysh's default 5000 lines at 80 columns and fewer than 3000 at 160, so the line setting of 100 to 20000 cannot be honoured by a fixed byte budget; [the mapping](#history-lines-to-scrollback-bytes-1319) derives the budget from the setting and the width instead.
 
 ### Parse stage on the baseline's own workloads: native core versus xterm.js (host microbenchmark, not a device baseline)
 
@@ -617,12 +706,12 @@ The slice is the longest a key press can wait for the session lock, so the defau
 
 Memory (resident set of the benchmark process, KiB): an empty session cost 8 KiB; each session that received 8 MiB of 80-column lines at the 4 MiB scrollback budget cost 3,923 KiB at 5 sessions and 3,921 KiB at 10, and the 100-session churn (create, 1 MiB of output each, close) held at 42,916 KiB across four rounds against 42,900 KiB before the first, so repeated create and close did not grow the process. `Session::close` frees the VT state at that moment, not at a later drop. These figures are for this host's allocator and libghostty-vt build; Android, iOS and Windows numbers do not exist yet.
 
-The same churn through the Tauri bridge (`a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget`, `--features native-terminal`, one process on this host): 110 rounds of `terminal_core_open`, a real local PTY printing 30,000 lines into a 1 MiB scrollback, reading the screen text and `terminal_core_close`. After a 10-round warm-up the resident set was 65,436, 67,784 and 65,864 KiB in three runs and grew by 316, 316 and 352 KiB over the next 100 rounds; the hub held no session and no reserved scrollback afterwards. The test fails above 32 MiB of growth; that bound is a guard, not a target. Single-host figures: Android, iOS and Windows do not exist yet.
+The same churn through the Tauri bridge (`a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget`, `--features native-terminal`, one process on this host): 110 rounds of `terminal_core_open`, a real local PTY printing 30,000 lines into a 1 MiB scrollback (the budget was in bytes when these three runs were taken; since [the History lines mapping](#history-lines-to-scrollback-bytes-1319) the test opens with 1000 lines, a 1.8 MiB budget, and one run on this host held 63,160 KiB after the warm-up and grew by 0 KiB over the next 100 rounds), reading the screen text and `terminal_core_close`. After a 10-round warm-up the resident set was 65,436, 67,784 and 65,864 KiB in three runs and grew by 316, 316 and 352 KiB over the next 100 rounds; the hub held no session and no reserved scrollback afterwards. The test fails above 32 MiB of growth; that bound is a guard, not a target. Single-host figures: Android, iOS and Windows do not exist yet.
 
 What this says, and does not say:
 
 - Adding workers scales aggregate throughput (10 sessions: 556, 1017 and 1684 MiB/s at 1, 2 and 4 workers) while the per-session credit latency falls, so the pool size is a real lever and is set from per-device data, not from this host ([#1339](https://github.com/mihazs/lazysh/issues/1339)). One worker parses plain text at about 650 MiB/s here; the style-heavy and wide-character workloads were roughly 5 to 10 times slower in the parse table above (taken on a busier host) and are the ones to measure on devices.
-- IPC calls per MB: the native path issues none per chunk (credits are returned inside Rust after VT processing). The xterm path issues one `ack_output` per `write` callback, so at the 16 KiB maximum chunk that is at most 64 calls per MiB by construction; the actual count depends on how the transports chunk, and was not measured.
+- IPC calls per MB: the native path issues none per chunk (credits are returned inside Rust after VT processing). The xterm path issues one `ack_output` per `write` callback, so at the 16 KiB maximum chunk that is at least 64 calls per MiB by construction (smaller chunks mean more); the actual count depends on how the remote writes. Measured through a real OpenSSH server (the `openssh_and_mosh_deliver_checksummed_output_to_a_core` interoperability test, OpenSSH 10.6p1 on this host, a debug build, 5.62 MiB of `seq` output with CJK and emoji through a real PTY, one acknowledgement per message, four runs): a line-buffered writer (`sed`, flushing every line) crossed the Channel as 58,055, 69,090, 64,753 and 57,111 `Data` messages, 10,337, 12,302, 11,530 and 10,169 per MiB, so that many `ack_output` calls per MiB, far above the 64 minimum; a block writer (`| cat`) crossed as 9,595, 9,177, 7,068 and 10,029 messages, 1,708, 1,634, 1,259 and 1,786 per MiB. The count varies run to run with how the PTY and the SSH channel coalesce. The same two workloads into a core crossed the Channel as zero `Data` messages. The same test file also runs 100,000 lines through the official ET 7.0.0 server into a core: the 1,888,895 bytes the workload printed between two markers were byte-identical to the expected output, with 262,143 bytes (the 256 KiB window minus one) the most ever queued unreturned and no `Data` message on the Channel. These are message and byte counts, not time: no throughput or CPU was taken in these tests.
 - **The bridge, Rust side only** (`bridge_throughput_channel_versus_core` in `ssh.rs`, run with `cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture`; built with opt-level 3 and no LTO, which is not the release profile). 64 MiB of 80-column text through `send_output` on this host, three runs, load average 3 to 4 at the start. The Channel path with a renderer that acknowledges every chunk the instant it is sent (an upper bound for the xterm path): 154, 151 and 152 MiB/s, 0.42 CPU s per 64 MiB, 64 Channel messages per MiB (the JSON serialization of `SshEvent::Data` is the cost). The core path (real libghostty-vt on the hub's workers, credit returned after VT processing): 666, 658 and 642 MiB/s, 0.11 to 0.12 CPU s per 64 MiB, zero Channel messages. The same test in a debug build ran the Channel path at 8 MiB/s, so a debug figure says nothing. These two are **not like for like**: the core's CPU includes VT parsing, which on the Channel path happens later in the WebView and is absent here, and none of the WebView decode, the xterm parse, the `ack_output` IPC or any rendering is measured. They bound the Rust-side cost of the data path; the comparison with the #1303 baseline needs the renderer wired in and a device.
 - With several sessions the p99 credit latency is 3 to 4 times the p95 (up to 16 ms with 10 sessions on one worker). The cause was not investigated; shared-host scheduling of the producer and worker threads is a candidate, queueing behind other sessions' windows is another.
 
@@ -645,6 +734,63 @@ Microseconds. The change is the one in `hub.rs`: a worker's run queue is two que
 - The idle row is unchanged by the change. One of the three "after" invocations had an idle p99 of 1615 microseconds and a p95 of 190 against 17 and 11 in the other two, at the highest load of the series; that is host noise on a shared machine, not the change, but it is why the idle p99 cell above is a range of two orders of magnitude and not a number.
 - Detached sessions are not starved: `a_detached_session_keeps_parsing_while_the_attached_one_never_idles` refills an attached session from its own credit hook so it never idles, and a detached one still finishes (it fails by timeout with the burst removed, and the other test fails on the old queue with 147,456 bytes parsed ahead of the echo against a bound of 65,536).
 - Not measured: the cost to the detached sessions (their credit latency while an attached one floods rises by construction to one turn in five on a worker; its size was not recorded), a phone, more or fewer than nine other sessions, split panes with several attached sessions (they share the priority queue and round-robin), and how many workers a device should have. Worker count stays a placeholder: the throughput table above shows the pool size is a real lever on this host and nothing else.
+
+### History lines to scrollback bytes (#1319)
+
+lazysh's History lines setting counts lines (100 to 20000, default 5000); libghostty-vt budgets bytes, and the rows one budget holds depend on the width and the content. `cargo run --release --example scrollback_budget` in `packages/terminal-runtime` measures it with the workloads of `tests/support/mod.rs`: 16 MiB of budget, each width fed far past the budget, then the rows the core reports. Host: AMD Ryzen 9 5900X, 31 GiB, Linux 7.3.3-1-cachyos, rustc 1.96.1, Zig 0.16.0 (the numbers are deterministic across invocations; no device was involved).
+
+| Content, rows kept by a 16 MiB budget (bytes per cell) | 20 cols | 40 cols | 80 cols | 120 cols | 200 cols | 279 cols |
+| --- | --- | --- | --- | --- | --- | --- |
+| Plain digits | 91,156 (9.2) | 46,243 (9.1) | 23,336 (9.0) | 15,702 (8.9) | 9,300 (9.0) | 6,663 (9.0) |
+| 16-colour SGR runs with bold | 91,156 (9.2) | 46,243 (9.1) | 23,336 (9.0) | 15,702 (8.9) | 9,300 (9.0) | 6,663 (9.0) |
+| Truecolor syntax-highlight runs | 91,156 (9.2) | 46,243 (9.1) | 23,336 (9.0) | 15,702 (8.9) | 9,300 (9.0) | 6,663 (9.0) |
+| A different truecolor foreground and background on every cell | 15,234 (55.1) | 7,381 (56.8) | 3,684 (56.9) | 2,544 (55.0) | 1,611 (52.1) | 985 (61.0) |
+| ZWJ emoji, wide CJK, combining marks | 37,564 (22.3) | 11,953 (35.1) | 5,996 (35.0) | 4,092 (34.2) | 2,310 (36.3) | 1,653 (36.4) |
+| A distinct OSC 8 hyperlink on every row | 30,865 (27.2) | 15,382 (27.3) | 7,730 (27.1) | 5,253 (26.6) | 3,009 (27.9) | 2,154 (27.9) |
+
+Styles are shared per page, so colour costs nothing until a page runs out of distinct styles; graphemes and hyperlinks cost extra bytes per cell. `scrollback_bytes_for_lines(lines, cols)` requests `lines x max(cols, 80) x 10 + 1 MiB` (10 bytes per cell is the measured 8.9 to 9.2 with margin; the MiB covers libghostty-vt freeing whole pages, which loses up to a page and a half of a small budget). Rows kept at that budget divided by the requested lines, after feeding three times the lines (the ordinary workloads are identical; a value near 3.00 means the budget was not yet full):
+
+| Lines | 20 cols | 40 cols | 80 cols | 120 cols | 200 cols | 279 cols |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100 | 2.77 | 2.77 | 2.77 | 2.77 | 2.77 | 2.77 |
+| 1000 | 2.98 | 2.98 | 1.82 | 1.82 | 1.58 | 1.47 |
+| 5000 | 3.00 | 2.54 | 1.38 | 1.29 | 1.22 | 1.23 |
+| 20000 | 3.00 | 2.37 | 1.21 | 1.18 | 1.18 | 1.17 |
+
+At 5000 lines the three expensive contents keep, per width from 20 to 279 columns: 0.76, 0.25, 0.22, 0.21, 0.20 and 0.19 of the requested lines for a style on every cell; 2.10, 0.48, 0.34, 0.36, 0.29 and 0.32 for graphemes; 1.66, 0.71, 0.45, 0.44, 0.39 and 0.39 for a hyperlink on every row. When the hub grants the full calculated budget, the setting is a floor for ordinary output at the width the session opened with, and an overestimate for content that defeats cell sharing. Before the mapping, the 4 MiB default kept about 5,300 rows of plain text at 80 columns and about 2,200 at 200. What this does not say: no device figure exists (Android and iOS cannot link the core yet), the width is fixed at open (a session that opens at 45 columns is budgeted as 80, one widened to 200 afterwards keeps fewer rows of what it prints next), the hub's 64 MiB per-session cap clamps the largest setting (20000 lines) at about 330 columns and wider, and the remaining global budget can reduce the grant further.
+
+### Scrollback compaction of idle sessions (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example compress_bench` and `cargo run --release --example session_bench memory` in `packages/terminal-runtime` ([#1338](https://github.com/mihazs/lazysh/issues/1338)). A detached session that has received nothing for `HubConfig::compress_after` (2 s by default) has its scrollback compacted by its worker with libghostty-vt's incremental compression, one bounded step at a time and only while no session on that worker has bytes to parse. An attached session is never compacted, and new output or an attach cancels a pending compaction. Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3.3, rustc 1.96.1 release, vendored libghostty-vt built `ReleaseFast`); `compress_bench` and `session_bench memory` ran three times each on 2026-11-18 on top of `origin/main` at `ec4ad0f5`, at 1-minute load averages of about 8 to 11 on 24 threads. No transport, no renderer, no xterm.js side by side and no device.
+
+`compress_bench`: ten sessions (80x24, the default 4 MiB scrollback) each receive 8 MiB; resident memory per session is the growth of the process over ten sessions; every pass asserts the full text is unchanged and the row count equal. The cells are the lowest to highest of the three runs.
+
+| Content | Rows kept | RSS KiB per session, filled | after compaction | Compaction ms per session (worst single step) | Reading the whole history ms, before and after | Attach snapshot ms, before and after |
+| --- | --- | --- | --- | --- | --- | --- |
+| plain text | 5280 | 4021 to 4032 | 646 to 652 | 0.7 to 0.8 (0.08) | 1.7 to 1.8, 3.0 to 5.2 | 0.24 to 0.25, 0.24 to 0.39 |
+| ANSI + truecolor | 4892 | 3352 to 3359 | 563 to 570 | 2.4 to 2.5 (0.29 to 0.42) | 0.7 to 1.3, 2.4 to 3.4 | 0.15 to 0.28, 0.17 to 0.19 |
+| CJK/emoji/combining | 5030 | 3829 to 3835 | 341 to 347 | 1.1 to 1.2 (0.16 to 0.17) | 1.6 to 1.9, 2.9 to 3.0 | 0.16 to 0.17, 0.16 to 0.18 |
+| plain lines, 80 columns | 5280 | 3920 | 392 | 0.8 to 0.9 (0.10 to 0.23) | 1.4, 2.6 to 2.8 | 0.18, 0.18 to 0.19 |
+
+Through the hub (`session_bench memory`, sessions filled with 8 MiB of 80-column lines at a 4 MiB scrollback, then left detached for 3 s with the default 2 s delay), resident memory per session, lowest to highest of three runs:
+
+| Sessions | Filled | After 3 s idle and detached |
+| --- | --- | --- |
+| 5 | 3986 to 3999 KiB | 534 to 547 KiB |
+| 10 | 3947 to 3960 KiB | 474 to 488 KiB |
+
+Churn (100 sessions, 1 MiB each, created and closed per round) over 40 rounds with compaction on: in each of three runs the process stayed within 64 to 192 KiB of its round-1 value through round 40 (14,364 to 14,428, 15,980 to 16,064 and 15,872 to 16,032 KiB; the baseline differs between invocations), and with it off between 15,028 and 15,192 KiB (the run of 2026-11-14). A first version that kept a closed session's pending compaction until its timer grew by about 1.4 MiB over the first 12 rounds and then held flat; closing a session now drops that entry, and the figures above are from the version that does.
+
+How this compares with the recorded xterm.js baseline, and why that comparison is weak: the [baseline](#measured-baseline) measured 7.2 to 8.3 MiB of renderer-process resident memory per session at 5 and 10 sessions with 5000 lines each (whole renderer process, DOM renderer, 152 or 46 columns, hidden panes), and 0.8 to 1.2 MiB of JS heap. The native figures above are the Rust core's process only, at 80 columns, with about 5280 rows kept, no renderer surface and no WebView; they are not the same quantity and no ratio is claimed. They do show that ten sessions cost about 40 MiB while all are active and about 8 MiB when nine are idle and detached (9 x 0.49 + 3.96), against 73 to 77 MiB of baseline renderer growth for ten sessions.
+
+What this says, and does not say:
+
+- The saving is real on this host: 83 to 91 % of a full session's resident memory returned, history intact (asserted on every pass), at a cost of 0.7 to 2.5 ms of worker time per session, no single step above 0.42 ms in these runs, and about 1.2 to 3.5 ms more the first time the whole history is read afterwards. An attach snapshot, which reads the visible screen, did not change.
+- What is not known: whether the reclamation works on Android, iOS and Windows (the library reports it as unsupported on some targets, in which case a step does nothing and the saving is zero), what a phone's allocator does with the freed pages, the cost of scrolling back into a compacted history on a device, and any energy cost of the periodic wake. Linux x86_64 with glibc is the only target measured.
+- The 2 s delay is a placeholder: it keeps a session that gets output every few seconds from being compacted and restored in turn, and nothing measured here chose it.
+- `HubConfig::scrollback_budget` (256 MiB) and `session_scrollback_max` (64 MiB) are unchanged placeholders: with compaction ten full sessions cost about 8 MiB on this host, which is not evidence for any particular device budget, and the mapping of the History lines setting to bytes is a separate change.
+
+`perf_gate` holds this in CI ([#1341](https://github.com/mihazs/lazysh/issues/1341); see [Regression benchmarks in CI](#regression-benchmarks-in-ci)): the filled and the idle figure at 5 and at 10 sessions. Idle sessions are measured through the hub with a 100 ms delay and counted once every session has stepped and none has for 300 ms. Three invocations on the host above gave 617 to 620 KiB per session at 5 sessions and 454 to 455 KiB at 10, against a limit of 1,500 KiB; `--inject nocompaction` (a hub that never compacts) gave 4,042 and 3,930 KiB and failed both. This is the host half of gate G15; the Waydroid half stays with [#2093](https://github.com/mihazs/lazysh/issues/2093) and was not run here.
 
 ### Renderer pipeline cost (host microbenchmark, not a candidate)
 
@@ -700,7 +846,21 @@ What this says, and does not say:
 - **The two engines agreed on the cursor after every fixture**, so they consumed the same stream. This is not a conformance result: the cursor does not show cell contents, and widths of emoji and combining sequences were not compared cell by cell (the VT conformance corpus in `packages/terminal-runtime/tests/conformance.rs` runs on the native build only).
 - **Native Rust is not faster by construction.** For the same fixtures the native runtime (through `TerminalRuntime::offer` and `pump`, SIMD on) measured 200 to 729, 40 to 75, 216 to 403 and 38 to 74 MiB/s over ten invocations at load 13 to 175 ([above](#core-parse-throughput-host-microbenchmark-not-a-device-baseline)); the wasm figures are inside or above those ranges. The two are not the same harness (the native one adds an ingress copy and runtime bookkeeping, and SIMD is on only there), and why the wasm number for non-ASCII text exceeds the native one was not investigated.
 - **Parsing is not most of what xterm.js costs on this host.** In the [baseline](#measured-baseline) 2 MiB of ANSI colour (W3, desktop viewport) ran at a median 4.3 MiB/s (464 ms of wall time) through `xterm.write` with the DOM renderer, against 61 MiB/s (about 33 ms) for the parser alone here, and plain text (W2) at 40 MiB/s against 84. The generators differ, so these are orders of magnitude, not ratios; the remainder is rendering and layout, which this table does not cover. A WASM terminal still needs a renderer in the WebView (DOM, canvas or WebGL), which is the [xterm.js renderer shootout](#renderer-shootout-xtermjs-renderers-1323) again, plus a JavaScript bridge that carries every byte and every dirty row.
-- Not shown: Chromium or an Android WebView (a different V8 version and flags), WebAssembly SIMD, a worker thread, memory growth under a long session (the linear memory never shrinks), startup time of instantiating a 4.5 MiB module, any rendering, energy, or any device.
+- Not shown: Chromium or an Android WebView (a different V8 version and flags), WebAssembly SIMD, a worker thread, memory growth under a long session (the linear memory never shrinks), loading the module in a WebView (asset fetch, streaming compilation, V8 code cache), any rendering, energy, or any device. The cold start of the module in Node is measured [below](#wasm-terminal-cold-start-node-fresh-process-per-sample).
+
+#### WASM terminal cold start (Node, fresh process per sample)
+
+Measured with `apps/client/bench/wasmStartup.mjs` ([#1323](https://github.com/mihazs/lazysh/issues/1323)), the same module as above (libghostty-vt from the vendored, hash-checked source, `zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Doptimize=ReleaseFast -Dsimd=false`, Zig 0.16.0, 4,675,760 bytes, sha256 in the raw files) and `@xterm/headless` 5.5.0 on the same Node v26.6.0 (V8 14.6) and the Ryzen 9 5900X host (Linux 7.3.3, load average at start 6.5 and 6.0, other agents running). Each sample is a fresh process that does the least that parses 14,800 bytes (a styled, wide and emoji text sample, the same bytes for both) from nothing loaded: xterm.js imports the package, creates an 80x24 terminal with 5000 lines of scrollback and writes through the private synchronous call; the module reads the file, compiles it, instantiates it, creates an 80x24 terminal with the module's default scrollback and writes through linear memory. 30 processes per engine, upper median (min to max) in milliseconds and MiB; the cursor after the write was checked equal between the engines and over all samples. Two runs, [raw output 1](benchmarks/terminal-wasm-startup-1.txt) (below) and [raw output 2](benchmarks/terminal-wasm-startup-2.txt), taken a minute or two apart.
+
+| engine | load (import or file read) | compile | instantiate | start through sample parsed, total | resident set added | wasm linear memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| xterm.js headless | 8.7 (8.5 to 10.7) | | | 21.6 (18.3 to 24.5) | 9.3 (7.2 to 10.1) | |
+| libghostty-vt wasm | 2.6 (2.5 to 2.7) | 2.2 (1.6 to 2.7) | 0.3 (0.3 to 0.4) | 8.1 (7.5 to 11.4) | 14.0 (13.6 to 18.0) | 1.3 (1.3 to 1.3) |
+
+- **The module completed startup and parsing sooner than xterm.js did**: 8.1 against 21.6 ms through the sample in the first run and 8.0 against 21.3 ms in the second, about 2.7 times. Compiling the 4.5 MiB module took 2.2 ms (V8 compiles lazily, so part of the cost moves into the first calls, which the total includes) and instantiating it 0.3 ms.
+- **It held more resident memory**: 14.0 MiB added to the process against 9.3 (9.1 in the second run) for xterm.js, 4.7 to 4.9 MiB more, which includes the 4.5 MiB buffer the file is read into. Its linear memory was 1.3 MiB after the first write and 1 to 9 MiB after 16 MiB of output ([above](#webassembly-vt-versus-xtermjs-parse-only-host-microbenchmark-not-a-candidate)).
+- **What this does not say.** The "load" column of xterm.js is Node importing a CommonJS package, not a WebView parsing an app bundle, so the two load figures are not comparable; a WebView streams and caches compiled code differently; xterm.js here has no renderer and no DOM (the app's session also pays for those); the host CPU is far faster than a phone's, and the cold start on a phone is unmeasured. Parse throughput and cold start together do not change the [decision](adr-0001-terminal-runtime.md#amendment-2-2026-11-13-native-candidates-measured-on-the-host-and-on-waydroid): the WASM terminal still needs a renderer in the WebView and a JavaScript bridge that carries every byte and dirty row, and neither a faster parser nor an 8 ms start removes that.
+
 ### wgpu prototype against the CPU reference renderer (host GPU, not a device)
 
 Measured with `cargo run --release --example wgpu_bench` in `packages/terminal-runtime/prototypes/wgpu` ([#1323](https://github.com/mihazs/lazysh/issues/1323); that directory was promoted to [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) by [#1324](https://github.com/mihazs/lazysh/issues/1324), and the numbers below were taken before the promotion, with the prototype's code; the [next section](#wgpu-renderer-idle-atlas-and-memory-host-gpu-not-a-device) measures the production crate): the wgpu candidate, prototype quality, implementing the same `TerminalRenderer` trait as the CPU reference renderer and fed the same `Frame` stream from the real libghostty-vt core. It consumes the shared layout (`layout::row_draws`): each draw becomes one instance of an instanced quad (a solid rectangle, or a glyph mask taken from an atlas), the dirty rows' instances are uploaded once per frame and drawn in one pass into an offscreen `Rgba8Unorm` texture. It is **offscreen and headless**: no window, swapchain or compositor, so `present` waits for the GPU to finish what `draw` submitted (the latest moment a swapchain image could be shown), and what the table calls a frame is draw (instance build, upload, encode, submit) plus that wait. It draws the reference renderer's dot-pattern glyphs, not text: no fonts, shaping, fallback or atlas eviction.
@@ -872,6 +1032,44 @@ What this says, and does not say:
 - **The first GPU context still costs 64 MiB of resident memory** on this driver against 7 to 8 MiB for an xterm.js session; the renderer's own GPU memory (5 to 16 MiB by window size) is small next to it.
 - Not shown: any text (rasterization, shaping, font fallback and their atlas pressure: real glyph masks are larger and more varied than dot patterns), a window surface and presentation timing, Android (Vulkan or OpenGL ES drivers, surface loss), Apple, Windows, energy and thermals, a long-lived session's memory beyond 4,000 frames, and a CI run on real hardware (CI has only software adapters).
 
+### Cursor blink, display scale and device loss (host GPU, not a device)
+
+Measured with `cargo run --release --example renderer_stats` in [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) ([#1326](https://github.com/mihazs/lazysh/issues/1326)); raw output [`terminal-wgpu-renderer-stats-2.txt`](benchmarks/terminal-wgpu-renderer-stats-2.txt) (it repeats the tables of the section above, from a second run, then adds these two). Same host and offscreen, dot-pattern setup as above (load average 6.5 at the start); one run.
+
+**Blink wakeups.** The host's single timer over real time, 10 s, three sessions of 80x24 sharing one `BlinkClock` (half period 530 ms): sleep to the instant `next_wake` names, set the phase on every session, draw and present.
+
+| cursor | timer wakeups | per second | submissions per session | rows drawn per session | context switches of the process | wake lateness p50 / max |
+|---|---|---|---|---|---|---|
+| blinking block | 18 | 1.80 | 18 | 18 | 91 | 60 / 64 microseconds |
+| steady block | 0 | 0 | 0 | 0 | 1 | no timer armed |
+
+A blinking cursor cost one wakeup per phase change (18 in 10 s: the phase changes at 0.53, 1.06, ... 9.54 s) however many sessions share the timer, and in every session one row, one pass and one submission per wakeup. A steady cursor armed no timer, drew nothing and the process made one context switch in the 10 s. **The GPU does not stay awake with blink off.** The 91 switches with blink on are three sessions each waiting for its GPU work to finish at every phase (`present` waits), not a polling loop. This measures the timer and the renderer, not an Android `Handler` or a display's vsync, and not energy.
+
+**Device loss.** 20 forced losses of an 80x24 renderer showing 24 rows of text, each recovered from the core's snapshot, in milliseconds: `resume` (a new device, pipeline and resources) p50 20.4 (min 20.0, max 22.1); resume plus snapshot plus draw plus present p50 22.1 (min 21.7, max 23.9). The picture after every recovery was the uninterrupted one (`tests/lifecycle.rs`: five losses compared with the reference renderer, identical pixels, the driver's live buffers and textures equal to those of a fresh renderer; the test bounds recovery at 5 s because it runs a debug build beside nine other tests, where five recoveries took 154 ms at worst). What was simulated is `Device::destroy()` on a desktop GPU: a driver reset on a phone, a surface lost with its window (#1327), memory pressure and a GPU that comes back slower were not.
+
+**Display scale.** Not a timing: the renderer at 1x, 2x, 3x, 1.5x, 1.25x and back, switched by `set_appearance` and `resize` on the held screen (no snapshot), drew the reference renderer's pixels at every scale and the pixels of a renderer created at that scale; goldens at 2x and 3x are in the runtime crate. Refresh rate: one second of continuous output (a burst every millisecond) cost 60, 120 and 90 frames (within 2) on a 60, 120 and 90 Hz pacer, one submission each, and none once the output stopped.
+
+### Text: real fonts in the wgpu renderer (host GPU, not a device)
+
+Measured with `cargo run --release --example text_stats` in [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) ([#1325](https://github.com/mihazs/lazysh/issues/1325)); raw output [`terminal-wgpu-text-stats-1.txt`](benchmarks/terminal-wgpu-text-stats-1.txt). Same host as the sections above (AMD Radeon RX 5500 XT through RADV, Vulkan, wgpu 30.0.2, Ryzen 9 5900X shared with other agents, load average 3.2 at the start), offscreen, 80x24 cells of 16x32 pixels (display scale 2), one run. The fonts are the **subsets** of the test fixtures ([`tests/fonts`](../../packages/terminal-renderer-wgpu/tests/fonts/README.md)): what they lack (most CJK and emoji of the unicode workload) draws the missing-glyph box, which costs the same rasterization but is not a full CJK or emoji font. Each stream is drawn twice: `dots` is the layout's reference glyph, `fonts` the text path.
+
+| workload | glyphs | glyph hits | glyph misses | hit rate % | atlas upload KiB | text ms total | us per miss | us per frame (64 frames) | wall ms per frame |
+|---|---|---|---|---|---|---|---|---|---|
+| plain text | dots | 100685 | 36 | 99.96 | 18.0 | 0.00 | 0.0 | 0.0 | 1.092 |
+| plain text | fonts | 100685 | 36 | 99.96 | 18.0 | 0.21 | 5.8 | 3.3 | 1.151 |
+| ANSI + truecolor | dots | 27986 | 21 | 99.93 | 10.5 | 0.00 | 0.0 | 0.0 | 4.008 |
+| ANSI + truecolor | fonts | 27986 | 21 | 99.93 | 10.5 | 0.14 | 6.8 | 2.2 | 4.169 |
+| full-screen redraw | dots | 3222 | 21 | 99.35 | 10.5 | 0.00 | 0.0 | 0.0 | 1.168 |
+| full-screen redraw | fonts | 3222 | 21 | 99.35 | 10.5 | 0.14 | 6.7 | 2.2 | 1.030 |
+| CJK/emoji/combining | dots | 1139 | 28 | 97.60 | 22.5 | 0.00 | 0.0 | 0.0 | 4.051 |
+| CJK/emoji/combining | fonts | 1139 | 28 | 97.60 | 40.5 | 2.23 | 79.6 | 34.8 | 4.014 |
+
+The glyph cache hit rate with fonts is the atlas's: it is the same as with dots because a cluster is rasterized once while resident, whatever draws it. Shaping and rasterizing a cluster that missed cost 5.8 to 6.8 microseconds for Latin and 79.6 on average for the unicode stream (wide clusters, color bitmaps, marks), so a frame that meets a screenful of new characters pays a few milliseconds once and the next frames pay nothing for text work: the steady frames of the first three streams spent 2.2 to 3.3 microseconds each shaping and rasterizing (`text ms` counts the misses only; the face lookup every glyph pays, hit or miss, is in the wall time). Cold start (a library of five faces, a renderer, one frame of 37 distinct glyphs): 15.62 ms to build the library and renderer, 3.24 ms for the first frame of which 0.24 ms was shaping and rasterizing. The wall time per frame is the benchmark's own feeding and drawing loop: plain text 1.092 then 1.151 ms, ANSI 4.008 then 4.169, redraw 1.168 then 1.030, unicode 4.051 then 4.014 ms (dots then fonts); one run on a shared host, so differences of that size are not established (the first run of the same example, before a per-glyph allocation was removed from the face lookup, read 1.182, 4.099, 1.166 and 4.130 ms for dots and 1.274, 4.075, 1.172 and 4.314 for fonts), and none of it says what fonts cost on a phone. The atlas upload of the unicode stream grew from 22.5 to 40.5 KiB because color glyphs are four bytes a texel.
+
+**Shaping library.** `swash` 0.2 (shaping with GSUB and GPOS, unhinted outlines, CBDT, sbix and COLR). It is pure Rust, so the Android and Apple builds need no C toolchain beyond what wgpu already has, and one dependency does what the issue asks of three. Cost measured on a scratch crate that shapes one cluster and renders one glyph ([`terminal-wgpu-text-size-1.txt`](benchmarks/terminal-wgpu-text-size-1.txt)): **0.89 MiB** of stripped binary (opt-level `s`, LTO, x86_64 Linux) over a program that only reads the font. The same crate compiled for `aarch64-linux-android` and `x86_64-linux-android` (`cargo check`, no NDK needed); the 32-bit Android targets are not installed here and were not checked, and nothing ran on a device. Not measured: a rustybuzz or HarfBuzz stack with a separate rasterizer, which was the alternative; the choice rests on the C-free build and one dependency, not on a size comparison.
+
+**Fonts of the machine.** `FontLibrary::system` for the list `SFMono-Regular, Liberation Mono, monospace` on the same host (895 files below `/usr/share/fonts` and `~/.local/share/fonts`): 436 ms in a debug build, one run, most of it reading the families it chose into memory (a CJK collection among them); it found Liberation Mono, a monospace font, Noto Sans Mono CJK SC and Noto Color Emoji. It runs once per surface and once per change of the font list, on the session's renderer thread. Not measured: a release build, a cold file cache, and Android's `/system/fonts`.
+
 ### Android Canvas drawing of the shared layout (Waydroid, not a device)
 
 Measured with the harness in `apps/client/bench/android-canvas` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): a throwaway APK (no Gradle, built by `build.sh` from the Android SDK command-line tools; it is not part of the app and not built by CI) that replays the shared layout of [`layout::row_draws`](native-rendering.md#terminal-renderer-api) with the Android `Canvas` API. The layouts are frames of draws written by `cargo run --release --example dump_layout -- <dir>` (packages/terminal-runtime): the 80x24 screen of each benchmark workload after every 256 KiB of its first 16 MiB (64 frames), 8x16 pixel cells, so the Canvas candidate draws exactly what the CPU reference renderer and the wgpu prototype draw. This is the "native drawing (Skia, Android Canvas)" candidate: the Android Canvas is Skia, so no separate Skia build was made; desktop Skia was not built.
@@ -932,6 +1130,37 @@ Measured with `cargo run --release --example inspect_bench` in `packages/termina
 
 The tap check costs a few microseconds here and scales with the row width (each read visits every column of the row to find the span), so the inspection itself is not where a tap's latency would come from; the bridge round trip, which this does not measure, is. It does not say what a phone costs.
 
+### Selection and search on a large scrollback (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example selection_bench` in `packages/terminal-runtime` ([#1320](https://github.com/mihazs/lazysh/issues/1320)): 80-column lines of 66 characters, the scrollback budget raised so every line is kept (the default is 4 MiB). Core only: no bridge, no JavaScript, no xterm.js comparison, no device, so no ratio is valid. Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3, rustc 1.96.1 release), taken while the host was shared (1-minute load average 14.8 at the start, on 24 threads). One invocation, on 2026-11-19 at the commit of the link slice; the figures are milliseconds.
+
+| Rows held | Text of everything (p50, max) | Search that misses (p50, max) | URL and path detection on one row (p50, max) | Word under a finger (p50) |
+| --- | --- | --- | --- | --- |
+| 5,001 (0.3 MiB of text) | 24.3, 25.6 | 8.5, 9.9 | 0.43, 2.27 | 0.001 |
+| 20,001 (1.3 MiB of text) | 100.5, 107.5 | 34.2, 34.6 | 0.42, 0.83 | 0.001 |
+
+Extraction and a missing search are linear in the rows read (about 5 microseconds a row for the text, 1.7 to 1.9 for the search); a word under a finger reads one row, and link detection reads the 33 rows around the tapped one (more only while a soft-wrapped line continues). An earlier invocation taken at load 22.8 gave 25.1 and 100.8 ms for the text and 8.2 and 33.1 ms for the search, and one at load 18.8 gave 24.1 and 100.7 ms for the text and 8.1 and 37.4 ms for the search. It does not say what a phone costs, and a single invocation under load is not a regression threshold.
+
+### Build cost of the wgpu renderer as an app dependency (build host, not a device)
+
+The app depends on [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) behind its optional `native-terminal` feature ([#2201](https://github.com/mihazs/lazysh/issues/2201)). Nothing in the app calls the renderer yet, so these figures are what the dependency costs a build with the feature on, not what a renderer in use will cost. Builds without the feature compile none of it. Raw output: [`benchmarks/terminal-renderer-app-dependency-build-1.txt`](benchmarks/terminal-renderer-app-dependency-build-1.txt). One run each on an AMD Ryzen 9 5900X shared with other work (load average 1 to 5), four Cargo jobs.
+
+**Linux x86_64, measured.** `cargo build --release --locked --features native-terminal` of the app (rustc 1.99.0, the root release profile: LTO, one codegen unit, stripped), with the feature first without and then with the renderer dependency, twice:
+
+| Artifact | Without the renderer | With the renderer | Delta |
+| --- | --- | --- | --- |
+| `lazysh` executable | 57,207,792 bytes | 57,205,872 bytes | -1,920 bytes |
+| `liblazysh_lib.so` | 3,951,496 bytes | 3,951,496 bytes | 0 |
+| `liblazysh_lib.a` | 404,486,146 bytes | 404,544,512 bytes | +58,366 bytes |
+
+The sizes were identical in both runs of each state. The executable is not byte-identical and is 1.9 KiB smaller, because the dependency turns on features of crates the app already had (`bytemuck` derive, `zerocopy` derive, `num-traits` with `libm`, `hashbrown` 0.17.1 with its default hasher), which recompiles their dependents; no renderer code is linked.
+
+A clean build without the renderer took 526 s. Adding it took 352 s in the same target directory, against 252 to 256 s for the app crate's own recompile and link alone, so about 98 s more: 62 CPU-seconds in the 29 crates the renderer adds on Linux (naga 18.5 s, wgpu-core 16.1 s, wgpu-hal 7.4 s, ash 6.6 s) and the one-off rebuild of 74 crates whose features changed.
+
+**Android arm64 and x86_64, compile time measured, package size not measured.** The renderer and the crates it adds (wgpu with the Vulkan and OpenGL ES backends) compile and archive for both ABIs with NDK r29.0.14206865 in 26 s (aarch64) and 24 s (x86_64) on top of the runtime crate, in the renderer's own release profile (no LTO, rustc 1.96.1); the renderer's `rlib` is 0.45 MiB per ABI. No Android package was built with the feature here, so the size delta of the shipped `.so` is **not measured**; the Linux result (no renderer code linked while nothing calls it) is the only evidence for it. The delta that matters, with the renderer drawing on a surface, belongs to [#1327](https://github.com/mihazs/lazysh/issues/1327).
+
+Not shown: macOS, iOS and Windows (their backends, Metal and Direct3D 12, were not compiled here; the root lock file pins their crates), a build on a CI runner, and any binary that calls the renderer.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.
@@ -939,6 +1168,38 @@ A candidate may replace the fallback on a device only if, on that device, all of
 ## Regression benchmarks in CI
 
 CI can only run what is reproducible on hosted runners: parse throughput of the core, per-session memory, golden-image comparisons and an injected-slowdown self-test. Device-only metrics follow a documented manual procedure and are not gated automatically ([#1341](https://github.com/mihazs/lazysh/issues/1341)).
+
+The `terminal-perf` job of `checks.yml` runs `cargo run --release --example perf_gate` in `packages/terminal-runtime` against the same checksum-verified libghostty-vt build as the `herdr-native` job. It is a job of its own, alone on its runner, and it is not a required check: a regression or a noisy host can never skip the jobs that consume `herdr-native`'s binaries. It runs on every push to `main` and on a pull request that selects the terminal runtime area, so a regression shows on the pull request that causes it; it stays report-only until the maintainer makes it a required check in the repository ruleset ([CONTRIBUTING.md](../../CONTRIBUTING.md#which-ci-jobs-a-pull-request-runs)). A metric beyond its limit makes the example exit 1 and the job red; the table goes to the job summary.
+
+What the gate holds, and the limit of each (the limits sit at a distance from the measured value that no run-to-run spread reached; "Measured" is the value, or the lowest to highest, of five invocations on the host below):
+
+| Metric | Measured | Limit | Why this kind of metric |
+| --- | --- | --- | --- |
+| Scrollback rows kept, 80 columns, default 4 MiB budget | 5,280 | at least 5,200 | deterministic (it is the budget policy) |
+| Resident memory per session after 8 MiB of 80-column lines, 5 and 10 sessions, attached | 3,920 to 3,922 KiB at both counts | at most 5,000 KiB | memory per session; the same in every invocation |
+| Resident memory per session, 5 and 10 sessions detached and idle after compaction ([#1338](https://github.com/mihazs/lazysh/issues/1338)) | 617 to 620 KiB at 5, 454 to 455 KiB at 10 | at most 1,500 KiB | memory per session through the hub; the limit is a third of the filled figure, so a session that stops being compacted fails it |
+| Resident growth over 80 create, feed 1 MiB and drop rounds, after 20 warm-up rounds | 0 KiB | at most 2,048 KiB | no growth over churn; the margin is for another allocator |
+| Allocations per MiB, VT only, plain text | 128.6 | at most 142 | deterministic; two per 16 KiB chunk, so no allocation per byte or per cell on the parse path |
+| Allocations per MiB, VT plus a frame per chunk, plain text | 247,305 | at most 260,000 | deterministic; this is the cost of `Frame` owning a `String` per cell |
+| Reference renderer bytes uploaded per MiB of output, full-screen redraw, one frame per 256 KiB | 2.81 MiB | at most 2.87 MiB | deterministic; what dirty-row damage tracking is for |
+| Frame cost, plain text: throughput with a frame per chunk over VT-only throughput | 0.119 to 0.129 | at least 0.05 | a ratio of two passes in one process |
+| Frame cost, ANSI and truecolor, the same ratio | 0.606 to 0.642 | at least 0.40 | the same, where the parse dominates |
+| VT-only throughput, plain text | 609 to 633 MiB/s | at least 100 MiB/s | an absolute floor for a collapse only |
+
+Golden images are not part of this job: `cargo test --test renderer` compares the reference renderer's output with the committed images pixel for pixel inside `herdr-native` already, and a divergence fails that required job.
+
+Noise handling, in order of preference:
+
+1. **Counts that do not depend on the host** (allocations, rows kept, bytes uploaded, memory per session) carry tight limits. They were identical across five invocations at 1-minute load averages of 4.8 to 7.9 on 24 threads.
+2. **Timed metrics are ratios of two passes in the same process.** The host's speed, clock and load affect both passes and cancel; only a change in the code under test moves the ratio. Each pass is the best of five, because noise only ever slows a pass down. A ratio below its limit is measured again, up to three batches of five passes with the bests carried over, before it fails.
+3. **No absolute latency or throughput threshold finer than a floor.** The one absolute speed, 100 MiB/s for plain text, is about six times below the host measured here and catches a collapse only. Latency tails (the credit latency p99 and the input-to-write p99 of the session benchmark) moved by a factor of two between invocations on a shared host and are not gated.
+4. **Limits sit well away from the measured value.** By arithmetic from the measured ratios, the two ratio limits trip at a frame path about 2.5 to 2.8 times slower than measured (the injected run below, a frame path four times slower, failed both), and the allocation limit at 5 percent more allocations. A gentler regression is not caught by this job; it shows in the benchmark tables above, which are run by hand.
+
+Self-test: `perf_gate --inject slow` spins for three times the time of every `take_frame` call, `--inject allocs` makes every frame allocate once per cell it carries, and `--inject nocompaction` runs the idle sessions in a hub that never compacts. The job runs all three after the real gate and fails unless each exits with status 1 (a crash exits differently and does not count). On the host above the real gate took 2.8 s, `--inject slow` failed both ratio metrics (plain text 0.039 and ANSI 0.310 against 0.123 and 0.629 without injection, 13.3 s because failing ratios are re-measured) and `--inject allocs` failed the allocation metric (370,185 allocations per MiB against 247,305).
+
+Environment of the figures above: AMD Ryzen 9 5900X (24 threads), Linux 7.3.3, rustc 1.96.1 release profile, libghostty-vt from the vendored Ghostty commit `44f2a44df` built with Zig 0.16.0 `ReleaseFast`, x86_64, 1-minute load average 4.8 to 7.9 during the five invocations. **Hosted `ubuntu-22.04` runner** (one run of this gate on a pull request, before the job was restricted to pushes to `main`: [run 43591350796](https://github.com/mihazs/lazysh/actions/runs/43591350796/job/132469854304), all nine metrics ok, job wall time 2 min 42 s including the Zig build): every count equal to the table above (5,280 rows, 3,922 KiB per session, 0 KiB growth, 128.6 and 247,305 allocations per MiB, 2.81 MiB uploaded), plain-text frame cost ratio 0.127 (limit 0.05), ANSI ratio 0.589 (limit 0.40, a narrower margin than on the desktop host, which measured 0.606 to 0.642) and VT-only throughput 589 MiB/s (floor 100). One hosted run is thin evidence for the timed ratios; the first runs on `main` add to it, and the limits change only with more figures in hand.
+
+Not covered, by design: Android and iOS devices, the xterm.js baseline (its harness needs a browser and is not reproducible enough on a hosted runner for a threshold), the wgpu prototype (it needs a GPU), and any latency to the display. Device runs follow [the Android procedure](#android-procedure-manual-gate-not-run).
 
 ## Existing, unrelated measurements
 
@@ -948,4 +1209,4 @@ CI can only run what is reproducible on hosted runners: parse throughput of the 
 
 - Best method for input-to-presentation on Android without external hardware.
 - How to hold radios and brightness constant across energy runs on the available devices.
-- Whether hosted CI can produce stable enough numbers for any latency threshold.
+- Whether hosted CI can produce stable enough numbers for any latency threshold. The `terminal-perf` gate avoids the question: it gates ratios inside one process and counts, and no latency. Whether its limits stay wide enough on a hosted runner is checked by its runs on `main`.

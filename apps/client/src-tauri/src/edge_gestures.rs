@@ -111,13 +111,16 @@ pub async fn edge_gesture_insets(app: AppHandle) -> Result<GestureInsets, String
     }
 }
 
+/// A plugin the renderer reaches through app commands, never through the plugin's own invoke handler.
+pub(crate) fn command_only_plugin(name: &'static str) -> tauri::plugin::Builder<tauri::Wry> {
+    tauri::plugin::Builder::new(name).invoke_handler(|invoke| {
+        invoke.resolver.reject("unavailable");
+        true
+    })
+}
+
 pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    tauri::plugin::Builder::new("lazysh-edge-gestures")
-        // The renderer reaches this through the app command, never the plugin.
-        .invoke_handler(|invoke| {
-            invoke.resolver.reject("unavailable");
-            true
-        })
+    command_only_plugin("lazysh-edge-gestures")
         .setup(|app, api| {
             #[cfg(target_os = "android")]
             {

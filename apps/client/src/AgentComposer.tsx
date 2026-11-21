@@ -1,8 +1,9 @@
-import {useCallback,useEffect,useId,useMemo,useRef,useState,type DragEvent} from 'react';
-import {ArrowLeft,Paperclip,SendHorizontal,Square} from 'lucide-react';
+import {useCallback,useEffect,useId,useLayoutEffect,useMemo,useRef,useState,type DragEvent} from 'react';
+import {ArrowLeft,LoaderCircle,Paperclip,SendHorizontal,Square} from 'lucide-react';
 import {publishComposerControl,useDialogOpen} from './agentDialogAnswer';
 import AttachmentPanel from './AttachmentPanel';
 import AgentComposerChips from './AgentComposerChips';
+import AgentComposerInsert from './AgentComposerInsert';
 import AgentComposerNotice from './AgentComposerNotice';
 import {useAgentAttachments} from './useAgentAttachments';
 import {uiErrorText} from './i18n/localError';
@@ -23,6 +24,8 @@ import './AgentComposer.css';
 /** Evidence, already held by the view, of the terminal pane the followed conversation runs in. */
 export type ComposerProof={kind:'tmux';paneId:string}|{kind:'herdr';pane:string;terminal:string}|{kind:'zellij';session:string;pane:number};
 const LIMIT=65536;
+/** The height of the field, in px, past which the draft is more than one line. */
+const TALL=56;
 /** Unsent drafts by conversation: they outlive the view switching to the terminal and back, never a reload. */
 const drafts=new Map<string,string>();
 // A Zellij pane is named by the report itself: there is no destination of the terminal to compare it with.
@@ -103,15 +106,17 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
   const bytes=draftLimit(labels?.backend??'tmux',true);
-  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
+  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !attach.busy;
   const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
+  // Escape is not known to interrupt Grok Build, so the view offers it no key beyond the guarded send.
+  const stoppable=ready && agent!=='grok-acp';
   // Shift+Tab has a verified key profile for Claude Code on tmux only; every other terminal hides the button.
   const modeSwitch=useModeSwitch(control,labels?.backend==='tmux' && agent==='claude',key);
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
-  // An @ path is plain text to OpenCode (its own picker makes the real mention), so the folder is not offered.
-  const mention=!slash && !slashClosed && !compositionActive && cwd && agent!=='opencode' ? mentionAt(draft,caret) : undefined;
+  // An @ path is plain text to OpenCode (its own picker makes the real mention), and nothing here has checked it for Grok Build, so the folder is not offered.
+  const mention=!slash && !slashClosed && !compositionActive && cwd && agent!=='opencode' && agent!=='grok-acp' ? mentionAt(draft,caret) : undefined;
   const files=useAgentFileSuggestions({sessionId,invoke,cwd,mention});
   // One list for both kinds of suggestion, so the keys and the listbox behave the same.
   const popup:{label:string;items:Suggestion[];pick:(index:number)=>void}|undefined=slash?{label:t('agentComposerCommands'),
@@ -125,6 +130,18 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     if(wantCaret.current===undefined)return;
     field.current?.setSelectionRange(wantCaret.current,wantCaret.current);setCaret(wantCaret.current);wantCaret.current=undefined;
   },[draft]);
+  // The field grows with what is typed, soft wraps included, up to the height its stylesheet allows; no line is clipped. Once a draft
+  // needs a second line the composer takes its tall layout and keeps it until the draft is empty again, so it cannot flip back and forth.
+  const box=useRef<HTMLElement>(null),tall=useRef(false);
+  useLayoutEffect(()=>{
+    const element=field.current;
+    if(!element || !box.current)return;
+    element.style.height='auto';
+    if(!draft)tall.current=false;else if(!tall.current && element.scrollHeight>TALL)tall.current=true;
+    box.current.toggleAttribute('data-multiline',tall.current);
+    element.style.height='auto';element.style.height=`${element.scrollHeight}px`;
+  },[draft,labels,stage]);
+  const insert=(text:string,at:number)=>{edit(draft.slice(0,at)+text+draft.slice(at));wantCaret.current=at+text.length;field.current?.focus({preventScroll:true});};
   const pick=(command:SlashCommand)=>{edit(slashText(command));field.current?.focus({preventScroll:true});};
   const now=useNow(1000,receipt?.phase==='accepted');
   const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,prompts,queued:[],elapsedMs:now-receipt.at});
@@ -132,8 +149,25 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   function stageDraft() {
     window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
   }
+  // A touch keyboard can keep the last word as an open composition that neither Send nor a compositionend ends: leaving the
+  // field ends it, as a tap elsewhere does (#1840). Send then waits for the render that holds the committed draft.
+  const submitAfterComposition=useRef<string|undefined>(undefined);
+  const submissionTarget=JSON.stringify([key,proofKey,stock,zellij,source,labels?.backend]);
+  function endComposition() {
+    if(!composing.current)return false;
+    const element=field.current;
+    element?.blur();
+    // A WebView may end it on blur without a compositionend.
+    if(composing.current){composing.current=false;setCompositionActive(false);attach.compose.end(element?.value ?? draft);}
+    return true;
+  }
+  useEffect(()=>{
+    const pending=submitAfterComposition.current;
+    if(pending && (!shown || pending!==submissionTarget || !access.current())){submitAfterComposition.current=undefined;return;}
+    if(pending && !composing.current){submitAfterComposition.current=undefined;submit();}
+  });
   function submit() {
-    if(composing.current)return;
+    if(endComposition()){submitAfterComposition.current=submissionTarget;return;}
     if(sendable){
       setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text)});
       control!.send();return;
@@ -156,7 +190,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   // A conversation that can neither take input nor be staged has nothing to compose; the options menu says why.
   if(!labels && !stage)return null;
   const dropping=(event:DragEvent)=>event.dataTransfer.types.includes('Files');
-  return <section className="agent-composer" data-attachment-open={attachmentOpen || undefined} aria-label={t('agentComposerTitle')}
+  return <section ref={box} className="agent-composer" data-attachment-open={attachmentOpen || undefined} data-busy={control?.busy || undefined} data-ready={ready || undefined} aria-label={t('agentComposerTitle')}
     onDragOver={event=>{if(dropping(event))event.preventDefault();}} onDrop={event=>{if(!dropping(event))return;event.preventDefault();void attach.upload([...event.dataTransfer.files]);}}>
     {attachmentOpen && access.current() && <div className="agent-composer-attach">
       <button type="button" className="subtle-button" onClick={()=>setAttachmentOpen(false)}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
@@ -169,10 +203,10 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     {popup && <AgentComposerPalette id={paletteId} label={popup.label} items={popup.items} active={Math.min(slashIndex,popup.items.length-1)} onPick={popup.pick} onHover={setSlashIndex}/>}
     {mode && <span className="agent-composer-mode" data-mode={mode}>{t(mode==='bash'?'agentModeBash':'agentModeMemory')}</span>}
     {attach.list.length>0 && <AgentComposerChips attachments={attach.list} onRemove={attach.remove}/>}
+    {ready && !popup && !attachmentOpen && <AgentComposerInsert commands={!draft} files={!!cwd && !mention}
+      onCommand={()=>insert('/',0)} onFile={()=>insert(draft.slice(0,caret).match(/(^|\s)$/)?'@':' @',caret)}/>}
     <form className="agent-composer-row" aria-label={t('chatDraft')} onSubmit={event=>{event.preventDefault();submit();}}>
-      <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
-      {modeSwitch.button}
-      <textarea ref={field} rows={Math.max(1,Math.min(6,draft.split('\n').length))} maxLength={LIMIT} value={draft} aria-label={t('chatDraftLabel')} placeholder={t('agentComposerLabel')}
+      <textarea ref={field} rows={1} maxLength={LIMIT} value={draft} aria-label={t('chatDraftLabel')} placeholder={t('agentComposerLabel')}
         onChange={event=>{setCaret(event.target.selectionStart);attach.change(event.target.value,composing.current);}}
         onSelect={event=>{if(!composing.current)attach.snap(event.currentTarget);setCaret(event.currentTarget.selectionStart);}}
         onCompositionStart={()=>{composing.current=true;setCompositionActive(true);attach.compose.begin();}} onCompositionEnd={event=>{composing.current=false;setCompositionActive(false);attach.compose.end(event.currentTarget.value);}}
@@ -194,8 +228,10 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
           }
           if(event.key==='Enter' && !event.shiftKey && (event.metaKey || event.ctrlKey || !coarse())){event.preventDefault();submit();}
         }}/>
-      {ready && <button type="button" className="icon-button" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
-      {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}><SendHorizontal size={18} aria-hidden="true"/></button>}
+      <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
+      {modeSwitch.button}
+      {stoppable && <button type="button" className="icon-button agent-composer-stop" data-armed={stopArmed || undefined} disabled={control!.busy || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{endComposition();if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
+      {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}>{control?.busy ? <LoaderCircle size={18} aria-hidden="true"/> : <SendHorizontal size={18} aria-hidden="true"/>}</button>}
     </form>
     {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock} zellij={zellij}
       draft={text} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}

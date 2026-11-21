@@ -24,7 +24,8 @@ test('a device lock that stays held fails the whole run, naming the holder, befo
   await writeFile(spec, `import {writeFileSync} from 'node:fs'; describe('worker', () => { it('runs', () => { writeFileSync(${JSON.stringify(marker)}, 'ran'); }); });`);
   const run = Bun.spawn(['bun', 'run', 'wdio', 'run', 'mobile-e2e/wdio.android.conf.ts', '--spec', spec], {
     cwd: client, stdout: 'pipe', stderr: 'pipe',
-    env: {...process.env, ANDROID_SERIAL: SERIAL, ANDROID_HOME: sdk, LAZYSH_E2E_LOCK_TIMEOUT_S: '2', LAZYSH_E2E_HOSTS: ''},
+    env: {...process.env, CI: 'true', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted',
+      ANDROID_SERIAL: SERIAL, ANDROID_HOME: sdk, LAZYSH_E2E_LOCK_TIMEOUT_S: '2', LAZYSH_E2E_HOSTS: ''},
   });
   const [out, code] = await Promise.all([new Response(run.stdout).text().then(async text => text + await new Response(run.stderr).text()), run.exited]);
   expect(code).not.toBe(0);

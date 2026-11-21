@@ -6,32 +6,8 @@ use std::io::Write;
 pub enum IosAction {
     Probe,
     Stream,
-    Tap {
-        #[arg(long)]
-        x: u32,
-        #[arg(long)]
-        y: u32,
-        #[arg(long)]
-        width: u32,
-        #[arg(long)]
-        height: u32,
-    },
-    Swipe {
-        #[arg(long)]
-        x: u32,
-        #[arg(long)]
-        y: u32,
-        #[arg(long)]
-        to_x: u32,
-        #[arg(long)]
-        to_y: u32,
-        #[arg(long)]
-        width: u32,
-        #[arg(long)]
-        height: u32,
-        #[arg(long)]
-        duration_ms: u16,
-    },
+    #[command(flatten)]
+    Gesture(Gesture),
     Button {
         #[arg(long)]
         key: String,
@@ -143,13 +119,6 @@ pub(super) fn execute(
     action: IosAction,
 ) -> Result<Value> {
     let (width, height) = probe(runner, id, socket)?;
-    let point = |x: u32, y: u32, w: u32, h: u32| {
-        if w == width && h == height && x < width && y < height {
-            Ok(())
-        } else {
-            Err(Error::Device("DeviceDimensionsChanged"))
-        }
-    };
     let arguments = match action {
         IosAction::Probe => {
             return Ok(
@@ -157,40 +126,33 @@ pub(super) fn execute(
             )
         }
         IosAction::Stream => return Err(Error::InvalidArgument),
-        IosAction::Tap {
-            x,
-            y,
-            width: w,
-            height: h,
-        } => {
-            point(x, y, w, h)?;
-            vec!["tap".into(), x.to_string(), y.to_string()]
-        }
-        IosAction::Swipe {
-            x,
-            y,
-            to_x,
-            to_y,
-            width: w,
-            height: h,
-            duration_ms,
-        } => {
-            point(x, y, w, h)?;
-            point(to_x, to_y, w, h)?;
-            if !(1..=10000).contains(&duration_ms) {
-                return Err(Error::InvalidArgument);
+        IosAction::Gesture(gesture) => {
+            gesture.check(width, height)?;
+            match gesture {
+                Gesture::Tap { x, y, .. } => {
+                    vec!["ui".into(), "tap".into(), x.to_string(), y.to_string()]
+                }
+                Gesture::Swipe {
+                    x,
+                    y,
+                    to_x,
+                    to_y,
+                    duration_ms,
+                    ..
+                } => vec![
+                    "ui".into(),
+                    "swipe".into(),
+                    x.to_string(),
+                    y.to_string(),
+                    to_x.to_string(),
+                    to_y.to_string(),
+                    "--duration".into(),
+                    format!("{}.{:03}", duration_ms / 1000, duration_ms % 1000),
+                ],
             }
-            vec![
-                "swipe".into(),
-                x.to_string(),
-                y.to_string(),
-                to_x.to_string(),
-                to_y.to_string(),
-                "--duration".into(),
-                format!("{}.{:03}", duration_ms / 1000, duration_ms % 1000),
-            ]
         }
         IosAction::Button { key } => vec![
+            "ui".into(),
             "button".into(),
             match key.as_str() {
                 "home" => "HOME",
@@ -308,22 +270,8 @@ fn stream_child(
         }
     }
 }
-pub fn stream(id: &str, socket: &str) -> Result<()> {
-    let cancelled = super::cancellation_signal()?;
-    let eof = cancelled.clone();
-    thread::spawn(move || {
-        let mut data = [0; 1];
-        while matches!(std::io::stdin().read(&mut data), Ok(1)) {}
-        eof.store(true, Ordering::Relaxed);
-    });
-    let (width, height) = probe(
-        &mut SdkRunner {
-            cancelled: cancelled.clone(),
-        },
-        id,
-        socket,
-    )?;
-    let command = SdkRunner::command(
+fn video_stream_command(socket: &str) -> Command {
+    SdkRunner::command(
         Tool::Idb,
         &command_args(
             socket,
@@ -339,9 +287,25 @@ pub fn stream(id: &str, socket: &str) -> Result<()> {
                 "0.5",
             ],
         ),
-    );
+    )
+}
+pub fn stream(id: &str, socket: &str) -> Result<()> {
+    let cancelled = super::cancellation_signal()?;
+    let eof = cancelled.clone();
+    thread::spawn(move || {
+        let mut data = [0; 1];
+        while matches!(std::io::stdin().read(&mut data), Ok(1)) {}
+        eof.store(true, Ordering::Relaxed);
+    });
+    let (width, height) = probe(
+        &mut SdkRunner {
+            cancelled: cancelled.clone(),
+        },
+        id,
+        socket,
+    )?;
     stream_child(
-        command,
+        video_stream_command(socket),
         std::io::stdout(),
         id.into(),
         width,
@@ -355,6 +319,24 @@ pub fn stream(id: &str, socket: &str) -> Result<()> {
 mod tests {
     use super::*;
     const ID: &str = "9C405382-203A-4DC0-A11B-B2FC37EBA881";
+    // A private socket in an owned 0700 directory, bound through its real path:
+    // Darwin temporary roots may use /var -> /private/var, which the adapter
+    // deliberately rejects, so the positive fixture must not weaken that check.
+    #[cfg(unix)]
+    fn private_socket() -> (
+        tempfile::TempDir,
+        std::os::unix::net::UnixListener,
+        std::path::PathBuf,
+    ) {
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("idb.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        (directory, listener, path)
+    }
     #[test]
     fn companion_identity_and_point_units_are_mandatory() {
         let value = json!({"udid":ID,"target_type":"SIMULATOR","state":"Booted","screen_dimensions":{"width":1170,"height":2532,"width_points":390,"height_points":844}});
@@ -391,19 +373,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn socket_must_be_owned_private_and_not_a_symlink_or_tcp_address() {
-        use std::os::unix::{
-            fs::{symlink, PermissionsExt},
-            net::UnixListener,
-        };
-        let directory = tempfile::tempdir().unwrap();
-        // Darwin temporary roots may use /var -> /private/var. The adapter
-        // deliberately rejects aliases, so bind the positive fixture through
-        // its real owned namespace rather than weaken that production check.
-        let root = directory.path().canonicalize().unwrap();
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let path = root.join("idb.sock");
-        let _listener = UnixListener::bind(&path).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let (_directory, _listener, path) = private_socket();
+        let root = path.parent().unwrap();
         assert!(socket_path(path.to_str().unwrap()).is_ok());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert!(socket_path(path.to_str().unwrap()).is_err());
@@ -511,5 +483,451 @@ mod tests {
         ));
         resume.send(()).unwrap();
         closed.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    struct Recorder(Vec<Vec<String>>);
+    impl Runner for Recorder {
+        fn output(&mut self, tool: Tool, args: &[String], _limit: usize) -> Result<Vec<u8>> {
+            assert_eq!(tool, Tool::Idb);
+            self.0.push(args.to_vec());
+            // The companion description idb 1.7.8 returned for an iPhone 16 Pro Simulator.
+            Ok(if args.iter().any(|argument| argument == "describe") {
+                json!({"udid":ID,"target_type":"simulator","state":"Booted","screen_dimensions":{"width":1206,"height":2622,"density":3.0,"width_points":402,"height_points":874}}).to_string().into_bytes()
+            } else {
+                Vec::new()
+            })
+        }
+        fn launch(&mut self, _tool: Tool, _args: &[String]) -> Result<()> {
+            unreachable!("idb controls never launch a detached SDK process")
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn input_runs_idb_ui_subcommands_with_point_arguments() {
+        // idb 1.7.8 rejects a top-level `tap`, `swipe` or `button` ("invalid choice"); they live under `ui`.
+        let (_directory, _listener, path) = private_socket();
+        let socket = path.to_str().unwrap();
+        let mut runner = Recorder(Vec::new());
+        for action in [
+            IosAction::Gesture(Gesture::Tap {
+                x: 201,
+                y: 406,
+                width: 402,
+                height: 874,
+            }),
+            IosAction::Gesture(Gesture::Swipe {
+                x: 2,
+                y: 437,
+                to_x: 300,
+                to_y: 437,
+                width: 402,
+                height: 874,
+                duration_ms: 1250,
+            }),
+            IosAction::Button {
+                key: "power".into(),
+            },
+        ] {
+            execute(&mut runner, ID, socket, action).unwrap();
+        }
+        let controls: Vec<&[String]> = runner
+            .0
+            .iter()
+            .filter(|call| !call.iter().any(|argument| argument == "describe"))
+            .map(|call| {
+                assert_eq!(
+                    call[..3],
+                    ["--companion", socket, "--no-prune-dead-companion"]
+                );
+                &call[3..]
+            })
+            .collect();
+        assert_eq!(
+            controls,
+            [
+                args(&["ui", "tap", "201", "406"]).as_slice(),
+                &args(&[
+                    "ui",
+                    "swipe",
+                    "2",
+                    "437",
+                    "300",
+                    "437",
+                    "--duration",
+                    "1.250"
+                ]),
+                &args(&["ui", "button", "LOCK"]),
+            ]
+        );
+    }
+
+    fn wait_until(what: &str, limit: Duration, mut condition: impl FnMut() -> bool) {
+        let started = Instant::now();
+        while !condition() {
+            assert!(started.elapsed() < limit, "timed out waiting for {what}");
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
+    /// The hosted runner's few CPUs are shared with the Simulator, so any adapter command can pass its
+    /// ten-second limit now and then. A repeatable command is retried twice, and every timeout is reported.
+    fn patient(what: &str, mut attempt: impl FnMut() -> Result<Value>) -> Value {
+        for round in 1..=3 {
+            match attempt() {
+                Err(Error::Device("DeviceTimeout")) => {
+                    println!("{what} exceeded the adapter's command limit (attempt {round})")
+                }
+                result => return result.unwrap_or_else(|error| panic!("{what} failed: {error:?}")),
+            }
+        }
+        panic!("{what} exceeded the adapter's command limit three times")
+    }
+    /// Harness-only commands (preparing the Simulator, reading the screen to observe an effect) get a
+    /// generous limit; the controls under test run with the adapter's own ten-second one.
+    fn harness(tool: Tool, arguments: &[String]) -> Result<Vec<u8>> {
+        bounded_command(
+            SdkRunner::command(tool, arguments),
+            MAX_SDK_TEXT,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(90),
+        )
+    }
+    /// The accessibility elements of the frontmost app, in points; fails while no app is frontmost.
+    fn describe_all(socket: &str) -> Result<Vec<Value>> {
+        let data = harness(Tool::Idb, &command_args(socket, &["ui", "describe-all"]))?;
+        serde_json::from_slice(&data).map_err(|_| Error::Device("InvalidDeviceList"))
+    }
+    fn has_label(socket: &str, label: &str) -> bool {
+        describe_all(socket)
+            .is_ok_and(|elements| elements.iter().any(|element| element["AXLabel"] == label))
+    }
+    /// Frames the production stream wrote as one JSON line each.
+    struct FrameSink {
+        pending: Vec<u8>,
+        frames: mpsc::Sender<Value>,
+    }
+    impl Write for FrameSink {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.pending.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+                let line: Vec<u8> = self.pending.drain(..=end).collect();
+                let _ = self.frames.send(serde_json::from_slice(&line).unwrap());
+            }
+            Ok(())
+        }
+    }
+    /// Real-host gate for issue #1731: macOS with Xcode and idb, an owned booted iOS Simulator and its
+    /// idb companion on a private Unix socket. The CI job (`ios-idb-acceptance.yml`) creates both.
+    /// Prints dimensions, counts and timings only, never screen contents.
+    #[test]
+    #[ignore = "requires macOS, an owned booted iOS Simulator and a private idb companion socket"]
+    fn owned_simulator_idb_preview_touch_and_lifecycle() {
+        let id = std::env::var("LAZYSH_TEST_IOS_UDID")
+            .expect("explicitly select an owned Simulator with LAZYSH_TEST_IOS_UDID");
+        let socket = std::env::var("LAZYSH_TEST_IDB_SOCKET")
+            .expect("select its private companion socket with LAZYSH_TEST_IDB_SOCKET");
+        let mut runner = SdkRunner {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        // CoreSimulatorService also answers discovery late while a Simulator shuts down: a timeout is "not yet".
+        let state = |runner: &mut SdkRunner| {
+            let inventory = match super::super::execute(
+                runner,
+                DeviceCommand::List {
+                    platform: Platform::Ios,
+                },
+            ) {
+                Ok(inventory) => inventory,
+                Err(Error::Device("DeviceTimeout")) => return None,
+                Err(error) => panic!("real simctl discovery failed: {error:?}"),
+            };
+            let device = inventory["devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|device| device["id"].as_str() == Some(&id))
+                .expect("the selected Simulator must be present in simctl discovery")
+                .clone();
+            assert_eq!(device["kind"], "simulator");
+            device["state"].as_str().map(str::to_owned)
+        };
+        // simctl shutdown took 23 to 66 s on the hosted runner with the companion attached, beyond
+        // the adapter's 10 s command limit (#1911). A DeviceTimeout answer is therefore reported,
+        // not failed, and the state that discovery then confirms is what the case asserts.
+        let lifecycle = |runner: &mut SdkRunner, command: DeviceCommand| {
+            let started = Instant::now();
+            match super::super::execute(runner, command) {
+                Ok(result) => {
+                    assert_eq!(
+                        (&result["status"], &result["id"]),
+                        (&json!("requested"), &json!(id))
+                    );
+                    println!(
+                        "lifecycle requested in {:.1}s",
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+                Err(Error::Device("DeviceTimeout")) => println!(
+                    "lifecycle request exceeded the adapter's command limit after {:.1}s",
+                    started.elapsed().as_secs_f64()
+                ),
+                Err(error) => panic!("lifecycle request failed: {error:?}"),
+            }
+            started
+        };
+
+        // Inventory and companion identity bind the same exact UUID, in screen points.
+        wait_until(
+            "the Simulator to be listed running",
+            Duration::from_secs(60),
+            || state(&mut runner).as_deref() == Some("running"),
+        );
+        let probe = patient("companion verification", || {
+            execute(&mut runner, &id, &socket, IosAction::Probe)
+        });
+        let (width, height) = (
+            probe["width"].as_u64().unwrap() as u32,
+            probe["height"].as_u64().unwrap() as u32,
+        );
+        assert!((100..=8192).contains(&width) && (100..=8192).contains(&height));
+        // Touch calibration premise: simctl screenshots are pixels, a whole multiple of the points.
+        let shot = patient("simctl screenshot", || {
+            super::super::execute(
+                &mut runner,
+                DeviceCommand::Screenshot {
+                    platform: Platform::Ios,
+                    id: id.clone(),
+                },
+            )
+        });
+        let (pixel_width, pixel_height) = (
+            shot["width"].as_u64().unwrap() as u32,
+            shot["height"].as_u64().unwrap() as u32,
+        );
+        let scale = pixel_width / width;
+        assert!(
+            (2..=3).contains(&scale) && pixel_width == width * scale && pixel_height == height * scale,
+            "screenshot {pixel_width}x{pixel_height} is not a Retina multiple of {width}x{height} points"
+        );
+
+        // A known foreground app with a labelled control at a known point.
+        let simctl = |arguments: &[&str]| harness(Tool::Simctl, &args(arguments));
+        let _ = simctl(&["terminate", &id, "com.apple.Preferences"]);
+        simctl(&["launch", &id, "com.apple.Preferences"]).expect("launch Settings");
+        wait_until("the Settings root list", Duration::from_secs(30), || {
+            has_label(&socket, "General")
+        });
+
+        // A tap at the centre of the "General" button, from its accessibility frame in points, opens General.
+        let elements = describe_all(&socket).expect("Settings accessibility tree");
+        let frame = elements
+            .iter()
+            .find(|element| element["AXLabel"] == "General" && element["type"] == "Button")
+            .expect("Settings lists a General button")["frame"]
+            .clone();
+        let (x, y) = (
+            (frame["x"].as_f64().unwrap() + frame["width"].as_f64().unwrap() / 2.0) as u32,
+            (frame["y"].as_f64().unwrap() + frame["height"].as_f64().unwrap() / 2.0) as u32,
+        );
+        // A tap is not repeated blindly: only after a timeout that left no effect.
+        let mut opened = false;
+        for round in 1..=2 {
+            let timed_out = match execute(
+                &mut runner,
+                &id,
+                &socket,
+                IosAction::Gesture(Gesture::Tap {
+                    x,
+                    y,
+                    width,
+                    height,
+                }),
+            ) {
+                Ok(_) => false,
+                Err(Error::Device("DeviceTimeout")) => {
+                    println!("tap exceeded the adapter's command limit (attempt {round})");
+                    true
+                }
+                Err(error) => panic!("tap failed: {error:?}"),
+            };
+            let until = Instant::now() + Duration::from_secs(15);
+            while !opened && Instant::now() < until {
+                opened = has_label(&socket, "About");
+                thread::sleep(Duration::from_secs(1));
+            }
+            if opened || !timed_out {
+                break;
+            }
+        }
+        assert!(opened, "General did not open after the tap");
+        // An edge swipe back is observed as the Settings root list returning.
+        patient("edge swipe", || {
+            execute(
+                &mut runner,
+                &id,
+                &socket,
+                IosAction::Gesture(Gesture::Swipe {
+                    x: 2,
+                    y: height / 2,
+                    to_x: width * 3 / 4,
+                    to_y: height / 2,
+                    width,
+                    height,
+                    duration_ms: 400,
+                }),
+            )
+        });
+        wait_until(
+            "the edge swipe to return to the root list",
+            Duration::from_secs(15),
+            || !has_label(&socket, "About") && has_label(&socket, "General"),
+        );
+        patient("Home", || {
+            execute(
+                &mut runner,
+                &id,
+                &socket,
+                IosAction::Button { key: "home".into() },
+            )
+        });
+        wait_until("Home to leave Settings", Duration::from_secs(15), || {
+            describe_all(&socket).map_or(true, |tree| tree[0]["AXLabel"] != "Settings")
+        });
+
+        // Continuous preview through the production command, frames in screen points. A change
+        // of foreground app, made through simctl so no idb client competes for the runner's CPUs, must show.
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (frames, received) = mpsc::channel();
+        let stream = {
+            let (id, socket, cancelled) = (id.clone(), socket.clone(), cancelled.clone());
+            thread::spawn(move || {
+                stream_child(
+                    video_stream_command(&socket),
+                    FrameSink {
+                        pending: Vec::new(),
+                        frames,
+                    },
+                    id,
+                    width,
+                    height,
+                    cancelled,
+                    Duration::from_secs(300),
+                )
+            })
+        };
+        let started = Instant::now();
+        let first = received
+            .recv_timeout(Duration::from_secs(30))
+            .expect("a first video frame");
+        assert_eq!(first["platform"], "ios");
+        assert_eq!(first["id"], id);
+        assert_eq!(
+            (first["width"].as_u64(), first["height"].as_u64()),
+            (Some(width.into()), Some(height.into()))
+        );
+        let (mut count, mut distinct) = (1, std::collections::HashSet::new());
+        distinct.insert(first["base64"].as_str().unwrap().to_owned());
+        simctl(&["launch", &id, "com.apple.Preferences"]).expect("launch Settings");
+        let until = Instant::now() + Duration::from_secs(60);
+        while distinct.len() < 2 || count < 3 {
+            let left = until
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{count} frames ({} distinct) in {:.1}s after the foreground app changed",
+                        distinct.len(),
+                        started.elapsed().as_secs_f64()
+                    )
+                });
+            match received.recv_timeout(left) {
+                Ok(frame) => {
+                    count += 1;
+                    distinct.insert(frame["base64"].as_str().unwrap().to_owned());
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+                    "the preview ended after {count} frames: {:?}",
+                    stream.join().unwrap()
+                ),
+            }
+        }
+        println!(
+            "idb preview: {count} frames ({} distinct) in {:.1}s, first {}x{} JPEG for {width}x{height} points",
+            distinct.len(),
+            started.elapsed().as_secs_f64(),
+            first["imageWidth"],
+            first["imageHeight"]
+        );
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(matches!(
+            stream.join().unwrap(),
+            Err(Error::Device("DeviceCancelled"))
+        ));
+        let processes = Command::new("ps")
+            .args(["-axo", "command="])
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&processes.stdout)
+                .lines()
+                .any(|line| line.contains("video-stream") && line.contains(&socket)),
+            "a cancelled preview left its idb child running"
+        );
+
+        // The remaining hardware buttons are accepted by idb.
+        for key in ["volume-up", "volume-down", "power"] {
+            patient(key, || {
+                execute(
+                    &mut runner,
+                    &id,
+                    &socket,
+                    IosAction::Button { key: key.into() },
+                )
+            });
+        }
+
+        // Lifecycle by exact UUID, confirmed through discovery. Controls fail closed while it is down.
+        let requested = lifecycle(
+            &mut runner,
+            DeviceCommand::Shutdown {
+                platform: Platform::Ios,
+                id: id.clone(),
+            },
+        );
+        wait_until("shutdown", Duration::from_secs(180), || {
+            state(&mut runner).as_deref() == Some("shutdown")
+        });
+        println!(
+            "shutdown confirmed {:.1}s after the request",
+            requested.elapsed().as_secs_f64()
+        );
+        assert!(execute(
+            &mut runner,
+            &id,
+            &socket,
+            IosAction::Button { key: "home".into() }
+        )
+        .is_err());
+        let requested = lifecycle(
+            &mut runner,
+            DeviceCommand::Boot {
+                platform: Platform::Ios,
+                id: id.clone(),
+            },
+        );
+        wait_until("boot", Duration::from_secs(180), || {
+            state(&mut runner).as_deref() == Some("running")
+        });
+        println!(
+            "boot confirmed {:.1}s after the request",
+            requested.elapsed().as_secs_f64()
+        );
+        wait_until(
+            "the companion to follow the Simulator",
+            Duration::from_secs(60),
+            || execute(&mut runner, &id, &socket, IosAction::Probe).is_ok(),
+        );
     }
 }

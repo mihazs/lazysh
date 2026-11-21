@@ -6,7 +6,7 @@ import AgentPanel from '../AgentPanel';
 import ApprovalPanel from '../ApprovalPanel';
 import CompanionSettingsPanel from '../CompanionSettingsPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
-import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inactiveBoardDisplay} from '../test/agentBoardData';
+import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,hostBrowserSettings,notificationPolicy,inactiveBoardDisplay} from '../test/agentBoardData';
 import {t,uiI18n} from './core';
 vi.mock('@tauri-apps/api/core',async original=>(await import('../test/nativeCoreMock')).mockNativeCore(original));
 beforeEach(()=>{
@@ -16,7 +16,7 @@ beforeEach(()=>{
 afterEach(async()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.clearAllMocks();await uiI18n.changeLanguage('en');});
 async function languagesKeep(check:()=>void){const calls=[...vi.mocked(invoke).mock.calls];for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);}}
 it('preserves reported rows, unsaved switches and all child ownership while translating the complete board',async()=>{
-  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:inactiveBoardDisplay);
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:command==='get_notification_policy'?notificationPolicy:inactiveBoardDisplay);
   const view=render(<AgentPanel sessionId={agentBoardSession}/>);
   await screen.findByText(agentBoardRecord.summary);fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
   const card=view.container.querySelector('.agent-card');const keepAwake=screen.getByRole('region',{name:t('keepAwakeRegion')});
@@ -79,12 +79,12 @@ it('leaves expired decisions disabled in every interface language',async()=>{
 });
 it('retains the exact settings revision/booleans through held save and translates its local refresh warning around raw host text',async()=>{
   let reject!:(reason:unknown)=>void;
-  vi.mocked(invoke).mockImplementation(async command=>command==='get_companion_settings'?companionSettings:new Promise((_,no)=>{reject=no;}));
+  vi.mocked(invoke).mockImplementation(async command=>command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:command==='get_notification_policy'?notificationPolicy:new Promise((_,no)=>{reject=no;}));
   render(<CompanionSettingsPanel sessionId={agentBoardSession}/>);fireEvent.click(await screen.findByLabelText(t('companionDevices')));fireEvent.click(screen.getByRole('button',{name:t('companionSave')}));
   await languagesKeep(()=>{expect(screen.getByRole('status').textContent).toBe(t('companionBusy'));expect(screen.getByLabelText(t('companionDevices'))).toHaveProperty('checked',false);});
   expect(invoke).toHaveBeenLastCalledWith('update_companion_settings',{sessionId:agentBoardSession,settings:{expectedRevision:7,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:false}},{headers:{'X-Lazysh-Access':'c'.repeat(64)}});
   const raw='companionUnsupported <native/user/path> {{error}}';await act(async()=>{reject({key:'companionUnsupported',message:raw});});
-  await languagesKeep(()=>{expect(screen.getByRole('alert').textContent).toBe(t('companionRefreshWarning',{error:raw}));expect(screen.getByLabelText(t('companionDevices'))).toHaveProperty('checked',false);expect(screen.queryByText(t('companionSaved'))).toBeNull();});
+  await languagesKeep(()=>{expect(screen.getByRole('alert').textContent).toBe(t('companionRefreshWarning',{error:raw}));expect(screen.queryByRole('button',{name:t('companionSave')})).toBeNull();expect(screen.queryByText(t('companionSaved'))).toBeNull();});
 });
 it.each([
   {command:'agent_snapshot',key:'agentsUnsupportedSnapshot',value:null},
@@ -95,7 +95,7 @@ it.each([
   {command:'agent_approvals',key:'approvalsInvalidIdentity',value:{schemaVersion:1,requests:[{...agentApproval(),expectedHash:'bad'}]}},
   {command:'get_companion_settings',key:'companionUnsupported',value:null},
 ] as const)('retranslates already-visible $key while preserving parser and raw DOM boundaries',async scenario=>{
-  vi.mocked(invoke).mockImplementation(async command=>command===scenario.command?scenario.value:command==='agent_approvals'?{schemaVersion:1,requests:[]}:inactiveBoardDisplay);
+  vi.mocked(invoke).mockImplementation(async command=>command===scenario.command?scenario.value:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_host_browser_settings'?hostBrowserSettings:inactiveBoardDisplay);
   const panel=scenario.command==='agent_snapshot'?<AgentPanel sessionId={agentBoardSession}/>:scenario.command==='agent_approvals'?<ApprovalPanel sessionId={agentBoardSession}/>:<CompanionSettingsPanel sessionId={agentBoardSession}/>;
   render(panel);await screen.findByRole('alert');vi.useFakeTimers();await languagesKeep(()=>expect(screen.getByRole('alert').textContent).toBe(t(scenario.key)));
 });

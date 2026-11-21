@@ -28,3 +28,23 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: sh .githooks/conventional-check "$TITLE" "$BASE" "$HEAD"
+
+  # AGENTS.md "Bug fixes": a fix(...) PR records its regression test or why none applies, and every Appium regression
+  # spec has a row in docs/regression-tests.md. A separate check, so it is not a required status until the maintainer adds
+  # `regression-test` to the ruleset (as with every new check).
+  regression-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a regression test on a fix and a row for every regression spec
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          sh .githooks/regression-check pr "$TITLE" "$BODY" "$BASE" "$HEAD"
+          sh .githooks/regression-check index

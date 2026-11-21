@@ -3,7 +3,8 @@
 Use trunk-based development.
 
 - Fetch the latest `main` before starting work. Create every work branch and worktree from `main` or `origin/main`.
-- Never branch from another feature, fix, or documentation branch. Do not create stacked pull requests.
+- Never create a branch from another branch. Every work branch starts at the current `origin/main`, with `git fetch origin` first and then `git worktree add -b <type>/<short-name> ~/dev/.worktrees/<name> origin/main`. Never run `git checkout -b` or `git switch -c` while a feature, fix, docs, release or backup branch is checked out, and never use another branch, a tag or a detached commit as the start point. Do not create stacked pull requests: a pull request's base is always `main`.
+- Before the first push of a branch, check that `git merge-base --is-ancestor origin/main HEAD` succeeds and that `git log --oneline origin/main..HEAD` lists only your own commits. If it carries someone else's commits, recreate the branch from `origin/main` and cherry-pick only yours. Sync with `main` by rebasing onto `origin/main`, never onto another feature branch.
 - Target `main` for every pull request and merge completed work into `main`.
 - If a change depends on another change, merge that prerequisite into `main` first, then start the dependent branch from updated `main`.
 - Keep branches short-lived. Track work with GitHub issues, the project board, and pull requests.
@@ -17,7 +18,7 @@ Use trunk-based development.
 
 Never idle on CI. A merged pull request is a finished checkpoint.
 
-- Open a pull request only when its slice is complete, tested and shippable on its own (tests, docs, CHANGELOG and changeset included). It is merged as soon as its required checks are green, so it must never carry half-wired code or work in progress.
+- Open a pull request only when its slice is complete, tested and shippable on its own (tests, docs and its changeset fragment, which is its changelog entry, included). It is merged as soon as its required checks are green, so it must never carry half-wired code or work in progress.
 - After pushing a pull request, keep implementing the next slice while CI runs. Start the next branch from fresh `origin/main`, or locally on top of the pushed branch when it depends on it, but do not open stacked pull requests: open the dependent pull request after its prerequisite has merged.
 - Do not poll CI, sleep on checks or merge your own pull requests when the PR driver is running (`/tmp/lazysh-driver/driver.py`, status in `/tmp/lazysh-pr-status.json`). It squash-merges a pull request when its required checks are green, reruns failed jobs up to twice, approves and merges the Changesets version pull request under its safety conditions, and records `needs-owner` or `needs-rebase`. Read the status at natural breaks and fix those states immediately. A pull request that must not merge yet is listed in `/tmp/lazysh-pr-hold.txt`.
 - Without the driver, merge your own pull request when the required checks pass, as described above, and still continue with the next slice instead of waiting.
@@ -65,7 +66,11 @@ explicitly requested. A recap-only or planning-only request remains read-only.
 
 # Issues and pull requests
 
-Use the issue and PR templates in `.github/`, adapted from `akitaonrails/ai-memory`. Keep every required section, state checks accurately, and mark inapplicable checks with a reason. User-facing changes require a `CHANGELOG.md` entry under `[Unreleased]`; call out changed defaults. The templates do not override the trunk-based workflow above.
+Use the issue and PR templates in `.github/`, adapted from `akitaonrails/ai-memory`. Keep every required section, state checks accurately, and mark inapplicable checks with a reason. A user-facing change is recorded by its Changesets fragment, which is the changelog entry: first line `type(scope): headline` (a Conventional Commits type, a user-facing headline of at most 110 characters), then an optional blank line and details that call out changed defaults. A separate `CHANGELOG.md` `[Unreleased]` entry is no longer required; see `CONTRIBUTING.md`, "Changelog entries". The templates do not override the trunk-based workflow above.
+
+# Bug fixes
+
+Every bug fix adds a regression test at the lowest layer that reproduces the bug (Vitest or `cargo test`, Playwright, an instrumented test, then Appium; an Appium test too when the bug only exists on a device), shows it failing on the parent commit, and adds or updates its row in `docs/regression-tests.md`. A `fix(...)` PR ticks one box of "Regression test" in the PR template: "Added" with the test, or "Not applicable" with the reason (an existing test already covers it, or no layer can reproduce it and a follow-up issue is linked); the `regression-test` check reads it. Never weaken or delete an existing test to land a fix. Steps: `docs/how-to/write-and-run-appium-tests.md#add-a-regression-test-for-a-bug`.
 
 # Zero duplication
 

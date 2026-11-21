@@ -26,7 +26,7 @@ Comparator media was fetched afresh from the publishers at 01:01–01:02 UTC. Mo
 |8|[Activity reports](android-workspace-2026-11-01/08-activity-reports.png)|Mixed|Supplied activity renders after scrolling. Companion settings continue below it. This does not reproduce or resolve missing real host events.|
 |9|[AI usage](android-workspace-2026-11-01/09-usage.png)|Poor return path|The quota shortcut expands three navigation rows. A Terminal tab exists, but there is no local Back/return affordance explaining the origin of this view.|
 |10|[Preferences](android-workspace-2026-11-01/10-preferences.png)|Poor entry and grouping|The container is already full screen on mobile. Autofocus targets Font size and starts its 2,219px content at scrollTop 436. Unavailable iOS icon controls still occupy space.|
-|11|Native cold/warm launch|Captured on an emulator-class guest, not a phone|A browser cannot establish the native handoff, so it was recorded on Waydroid (2026-11-13): cold start and a restore after process death show a text placeholder for 33–75 ms between the branded cover and the workspace; warm start is clean. Details: [native launch capture](#native-launch-capture-waydroid-2026-11-13). The Galaxy S23+ and the published arm64 build are still not captured; #582 stays open.|
+|11|Native cold/warm launch|Captured on an emulator-class guest, not a phone|A browser cannot establish the native handoff, so it was recorded on Waydroid. 2026-11-13: cold start and a restore after process death show a text placeholder for 33–75 ms between the branded cover and the workspace; warm start is clean. 2026-11-15: the first revision of the fix (#1577) traded that for the lock screen with its button for 45–54 ms, and the corrected revision goes from the cover straight to the workspace. Details: [native launch capture](#native-launch-capture-waydroid-2026-11-13) and [second capture](#second-capture-webview-rendered-under-the-cover-waydroid-2026-11-15). The Galaxy S23+ and the published arm64 build are still not captured; #582 stays open.|
 
 No horizontal page overflow was observed at the captured width. This does not establish reflow at enlarged fonts, every phone width or with a native keyboard open.
 
@@ -84,7 +84,7 @@ Acceptance: measure text/background contrast over representative terminal conten
 
 Capture cold start, warm start, recreation and restoration as frame sequences: branded system/boot cover → ready workspace. Confirm there is no interactive placeholder or unrelated content between them. A home-screen logo is not evidence of a working splash. Android's system splash has its own Activity/window handoff. [Android splash guidance](https://developer.android.com/develop/ui/views/launch/splash-screen). Tracks [#582](https://github.com/mihazs/lazysh/issues/582).
 
-First capture: see [Native launch capture](#native-launch-capture-waydroid-2026-11-13). It found one remaining handoff defect and left the physical-device sequence open.
+First capture: see [Native launch capture](#native-launch-capture-waydroid-2026-11-13). It found one remaining handoff defect and left the physical-device sequence open. The [second capture](#second-capture-webview-rendered-under-the-cover-waydroid-2026-11-15) measures the fix.
 
 ## Benchmark decisions
 
@@ -102,7 +102,7 @@ Neither comparator packet establishes native splash quality, complete agent repo
 
 1. Diagnose missing activity while prioritizing agent content and collapsing healthy setup (#666/#663); make saved-host focus intentional (#667).
 2. Establish contextual return and replace the remaining oversized task overlays (#665/#588).
-3. Close the remaining native launch handoff defect and verify it on a phone (#582); the first emulator capture is below.
+3. Close the remaining native launch handoff defect and verify it on a phone (#582); the emulator captures are below, the phone check is still open.
 4. Refine glass, spacing and platform-specific visibility, then repeat the same captured journey with font scaling and native Android Back (#664/#585).
 
 Each completed checkpoint needs review, relevant executable/device evidence, merge and a published version with verified assets. The research and issue board do not mark these fixes complete.
@@ -142,6 +142,28 @@ A candidate that kept the cover until `WebView.postVisualStateCallback` complete
 
 - The window is `FLAG_SECURE` from the moment the WebView is created until the policy is known, and the screen recorder shows secure content as black. Frames before the cover (the "dark window" and black frames) may therefore be capture blanking and are not evidence of what a display shows. Only the handoff from the cover onward is a reliable observation.
 - Another tool was driving the same shared guest during the first recordings; frames after the workspace appeared in the first session were discarded.
+- Physical Galaxy S23+ frames, the published arm64 build and release (non-debug) timing remain unverified.
+
+## Second capture: WebView rendered under the cover (Waydroid, 2026-11-15)
+
+Tracked in [#582](https://github.com/mihazs/lazysh/issues/582); the change is [#1577](https://github.com/mihazs/lazysh/pull/1577). Same guest, window size, recorder and method as the first capture (1080×2400 at 420 dpi, animations at 1.0, `screenrecord` at 540×1200, frames compared with reference frames of each state, durations from frame timestamps). Three builds of the same debug APK, with the same Rust library and web bundle, differ only in `ResumeCover.kt`. Three cold starts and one restore after `am kill` per build, recorded in one window of the guest.
+
+|Build|Frames between the last native-cover frame and the workspace|What they show|
+|---|---|---|
+|`main` before the change|9|The page's placeholder ("Checking device access…") for 29–38 ms|
+|First revision of #1577 (the cover is held until the WebView has painted)|5–12|The lock screen ("lazysh is locked", **Unlock lazysh** button) for 45–54 ms|
+|#1577 with the fix (the held cover keeps its startup look)|0|Nothing: the cover, then the workspace on the next frame (4–5 ms)|
+
+Warm start goes from the launcher straight to the workspace in all three builds.
+
+![Cold start, the last frames before the workspace: placeholder on main, lock screen in the first revision, the cover then the workspace with the fix](android-native-launch-2026-11-15/handoff-cold-start.png)
+
+The first revision removed the placeholder but, as soon as the access policy was known, let the held cover show its lock controls until the WebView had painted: the "screen with a button" of #582, which #595 had removed. The cover now keeps its logo-only startup look while it waits, and `NativeResumeCoverTest` asserts it: the new assertion fails on the first revision (expected visible, was gone) and passes with the fix, on this guest.
+
+### Limits of the second capture
+
+- Same as the first capture: a debug build on an x86_64 guest, not a Galaxy S23+ with One UI, so the durations describe the order of the frames, not their speed on a phone. Frames before the native cover can be blanked by `FLAG_SECURE` in the recorder.
+- Three cold starts and one restore per build, in the first-run state (no saved host). A saved host, a different language or an enabled app lock were not recorded.
 - Physical Galaxy S23+ frames, the published arm64 build and release (non-debug) timing remain unverified.
 
 ## Inspected screenshot gallery

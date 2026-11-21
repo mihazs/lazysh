@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import {afterEach,expect,it,vi} from 'vitest';
-import {fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {act,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import {cleanupNativeMocks} from './test/nativeCoreMock';
+import {chatFollowAccess} from './test/chatFollowAccess';
 import ChatPanel,{parseTranscript} from './ChatPanel';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
@@ -52,4 +53,62 @@ it('accepts only the plan card on a Grok conversation',async()=>{
   vi.mocked(invoke).mockResolvedValueOnce(planPage({kind:'question',questions:[{question:'Which?',multiple:false,options:[]}]}));
   await openConversation();
   expect((await screen.findByRole('alert')).textContent).toBe('Invalid recorded plan or question.');
+});
+
+/** The Agent view's reader on the session log a Grok Build hook reported (apps/agent/tests/grok_hooks.rs builds the same shapes). */
+describe('a Grok Build conversation in the Agent view',()=>{
+  const logPath='/home/u/.grok/sessions/work-project/s1/updates.jsonl';
+  const log=[
+    {id:'u1',role:'user',blocks:[{type:'text',text:'Run the tests'}]},
+    {id:'a1',role:'assistant',blocks:[{type:'text',text:'Running them.'}]},
+    {id:'grok-tool-9',role:'assistant',blocks:[
+      {type:'tool_use',id:'t1',name:'npm test',text:'{"command":"npm test"}',status:'completed'},
+      {type:'tool_result',id:'t1',text:'12 passed',status:'completed'},
+    ]},
+    {id:'grok-record-12',role:'assistant',blocks:[{type:'tool_use',id:'grok-plan-12',name:'plan',text:'',card:{kind:'plan',entries:[{text:'Run the tests',status:'completed'},{text:'Report',status:'in_progress'},{text:'Ship it',status:'pending'}]}}]},
+  ];
+  let served:unknown;
+  const serve=(messages:unknown[],nextOffset=900)=>{served={...response('unused'),nextOffset,truncated:false,messages};};
+  const transcriptReads=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='agent_transcript');
+  beforeEach(()=>{
+    vi.useFakeTimers();chatFollowAccess();serve(log);
+    Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});
+    vi.mocked(invoke).mockReset().mockImplementation(async command=>{if(command!=='agent_transcript')throw new Error(`Unexpected ${command}`);return served;});
+  });
+  afterEach(()=>{vi.useRealTimers();vi.mocked(invoke).mockReset();});
+  async function openBound() {
+    render(<ChatPanel sessionId="host" shown bound={{agent:'grok-acp',path:logPath}} timeline/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+  }
+
+  it('reads the reported session log through the companion with the Grok adapter and its conversation view',async()=>{
+    await openBound();
+    expect(transcriptReads()[0][1]).toMatchObject({sessionId:'host',agent:'grok-acp',path:logPath,view:'conversation'});
+  });
+
+  it('shows the turn, the tool call with its output and the plan with its steps',async()=>{
+    await openBound();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('Running them.')).toBeTruthy();
+    expect(document.body.textContent).toContain('npm test');
+    expect(document.body.textContent).toContain('12 passed');
+    expect(screen.getByText(/1 of 3/)).toBeTruthy();
+  });
+
+  it('follows the session log while the agent writes it, which the picker never does for this view',async()=>{
+    await openBound();
+    expect(screen.queryByText('Now the report.')).toBeNull();
+    serve([...log,{id:'a2',role:'assistant',blocks:[{type:'text',text:'Now the report.'}]}],1200);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(2500);});
+    expect(screen.getByText('Now the report.')).toBeTruthy();
+    expect(transcriptReads().length).toBeGreaterThan(1);
+    expect(transcriptReads().every(([,args])=>(args as {view?:string}).view==='conversation')).toBe(true);
+  });
+
+  it('refuses a plan card with a step state Grok does not record instead of guessing',async()=>{
+    serve([log[0],{...log[3],blocks:[{type:'tool_use',id:'p',name:'plan',text:'',card:{kind:'plan',entries:[{text:'x',status:'blocked'}]}}]}]);
+    await openBound();
+    expect(screen.queryByText('Run the tests')).toBeNull();
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
 });

@@ -1,6 +1,8 @@
 use lazysh_agent::transcript::{conversation, read_page, TranscriptAgent};
 use serde_json::{json, Value};
 use std::{fs::OpenOptions, io::Write};
+#[path = "support/json_output.rs"]
+mod json_output;
 #[path = "support/jsonl.rs"]
 mod jsonl;
 
@@ -272,7 +274,7 @@ fn reconstruction_enforces_file_record_block_and_assembled_text_limits() {
     for events in [
         vec![chunk(&"x".repeat(150000)), chunk(&"y".repeat(150000))],
         vec![event("agent_message_chunk", json!({"content":{"type":"image"}})); 1001],
-        vec![event("turn_completed", json!({})); 10001],
+        vec![event("turn_completed", json!({})); 100_001],
         vec![chunk(&"z".repeat(262144))],
     ] {
         jsonl::write(&path, &events);
@@ -328,4 +330,102 @@ fn output_budget_keeps_a_truthful_latest_suffix_and_cli_exposes_only_the_request
         let result: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["view"], expected);
     }
+}
+
+/// One turn of a long log: a prompt, an answer streamed as `words` chunks of one message, the turn's end.
+fn streamed_turn(turn: u64, words: u64) -> Vec<Value> {
+    let id = format!("00000000-0000-4000-8000-{turn:012}");
+    let mut records = vec![prompt(turn, &format!("question {turn}"))];
+    for word in 0..words {
+        let mut record = chunk(&format!("w{word} "));
+        record["params"]["update"]["messageId"] = json!(id);
+        records.push(record);
+    }
+    records.push(event("turn_completed", json!({})));
+    records
+}
+fn answer(words: u64) -> String {
+    (0..words).map(|word| format!("w{word} ")).collect()
+}
+fn cli(path: &std::path::Path, extra: &[&str]) -> Value {
+    json_output::decode(
+        std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+            .args([
+                "transcript",
+                "--agent",
+                "grok-acp",
+                "--view",
+                "conversation",
+            ])
+            .arg("--path")
+            .arg(path)
+            .args(extra)
+            .output()
+            .unwrap(),
+    )
+}
+
+#[test]
+fn a_log_of_fifty_thousand_streamed_chunks_reads_as_its_messages() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("updates.jsonl");
+    let records: Vec<Value> = (0..500).flat_map(|turn| streamed_turn(turn, 100)).collect();
+    assert!(records.len() >= 50_000);
+    jsonl::write(&path, &records);
+    let newest = cli(&path, &["--limit", "100"]);
+    let messages = newest["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 100);
+    assert_eq!(newest["truncated"], true);
+    assert_eq!(messages[99]["blocks"][0]["text"], answer(100));
+    assert_eq!(messages[98]["blocks"][0]["text"], "question 499");
+}
+
+#[test]
+fn rejections_still_fail_visibly_deep_inside_a_long_streamed_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("updates.jsonl");
+    let long = || -> Vec<Value> { (0..20).flat_map(|turn| streamed_turn(turn, 600)).collect() };
+    let mut foreign = chunk("foreign");
+    foreign["params"]["sessionId"] = json!("other");
+    let mut repeated = chunk("again");
+    repeated["params"]["update"]["messageId"] = json!("00000000-0000-4000-8000-000000000000");
+    for tail in [
+        vec![event("rewind_marker", json!({"target_prompt_index":99}))],
+        vec![foreign],
+        vec![repeated],
+    ] {
+        let mut records = long();
+        records.extend(tail);
+        jsonl::write(&path, &records);
+        assert!(conversation(&path, TranscriptAgent::GrokAcp, 100).is_err());
+        assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_ok());
+    }
+    let mut records = long();
+    records.push(event("rewind_marker", json!({"target_prompt_index":10})));
+    records.extend(streamed_turn(10, 3));
+    jsonl::write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::GrokAcp, 100).unwrap();
+    let texts: Vec<&str> = page
+        .messages
+        .iter()
+        .map(|message| message["blocks"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts.len(), 22);
+    assert_eq!(texts[20], "question 10");
+    assert_eq!(texts[21], answer(3));
+}
+
+#[test]
+fn a_rewind_still_cuts_where_a_prompt_began_when_its_chunk_shares_the_previous_message_id() {
+    let mut first = prompt(0, "first");
+    first["params"]["update"]["messageId"] = json!("00000000-0000-4000-8000-000000000001");
+    let mut second = prompt(1, " second");
+    second["params"]["update"]["messageId"] = json!("00000000-0000-4000-8000-000000000001");
+    let result = run(&[
+        first,
+        second,
+        event("rewind_marker", json!({"target_prompt_index":1})),
+    ]);
+    assert_eq!(result["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(result["messages"][0]["blocks"][0]["text"], "first");
 }

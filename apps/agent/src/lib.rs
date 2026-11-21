@@ -1,11 +1,15 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
+pub mod auto_update;
 pub mod browser;
+pub mod desktop_lock;
 pub mod devices;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod directory_listing;
 pub mod herdr;
+pub mod herdr_events;
+pub mod herdr_pane_input;
 pub mod hook_setup;
 pub mod hooks;
 pub mod host_browser;
@@ -14,9 +18,16 @@ pub mod kimi_code;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
+// The process table is read on Unix only; elsewhere only the declared parent session applies.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub mod nested_agent;
+pub mod notification_policy;
+mod pane_server;
+pub use pane_server::pane_server;
 mod private_json;
 pub mod relay;
 pub mod reported_history;
+pub mod review;
 pub mod settings;
 pub mod skills;
 #[cfg(feature = "storage-observation")]
@@ -72,6 +83,7 @@ fn wait_for_storage_until(deadline: Instant) -> bool {
 
 pub const MAX_INPUT: usize = 256 * 1024;
 const RETENTION_SECONDS: f64 = 7.0 * 86400.0;
+const ACTIVE_TURN_SECONDS: i64 = 10 * 60;
 const HOOK_EVENTS: [&str; 8] = [
     "UserPromptSubmit",
     "PreToolUse",
@@ -97,6 +109,7 @@ pub enum Error {
     Relay(&'static str),
     Browser(&'static str),
     Listeners(&'static str),
+    Review(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -111,7 +124,7 @@ impl Error {
             Self::Device(kind) | Self::Herdr(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
-            Self::Browser(kind) | Self::Listeners(kind) => kind,
+            Self::Browser(kind) | Self::Listeners(kind) | Self::Review(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
         }
@@ -121,12 +134,13 @@ lazysh_common::impl_from_error!(Error, Io, io::Error);
 lazysh_common::impl_from_error!(Error, Storage, rusqlite::Error);
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Agent {
     Claude,
     Codex,
     Opencode,
     Gemini,
+    Grok,
     Droid,
     Kimi,
     /// Kimi Code 2.4 approval requests only; reads through `kimi_code::read`, not `normalize`.
@@ -203,6 +217,10 @@ pub struct Event {
     pub state: SessionState,
     pub summary: String,
     pub pane_id: Option<String>,
+    /// The tmux or rmux server `pane_id` belongs to (`tmux:work`): a pane id is unique only within one server.
+    /// Absent from a companion that predates it, and for a pane no `-L` label names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_server: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
 }
@@ -214,6 +232,13 @@ impl Event {
         text(&self.summary, 512)?;
         if let Some(pane) = &self.pane_id {
             text(pane, 256)?;
+        }
+        if self
+            .pane_server
+            .as_deref()
+            .is_some_and(|server| !pane_server::valid(server))
+        {
+            return Err(Error::InvalidEvent);
         }
         Ok(())
     }
@@ -234,6 +259,9 @@ pub struct SessionSummary {
 pub struct Snapshot {
     pub schema_version: u8,
     pub sessions: Vec<SessionSummary>,
+    /// Present only when an app newer than this companion asked: what happens to this companion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<auto_update::Update>,
 }
 
 fn text(value: &str, maximum: usize) -> Result<()> {
@@ -272,6 +300,7 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
     if !payload.is_object() {
         return Err(Error::InvalidEvent);
     }
+    let agent = hooks::reporting_agent(agent, payload);
     let event = match agent {
         // Its approvals need the correlation ledger, which a stateless event cannot carry.
         Agent::KimiCode => return Err(Error::InvalidArgument),
@@ -281,16 +310,19 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Opencode | Agent::Cursor | Agent::Amp | Agent::Cline => match match agent {
-            Agent::Opencode => hooks::opencode_event(payload, pane),
-            Agent::Cursor => hooks::cursor_event(payload, pane),
-            Agent::Amp => hooks::amp_event(payload, pane),
-            Agent::Cline => hooks::cline_event(payload, pane),
-            _ => unreachable!(),
-        }? {
-            Some(event) => event,
-            None => return Ok(None),
-        },
+        Agent::Opencode | Agent::Cursor | Agent::Amp | Agent::Cline | Agent::Grok => {
+            match match agent {
+                Agent::Opencode => hooks::opencode_event(payload, pane),
+                Agent::Cursor => hooks::cursor_event(payload, pane),
+                Agent::Amp => hooks::amp_event(payload, pane),
+                Agent::Cline => hooks::cline_event(payload, pane),
+                Agent::Grok => hooks::grok_event(payload, pane),
+                _ => unreachable!(),
+            }? {
+                Some(event) => event,
+                None => return Ok(None),
+            }
+        }
         Agent::Claude
         | Agent::Codex
         | Agent::Gemini
@@ -436,6 +468,7 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 state,
                 summary: summary.into(),
                 pane_id: pane.map(str::to_owned),
+                pane_server: None,
                 waiting,
             }
         }
@@ -444,17 +477,43 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
     Ok(Some(event))
 }
 
-/// The terminal pane a hook runs in: tmux's `TMUX_PANE`, else Zellij's session and terminal pane as `zellij:<session>:<pane>`.
-/// tmux wins when both are exported, as before Zellij was recognised.
+/// A channel whose sender is dropped when this process's stdin closes: how a stream command learns that
+/// the exec channel it serves went away.
+pub(crate) fn stdin_closed() -> std::sync::mpsc::Receiver<()> {
+    let (closed_tx, closed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = [0; 64];
+        let mut stdin = io::stdin();
+        while matches!(stdin.read(&mut buffer), Ok(count) if count > 0) {}
+        drop(closed_tx);
+    });
+    closed
+}
+
+/// The terminal pane a hook runs in: tmux's `TMUX_PANE`, else Zellij's session and terminal pane as `zellij:<session>:<pane>`,
+/// else the random identifier lazysh exported when it launched the terminal (`LAZYSH_TERMINAL`) as `lazysh:<id>`.
+/// tmux wins when both are exported, as before Zellij was recognised; a multiplexer started inside a launched terminal names its own panes.
 pub fn pane_identity() -> Option<String> {
     let var = |name| std::env::var(name).ok();
     identity(
         var("TMUX_PANE"),
         var("ZELLIJ_SESSION_NAME").as_deref(),
         var("ZELLIJ_PANE_ID").as_deref(),
+        var("LAZYSH_TERMINAL").as_deref(),
     )
 }
-fn identity(tmux: Option<String>, session: Option<&str>, pane: Option<&str>) -> Option<String> {
+/// The multiplexer pane an approval is bound to, or the exact Herdr pane.
+pub fn approval_pane_identity() -> Option<String> {
+    pane_identity()
+        .filter(|pane| !pane.starts_with("lazysh:"))
+        .or_else(herdr::pane_identity)
+}
+fn identity(
+    tmux: Option<String>,
+    session: Option<&str>,
+    pane: Option<&str>,
+    terminal: Option<&str>,
+) -> Option<String> {
     tmux.or_else(|| {
         let (session, pane) = (session?, pane?);
         let valid = !session.is_empty()
@@ -463,6 +522,11 @@ fn identity(tmux: Option<String>, session: Option<&str>, pane: Option<&str>) -> 
             && (1..=10).contains(&pane.len())
             && pane.bytes().all(|c| c.is_ascii_digit());
         valid.then(|| format!("zellij:{session}:{pane}"))
+    })
+    .or_else(|| {
+        let id = terminal?;
+        let valid = id.len() == 32 && id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
+        valid.then(|| format!("lazysh:{id}"))
     })
 }
 
@@ -587,6 +651,13 @@ fn lock_store_bootstrap(
 const WAITING_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_waiting (
     agent TEXT NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL, since REAL NOT NULL,
     PRIMARY KEY (agent,session_id));";
+const EVICTED_WORKING_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS evicted_working (
+    id INTEGER PRIMARY KEY CHECK (id = 1), updated_at REAL NOT NULL);";
+
+// Additive like `session_waiting`: a companion that predates it never reads or writes this table.
+const PANE_SERVER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_pane_server (
+    agent TEXT NOT NULL, session_id TEXT NOT NULL, server TEXT NOT NULL,
+    PRIMARY KEY (agent,session_id));";
 
 fn apply_schema(
     transaction: &rusqlite::Transaction<'_>,
@@ -596,7 +667,9 @@ fn apply_schema(
         reported_history::SCHEMA,
         hooks::AIDER_HEALTH_SCHEMA,
         WAITING_SCHEMA,
+        EVICTED_WORKING_SCHEMA,
         kimi_code::SCHEMA,
+        PANE_SERVER_SCHEMA,
     ] {
         transaction
             .execute_batch(schema)
@@ -670,7 +743,12 @@ fn state_file_present(path: &Path, nonempty: bool) -> bool {
 }
 
 /// Write one lifecycle report and admit its relay transition, inside the caller's transaction.
-fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64) -> Result<()> {
+fn write_event(
+    transaction: &rusqlite::Transaction<'_>,
+    event: &Event,
+    now: f64,
+    admission: notification_policy::Admission,
+) -> Result<()> {
     let prior: Option<String> = transaction
         .query_row(
             "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
@@ -711,6 +789,18 @@ fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64)
             ),
         }
         .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
+    match &event.pane_server {
+        Some(server) => transaction.execute(
+            "INSERT INTO session_pane_server VALUES (?1,?2,?3)
+            ON CONFLICT(agent,session_id) DO UPDATE SET server=excluded.server",
+            params![event.agent, event.session_id, server],
+        ),
+        None => transaction.execute(
+            "DELETE FROM session_pane_server WHERE agent=?1 AND session_id=?2",
+            params![event.agent, event.session_id],
+        ),
+    }
+    .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
     transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
         ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
         summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
@@ -723,7 +813,8 @@ fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64)
     relay::admit_transition(
         transaction,
         kind,
-        prior.as_deref() != Some(event.state.as_str()),
+        prior.as_deref() != Some(event.state.as_str())
+            && admission == notification_policy::Admission::Queue,
         now as i64,
     )
     .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
@@ -733,16 +824,23 @@ fn write_event(transaction: &rusqlite::Transaction<'_>, event: &Event, now: f64)
 
 /// Drop sessions past retention or the count cap, then the waits and observations of dropped sessions.
 fn apply_retention(transaction: &rusqlite::Transaction<'_>, now: f64) -> Result<()> {
+    // Age pruning must not erase malformed timestamp evidence before the updater sees it.
+    transaction.execute("INSERT INTO evicted_working SELECT 1,?1 WHERE EXISTS(SELECT 1 FROM sessions WHERE typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799) ON CONFLICT(id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)",[now]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
     transaction
         .execute(
             "DELETE FROM sessions WHERE updated_at < ?1",
             [now - RETENTION_SECONDS],
         )
         .map_err(|e| storage_failure(StoragePhase::RetentionAge, e.into()))?;
+    // Remember an evicted recent working report until its active-turn window expires.
+    transaction.execute("INSERT INTO evicted_working SELECT 1,MAX(CASE WHEN typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 THEN ?2 ELSE updated_at END) FROM sessions WHERE (typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR (state NOT IN ('done','needs_attention') AND updated_at > ?1)) AND rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100) HAVING COUNT(*) > 0 ON CONFLICT(id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)",[now - ACTIVE_TURN_SECONDS as f64,now]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+    // Keep the board’s newest-100 ordering; the sentinel keeps evicted active evidence separately.
     transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
-    transaction
-        .execute("DELETE FROM session_waiting WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent=session_waiting.agent AND sessions.session_id=session_waiting.session_id)", [])
-        .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+    for table in ["session_waiting", "session_pane_server"] {
+        transaction
+            .execute(&format!("DELETE FROM {table} WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent={table}.agent AND sessions.session_id={table}.session_id)"), [])
+            .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+    }
     Ok(())
 }
 
@@ -897,13 +995,20 @@ impl Store {
         Ok(Self { connection })
     }
     pub fn ingest(&mut self, event: &Event, now: DateTime<Utc>) -> Result<()> {
-        self.ingest_with_reported_history(Some(event), None, now)
+        self.ingest_with_reported_history(
+            Some(event),
+            None,
+            now,
+            notification_policy::Admission::Queue,
+        )
     }
+    /// `admission` only decides whether a state change may queue a relay notification; the event is recorded either way.
     pub fn ingest_with_reported_history(
         &mut self,
         event: Option<&Event>,
         source: Option<&reported_history::ReportedSource>,
         reported_at: DateTime<Utc>,
+        admission: notification_policy::Admission,
     ) -> Result<()> {
         if let Some(event) = event {
             event
@@ -921,7 +1026,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| storage_failure(StoragePhase::IngestBegin, e.into()))?;
         if let Some(event) = event {
-            write_event(&transaction, event, now)?;
+            write_event(&transaction, event, now, admission)?;
         }
         if let Some(source) = source {
             reported_history::insert(&transaction, source, reported_at)?;
@@ -932,15 +1037,23 @@ impl Store {
             .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;
         Ok(())
     }
+    /// Check all retained sessions without the display snapshot's row limit.
+    pub(crate) fn has_working_since(&self, cutoff: DateTime<Utc>) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR (state NOT IN ('done','needs_attention') AND updated_at > ?1) UNION ALL SELECT 1 FROM evicted_working WHERE typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR updated_at > ?1)",
+            [cutoff.timestamp_micros() as f64 / 1_000_000.0],
+            |row| row.get(0),
+        )?)
+    }
     pub fn snapshot(&mut self, limit: u8, now: DateTime<Utc>) -> Result<Snapshot> {
         if !(1..=100).contains(&limit) {
             return Err(Error::InvalidArgument);
         }
         self.connection.execute(
-            "DELETE FROM sessions WHERE updated_at < ?1",
+            "DELETE FROM sessions WHERE typeof(state) = 'text' AND state IN ('working','done','needs_attention') AND typeof(updated_at) IN ('real','integer') AND updated_at BETWEEN -62135596800 AND 253402300799 AND updated_at < ?1",
             [now.timestamp_micros() as f64 / 1_000_000.0 - RETENTION_SECONDS],
         )?;
-        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since FROM sessions LEFT JOIN session_waiting USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
+        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since,server FROM sessions LEFT JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
         let mut rows = statement.query([limit])?;
         let mut sessions = Vec::new();
         while let Some(row) = rows.next()? {
@@ -974,6 +1087,7 @@ impl Store {
                     state,
                     summary: row.get(4)?,
                     pane_id: row.get(5)?,
+                    pane_server: row.get(10)?,
                     waiting,
                 },
                 updated_at,
@@ -985,6 +1099,7 @@ impl Store {
         Ok(Snapshot {
             schema_version: 1,
             sessions,
+            update: None,
         })
     }
 }
@@ -998,11 +1113,12 @@ mod test_permissions;
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TERMINAL: &str = "0123456789abcdef0123456789abcdef";
     #[test]
-    fn names_the_pane_of_tmux_else_zellij_and_nothing_malformed() {
-        let zellij = |session, pane| identity(None, Some(session), Some(pane));
+    fn names_the_pane_of_tmux_else_zellij_else_a_launched_terminal_and_nothing_malformed() {
+        let zellij = |session, pane| identity(None, Some(session), Some(pane), None);
         assert_eq!(
-            identity(Some("%4".into()), Some("work"), Some("2")),
+            identity(Some("%4".into()), Some("work"), Some("2"), Some(TERMINAL)),
             Some("%4".into())
         );
         assert_eq!(zellij("work", "2"), Some("zellij:work:2".into()));
@@ -1020,8 +1136,31 @@ mod tests {
         ] {
             assert_eq!(zellij(session, pane), None, "{session:?} {pane:?}");
         }
-        assert_eq!(identity(None, Some("work"), None), None);
-        assert_eq!(identity(None, None, None), None);
+        assert_eq!(identity(None, Some("work"), None, None), None);
+        assert_eq!(identity(None, None, None, None), None);
+        // A multiplexer started inside a launched terminal inherits its variable and still names its own pane.
+        assert_eq!(
+            identity(None, Some("work"), Some("2"), Some(TERMINAL)),
+            Some("zellij:work:2".into())
+        );
+        assert_eq!(
+            identity(None, None, None, Some(TERMINAL)),
+            Some(format!("lazysh:{TERMINAL}"))
+        );
+        for terminal in [
+            "",
+            "0123456789ABCDEF0123456789abcdef",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789abcdef0123456789abcde\n",
+            "0123456789abcdef0123456789abcdeg",
+        ] {
+            assert_eq!(
+                identity(None, None, None, Some(terminal)),
+                None,
+                "{terminal:?}"
+            );
+        }
     }
     #[cfg(unix)]
     #[test]
@@ -1151,6 +1290,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(|| {
                         barrier.wait();
+                        let started = Instant::now();
                         let mut store = Store::open_with_storage_checks(
                             directory.path(),
                             storage_filesystem::require_local,
@@ -1158,8 +1298,12 @@ mod tests {
                                 std::thread::sleep(Duration::from_millis(100));
                                 validate_sidecar(sidecar)
                             },
-                        )?;
-                        store.ingest(&event, Utc::now())
+                        )
+                        .map_err(|error| ("open", started.elapsed(), error))?;
+                        let opened = Instant::now();
+                        store
+                            .ingest(&event, Utc::now())
+                            .map_err(|error| ("ingest", opened.elapsed(), error))
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1449,6 +1593,208 @@ mod tests {
     }
 
     #[test]
+    fn recent_working_query_checks_all_stored_rows_and_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let seconds = now.timestamp_micros() as f64 / 1_000_000.0;
+        assert!(!store.has_working_since(now).unwrap());
+        store.connection.execute(
+            "INSERT INTO sessions VALUES ('Test','working','/work','working','Working',NULL,?1,1)",
+            [seconds],
+        ).unwrap();
+        for i in 0..101 {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO sessions VALUES ('Test',?1,'/work','done','Done',NULL,?2,1)",
+                    params![format!("done-{i}"), seconds + 1.0],
+                )
+                .unwrap();
+        }
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+        assert!(!store.has_working_since(now).unwrap());
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET state='future' WHERE session_id='working'",
+                [],
+            )
+            .unwrap();
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+    }
+    #[test]
+    fn invalid_session_timestamps_defer_even_after_retention_evicts_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        for id in ["bad-time", "bad-state", "bad-finite", "bad-unknown"] {
+            store.ingest(&fixture_event(id), now).unwrap();
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET updated_at=?1 WHERE session_id='bad-time'",
+                [f64::NEG_INFINITY],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET state=x'ff', updated_at=1 WHERE session_id='bad-state'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET updated_at=-8900000000000 WHERE session_id='bad-finite'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sessions SET state='future', updated_at=1 WHERE session_id='bad-unknown'",
+                [],
+            )
+            .unwrap();
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::minutes(10))
+            .unwrap());
+        let _ = store.snapshot(100, now);
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id IN ('bad-state','bad-finite','bad-unknown')",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            3
+        );
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::minutes(10))
+            .unwrap());
+        let mut event = fixture_event("next");
+        event.state = SessionState::Done;
+        for i in 0..101 {
+            event.session_id = format!("later-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::microseconds(i))
+                .unwrap();
+        }
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::minutes(10))
+            .unwrap());
+    }
+
+    #[test]
+    fn active_query_rejects_timestamps_outside_safe_calendar_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let mut event = fixture_event("bound");
+        event.state = SessionState::Done;
+        store.ingest(&event, now).unwrap();
+        for (time, invalid) in [
+            (-62_135_596_800_i64, false),
+            (-62_135_596_801, true),
+            (253_402_300_799, false),
+            (253_402_300_800, true),
+        ] {
+            store
+                .connection
+                .execute(
+                    "UPDATE sessions SET updated_at=?1 WHERE session_id='bound'",
+                    [time],
+                )
+                .unwrap();
+            assert_eq!(
+                store
+                    .has_working_since(now - chrono::TimeDelta::minutes(10))
+                    .unwrap(),
+                invalid,
+                "{time}"
+            );
+        }
+    }
+
+    #[test]
+    fn retention_records_recent_working_sessions_evicted_by_newer_done_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let mut event = fixture_event("working");
+        store.ingest(&event, now).unwrap();
+        event.state = SessionState::Done;
+        for i in 0..101 {
+            event.session_id = format!("done-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::seconds(1))
+                .unwrap();
+        }
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+        assert_eq!(store.snapshot(100, now).unwrap().sessions.len(), 100);
+        assert!(!store
+            .has_working_since(now + chrono::TimeDelta::seconds(1))
+            .unwrap());
+        event.session_id = "later".into();
+        store
+            .ingest(&event, now + chrono::TimeDelta::minutes(11))
+            .unwrap();
+        assert!(!store
+            .has_working_since(now + chrono::TimeDelta::seconds(1))
+            .unwrap());
+    }
+    #[test]
+    fn evicted_working_session_defers_until_its_report_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let now = Utc::now();
+        let mut event = fixture_event("initial");
+        for i in 0..102 {
+            event.session_id = format!("session-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::microseconds(i))
+                .unwrap();
+        }
+        event.state = SessionState::NeedsAttention;
+        event.waiting = Some(Waiting::Unknown);
+        event.session_id = "new-attention".into();
+        store
+            .ingest(&event, now + chrono::TimeDelta::milliseconds(500))
+            .unwrap();
+        assert!(store
+            .snapshot(100, now)
+            .unwrap()
+            .sessions
+            .iter()
+            .any(|session| session.event.session_id == "new-attention"));
+        event.state = SessionState::Done;
+        event.waiting = None;
+        for i in 2..102 {
+            event.session_id = format!("session-{i}");
+            store
+                .ingest(&event, now + chrono::TimeDelta::seconds(1))
+                .unwrap();
+        }
+        assert_eq!(store.snapshot(100, now).unwrap().sessions.len(), 100);
+        assert!(store
+            .has_working_since(now - chrono::TimeDelta::seconds(1))
+            .unwrap());
+        assert!(!store
+            .has_working_since(now + chrono::TimeDelta::seconds(1))
+            .unwrap());
+    }
+    #[test]
     fn retention_runs_on_ingest_and_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
@@ -1463,6 +1809,7 @@ mod tests {
                         state: SessionState::Done,
                         summary: "Done".into(),
                         pane_id: None,
+                        pane_server: None,
                         waiting: None,
                     },
                     now + chrono::TimeDelta::microseconds(i),

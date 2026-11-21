@@ -128,6 +128,13 @@ it('persists local intent without inventing an SSH host or retaining output',()=
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
   }
 });
+it('saves the local target of a session, never the default one or anything that is not a target id',()=>{
+  saveWorkspace([{local:true,target:'wsl:Ubuntu-22.04'},{local:true,target:'default'},{local:true,target:'pwsh'},{local:true,target:'..\\x'}] as never);
+  expect(readWorkspace()).toEqual([{local:true,target:'wsl:Ubuntu-22.04'},{local:true},{local:true,target:'pwsh'},{local:true}]);
+  for(const target of ['default','C:\\Windows\\System32\\cmd.exe','wsl:-d','wsl:a b','wsl:',7,null]) {
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{local:true,target}]));expect(readWorkspace()).toEqual([]);
+  }
+});
 it('preserves named server identity with the exact restored session and rejects dropped or invalid contexts',()=>{
   const attached={kind:'tmux' as const,name:'label',restoreName:'actual',tmuxServer:"世界 '$(touch NO);"};
   saveWorkspace([{hostId:'host',attached}]);

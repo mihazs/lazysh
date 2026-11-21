@@ -1,31 +1,32 @@
-import {join} from 'node:path';
-import {lstat,readdir,readlink} from 'node:fs/promises';
+import {isAbsolute,join} from 'node:path';
+import {lstat,readdir,readlink,realpath,writeFile} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,descendants,identity,type OwnedPid} from './ownedProcess';
 import {SshFixture,stopOwnedTree} from './sshFixture';
 
+type OwnedChat={transcript:string;record:string;draft:string;window:'alpha'};
 type OwnedWindow={windowId:string;index:number;name:'alpha'|'beta';marker:string;paneId:string;pane:OwnedPid};
 const paneRow=/^(@[0-9]{1,9})\|([0-9]{1,3})\|(alpha|beta)\|([01])\|(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])$/;
 
-/** Parses one bounded `list-panes` readback; anything else is a changed topology. */
-export function tmuxPaneRows(text:string) {
+/** Parses one bounded `list-panes` readback; anything else is a changed topology. `extra` counts panes the app added by a split. */
+export function tmuxPaneRows(text:string,extra=0) {
   const lines=text.trim().split('\n');
-  if(text.length>1024 || lines.length!==2)throw new Error('Owned tmux topology changed');
+  if(text.length>1024 || lines.length!==2+extra)throw new Error('Owned tmux topology changed');
   return lines.map(line=>{
     const row=paneRow.exec(line);
     if(!row)throw new Error('Owned tmux topology changed');
     return {windowId:row[1],index:Number(row[2]),name:row[3] as 'alpha'|'beta',active:row[4]==='1',paneId:row[5],pid:Number(row[6]),dead:row[7]==='1'};
   });
 }
-const windowRow=/^(@[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})$/;
-/** Parses one bounded `list-windows` readback of the owned session. */
+const windowRow=/^(@[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})\|([01])\|([01])$/;
+/** Parses one bounded `list-windows` readback of the owned session: id, name, `#{window_active}` and `#{window_zoomed_flag}`. */
 export function tmuxWindowRows(text:string) {
   const lines=text.trim().split('\n');
   if(text.length>1024 || lines.length>8)throw new Error('Owned tmux window topology changed');
   return lines.map(line=>{
     const row=windowRow.exec(line);
     if(!row)throw new Error('Owned tmux window topology changed');
-    return {windowId:row[1],name:row[2]};
+    return {windowId:row[1],name:row[2],active:row[3]==='1',zoomed:row[4]==='1'};
   });
 }
 /** The one window beyond the originals that the app adds: every name it showed, in order, and whether it is gone. */
@@ -43,8 +44,38 @@ export function tmuxWindowLifecycle(rows:ReturnType<typeof tmuxWindowRows>,origi
   if(!seen)return {windowId:extra[0].windowId,names:[extra[0].name],closed:false};
   return seen.names.at(-1)===extra[0].name?seen:{...seen,names:[...seen.names,extra[0].name]};
 }
+/** What the display of the original windows shows: the active window and whether its panes are zoomed. */
+export type TmuxView={window:'alpha'|'beta'|'other';zoomed:boolean};
+/** Appends the active window's view to a history that keeps only changes, so the host sees each state the app left the server in. */
+export function tmuxViewHistory(rows:ReturnType<typeof tmuxWindowRows>,originals:readonly {windowId:string;name:string}[],history:readonly TmuxView[]) {
+  const active=rows.filter(row=>row.active);
+  if(active.length!==1)throw new Error('Owned tmux window topology changed');
+  const name=originals.find(original=>original.windowId===active[0].windowId)?.name;
+  const view:TmuxView={window:name==='alpha' || name==='beta'?name:'other',zoomed:active[0].zoomed};
+  const last=history.at(-1);
+  if(last?.window===view.window && last.zoomed===view.zoomed)return history;
+  if(history.length>=24)throw new Error('Owned tmux view history exceeded');
+  return [...history,view];
+}
+/** The gesture phase ends the history in this order: beta unzoomed, a pinch zooms it, a pinch unzooms it, a swipe left shows the next window (alpha), a swipe right returns to beta. */
+export function tmuxGesturesVerified(history:readonly TmuxView[]) {
+  const expected:TmuxView[]=[{window:'beta',zoomed:false},{window:'beta',zoomed:true},{window:'beta',zoomed:false},{window:'alpha',zoomed:false},{window:'beta',zoomed:false}];
+  return history.length>=expected.length
+    && expected.every((view,index)=>history[history.length-expected.length+index].window===view.window && history[history.length-expected.length+index].zoomed===view.zoomed);
+}
 /** The names the app gives the window it creates and renames, and the host expects in that order. */
 export const tmuxLifecycleNames=['scratch','renamed'] as const;
+const splitRow=/^(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])\|(\/[^|\n]{0,1023})$/;
+/** Parses the bounded `list-panes` readback of the split window: pane, process, window zoom flag and directory. */
+export function tmuxSplitRows(text:string) {
+  const lines=text.trim().split('\n');
+  if(text.length>2048 || lines.length!==2)throw new Error('Owned tmux split topology changed');
+  return lines.map(line=>{
+    const row=splitRow.exec(line);
+    if(!row)throw new Error('Owned tmux split topology changed');
+    return {paneId:row[1],pid:Number(row[2]),zoomed:row[3]==='1',path:row[4]};
+  });
+}
 /** Display clients exclude tmux control-mode clients such as the app's Jump binding. */
 export function tmuxDisplayClients(text:string) {
   const lines=text.split('\n').filter(Boolean);
@@ -54,6 +85,62 @@ export function tmuxDisplayClients(text:string) {
 /** Compressed display-client history: attach, detach, reattach and final detach. */
 export function tmuxAttachHistoryVerified(history:readonly number[]) {
   return history.length===5 && [0,1,0,1,0].every((count,index)=>history[index]===count);
+}
+/** tmux 3.3 added `allow-passthrough`; an older server drops a DCS-wrapped sequence instead of forwarding it. */
+export function tmuxPassthroughSupported(version:string) {
+  const parts=/^tmux ([0-9]+)[.]([0-9]+)[a-z]?$/.exec(version);
+  return !!parts && (Number(parts[1])>3 || (Number(parts[1])===3 && Number(parts[2])>=3));
+}
+/** Compressed `pane_in_mode` history of the first window's pane: out of a mode, in copy mode, out again. */
+export function tmuxCopyModeVerified(history:readonly number[]) {
+  return history.length===3 && [0,1,0].every((mode,index)=>history[index]===mode);
+}
+
+/**
+ * The Chat draft must sit in exactly one pane, once, and that pane is the one the attached client displayed.
+ * Captures are `capture-pane -p -J` texts keyed by pane id; anything else is a different delivery.
+ */
+export function tmuxChatDeliveredOnce(captures:readonly {paneId:string;text:string}[],draft:string,expected:string) {
+  if(!draft || !captures.some(item=>item.paneId===expected) || new Set(captures.map(item=>item.paneId)).size!==captures.length)throw new Error('Owned tmux Chat readback invalid');
+  const holders=captures.filter(item=>item.text.includes(draft));
+  if(holders.length!==1 || holders[0].paneId!==expected || holders[0].text.split(draft).length!==2)throw new Error('Owned tmux Chat input did not reach exactly the original pane once');
+}
+/** The session the host's saved Default multiplexer must create, absent on the owned server; tmux refuses `:` and `.` in a name. */
+export const tmuxDefaultName='my-work';
+const sessionRow=/^(\$[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})\|([0-9]{1,3})$/;
+/** Parses one bounded `list-sessions` readback. */
+export function tmuxSessionRows(text:string) {
+  const lines=text.trim().split('\n');
+  if(text.length>1024 || lines.length>8)throw new Error('Owned tmux session topology changed');
+  return lines.map(line=>{
+    const row=sessionRow.exec(line);
+    if(!row)throw new Error('Owned tmux session topology changed');
+    return {sessionId:row[1],name:row[2],windows:Number(row[3])};
+  });
+}
+/** The one session beyond the original that the saved default creates, by tmux's own id. */
+export type TmuxDefaultSession={sessionId:string};
+/**
+ * Folds one session readback. The original keeps its id and name (its windows belong to the window lifecycle); at most one other session
+ * exists, only under the default name with its one window; and once seen it keeps its id, so a second creation under that name
+ * (a killed and recreated session, or a second row) is a changed topology, as is a vanished one.
+ */
+export function tmuxDefaultSession(rows:ReturnType<typeof tmuxSessionRows>,original:{sessionId:string;name:string},seen?:TmuxDefaultSession):TmuxDefaultSession|undefined {
+  const kept=rows.filter(row=>row.sessionId===original.sessionId);
+  if(kept.length!==1 || kept[0].name!==original.name)throw new Error('Owned tmux original session changed');
+  const extra=rows.filter(row=>row.sessionId!==original.sessionId);
+  if(extra.length>1 || extra.some(row=>row.name!==tmuxDefaultName || row.windows!==1) || (seen && seen.sessionId!==extra[0]?.sessionId))
+    throw new Error('Owned tmux default session topology changed');
+  return extra[0] && {sessionId:extra[0].sessionId};
+}
+/** The default session's attach history from its first sighting (the app creates it a moment before it attaches): attach, detach, reattach and final detach. */
+export function tmuxDefaultAttachVerified(history:readonly number[]) {
+  const attached=history[0]===0?history.slice(1):history;
+  return attached.length===4 && [1,0,1,0].every((count,index)=>attached[index]===count);
+}
+/** The default session's one pane started in the login directory the saved default's `-c .` resolves to. */
+export function tmuxDefaultDirectory(text:string,directory:string) {
+  if(text.length>512 || text.trim()!==directory)throw new Error('Owned tmux default session directory changed');
 }
 
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
@@ -100,15 +187,25 @@ export class TmuxFixture {
   private serverPid:OwnedPid|undefined;
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
+  private views:TmuxView[]=[];
   private lifecycle:TmuxWindowLifecycle|undefined;
+  private extraPanes=0;
+  private chat:OwnedChat|undefined;
+  private sessionId='';
+  private defaultSession:TmuxDefaultSession|undefined;
+  private defaultHistory:number[]=[];
+  private modes:number[]=[];
   private constructor(readonly ssh:SshFixture) {}
-  static async start(binary=process.env.LAZYSH_TEST_TMUX) {
+  /** With an `agent` companion the fixture also owns a synthetic Claude transcript, so the app can open it and send Chat input. */
+  static async start(binary=process.env.LAZYSH_TEST_TMUX,agent?:string) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
-    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary});
+    if(agent!==undefined && !isAbsolute(agent))throw new Error('Explicit current-source companion required');
+    const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmuxBinary:binary,agentBinary:agent});
     const owned=new TmuxFixture(ssh);
     try {
       const version=(await owned.run(['-V'],false)).trim();
       if(!/^tmux [0-9]+[.][0-9]+[a-z]?$/.test(version))throw new Error('Owned tmux version unavailable');
+      if(!tmuxPassthroughSupported(version))throw new Error('Owned tmux 3.3 or later required for escape passthrough');
       console.log(`Owned Android tmux fixture ${version}`);
       owned.server=ssh.tmuxServer(['-D','-f','/dev/null','-L','default']);
       const socket=join(ssh.environment!.TMUX_TMPDIR!,`tmux-${process.getuid!()}`,'default');
@@ -118,14 +215,21 @@ export class TmuxFixture {
         if(performance.now()>=until || !await owned.server.liveIdentity())throw new Error('Owned tmux startup deadline');
         await delay(10);
       }
+      // The pinned server forwards a DCS-wrapped escape sequence from a pane to its attached clients, as tmux 3.3 added.
+      await owned.run(['set-option','-g','allow-passthrough','on']);
+      // Copy mode takes plain keys (k, V, Enter) whatever the host's EDITOR would have chosen.
+      await owned.run(['set-option','-gw','mode-keys','vi']);
       for(const [index,name] of [[0,'alpha'],[1,'beta']] as const) {
-        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec sleep 3600`;
+        // beta stays an interactive shell, so the app can print a passthrough sequence there; alpha only waits.
+        const marker=`TMUX_${name.toUpperCase()}_${ssh.nonce}`,command=`printf '%s\\n' '${marker}'; exec ${name==='beta'?'/bin/sh -i':'sleep 3600'}`;
         await owned.run(index===0?['new-session','-d','-s',owned.name,'-n',name,'-x','80','-y','24','-c',ssh.directory,command]
           :['new-window','-d','-t',`=${owned.name}:${index}`,'-n',name,'-c',ssh.directory,command]);
         owned.windows.push({windowId:'',index,name,marker,paneId:'',pane:{pid:0,parent:0,start:'',state:''}});
       }
       const pid=Number((await owned.run(['display-message','-p','-t',`=${owned.name}`,'#{pid}'])).trim());
       owned.serverPid=Number.isSafeInteger(pid) && pid>0?await identity(pid):undefined;
+      owned.sessionId=tmuxSessionRows(await owned.sessions()).find(row=>row.name===owned.name)?.sessionId??'';
+      if(!owned.sessionId)throw new Error('Owned tmux topology changed');
       let ancestor=owned.serverPid,admitted=false;
       for(let depth=0;ancestor && depth<4 && !admitted;depth++) {admitted=ancestor.parent===owned.server.child.pid;ancestor=await identity(ancestor.parent);}
       if(!admitted)throw new Error('Owned tmux server is not the namespaced fixture server');
@@ -141,6 +245,7 @@ export class TmuxFixture {
           await delay(10);
         }
       }
+      if(agent)await owned.prepareChat();
       await owned.observe();
       return owned;
     } catch(error) {
@@ -172,25 +277,48 @@ export class TmuxFixture {
     }
     return found;
   }
+  private sessions() {return this.run(['list-sessions','-F','#{session_id}|#{session_name}|#{session_windows}']);}
   private panes() {return this.run(['list-panes','-s','-t',`=${this.name}`,'-F','#{window_id}|#{window_index}|#{window_name}|#{window_active}|#{pane_id}|#{pane_pid}|#{pane_dead}']);}
   private async alive(saved:OwnedPid|undefined) {
     const current=saved && await identity(saved.pid);
     return !!current && current.start===saved?.start && current.parent===saved?.parent && !['Z','X'].includes(current.state);
   }
-  /** One host sample: the original server and both pane processes, plus display clients. Returns the current display-client count. */
+  /** One host sample: the original server and both pane processes, the active window and its zoom flag, plus display clients. Returns the current display-client count. */
   async observe() {
     if(!await this.server?.liveIdentity() || !await this.alive(this.serverPid) || !this.windows.length)throw new Error('Owned tmux server identity changed');
     for(const window of this.windows)if(!await this.alive(window.pane))throw new Error('Owned tmux pane identity changed');
-    this.lifecycle=tmuxWindowLifecycle(tmuxWindowRows(await this.run(['list-windows','-t',`=${this.name}`,'-F','#{window_id}|#{window_name}'])),this.windows,this.lifecycle);
+    const windows=tmuxWindowRows(await this.run(['list-windows','-t',`=${this.name}`,'-F','#{window_id}|#{window_name}|#{window_active}|#{window_zoomed_flag}']));
+    this.lifecycle=tmuxWindowLifecycle(windows,this.windows,this.lifecycle);
+    this.views=[...tmuxViewHistory(windows,this.windows,this.views)];
     const count=tmuxDisplayClients(await this.run(['list-clients','-t',`=${this.name}`,'-F','#{client_control_mode}']));
     if(this.history.at(-1)!==count) {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
       this.history.push(count);
     }
+    this.defaultSession=tmuxDefaultSession(tmuxSessionRows(await this.sessions()),{sessionId:this.sessionId,name:this.name},this.defaultSession);
+    if(this.defaultSession) {
+      const clients=tmuxDisplayClients(await this.run(['list-clients','-t',`=${tmuxDefaultName}`,'-F','#{client_control_mode}']));
+      if(this.defaultHistory.at(-1)!==clients) {
+        if(this.defaultHistory.length>=8)throw new Error('Owned tmux default attach history exceeded');
+        this.defaultHistory.push(clients);
+      }
+    }
+    const mode=(await this.run(['display-message','-p','-t',this.windows[0].paneId,'#{pane_in_mode}'])).trim();
+    if(mode!=='0' && mode!=='1')throw new Error('Owned tmux pane mode readback invalid');
+    if(this.modes.at(-1)!==Number(mode)) {
+      if(this.modes.length>=8)throw new Error('Owned tmux pane mode history exceeded');
+      this.modes.push(Number(mode));
+    }
     return count;
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
-  diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
+  diagnostic() {return {schemaVersion:1,history:[...this.history],defaultHistory:[...this.defaultHistory],views:this.views.map(view=>`${view.window}${view.zoomed?'+zoom':''}`),windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
+  /** Whether window `index`'s original pane still shows `text` on the host, so bytes the app typed reached that pane's own tty. */
+  async paneHolds(index:number,text:string) {
+    const window=this.windows.find(value=>value.index===index);
+    if(!window)throw new Error('Owned tmux topology required');
+    return (await this.run(['capture-pane','-p','-t',window.paneId])).includes(text);
+  }
   async verifyDetachedAndReattached() {
     const deadline=performance.now()+5000;
     while(true) {
@@ -199,8 +327,8 @@ export class TmuxFixture {
       await delay(25);
     }
     if(!tmuxAttachHistoryVerified(this.history))throw new Error('Owned tmux attach, detach and reattach were not observed');
-    if((await this.run(['list-sessions','-F','#{session_name}'])).trim()!==this.name)throw new Error('Owned tmux sessions changed');
-    const rows=tmuxPaneRows(await this.panes());
+    const rows=tmuxPaneRows(await this.panes(),this.extraPanes);
+    if(rows.filter(value=>value.name==='alpha').length!==1)throw new Error('Owned tmux remote state differs');
     for(const window of this.windows) {
       const row=rows.find(value=>value.paneId===window.paneId);
       // The app switched to beta through Jump To; the detached session keeps that window.
@@ -214,9 +342,64 @@ export class TmuxFixture {
     await this.observe();
     if(!this.lifecycle?.closed || this.lifecycle.names.join()!==tmuxLifecycleNames.join())throw new Error('Owned tmux window create, rename and close were not observed');
   }
+  /**
+   * The app split beta's original pane top/bottom and zoomed the new pane twice, so the window ends
+   * unzoomed with the original pane untouched and a second pane started in its directory.
+   */
+  async verifySplitAndZoom() {
+    const beta=this.windows.find(window=>window.name==='beta');
+    if(!beta)throw new Error('Owned tmux topology required');
+    const rows=tmuxSplitRows(await this.run(['list-panes','-t',beta.windowId,'-F','#{pane_id}|#{pane_pid}|#{window_zoomed_flag}|#{pane_current_path}']));
+    const original=rows.find(row=>row.paneId===beta.paneId),added=rows.find(row=>row.paneId!==beta.paneId);
+    if(!original || !added || original.pid!==beta.pane.pid || added.pid===beta.pane.pid || rows.some(row=>row.zoomed))throw new Error('Owned tmux split and zoom were not observed');
+    if(await realpath(added.path)!==await realpath(this.ssh.directory))throw new Error('Owned tmux split directory differs');
+    this.extraPanes=1;
+  }
+  /** One synthetic Claude record the companion reads, and a draft that is distinct per run and echoed by the pane's tty. */
+  private async prepareChat() {
+    const nonce=this.ssh.nonce,transcript=join(this.ssh.directory,'owned-transcript.jsonl'),record=`OWNED_TMUX_RECORD_${nonce}`;
+    await writeFile(transcript,JSON.stringify({type:'user',uuid:`owned-${nonce}`,message:{role:'user',content:record}})+'\n',{mode:0o600});
+    // The companion the app will run over SSH must read this record through the same private environment.
+    const read=await this.ssh.client(true,`lazysh-agent transcript --agent claude --path '${transcript}' --offset 0 --limit 50`);
+    const page=JSON.parse(await read.finish('owned tmux companion transcript preflight',5000));
+    if(page.schemaVersion!==1 || !JSON.stringify(page.messages).includes(record))throw new Error('Owned tmux companion did not read the synthetic transcript');
+    this.chat={transcript,record,draft:`tmux chat ${nonce}: it's "quoted" $HOME #{pane_id} a;b`,window:'alpha'};
+  }
+  /** After the run: the confirmed draft is in the original pane only (by pane id), once, and that pane is the same process. */
+  async verifyChatInput() {
+    const chat=this.chat,alpha=this.windows.find(window=>window.name===chat?.window);
+    if(!chat || !alpha)throw new Error('Owned tmux Chat fixture required');
+    await this.observe();
+    const captures=[];
+    for(const window of this.windows)captures.push({paneId:window.paneId,text:await this.run(['capture-pane','-p','-J','-t',window.paneId])});
+    tmuxChatDeliveredOnce(captures,chat.draft,alpha.paneId);
+  }
+  /** The app's saved default created the one missing session in the login directory, attached it, and after a disconnect attached that same session again. */
+  async verifyDefaultSession() {
+    const deadline=performance.now()+5000;
+    while(true) {
+      await this.observe();
+      if(this.defaultHistory.at(-1)===0 || performance.now()>=deadline)break;
+      await delay(25);
+    }
+    if(!this.defaultSession || !tmuxDefaultAttachVerified(this.defaultHistory))throw new Error('Owned tmux default session create, attach, detach and reattach were not observed');
+    tmuxDefaultDirectory(await this.run(['list-panes','-s','-t',`=${tmuxDefaultName}`,'-F','#{pane_current_path}']),this.ssh.directory);
+  }
+  /** The first window's pane entered copy mode and left it, and tmux's newest buffer is exactly the line the app copied. */
+  async verifyCopied() {
+    await this.observe();
+    if(!tmuxCopyModeVerified(this.modes))throw new Error('Owned tmux copy mode was not entered and left');
+    // A selected line carries its newline.
+    if(await this.run(['show-buffer'])!==`${this.windows[0].marker}\n`)throw new Error('Owned tmux copied line differs');
+  }
+  /** After the split, the app pinched the zoom on and off and swiped to the next window and back: the monitor saw those states last, in that order. */
+  async verifyGestures() {
+    await this.observe();
+    if(!tmuxGesturesVerified(this.views))throw new Error('Owned tmux pinch zoom, unzoom and two-finger window swipes were not observed');
+  }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker})),lifecycle:[...tmuxLifecycleNames]};
+    return {name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames],defaultName:tmuxDefaultName,...(this.chat?{chat:this.chat}:{})};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */

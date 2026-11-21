@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import TmuxJumpPanel from './TmuxJumpPanel';
 import type { TmuxJumpSnapshot } from './bridge';
 import { accessSnapshot, applyAccessStatus } from './access';
-import {tmuxJumpSnapshot as snapshot} from './test/tmuxJumpData';
+import {tmuxJumpSnapshot as snapshot,tmuxJumpPaneSnapshot as paneSnapshot} from './test/tmuxJumpData';
 
 vi.mock('@tauri-apps/api/core', () => ({invoke:vi.fn(),isTauri:()=>true}));
 afterEach(() => { cleanup(); localStorage.clear(); vi.resetAllMocks(); });
@@ -122,4 +122,81 @@ it('retries a retired picker only through an explicit fresh snapshot read',async
   expect(screen.queryByRole('button',{name:'0: agent · Current'})).toBeNull();expect(invoke).toHaveBeenCalledTimes(2);
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByRole('button',{name:'0: agent · Current'});
   expect(invoke).toHaveBeenLastCalledWith('tmux_jump_snapshot',{sessionId:'retry-display'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+});
+
+const report=(paneId:string,agent:string,summary='Reading the tests')=>({sessionId:`s-${paneId}`,agent,project:'/work',state:'working',updatedAt:'2026-11-15T12:00:00.000Z',summary,paneId,eventCount:1});
+function hostReplies(jump:TmuxJumpSnapshot,reports:ReturnType<typeof report>[]=[]) {
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:reports}:command==='tmux_jump'?jump:paneSnapshot);
+}
+it.each([
+  ['several panes',{sessionId:'$1',windowId:'@3',paneId:'%7'},'Pane 1: review · Current'],
+  ['a zoomed window, where only the active pane shows',{sessionId:'$1',windowId:'@5',paneId:'%8'},'Pane 0: cargo · Zoomed · Current'],
+  ['one pane',{sessionId:'$2',windowId:'@4',paneId:'%10'},'Pane 0: htop · Current'],
+])('lists every pane under its window and marks exactly one row Current with %s',async (_name,current,marked)=>{
+  vi.mocked(invoke).mockResolvedValue({...paneSnapshot,current});
+  render(<TmuxJumpPanel sessionId="display" onClose={vi.fn()} onJump={vi.fn()}/>);
+  const row=await screen.findByRole('button',{name:marked});
+  expect(screen.getAllByRole('button',{current:'location'})).toEqual([row]);
+  const names=screen.getAllByRole('button').map(button=>button.textContent);
+  for(const pane of ['Pane 0: vim','Pane 0: cargo · Zoomed','Pane 1: tail','Pane 0: htop','Pane 1: review'])
+    expect(names.some(name=>name?.startsWith(pane))).toBe(true);
+  // A window row is never marked while its pane rows are shown.
+  expect(screen.getByRole('button',{name:/^0: agent/}).hasAttribute('aria-current')).toBe(false);
+});
+it('moves to the exact pane the row names, in the window and session it was listed under',async()=>{
+  const result={...paneSnapshot,current:{sessionId:'$1',windowId:'@5',paneId:'%9'}};
+  hostReplies(result);
+  const close=vi.fn(),jumped=vi.fn();
+  render(<TmuxJumpPanel sessionId="display" onClose={close} onJump={jumped}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Pane 1: tail'}));
+  await act(async()=>{});
+  expect(invoke).toHaveBeenLastCalledWith('tmux_jump',{sessionId:'display',generation:'actor-one',targetSessionId:'$1',windowId:'@5',paneId:'%9'},expect.anything());
+  expect(jumped).toHaveBeenCalledWith(result);expect(close).toHaveBeenCalledOnce();
+});
+it('closes on the displayed pane, but jumps to another pane of the displayed window',async()=>{
+  const result={...paneSnapshot,current:{...paneSnapshot.current,paneId:'%6'}};
+  hostReplies(result);
+  const close=vi.fn(),jumped=vi.fn();
+  render(<TmuxJumpPanel sessionId="display" onClose={close} onJump={jumped}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Pane 1: review · Current'}));
+  expect(close).toHaveBeenCalledOnce();expect(invoke).not.toHaveBeenCalledWith('tmux_jump',expect.anything(),expect.anything());
+  fireEvent.click(screen.getByRole('button',{name:'Pane 0: vim'}));
+  await act(async()=>{});
+  expect(invoke).toHaveBeenLastCalledWith('tmux_jump',{sessionId:'display',generation:'actor-one',targetSessionId:'$1',windowId:'@3',paneId:'%6'},expect.anything());
+  expect(jumped).toHaveBeenCalledWith(result);
+});
+it('names the agent a companion report puts in a pane, and none once that session ended',async()=>{
+  hostReplies(paneSnapshot,[report('%7','Codex'),report('%6','Claude Code','Session ended'),report('%99','Gemini')]);
+  render(<TmuxJumpPanel sessionId="display" onClose={vi.fn()} onJump={vi.fn()}/>);
+  expect(await screen.findByRole('button',{name:'Pane 1: review · Codex · Current'})).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Pane 0: vim'})).toBeTruthy();
+  expect(screen.queryByText(/Gemini|Claude Code/)).toBeNull();
+  expect(invoke).toHaveBeenCalledWith('agent_snapshot',{sessionId:'display'},expect.anything());
+});
+it('still shows the panes when the host has no companion to ask',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>{if(command==='agent_snapshot')throw new Error('companion missing');return paneSnapshot;});
+  render(<TmuxJumpPanel sessionId="display" onClose={vi.fn()} onJump={vi.fn()}/>);
+  expect(await screen.findByRole('button',{name:'Pane 1: review · Current'})).toBeTruthy();
+  await act(async()=>{});
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+it('keeps the window level when the binding lists no panes, and never asks for agents',async()=>{
+  vi.mocked(invoke).mockResolvedValue(snapshot);
+  render(<TmuxJumpPanel sessionId="display" onClose={vi.fn()} onJump={vi.fn()}/>);
+  expect((await screen.findByRole('button',{name:'0: agent · Current'})).getAttribute('aria-current')).toBe('location');
+  expect(screen.queryByText(/^Pane /)).toBeNull();
+  expect(invoke).toHaveBeenCalledOnce();
+});
+it('drops the rows of a pane that is gone and reads the tree again on Refresh',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='tmux_jump')throw new Error('That tmux pane is no longer in that window; refresh the view');
+    return command==='agent_snapshot'?{schemaVersion:1,sessions:[]}:paneSnapshot;
+  });
+  render(<TmuxJumpPanel sessionId="display" onClose={vi.fn()} onJump={vi.fn()}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Pane 1: tail'}));
+  expect((await screen.findByRole('alert')).textContent).toContain('no longer in that window');
+  expect(screen.queryByRole('button',{name:'Pane 1: tail'})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  expect(await screen.findByRole('button',{name:'Pane 1: tail'})).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_jump_snapshot')).toHaveLength(2);
 });

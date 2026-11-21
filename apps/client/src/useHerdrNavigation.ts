@@ -17,9 +17,24 @@ export type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab
 export type HerdrTree = {
   workspaces: {workspace_id:string;label:string;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   tabs: {workspace_id:string;tab_id:string;label:string;number:number;focused:boolean;agent_status:LiveAgent['agent_status']}[];
-  panes: {workspace_id:string;tab_id:string;pane_id:string;terminal_id?:string;cwd?:string|null;focused:boolean;agent_status:LiveAgent['agent_status']}[];
+  panes: {workspace_id:string;tab_id:string;pane_id:string;terminal_id?:string;cwd?:string|null;label?:string;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   agents?:Omit<LiveAgent,'cwd'>[];
 };
+/** Where the guarded Herdr client attached through this terminal shows itself, in the server's public identifiers. */
+type ClientLocation=Readonly<{workspace:string;tab:string;pane:string;terminal:string}>;
+function clientLocation(reply:unknown,server:string):ClientLocation|undefined {
+  const row=reply as {kind?:unknown;server?:unknown;destination?:Record<string,unknown>}|null;
+  const at=row?.destination;
+  if(!at || row.kind!=='observed' || row.server!==server || !(['workspace','tab','pane','terminal'] as const).every(key=>boundedText(at[key],256)))return;
+  return {workspace:at.workspace as string,tab:at.tab as string,pane:at.pane as string,terminal:at.terminal as string};
+}
+/** Herdr's snapshot flags are the server's shared focus; the guarded client's own read replaces them with what this display shows. */
+export function withClientFocus(tree:HerdrTree,at:ClientLocation):HerdrTree {
+  return {...tree,
+    workspaces:tree.workspaces.map(item=>({...item,focused:item.workspace_id===at.workspace})),
+    tabs:tree.tabs.map(item=>({...item,focused:item.workspace_id===at.workspace && item.tab_id===at.tab})),
+    panes:tree.panes.map(item=>({...item,focused:item.workspace_id===at.workspace && item.tab_id===at.tab && item.pane_id===at.pane && item.terminal_id===at.terminal}))};
+}
 /** Display form of a host path: the login user's home becomes `~` and another user's home `~name`. */
 export function homeRelativePath(path:string,destination:string) {
   const user=/^([^@\s/]+)@/.exec(destination)?.[1];
@@ -60,7 +75,8 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 
 
 /** One visibility- and lease-owned reader for a terminal's selected Herdr server. */
-export function useHerdrNavigation({sessionId,herdrSession,visible,reports,intervalMs=5000}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;intervalMs?:number}) {
+/** `clientFocus` also asks the guarded client where it shows itself. That read shares the guard with Chat, so only the navigation surface that marks the current row asks for it. */
+export function useHerdrNavigation({sessionId,herdrSession,visible,reports,intervalMs=5000,clientFocus=false}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;intervalMs?:number;clientFocus?:boolean}) {
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [choice,setChoice]=useState<{host:string;name:string}|null>(null);
@@ -71,6 +87,7 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
   const [query,setQuery]=useState('');
   useEffect(()=>setQuery(''),[sessionId]);
   const flight=useRef(false);
+  const located=useRef<{host:string;server:string;at:ClientLocation}|null>(null);
   const refresh=useRef<()=>Promise<void>>(async()=>{});
   useEffect(()=>{
     let current=true;
@@ -88,7 +105,16 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
         if(server){
           const snapshot=await invoke<HerdrTree>('herdr_tree',{sessionId,name:server});
           const rows=snapshot.agents===undefined?[]:parseHerdrAgents(snapshot);
-          if(owns())setResult({host:sessionId,servers:names,server,rows,snapshot,loaded:true});
+          let at:ClientLocation|undefined;
+          if(clientFocus) {
+            try {at=clientLocation(await invoke('herdr_chat',{sessionId,action:{kind:'observe'}}),server);}
+            catch(error) {
+              // Stock Herdr has no such read and keeps the shared focus. A Chat turn holds the guard only briefly, so keep the last reading instead of flickering back to it.
+              if((error as {kind?:string}|undefined)?.kind==='herdr_chat_busy' && located.current?.host===sessionId && located.current.server===server)at=located.current.at;
+            }
+            located.current=at?{host:sessionId,server,at}:null;
+          }
+          if(owns())setResult({host:sessionId,servers:names,server,rows,snapshot:at?withClientFocus(snapshot,at):snapshot,loaded:true});
         }
         if(owns())setFailure(null);
       }catch(error){if(owns()){setResult(previous=>previous?.host===sessionId?{...previous,rows:[],snapshot:undefined,loaded:false}:null);setFailure({host:sessionId,cause:captureUiError(error)});}}
@@ -98,7 +124,7 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
     if(visible)void read();
     const timer=visible?window.setInterval(()=>void read(),intervalMs):undefined;
     return()=>{current=false;window.clearInterval(timer);};
-  },[sessionId,selected,visible,invoke,lease,intervalMs]);
+  },[sessionId,selected,visible,invoke,lease,intervalMs,clientFocus]);
   const owned=result?.host===sessionId?result:null;
   const reportReadable=!!reports?.available && reports.lease.current();
   const data=useMemo(()=>owned && withReportedStatus(owned,reports,sessionId),[owned,reports?.rows,reports?.host,reportReadable,sessionId]);

@@ -2,25 +2,12 @@ use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::host::{Cmd, Host};
 use crate::local::LocalState;
 use crate::ssh::{AppState, Result, SshError};
+use lazysh_common::repository_review::{self as review, Invalid, Status, ENTRY_LIMIT, GIT_ENV};
 use serde::Serialize;
 use tauri::State;
 
-const ENTRY_LIMIT: usize = 10_000;
 const BLOB_LIMIT: u64 = 200 * 1024;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Change {
-    path: String,
-    original_path: Option<String>,
-    index: String,
-    worktree: String,
-}
-#[derive(Debug, Serialize)]
-pub struct Status {
-    path: String,
-    changes: Vec<Change>,
-}
 #[derive(Debug, Serialize)]
 pub struct Commit {
     oid: String,
@@ -38,11 +25,6 @@ pub struct Blob {
     text: Option<String>,
     binary: bool,
     bytes: u64,
-}
-#[derive(Debug, Serialize)]
-pub struct Diff {
-    patch: String,
-    binary: bool,
 }
 #[derive(Debug, Serialize)]
 pub struct Image {
@@ -81,7 +63,7 @@ pub async fn repository_image(
             if let Some(object_id) = object_id {
                 return image(read_blob(&host, &access, &path, &object_id, IMAGE_TEXT).await?);
             }
-            check_file_path(&file_path)?;
+            review::check_file_path(&file_path).map_err(refused)?;
             git(&path, &[])?;
             let target = format!("{}/{}", path.trim_end_matches('/'), file_path);
             let bytes = host
@@ -147,24 +129,14 @@ async fn read_blob(
 fn invalid(message: &str) -> SshError {
     SshError::new("invalid_repository", message)
 }
-const GIT_ENV: &[(&str, &str)] = &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_NO_REPLACE_OBJECTS", "1")];
+fn refused(error: Invalid) -> SshError {
+    invalid(error.message())
+}
 fn git(path: &str, args: &[&str]) -> Result<Cmd> {
-    if path.is_empty() || path.len() > 4096 || path.contains('\0') {
-        return Err(invalid("Invalid repository directory"));
-    }
-    let mut argv = vec![
-        "git",
-        "--no-pager",
-        "--literal-pathspecs",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.quotePath=false",
-        "-C",
-        path,
-    ];
-    argv.extend_from_slice(args);
-    Ok(Cmd::new(GIT_ENV, &argv))
+    Ok(Cmd::new(
+        GIT_ENV,
+        &review::git(path, args).map_err(refused)?,
+    ))
 }
 fn oid(value: &str) -> Result<()> {
     if !matches!(value.len(), 40 | 64) || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -173,50 +145,6 @@ fn oid(value: &str) -> Result<()> {
         ));
     }
     Ok(())
-}
-fn check_file_path(value: &str) -> Result<()> {
-    if value.is_empty()
-        || value.len() > 4096
-        || value.contains('\0')
-        || value.starts_with('/')
-        || value.split('/').any(|part| part == "..")
-    {
-        return Err(invalid("Select a repository-relative file path"));
-    }
-    Ok(())
-}
-fn parse_status(text: &str) -> Result<Vec<Change>> {
-    let mut parts = text.split_terminator('\0');
-    let mut changes = Vec::new();
-    while let Some(record) = parts.next() {
-        if record.len() < 4 || record.as_bytes()[2] != b' ' || !record.is_char_boundary(3) {
-            return Err(invalid("Invalid Git status output"));
-        }
-        let state = &record.as_bytes()[..2];
-        if !state.iter().all(|b| b" MADRCU?!T".contains(b)) {
-            return Err(invalid("Unknown Git status"));
-        }
-        let original_path = if state.contains(&b'R') || state.contains(&b'C') {
-            Some(
-                parts
-                    .next()
-                    .ok_or_else(|| invalid("Incomplete Git rename record"))?
-                    .to_owned(),
-            )
-        } else {
-            None
-        };
-        changes.push(Change {
-            path: record[3..].to_owned(),
-            original_path,
-            index: (state[0] as char).to_string(),
-            worktree: (state[1] as char).to_string(),
-        });
-        if changes.len() > ENTRY_LIMIT {
-            return Err(invalid("Repository has more than 10,000 changed files"));
-        }
-    }
-    Ok(changes)
 }
 fn parse_history(text: &str) -> Result<Vec<Commit>> {
     let mut fields = text.split_terminator('\0');
@@ -286,30 +214,11 @@ pub async fn repository_status(
         .run(async {
             let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             let root = host
-                .run(&access, &git(&path, &["rev-parse", "--show-toplevel"])?)
+                .run(&access, &git(&path, &review::TOPLEVEL_ARGS)?)
                 .await?;
-            let root = root.strip_suffix('\n').unwrap_or(&root).to_owned();
-            let changes = parse_status(
-                &host
-                    .run(
-                        &access,
-                        &git(
-                            &root,
-                            &[
-                                "status",
-                                "--porcelain=v1",
-                                "-z",
-                                "--untracked-files=all",
-                                "--ignore-submodules=all",
-                            ],
-                        )?,
-                    )
-                    .await?,
-            )?;
-            Ok(Status {
-                path: root,
-                changes,
-            })
+            let root = review::toplevel(&root);
+            let porcelain = host.run(&access, &git(root, &review::STATUS_ARGS)?).await?;
+            review::status(root, &porcelain).map_err(refused)
         })
         .await
 }
@@ -368,7 +277,7 @@ pub async fn repository_tree(
             oid(&revision)?;
             let directory = directory.unwrap_or_default();
             if !directory.is_empty() {
-                check_file_path(&directory)?;
+                review::check_file_path(&directory).map_err(refused)?;
             }
             let tree = if directory.is_empty() {
                 revision
@@ -433,33 +342,19 @@ pub async fn repository_diff(
     file_path: String,
     staged: bool,
     access: AccessLease,
-) -> std::result::Result<Guarded<Diff>, GuardedError<crate::ssh::SshError>> {
+) -> std::result::Result<Guarded<review::Diff>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            check_file_path(&file_path)?;
             let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
-            let diff = |options: &[&str]| -> Result<Cmd> {
-                let mut args = vec!["diff", "--no-ext-diff", "--no-textconv"];
-                args.extend_from_slice(options);
-                if staged {
-                    args.push("--cached");
-                }
-                args.extend_from_slice(&["--", &file_path]);
-                git(&path, &args)
+            let read = |options: &[&str]| -> Result<Cmd> {
+                Ok(Cmd::new(
+                    GIT_ENV,
+                    &review::diff_command(&path, options, staged, &file_path).map_err(refused)?,
+                ))
             };
-            let stats = host.run(&access, &diff(&["--numstat", "-z"])?).await?;
-            let binary = stats
-                .split_terminator('\0')
-                .any(|row| row.starts_with("-\t-\t"));
-            let patch = host
-                .run(&access, &diff(&["--no-color", "--no-renames"])?)
-                .await?;
-            if patch.lines().count() > 10_000 {
-                return Err(invalid(
-                    "Diff preview exceeds 10,000 lines; review a smaller change in the terminal",
-                ));
-            }
-            Ok(Diff { patch, binary })
+            let stats = host.run(&access, &read(&review::NUMSTAT_OPTIONS)?).await?;
+            let patch = host.run(&access, &read(&review::PATCH_OPTIONS)?).await?;
+            review::diff(&stats, patch).map_err(refused)
         })
         .await
 }
@@ -475,7 +370,7 @@ mod tests {
         lazysh_common::test_support::successful_output(Command::new("sh").args(["-c", &command]))
     }
     #[test]
-    fn rejects_untrusted_revisions_and_relative_escape() {
+    fn rejects_untrusted_revisions_and_active_image_formats() {
         for revision in [
             "HEAD",
             "--help",
@@ -486,11 +381,6 @@ mod tests {
             assert!(oid(revision).is_err());
         }
         assert!(oid(&"a".repeat(40)).is_ok());
-        for path in ["../outside", "/etc/passwd", "x/../../outside", "x\0y"] {
-            assert!(check_file_path(path).is_err());
-        }
-        assert!(check_file_path("--help;$(touch harmless)").is_ok());
-        assert!(parse_status("R  broken\0").is_err());
         assert!(image(b"<svg onload='run()'>".to_vec()).is_err());
         assert!(image(b"<html>secret</html>".to_vec()).is_err());
         assert_eq!(
@@ -618,14 +508,9 @@ mod tests {
         fs::rename(path.join(hostile), path.join("renamed.txt")).unwrap();
         git(&["add", "--", "."]);
         fs::write(path.join("untracked.txt"), "new").unwrap();
-        let changes = parse_status(&git(&[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=all",
-        ]))
-        .unwrap();
+        let changes = review::status("", &git(&review::STATUS_ARGS))
+            .unwrap()
+            .changes;
         assert!(changes.iter().any(|change| change.path == "renamed.txt"
             && change.original_path.as_deref() == Some(hostile)));
         assert!(changes

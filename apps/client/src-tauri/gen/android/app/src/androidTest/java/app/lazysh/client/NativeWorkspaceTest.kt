@@ -1,11 +1,15 @@
 package app.lazysh.client
 
+import android.app.Activity
+import android.app.Instrumentation
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.view.KeyEvent
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.PatternMatcher
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -64,12 +68,14 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.Pattern
+import kotlin.math.roundToInt
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import androidx.test.uiautomator.Configurator
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -111,6 +117,24 @@ private class OwnedFingerWindowObserver(
             projected.put(row)
         }
         JSONObject().put("state",state).put("overflow",overflow).put("eventCount",events.length()).put("events",projected).toString()
+    } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
+    // Report motion relative to DOWN, without exposing absolute touch coordinates.
+    fun verticalFailureSummary(): String = try {
+        val source = JSONObject(snapshot())
+        val events = source.getJSONArray("events")
+        require(source.getString("state") == "observed" && !source.getBoolean("overflow") && events.length() in 1..6)
+        require(events.getJSONObject(0).getString("action") == "down")
+        val first = events.getJSONObject(0).getJSONArray("point").getDouble(3)
+        require(first.isFinite())
+        val deltas = JSONArray()
+        for (index in 0 until events.length()) {
+            val event = events.getJSONObject(index)
+            val action = event.getString("action")
+            val y = event.getJSONArray("point").getDouble(3)
+            require(action in listOf("down", "move", "up", "cancel", "other") && y.isFinite())
+            deltas.put(JSONObject().put("action", action).put("rawYFromDown", (y - first).coerceIn(-65_535.0, 65_535.0)))
+        }
+        JSONObject().put("state", "observed").put("events", deltas).toString()
     } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
     private fun elapsed(value: Long) = (value - epoch).coerceIn(0, 65_535)
     private fun record(row: JSONObject?, outcome: String) {
@@ -277,6 +301,36 @@ class NativeWorkspaceTest {
     private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String =
         requireNotNull(evaluateIfPresent(scenario, expression, timeoutMillis))
 
+    /** A screenshot of the frame the WebView has just committed, so the pixels show the page's latest DOM. */
+    private fun committedScreenshot(scenario: ActivityScenario<MainActivity>, requestId: Long): android.graphics.Bitmap {
+        if (android.os.Build.VERSION.SDK_INT < 29) throw AssertionError("Native capture requires frame commits")
+        val committed = CountDownLatch(1)
+        val frame = Runnable { committed.countDown() }
+        var observing = true
+        var tree: android.view.ViewTreeObserver? = null
+        scenario.onActivity { activity ->
+            val view = checkNotNull(webView(activity.window.decorView))
+            assertTrue("Native WebView must render frames", view.isAttachedToWindow && view.isHardwareAccelerated)
+            view.postVisualStateCallback(requestId, object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    if (observing && view.isAttachedToWindow) {
+                        tree = view.viewTreeObserver
+                        tree?.registerFrameCommitCallback(frame)
+                        view.invalidate()
+                    }
+                }
+            })
+        }
+        val submitted = try { committed.await(5, TimeUnit.SECONDS) } finally {
+            scenario.onActivity {
+                observing = false
+                tree?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(frame)
+            }
+        }
+        assertTrue("Native DOM must reach a committed frame", submitted)
+        return requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+    }
+
     /**
      * Phones hide the top bar in a connected session by default (the side menu replaces it). These suites drive the top bar's
      * controls, so the device keeps "Show top bar" on; the side menu itself is covered by the Playwright phone project.
@@ -296,8 +350,18 @@ class NativeWorkspaceTest {
         observe: ((Long) -> String)? = null) {
         var firstObservation: String? = null
         var lastObservation: String? = null
+        var unfocusedSince: Long? = null
+        var recovered = false
         while (true) {
             val native = NativeActivityFixture.readiness(scenario)
+            // A system overlay (an expanded shade, a dialog) that took the focus is closed once; the wait stays bounded by the deadline.
+            if (native.activityState == androidx.lifecycle.Lifecycle.State.RESUMED && !native.windowFocused) {
+                val since = unfocusedSince ?: System.nanoTime().also { unfocusedSince = it }
+                if (!recovered && System.nanoTime() - since > TimeUnit.SECONDS.toNanos(5)) {
+                    recovered = true
+                    NativeActivityFixture.clearSystemOverlays()
+                }
+            } else unfocusedSince = null
             if (native.ready && evaluateIfPresent(scenario, expression) == "true") return
             val error = evaluateIfPresent(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
             assertTrue("Native workspace failed at $stage: $error", error == null || error == "\"\"")
@@ -1047,6 +1111,105 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
     }
 
+    /**
+     * The Android WebView composites `backdrop-filter` with its own renderer, which Playwright's Chromium and the Linux GUI's
+     * WebKitGTK never sample (#1723). For a dialog this reads its computed material, then lays a black and white underlay
+     * beneath it and measures the pixels the device shows across the underlay's edge: a translucent material lets through what
+     * its alpha leaves, and a blur turns the hard edge into a gradient. A dialog whose fallback is opaque (Preferences is a full
+     * page on a phone) must show neither. The default app theme is sampled; Playwright covers the others.
+     */
+    private fun assertCompositedMaterial(scenario: ActivityScenario<MainActivity>, name: String, dialog: String, glassWhen: String) {
+        val quoted = JSONObject.quote(dialog)
+        awaitDocument(scenario, "$name settled", "Boolean(document.querySelector($quoted)) && document.getAnimations().every(a=>a.effect?.getComputedTiming().iterations===Infinity||a.playState==='finished')")
+        val material = JSONObject(evaluate(scenario, """
+            (()=>{
+              const dialog=document.querySelector($quoted),backdrop=dialog.parentElement,bounds=dialog.getBoundingClientRect(),style=getComputedStyle(dialog);
+              const canvas=document.createElement('canvas').getContext('2d');canvas.fillStyle=style.backgroundColor;canvas.fillRect(0,0,1,1);
+              const filter=style.backdropFilter||style.getPropertyValue('-webkit-backdrop-filter');
+              const renderable=(CSS.supports('backdrop-filter','blur(1px)')||CSS.supports('-webkit-backdrop-filter','blur(1px)'))
+                &&CSS.supports('background','color-mix(in srgb, black 90%, transparent)')
+                &&!matchMedia('(prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active)').matches;
+              const centre=bounds.left+bounds.width/2;
+              // The underlay sits between the page and the dialog; hiding the content leaves only the dialog's own material.
+              const probe=document.createElement('div');probe.id='glass-probe';
+              probe.style.cssText='position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,#000 '+centre+'px,#fff '+centre+'px)';
+              backdrop.prepend(probe);backdrop.style.background='transparent';backdrop.style.animation='none';
+              for(const child of dialog.children)child.style.visibility='hidden';
+              return {glass:renderable&&$glassWhen,alpha:canvas.getImageData(0,0,1,1).data[3],blurred:filter.includes('blur('),filter,background:style.backgroundColor,
+                opacity:style.opacity,centre,row:bounds.top+bounds.height/2,width:bounds.width,viewport:innerWidth};
+            })()
+        """))
+        try {
+            val glass = material.getBoolean("glass")
+            val alpha = material.getInt("alpha")
+            assertEquals("$name opacity", "1", material.getString("opacity"))
+            assertTrue("$name must be ${if (glass) "translucent" else "opaque"}: $material", if (glass) alpha in 1..254 else alpha == 255)
+            assertEquals("$name backdrop blur: $material", glass, material.getBoolean("blurred"))
+            val origin = IntArray(2)
+            var scale = 0.0
+            scenario.onActivity { activity ->
+                val view = checkNotNull(webView(activity.window.decorView))
+                view.getLocationOnScreen(origin)
+                scale = view.width / material.getDouble("viewport")
+            }
+            fun capture(): List<Double> {
+                val shot = committedScreenshot(scenario, System.nanoTime())
+                try {
+                    return (-80..80).map { offset ->
+                        val pixel = shot.getPixel(
+                            (origin[0] + (material.getDouble("centre") + offset) * scale).roundToInt(),
+                            (origin[1] + material.getDouble("row") * scale).roundToInt())
+                        0.2126 * android.graphics.Color.red(pixel) + 0.7152 * android.graphics.Color.green(pixel) + 0.0722 * android.graphics.Color.blue(pixel)
+                    }
+                } finally { shot.recycle() }
+            }
+            // Plateaus well clear of the edge, then how many CSS pixels the edge takes to go from 10% to 90%.
+            fun shown(luma: List<Double>) = luma.takeLast(21).average() - luma.take(21).average()
+            fun transition(luma: List<Double>): Int {
+                val dark = luma.take(21).average()
+                val range = shown(luma)
+                return luma.count { it > dark + range * 0.1 && it < dark + range * 0.9 }
+            }
+            fun accepted(luma: List<Double>) = Math.abs(255.0 - alpha - shown(luma)) <= 8.0 && (if (glass) transition(luma) >= 15 else transition(luma) <= 3)
+            // The compositor presents a mutated page a frame or two after the frame commit, so a first capture can still
+            // be the page as it was. The material must hold in two captures in a row, at least a second after the underlay.
+            val laid = System.nanoTime()
+            var luma = capture()
+            var holds = 0
+            val deadline = laid + TimeUnit.SECONDS.toNanos(15)
+            while (true) {
+                holds = if (accepted(luma)) holds + 1 else 0
+                if (holds >= 2 && System.nanoTime() - laid >= TimeUnit.SECONDS.toNanos(1)) break
+                if (System.nanoTime() >= deadline) break
+                Thread.sleep(300)
+                luma = capture()
+            }
+            android.util.Log.i("lazysh-glass", "$name: $material shown=${shown(luma)} transition=${transition(luma)} scale=$scale")
+            assertEquals("$name: the underlay must show through by what the alpha leaves ($material)", 255.0 - alpha, shown(luma), 8.0)
+            assertTrue("$name: a ${if (glass) "blurred" else "solid"} edge took ${transition(luma)} CSS px ($material)", if (glass) transition(luma) >= 15 else transition(luma) <= 3)
+        } finally {
+            evaluate(scenario, """
+                (()=>{const dialog=document.querySelector($quoted),backdrop=dialog?.parentElement;
+                  document.getElementById('glass-probe')?.remove();backdrop?.style.removeProperty('background');backdrop?.style.removeProperty('animation');
+                  for(const child of dialog?.children??[])child.style.visibility='';return true;})()
+            """)
+        }
+    }
+
+    @Test fun webViewCompositesTheGlassMaterialOfItsDialogsOrKeepsTheOpaqueFallback() {
+        val scenario = NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario, "glass material workspace")
+        closeHostsDrawer(scenario, "hosts closed before glass material")
+        // The tools dialog is glass at every width. Preferences is only glass beside a sidebar: on a phone it is an opaque page.
+        openWorkspaceTools(scenario, System.nanoTime() + TimeUnit.SECONDS.toNanos(120))
+        try { assertCompositedMaterial(scenario, "Workspace tools", workspaceToolsDialog, "true") }
+        finally { onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Workspace tools']")).perform(webClick()) }
+        awaitDocument(scenario, "workspace tools closed", "!Boolean(document.querySelector(${JSONObject.quote(workspaceToolsDialog)}))")
+        openPreferences(scenario)
+        try { assertCompositedMaterial(scenario, "Preferences", "[role=dialog][aria-label='Preferences']", "matchMedia('(min-width: 601px)').matches") }
+        finally { closePreferences() }
+    }
+
     private fun openAppearance(scenario: ActivityScenario<MainActivity>, stage: String) {
         awaitUnlockedWorkspace(scenario, stage)
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
@@ -1446,6 +1609,95 @@ class NativeWorkspaceTest {
         assertTrue(!denied.complete(0)) // An already-denied permission does not prove a Deny click.
     }
 
+    // The first real choice of a case fixes the sheet's system owner; every later choice must come from the same package.
+    private var cameraPermissionOwner: String? = null
+
+    /** Clicks one real choice ("permission_deny_button" or "permission_allow_foreground_only_button") of the system camera permission sheet and waits for its effect. */
+    private fun chooseOwnedCameraPermission(id: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val expected = when (id) {
+            "permission_deny_button" -> PackageManager.PERMISSION_DENIED
+            "permission_allow_foreground_only_button" -> PackageManager.PERMISSION_GRANTED
+            else -> throw AssertionError("Unsupported owned camera permission choice")
+        }
+        val progress = QrPermissionProgress(System.nanoTime(), expected)
+        val selector = cameraPermissionOwner?.let { By.res(it, id) }
+            ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
+        val device = UiDevice.getInstance(instrumentation)
+        try {
+            assertTrue("Owned permission choice requires default-display window observations", Build.VERSION.SDK_INT >= 30)
+            val lookup = progress.remaining(System.nanoTime())
+            assertTrue("Expected real owned camera permission choice: $id", lookup > 0 && device.wait(Until.hasObject(selector), lookup))
+            val choices = device.findObjects(selector)
+            assertEquals("Permission choice must be unambiguous", 1, choices.size)
+            val owner = requireNotNull(choices.single().applicationPackage) { "Permission owner unavailable" }
+            val info = context.packageManager.getApplicationInfo(owner, 0)
+            assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
+            if (cameraPermissionOwner == null) cameraPermissionOwner = owner
+            assertEquals("Permission choices must retain the same system owner", cameraPermissionOwner, owner)
+            // The preceding UiAutomator query configures interactive-window reporting.
+            // Use the same connection flags, without another implicit idle wait.
+            val automation = instrumentation.getUiAutomation(Configurator.getInstance().uiAutomationFlags)
+            var selected: Pair<Int, Point>? = null
+            progress.phase = QrPermissionPhase.WINDOW
+            while (progress.remaining(System.nanoTime()) > 0 && selected == null) {
+                val windows = automation.windows
+                progress.windows = windows.size
+                try {
+                    assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
+                    val candidates = windows.filter { it.displayId == Display.DEFAULT_DISPLAY && it.isActive && it.isFocused }
+                    val matches = mutableListOf<Pair<Int, Point>>()
+                    progress.choices = 0
+                    for (window in candidates) {
+                        val root = window.root ?: continue
+                        try {
+                            if (root.packageName?.toString() != owner) continue
+                            val nodes = root.findAccessibilityNodeInfosByViewId("$owner:id/$id")
+                            progress.choices = (progress.choices ?: 0) + nodes.size
+                            try {
+                                assertTrue("Owned permission choice must remain unambiguous", progress.choices!! <= 1)
+                                for (node in nodes) {
+                                    val bounds = Rect(); node.getBoundsInScreen(bounds)
+                                    val windowBounds = Rect(); window.getBoundsInScreen(windowBounds)
+                                    if (node.windowId == window.id && node.isEnabled && node.isClickable && node.isVisibleToUser &&
+                                        !bounds.isEmpty && windowBounds.contains(bounds) && bounds.left >= 0 && bounds.top >= 0 &&
+                                        bounds.right <= device.displayWidth && bounds.bottom <= device.displayHeight) {
+                                        matches.add(window.id to Point(bounds.centerX(), bounds.centerY()))
+                                    }
+                                }
+                            } finally { nodes.forEach { it.recycle() } }
+                        } finally { root.recycle() }
+                    }
+                    assertTrue("Owned permission focused window must be unique", matches.size <= 1)
+                    selected = matches.singleOrNull()
+                } finally { windows.forEach { it.recycle() } }
+                if (selected == null) Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
+            }
+            progress.ready = selected != null
+            progress.permissionBefore = context.checkSelfPermission(android.Manifest.permission.CAMERA)
+            assertTrue("Owned permission choice must be input-ready within its original budget", progress.admit(System.nanoTime()))
+            val (windowId, point) = requireNotNull(selected)
+            progress.delivered(device.click(point.x, point.y))
+            assertTrue("Owned permission click delivery must succeed", progress.delivery == true)
+            while (progress.remaining(System.nanoTime()) > 0) {
+                progress.permissionAfter = context.checkSelfPermission(android.Manifest.permission.CAMERA)
+                val windows = automation.windows
+                try {
+                    progress.windows = windows.size
+                    assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
+                    progress.dismissed = windows.none { it.id == windowId }
+                } finally { windows.forEach { it.recycle() } }
+                if (progress.complete(System.nanoTime())) { progress.phase = QrPermissionPhase.COMPLETE; return }
+                Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
+            }
+            assertTrue("Owned permission effect must settle within its original budget", progress.complete(System.nanoTime()))
+        } finally {
+            // Only finite metadata leaves this helper; never UI text or raw framework errors.
+            try { println("lazysh camera permission: ${progress.report(System.nanoTime())}") } catch (_: Throwable) { }
+        }
+    }
+
     // Dedicated invocation with an owned emulator imagefile camera; no mocked frames or IPC.
     @Test fun ownedQrCameraRequiresPermissionAndExplicitPreview() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -1481,89 +1733,7 @@ class NativeWorkspaceTest {
         val frameGate = QrFrameGate()
         val draftSelector = "[aria-label='Theme JSON or share code']"
         val draft = "manual owned QR draft stays literal"
-        var permissionController: String? = null
-        fun permission(id: String) {
-            val expected = when (id) {
-                "permission_deny_button" -> PackageManager.PERMISSION_DENIED
-                "permission_allow_foreground_only_button" -> PackageManager.PERMISSION_GRANTED
-                else -> throw AssertionError("Unsupported owned camera permission choice")
-            }
-            val progress = QrPermissionProgress(System.nanoTime(), expected)
-            val selector = permissionController?.let { By.res(it, id) }
-                ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
-            val device = UiDevice.getInstance(instrumentation)
-            try {
-                assertTrue("Owned permission choice requires default-display window observations", Build.VERSION.SDK_INT >= 30)
-                val lookup = progress.remaining(System.nanoTime())
-                assertTrue("Expected real owned camera permission choice: $id", lookup > 0 && device.wait(Until.hasObject(selector), lookup))
-                val choices = device.findObjects(selector)
-                assertEquals("Permission choice must be unambiguous", 1, choices.size)
-                val owner = requireNotNull(choices.single().applicationPackage) { "Permission owner unavailable" }
-                val info = context.packageManager.getApplicationInfo(owner, 0)
-                assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
-                if (permissionController == null) permissionController = owner
-                assertEquals("Permission choices must retain the same system owner", permissionController, owner)
-                // The preceding UiAutomator query configures interactive-window reporting.
-                // Use the same connection flags, without another implicit idle wait.
-                val automation = instrumentation.getUiAutomation(Configurator.getInstance().uiAutomationFlags)
-                var selected: Pair<Int, Point>? = null
-                progress.phase = QrPermissionPhase.WINDOW
-                while (progress.remaining(System.nanoTime()) > 0 && selected == null) {
-                    val windows = automation.windows
-                    progress.windows = windows.size
-                    try {
-                        assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
-                        val candidates = windows.filter { it.displayId == Display.DEFAULT_DISPLAY && it.isActive && it.isFocused }
-                        val matches = mutableListOf<Pair<Int, Point>>()
-                        progress.choices = 0
-                        for (window in candidates) {
-                            val root = window.root ?: continue
-                            try {
-                                if (root.packageName?.toString() != owner) continue
-                                val nodes = root.findAccessibilityNodeInfosByViewId("$owner:id/$id")
-                                progress.choices = (progress.choices ?: 0) + nodes.size
-                                try {
-                                    assertTrue("Owned permission choice must remain unambiguous", progress.choices!! <= 1)
-                                    for (node in nodes) {
-                                        val bounds = Rect(); node.getBoundsInScreen(bounds)
-                                        val windowBounds = Rect(); window.getBoundsInScreen(windowBounds)
-                                        if (node.windowId == window.id && node.isEnabled && node.isClickable && node.isVisibleToUser &&
-                                            !bounds.isEmpty && windowBounds.contains(bounds) && bounds.left >= 0 && bounds.top >= 0 &&
-                                            bounds.right <= device.displayWidth && bounds.bottom <= device.displayHeight) {
-                                            matches.add(window.id to Point(bounds.centerX(), bounds.centerY()))
-                                        }
-                                    }
-                                } finally { nodes.forEach { it.recycle() } }
-                            } finally { root.recycle() }
-                        }
-                        assertTrue("Owned permission focused window must be unique", matches.size <= 1)
-                        selected = matches.singleOrNull()
-                    } finally { windows.forEach { it.recycle() } }
-                    if (selected == null) Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
-                }
-                progress.ready = selected != null
-                progress.permissionBefore = context.checkSelfPermission(android.Manifest.permission.CAMERA)
-                assertTrue("Owned permission choice must be input-ready within its original budget", progress.admit(System.nanoTime()))
-                val (windowId, point) = requireNotNull(selected)
-                progress.delivered(device.click(point.x, point.y))
-                assertTrue("Owned permission click delivery must succeed", progress.delivery == true)
-                while (progress.remaining(System.nanoTime()) > 0) {
-                    progress.permissionAfter = context.checkSelfPermission(android.Manifest.permission.CAMERA)
-                    val windows = automation.windows
-                    try {
-                        progress.windows = windows.size
-                        assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
-                        progress.dismissed = windows.none { it.id == windowId }
-                    } finally { windows.forEach { it.recycle() } }
-                    if (progress.complete(System.nanoTime())) { progress.phase = QrPermissionPhase.COMPLETE; return }
-                    Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
-                }
-                assertTrue("Owned permission effect must settle within its original budget", progress.complete(System.nanoTime()))
-            } finally {
-                // Only finite metadata leaves this helper; never UI text or raw framework errors.
-                try { println("lazysh QR permission: ${progress.report(System.nanoTime())}") } catch (_: Throwable) { }
-            }
-        }
+        fun permission(id: String) = chooseOwnedCameraPermission(id)
         var primary: Throwable? = null
         var propagating = false
         try {
@@ -1643,11 +1813,65 @@ class NativeWorkspaceTest {
             cleanup { evaluateIfPresent(scenario, frameGate.restore) }
             cleanup {
                 val device = UiDevice.getInstance(instrumentation)
-                permissionController?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
+                cameraPermissionOwner?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
             }
             cleanup { observation?.let { camera.unregisterAvailabilityCallback(it) } }
             cleanup { observer.quitSafely(); observer.join(5_000); assertTrue("Camera observer must retire", !observer.isAlive) }
+            if (!propagating && primary != null) throw primary!!
+        }
+    }
+
+    /** One real finger tap on the centre of a page element: a WebView file chooser needs the trusted user activation a scripted click lacks. */
+    private fun fingerTapElement(scenario: ActivityScenario<MainActivity>, selector: String) {
+        evaluate(scenario, "(document.querySelector(${JSONObject.quote(selector)})?.scrollIntoView({block:'center'}), true)")
+        awaitDocument(scenario, "touchable $selector", workspaceElementVisible(selector, true))
+        val centre = JSONArray(evaluate(scenario, """
+            (()=>{const r=document.querySelector(${JSONObject.quote(selector)}).getBoundingClientRect();
+              return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()
+        """))
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, CoordinatesProvider { view ->
+            val origin = IntArray(2); view.getLocationOnScreen(origin)
+            val scale = view.width / centre.getDouble(2)
+            floatArrayOf((origin[0] + centre.getDouble(0) * scale).toFloat(), (origin[1] + centre.getDouble(1) * scale).toFloat())
+        }, Press.FINGER))
+    }
+
+    // The ordinary picker branch of the QR image fallback: no capture attribute, so Wry opens the system chooser (DocumentsUI)
+    // and the chosen bytes reach the page through the real result path. It needs only the emulator, so it runs with the shared cases.
+    @Test fun qrImageFallbackChoosesAFileThroughTheRealSystemPicker() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val scenario = NativeActivityFixture.scenario
+        val name = "lazysh-qr-${UUID.randomUUID()}.png"
+        val file = ".theme-qr-panel input[type=file]"
+        val saved = "localStorage.getItem('lazysh.preferences.v1')"
+        val noPreview = "!document.querySelector('.theme-preview')"
+        val staged = OwnedFileChooser.stage(instrumentation, "theme-qr.png", name)
+        var primary: Throwable? = null
+        var propagating = false
+        try {
+            openAppearance(scenario, "QR image fallback workspace")
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
+            awaitDocument(scenario, "QR image fallback enabled", "Boolean(document.querySelector(${JSONObject.quote(file)}) && !document.querySelector(${JSONObject.quote(file)}).disabled)")
+            assertEquals("No preview before a file is chosen", "true", evaluate(scenario, noPreview))
+            val before = evaluate(scenario, saved)
+            fingerTapElement(scenario, file)
+            OwnedFileChooser.choose(instrumentation, name)
+            awaitDocument(scenario, "preview decoded from the chosen image", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'")
+            assertEquals("A chosen image must not apply itself", before, evaluate(scenario, saved))
+            webButton("Cancel preview")
+            awaitDocument(scenario, "chosen-image preview discarded", noPreview)
+            assertEquals("Discarding the preview must not apply preferences", before, evaluate(scenario, saved))
+            println("lazysh QR UI: real system picker chose the owned image; preview shown, not applied")
+        } catch (failure: Throwable) { primary = failure; propagating = true; throw failure }
+        finally {
+            fun cleanup(action: () -> Unit) { try { action() } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary!!.addSuppressed(failure)
+            } }
+            // A picker still open would hide the app from every later case.
+            cleanup { OwnedFileChooser.dismiss(instrumentation) }
+            cleanup { closePreferences() }
+            cleanup { OwnedFileChooser.unstage(instrumentation, staged) }
             if (!propagating && primary != null) throw primary!!
         }
     }
@@ -1688,18 +1912,46 @@ class NativeWorkspaceTest {
         onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.SLOW, point(from), point(to), Press.FINGER))
     }
 
-    private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
-        val menu = "[role=dialog][aria-label='Workspace tools']"
+    private val workspaceToolsDialog = "[role=dialog][aria-label='Workspace tools']"
+
+    /** A phone-width connected workspace, like a wide one, keeps Preferences in its tools menu. */
+    private fun openPreferences(scenario: ActivityScenario<MainActivity>) {
+        if (evaluate(scenario, workspaceElementVisible("button[aria-label='Preferences']")) == "true")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        else workspaceMenuAction(scenario, "Preferences")
+    }
+
+    /** An open hosts drawer makes the workspace inert, and an earlier case on the shared activity can leave it open. */
+    private fun closeHostsDrawer(scenario: ActivityScenario<MainActivity>, stage: String) {
+        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
+        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
+            awaitDocument(scenario, stage, "!" + workspaceElementVisible(closeHosts))
+        }
+    }
+
+    private fun openWorkspaceTools(scenario: ActivityScenario<MainActivity>, deadline: Long) {
         keepTopBar(scenario)
-        if (evaluate(scenario, workspaceElementVisible(menu)) != "true") {
+        if (evaluate(scenario, workspaceElementVisible(workspaceToolsDialog)) != "true") {
             awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"), deadline = deadline)
             val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
             trigger.perform(webScrollIntoView())
-            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline)
+            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline, observe = { remaining ->
+                evaluate(scenario, """
+                    (()=>{const bounds=document.querySelector('button.mobile-tools').getBoundingClientRect(),hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+                      return JSON.stringify({bounds:[bounds.left,bounds.top,bounds.right,bounds.bottom],viewport:[innerWidth,innerHeight],
+                        hit:hit&&(hit.tagName+'.'+hit.className+'['+(hit.getAttribute('aria-label')||'')+']'),inert:document.querySelector('main.workspace')?.inert});})()
+                """, remaining)
+            })
             trigger.perform(webClick())
         }
-        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
+        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(workspaceToolsDialog), deadline = deadline)
+    }
+
+    private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+        val menu = workspaceToolsDialog
+        openWorkspaceTools(scenario, deadline)
         // Tool groups are carousel pages: turn them with a real finger swipe until the action's page is shown.
         val pageOffset = """
             (()=>{const target=Array.from(document.querySelectorAll(${JSONObject.quote("$menu .workspace-tools-page button")}))
@@ -1773,11 +2025,7 @@ class NativeWorkspaceTest {
     }
 
     private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
-        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
-        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
-            awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
-        }
+        closeHostsDrawer(scenario, "hosts closed before owned disconnect")
         val disconnect = "button[aria-label='Disconnect $name']"
         if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
             selectOwnedConnection(scenario, name, requireMosh)
@@ -2074,6 +2322,20 @@ class NativeWorkspaceTest {
                     val row=JSONObject(clamped.failureSummary()).getJSONArray("events").getJSONObject(0)
                     assertEquals(expectedTime,row.getInt("dispatchAtMs"));assertEquals(expectedTime,row.getInt("returnedAtMs"))
                 }
+                val vertical = OwnedFingerWindowObserver(delegate, epoch) { epoch + 2 }
+                val down = android.view.MotionEvent.obtain(epoch, epoch, android.view.MotionEvent.ACTION_DOWN, 10f, 200f, 0)
+                val move = android.view.MotionEvent.obtain(epoch, epoch + 1, android.view.MotionEvent.ACTION_MOVE, 10f, 175f, 0)
+                try {
+                    expected = down; vertical.dispatchTouchEvent(down)
+                    expected = move; vertical.dispatchTouchEvent(move)
+                    val movement = JSONObject(vertical.verticalFailureSummary())
+                    assertEquals("observed", movement.getString("state"))
+                    val rows = movement.getJSONArray("events")
+                    assertEquals(0.0, rows.getJSONObject(0).getDouble("rawYFromDown"), 0.0)
+                    assertEquals(-25.0, rows.getJSONObject(1).getDouble("rawYFromDown"), 0.0)
+                    assertFalse(movement.toString().contains("200")); assertFalse(movement.toString().contains("point"))
+                    assertEquals("unavailable", JSONObject(observer.verticalFailureSummary()).getString("state"))
+                } finally { down.recycle(); move.recycle(); expected = event }
                 val unavailable = OwnedFingerWindowObserver(delegate, epoch) { throw IllegalStateException("private observation failure") }
                 handled = false
                 assertFalse(unavailable.dispatchTouchEvent(event))
@@ -2761,6 +3023,9 @@ class NativeWorkspaceTest {
             require(Regex("w[0-9]+:p[0-9]+").matches(target.getString("paneId")) && target.getString("paneId").length <= 50)
             require(Regex("NAV_(SOURCE|SHELL|AGENT)_[a-f0-9]{32}").matches(target.getString("marker")))
         }
+        // The host harness reports these states to the real server; the board must render exactly them.
+        val statusText = mapOf("working" to "Working", "blocked" to "Needs attention")
+        require(statusText.containsKey(source.getString("status")) && statusText.containsKey(agent.getString("status")) && !shell.has("status"))
         val first = "$parent / $server"
         val second = "$first / $server"
         val labels = listOf(parent, first, second)
@@ -2779,32 +3044,7 @@ class NativeWorkspaceTest {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val directory = java.io.File(requireNotNull(instrumentation.targetContext.getExternalFilesDir(null)), "herdr-navigation")
             require(directory.mkdirs() || directory.isDirectory)
-            if (android.os.Build.VERSION.SDK_INT < 29) throw AssertionError("Owned navigation capture requires frame commits")
-            val committed = CountDownLatch(1)
-            val frame = Runnable { committed.countDown() }
-            var observing = true
-            var tree: android.view.ViewTreeObserver? = null
-            scenario.onActivity { activity ->
-                val view = checkNotNull(webView(activity.window.decorView))
-                assertTrue("Owned navigation WebView must render frames", view.isAttachedToWindow && view.isHardwareAccelerated)
-                view.postVisualStateCallback(capture.toLong(), object : WebView.VisualStateCallback() {
-                    override fun onComplete(requestId: Long) {
-                        if (observing && view.isAttachedToWindow) {
-                            tree = view.viewTreeObserver
-                            tree?.registerFrameCommitCallback(frame)
-                            view.invalidate()
-                        }
-                    }
-                })
-            }
-            val submitted = try { committed.await(5, TimeUnit.SECONDS) } finally {
-                scenario.onActivity {
-                    observing = false
-                    tree?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(frame)
-                }
-            }
-            assertTrue("Owned navigation DOM must reach a committed frame", submitted)
-            val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            val bitmap = committedScreenshot(scenario, capture.toLong())
             try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
             finally { bitmap.recycle() }
         }
@@ -2845,7 +3085,14 @@ class NativeWorkspaceTest {
                 Thread.sleep(100)
             } while (System.nanoTime() < settled)
         }
-        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false) {
+        // Herdr marks exactly the focused space, tab and pane current, and the marker follows the real shared focus.
+        var focused = source
+        fun currentLabels(target: JSONObject) = JSONArray(when {
+            target === agent -> listOf(navigation.getString("workspaceLabel"), agent.getString("label"), "codex")
+            target === shell -> listOf(navigation.getString("workspaceLabel"), shell.getString("label"), shell.getString("paneId"))
+            else -> listOf(source.getString("label"), "codex")
+        })
+        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false, status: String? = null) {
             // From the parent SSH display, the switch activates the first existing Herdr display.
             val display = if (fromParent) 1 else 2
             if (fromParent) {choose(0); closeSoftKeyboard()}
@@ -2853,19 +3100,74 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
             val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
-            val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]"
+            val state = if (status == null) "" else "[@data-agent-status='$status'][.//span[contains(@class,'row-tag-status')][normalize-space(.)='${statusText.getValue(status)}']]"
+            val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]$state"
             awaitDocument(scenario, "shared Herdr navigation target ready", """
                 (()=>{const rows=document.evaluate(${JSONObject.quote(row)},document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);
                   return Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.') &&
                     rows.snapshotLength===1 && !rows.snapshotItem(0).disabled;})()
+            """)
+            if (mode == "Workspaces") awaitDocument(scenario, "shared Herdr tree marks the focused space, tab and pane current", """
+                (()=>{const marked=Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) .herdr-navigation-row[data-current="true"]')).map(x=>x.querySelector('strong')?.textContent.trim());
+                  return marked.length===3 && ${currentLabels(focused)}.every(label=>marked.includes(label));})()
             """)
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
             screenshot(if (mode == "Agents") "agents" else "spaces")
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webClick())
             keyboardStaysClosed(display, "$mode $targetLabel")
             visible(display, target)
+            focused = target
             select(1, target) // Stock public focus must move the other real client too.
             select(2, target)
+        }
+        // The Sessions panel's Herdr browser sends the typed create, rename, split and zoom actions (`--no-focus`, so the shared
+        // focus the checks above rely on stays put). The host reads the workspace back from Herdr itself; the panel's refreshed
+        // tree is only the synchronization point and the pane id source here.
+        fun panelActions() {
+            val nonce = navigation.getString("workspaceLabel").removePrefix("NAV_WORKSPACE_")
+            require(Regex("[a-f0-9]{32}").matches(nonce)) { "Owned Herdr nonce required" }
+            val created = "ANDROID_CREATED_$nonce"
+            val renamed = "ANDROID_RENAMED_$nonce"
+            val directory = requireNotNull(java.io.File(herdr.getString("transcript")).parent) { "Owned Herdr directory required" }
+            require(directory.startsWith("/")) { "Owned Herdr directory must be absolute" }
+            val section = "section[aria-label='Herdr $server workspaces']"
+            val sectionPath = "//section[@aria-label='Herdr $server workspaces']"
+            fun workspacePath(label: String) = "$sectionPath/details[starts-with(normalize-space(./summary),'$label')]"
+            val idle = "(()=>{const s=document.querySelector(${JSONObject.quote(section)});return !!s && !s.querySelector('[role=status],[role=alert]');})()"
+            fun summaries() = "Array.from(document.querySelectorAll(${JSONObject.quote("$section > details > summary")})).map(x=>x.textContent.trim())"
+            fun paneIds(label: String) = """(()=>{const w=Array.from(document.querySelectorAll(${JSONObject.quote("$section > details")}))
+                .find(x=>(x.querySelector(':scope > summary')?.textContent??'').trim().startsWith(${JSONObject.quote(label)}));
+                return w ? Array.from(w.querySelectorAll('.mux-row strong')).map(x=>x.textContent.trim().split(' · ')[0]) : [];})()"""
+            fun clickPath(path: String) = onWebView().withElement(findElement(Locator.XPATH, path)).perform(webScrollIntoView()).perform(webClick())
+            val labelInput = "$section form label:nth-of-type(1) input"
+            val directoryInput = "$section form label:nth-of-type(2) input"
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "Herdr browser list ready", "Array.from(document.querySelectorAll('.multiplexer-panel button')).filter(x=>x.textContent.trim()==='List herdr sessions' && !x.disabled).length===1")
+            click("List herdr sessions")
+            awaitDocument(scenario, "Herdr browser lists $server", "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Browse Herdr $server' && !x.disabled).length===1")
+            click("Browse Herdr $server")
+            awaitDocument(scenario, "Herdr browser reads its two workspaces", "$idle && ${summaries()}.length===2")
+            // Create: a new workspace in the fixture directory, not focused.
+            click("New Herdr workspace")
+            awaitDocument(scenario, "Herdr create form", "document.querySelectorAll(${JSONObject.quote(directoryInput)}).length===1")
+            typeInto(scenario, labelInput, created); closeSoftKeyboard()
+            replaceNativeText(scenario, directoryInput, directory); closeSoftKeyboard()
+            clickPath("$sectionPath//form//button[normalize-space(.)='Save Herdr workspace']")
+            awaitDocument(scenario, "Herdr panel lists the created workspace", "$idle && ${summaries()}.length===3 && ${summaries()}.some(x=>x.startsWith(${JSONObject.quote(created)}))")
+            // Rename: the form starts from the current label.
+            clickPath("${workspacePath(created)}/div[contains(@class,'tool-bar')]/button[normalize-space(.)='Rename Herdr workspace']")
+            awaitDocument(scenario, "Herdr rename form", "document.querySelector(${JSONObject.quote(labelInput)})?.value===${JSONObject.quote(created)}")
+            replaceNativeText(scenario, labelInput, renamed); closeSoftKeyboard()
+            clickPath("$sectionPath//form//button[normalize-space(.)='Save Herdr workspace']")
+            awaitDocument(scenario, "Herdr panel shows the renamed workspace", "$idle && ${summaries()}.some(x=>x.startsWith(${JSONObject.quote(renamed)})) && !${summaries()}.some(x=>x.startsWith(${JSONObject.quote(created)}))")
+            // Split down the new workspace's only pane, then zoom it.
+            awaitDocument(scenario, "the renamed workspace has one pane", "${paneIds(renamed)}.length===1")
+            val pane = evaluate(scenario, "${paneIds(renamed)}[0]").trim('"')
+            require(Regex("w[0-9]+:p[0-9]+").matches(pane)) { "Herdr panel pane id invalid" }
+            clickPath("${workspacePath(renamed)}//button[normalize-space(.)='Split $pane down']")
+            awaitDocument(scenario, "Herdr split adds a second pane", "$idle && ${paneIds(renamed)}.length===2 && ${paneIds(renamed)}.includes(${JSONObject.quote(pane)})")
+            clickPath("${workspacePath(renamed)}//button[normalize-space(.)='Zoom $pane']")
+            awaitDocument(scenario, "Herdr zoom settled without an error", "$idle && ${paneIds(renamed)}.length===2")
         }
         var primaryFailure: Throwable? = null
         try {
@@ -2886,17 +3188,18 @@ class NativeWorkspaceTest {
             assertEquals("Stock Herdr cannot offer a private receipt", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             navigate("Workspaces", navigation.getString("workspaceLabel"), agent)
             navigate("Workspaces", shell.getString("label"), shell, fromParent = true)
-            navigate("Agents", "codex", agent, agent.getString("label"))
+            navigate("Agents", "codex", agent, agent.getString("label"), status = agent.getString("status"))
             navigate("Workspaces", shell.getString("paneId"), shell)
             sessionView(scenario, "Transcript")
             assertEquals("Navigation cannot create stock input authority", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             reopenSource()
             assertEquals("Reopening the old transcript cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             // Restore the exact old target through public navigation; stock still has no private receipt.
-            navigate("Agents", "codex", source, source.getString("label"))
+            navigate("Agents", "codex", source, source.getString("label"), status = source.getString("status"))
             reopenSource()
             assertEquals("Returning to the old destination cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
-            println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus and unavailable private Chat input; no input action dispatched")
+            panelActions()
+            println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus, unavailable private Chat input, and the panel's create, rename, split and zoom; no input action dispatched")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -2913,11 +3216,143 @@ class NativeWorkspaceTest {
         }
     }
 
+    // The attached display a multiplexer case opened is closed whatever the case did; a failure to close it never replaces the case's own failure.
+    private fun closeOwnedDisplay(scenario: ActivityScenario<MainActivity>, child: String, primaryFailure: Throwable?) {
+        try {
+            if (evaluate(scenario, present("button[aria-label='Disconnect $child']")) == "true") endOwnedConnection(scenario, child)
+        } catch (cleanup: Throwable) {
+            if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+        }
+    }
+
+    // Opens the synthetic transcript the host companion reads, stages a draft, and sends it through the explicit
+    // Choose, Confirm and Send steps to the pane this tmux display shows. The host later reads that exact pane back.
+    private fun verifyOwnedTmuxChat(scenario: ActivityScenario<MainActivity>, chat: JSONObject, shown: JSONObject, session: String, label: String) {
+        val transcript = chat.getString("transcript")
+        val record = chat.getString("record")
+        val draft = chat.getString("draft")
+        require(transcript.startsWith("/") && transcript.length <= 4096 && transcript.none { it.isISOControl() })
+        require(Regex("OWNED_TMUX_RECORD_[a-f0-9]{32}").matches(record))
+        require(draft.toByteArray(Charsets.UTF_8).size in 1..4096 && draft.none { it.isISOControl() })
+        require(chat.getString("window") == shown.getString("name"))
+        val region = "section[aria-label='Terminal input']"
+        val path = "input[placeholder='Absolute host path to session.jsonl']"
+        val composer = "form.chat-composer textarea"
+        fun hasButton(text: String) = "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote(text)}).length===1"
+        fun press(text: String) = onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='$text']")).perform(webScrollIntoView()).perform(webClick())
+        sessionView(scenario, "Transcript")
+        awaitDocument(scenario, "tmux transcript controls ready", present(path))
+        typeInto(scenario, path, transcript)
+        closeSoftKeyboard()
+        press("Open transcript")
+        awaitDocument(scenario, "real companion transcript read for the tmux display",
+            "document.querySelector('.chat-messages')?.textContent.includes(${JSONObject.quote(record)}) && Boolean(document.querySelector(${JSONObject.quote(region)}))",
+            observe = { remaining -> evaluate(scenario, """
+                (()=>{const chat=document.querySelector('.chat-panel');
+                  return JSON.stringify({chatPanel:!!chat,shown:chat?.hidden===false,messages:(document.querySelector('.chat-messages')?.textContent??'').slice(0,80),
+                    region:!!document.querySelector(${JSONObject.quote(region)}),alert:(chat?.querySelector('[role=alert]')?.textContent??'').slice(0,160),
+                    path:(chat?.querySelector('input[required]')?.value??'').length,tabs:document.querySelectorAll('.session-tabs [role=tab]').length});})()
+            """, remaining) })
+        assertEquals("No Send before the destination is confirmed", "false", evaluate(scenario, hasButton("Send to terminal")))
+        pasteOwnedText(scenario, composer, draft, label)
+        closeSoftKeyboard()
+        assertEquals("Native paste must preserve the exact draft", "true", evaluate(scenario, "document.querySelector(${JSONObject.quote(composer)})?.value===${JSONObject.quote(draft)}"))
+        press("Choose terminal destination")
+        // The confirmation names the live display's session, window and pane; choosing alone never enables Send.
+        awaitDocument(scenario, "tmux destination names the displayed window", """
+            (()=>{const rows=Array.from(document.querySelectorAll(${JSONObject.quote("$region dl")}));if(rows.length!==1)return false;
+              const text=Array.from(rows[0].children).map(x=>x.textContent.trim());
+              return text.join('|').includes(${JSONObject.quote("tmux session|$session|tmux window|${shown.getString("name")}|")}) && ${hasButton("Confirm this destination")};})()
+        """)
+        assertEquals("Choosing the destination must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
+        press("Confirm this destination")
+        awaitDocument(scenario, "explicit tmux destination binding", hasButton("Send to terminal"))
+        press("Send to terminal")
+        awaitDocument(scenario, "tmux delivery acknowledged",
+            "Array.from(document.querySelectorAll('[role=status]')).some(x=>x.textContent==='Text and Enter sent to the confirmed pane.')")
+        assertEquals("Only the acknowledged draft is cleared", "true", evaluate(scenario, "document.querySelector(${JSONObject.quote(composer)})?.value===''"))
+        sessionView(scenario, "Terminal")
+    }
+
+    /**
+     * tmux copy mode through the packaged UI. The prefix shortcut "Copy mode" enters it on the displayed pane; native keys
+     * then move onto the marker line, select it and copy it. tmux answers with an OSC 52 write, which the terminal holds for
+     * consent, so the line reaches the system clipboard only after a real tap on Allow. The host proves the pane's copy mode
+     * and the buffer tmux copied.
+     */
+    private fun verifyTmuxCopyMode(scenario: ActivityScenario<MainActivity>, marker: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        fun copied(): String? {
+            val text = AtomicReference<String?>()
+            instrumentation.runOnMainSync { text.set(clipboard.primaryClip?.getItemAt(0)?.coerceToText(instrumentation.targetContext)?.toString()) }
+            return text.get()
+        }
+        // A selected line carries its newline.
+        val line = "$marker\n"
+        val screenHasIndicator = terminalScreenContains("[0/0]")
+        /** A real finger tap at the middle of the one matching element, hit-tested so a covering view cannot take it. */
+        fun tap(elements: String) {
+            val css = JSONArray(evaluate(scenario, """
+                (()=>{const matches=$elements;if(matches.length!==1||matches[0].disabled)throw Error('Owned enabled tap target required');
+                  const rect=matches[0].getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+                  if(!matches[0].contains(document.elementFromPoint(x,y)))throw Error('Owned tap hit target required');
+                  return [x,y,innerWidth];})()
+            """))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2); view.getLocationOnScreen(origin)
+                val scale = view.width / css.getDouble(2)
+                floatArrayOf((origin[0] + css.getDouble(0) * scale).toFloat(), (origin[1] + css.getDouble(1) * scale).toFloat())
+            }, Press.FINGER))
+        }
+        sessionView(scenario, "Sessions")
+        val region = "section[aria-label='tmux prefix shortcuts']"
+        val ready = "Array.from(document.querySelectorAll(${JSONObject.quote("$region button")})).filter(x=>x.textContent.trim()==='Copy mode' && !x.disabled).length===1"
+        awaitDocument(scenario, "tmux Copy mode shortcut ready", ready)
+        onWebView().withElement(findElement(Locator.XPATH, "//section[@aria-label='tmux prefix shortcuts']//button[normalize-space(.)='Copy mode']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "tmux Copy mode shortcut sent", "$ready && !document.querySelector(${JSONObject.quote("$region [role=alert]")})")
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "tmux copy mode shows its position indicator", screenHasIndicator)
+        // The attached display is the visible pane; the SSH tab's terminal below it stays mounted. A finger taps it to focus
+        // its input; the hidden input itself is not manipulable.
+        tap("Array.from(document.querySelectorAll('.terminal-pane')).filter(p=>p.style.display!=='none').map(p=>p.querySelector('.xterm-screen'))")
+        awaitDocument(scenario, "tmux terminal input focused", "document.activeElement===Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none')?.querySelector('.xterm-helper-textarea')")
+        // The cursor starts below the marker: k moves onto it, V selects the line and Enter copies it and leaves copy mode.
+        // One key at a time with a pause, as a finger types: the host check showed tmux 3.4 not copying when the three keys arrived in one write.
+        fun press(key: EspressoKey) {
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(key))
+            Thread.sleep(150)
+        }
+        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_K).build())
+        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_V).withShiftPressed(true).build())
+        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_ENTER).build())
+        awaitDocument(scenario, "tmux copy leaves copy mode", "!($screenHasIndicator)")
+        awaitDocument(scenario, "tmux copy reaches the remote clipboard request",
+            "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')==='Remote clipboard request' && x.textContent.includes(${JSONObject.quote(marker)}))")
+        assertTrue("The copied line must not reach the clipboard before Allow", copied() != line)
+        // navigator.clipboard.writeText needs the user activation of a real touch, which a scripted click does not give.
+        closeSoftKeyboard()
+        tap("Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Allow this copy')")
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (copied() != line) {
+            assertTrue("Allow did not write the copied tmux line to the system clipboard", System.nanoTime() < deadline)
+            Thread.sleep(100)
+        }
+        // SystemUI previews a copied clip over the bottom-left for a few seconds; wait it out before the next tap.
+        awaitClipboardPreviewGone(System.nanoTime())
+        println("lazysh tmux: copy mode entered from its shortcut, a line copied and the system clipboard written after Allow")
+    }
+
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
-    // window control, tab-close detach and reattach. The host independently proves
-    // the remote window state and that the original server and panes survived.
-    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String) {
+    // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
+    // from the Sessions panel, a two-finger pinch zoom and unzoom and window swipes on the display,
+    // tab-close detach and reattach. The host independently proves the remote
+    // window state, the Chat draft in the original pane, that the split left the original pane untouched
+    // and the zoom returned, that the gestures changed the zoom flag and active window in order,
+    // and that the original server and panes survived.
+    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
         val windows = tmux.getJSONArray("windows")
@@ -2926,6 +3361,7 @@ class NativeWorkspaceTest {
         val beta = windows.getJSONObject(1)
         require(alpha.getInt("index") == 0 && alpha.getString("name") == "alpha" && beta.getInt("index") == 1 && beta.getString("name") == "beta")
         for (window in listOf(alpha, beta)) require(Regex("TMUX_(ALPHA|BETA)_[a-f0-9]{32}").matches(window.getString("marker")))
+        for (window in listOf(alpha, beta)) require(Regex("%[0-9]{1,9}").matches(window.getString("paneId")))
         val child = "$parent / $server"
         val labels = JSONArray(listOf(parent, child))
         val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
@@ -2933,6 +3369,11 @@ class NativeWorkspaceTest {
         val jumpPanel = "section[aria-label='tmux Jump To']"
         fun title(window: JSONObject) = "${window.getInt("index")}: ${window.getString("name")}"
         fun click(xpath: String) = onWebView().withElement(findElement(Locator.XPATH, xpath)).perform(webScrollIntoView()).perform(webClick())
+        // Jump To lists each window's panes under it, and its one Current marker sits on the pane row of the displayed window.
+        val jumpMarker = "(panel=>{const rows=Array.from(panel.querySelectorAll('.mux-row')),marked=Array.from(panel.querySelectorAll('.mux-row button[aria-current=location]'))," +
+            "row=marked.length===1?marked[0].closest('.mux-row'):null,owner=row?rows.slice(0,rows.indexOf(row)).reverse().find(x=>!x.classList.contains('mux-pane-row')):null;" +
+            "return {windows:rows.filter(x=>!x.classList.contains('mux-pane-row')).map(x=>x.textContent.trim()),panes:rows.filter(x=>x.classList.contains('mux-pane-row')).length," +
+            "marked:marked.length,onPane:!!row?.classList.contains('mux-pane-row'),owner:owner?.textContent.trim()};})"
         fun visible(target: JSONObject, other: JSONObject, stage: String) {
             sessionView(scenario, "Terminal")
             val forbidden = JSONArray(listOf(other.getString("marker")))
@@ -2968,15 +3409,16 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "live tmux Jump To marks ${title(current)} current", """
                 (()=>{const panels=document.querySelectorAll(${JSONObject.quote(jumpPanel)});
                   if(panels.length!==1 || panels[0].querySelector('[role=status],[role=alert]'))return false;
-                  const buttons=Array.from(panels[0].querySelectorAll('.mux-row button')),marked=buttons.filter(x=>x.getAttribute('aria-current')==='location');
-                  return buttons.length===2 && marked.length===1 && marked[0].textContent.trim()===${JSONObject.quote(title(current) + " · Current")} &&
-                    buttons.some(x=>x.textContent.trim()===${JSONObject.quote(title(target))} && !x.disabled);})()
+                  const found=$jumpMarker(panels[0]);
+                  return found.windows.length===2 && found.panes===2 && found.marked===1 && found.onPane && found.owner===${JSONObject.quote(title(current))} &&
+                    found.windows.includes(${JSONObject.quote(title(target))});})()
             """)
             click("//section[@aria-label='tmux Jump To']//button[normalize-space(.)='${title(target)}']")
             awaitDocument(scenario, "tmux Jump To reached ${title(target)}", """
                 (()=>{const panel=document.querySelector(${JSONObject.quote(jumpPanel)});
-                  return !panel || (!panel.querySelector('[role=status],[role=alert]') &&
-                    panel.querySelector('.mux-row button[aria-current=location]')?.textContent.trim()===${JSONObject.quote(title(target) + " · Current")});})()
+                  if(!panel)return true;
+                  const found=$jumpMarker(panel);
+                  return !panel.querySelector('[role=status],[role=alert]') && found.marked===1 && found.onPane && found.owner===${JSONObject.quote(title(target))};})()
             """)
         }
         fun numbered(target: JSONObject) {
@@ -2997,6 +3439,52 @@ class NativeWorkspaceTest {
                 if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") selectOwnedConnection(scenario, parent)
                 else onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(1) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
             }
+        }
+        // The Sessions panel lists each window's panes; the ids it shows are tmux's own, read after the action ran.
+        val betaPanes = """
+            (()=>{const window=Array.from(document.querySelectorAll('.tool-panel.multiplexer-panel .mux-list > details > details'))
+              .find(x=>(x.querySelector(':scope > summary')?.textContent??'').trim().startsWith(${JSONObject.quote(title(beta))}));
+              return window ? Array.from(window.querySelectorAll(':scope > .mux-row strong')).map(x=>x.textContent.trim().split(' · ')[1]) : [];})()
+        """
+        // The panel rereads the host when the Sessions view opens, so a pane button exists only once that read finished.
+        fun clickPaneButton(label: String) {
+            awaitDocument(scenario, "tmux pane control $label ready",
+                "Array.from(document.querySelectorAll('section.multiplexer-panel button')).filter(x=>x.textContent.trim()===${JSONObject.quote(label)} && !x.disabled).length===1")
+            click("//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='$label']")
+        }
+        // The display is the real tmux client: a zoomed pane fills it, so beta's marker (printed by the original pane) leaves the screen.
+        fun markerOnScreen(shown: Boolean, stage: String) {
+            sessionView(scenario, "Terminal")
+            awaitDocument(scenario, stage, """
+                (()=>{const visible=n=>n.getClientRects().length>0&&n.getBoundingClientRect().width>0;
+                  const panes=Array.from(document.querySelectorAll('.terminal-pane')).filter(visible);
+                  const screens=panes.length===1?Array.from(panes[0].querySelectorAll('.xterm-screen')).filter(visible):[];
+                  // A screen that is not painted yet has no text at all, so a missing marker on it proves nothing.
+                  return screens.length===1 && screens[0].textContent.trim().length>0 &&
+                    screens[0].textContent.includes(${JSONObject.quote(beta.getString("marker"))})===$shown;})()
+            """) { ms -> evaluate(scenario, """(()=>{const visible=n=>n.getClientRects().length>0&&n.getBoundingClientRect().width>0;
+                const panes=Array.from(document.querySelectorAll('.terminal-pane')).filter(visible);
+                const screens=panes.length===1?Array.from(panes[0].querySelectorAll('.xterm-screen')).filter(visible):[];
+                return [panes.length,screens.length,screens[0]?.textContent.trim().length>0,
+                  screens[0]?.textContent.includes(${JSONObject.quote(beta.getString("marker"))})].join('|');})()""", ms) }
+        }
+        // Split writes a second pane under beta's original one; the panel's refreshed tree is the witness that the action ran.
+        fun splitBeta(): String {
+            val original = beta.getString("paneId")
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "tmux ${title(beta)} lists only its original pane", "JSON.stringify($betaPanes)===${JSONObject.quote("[\"$original\"]")}")
+            clickPaneButton("Split $original top/bottom")
+            awaitDocument(scenario, "tmux split adds a second pane to ${title(beta)}", "(()=>{const ids=$betaPanes;return ids.length===2 && ids.includes(${JSONObject.quote(original)});})()")
+            val added = evaluate(scenario, "$betaPanes.find(id=>id!==${JSONObject.quote(original)})").trim('"')
+            require(Regex("%[0-9]{1,9}").matches(added) && added != original) { "tmux split must add a distinct pane" }
+            markerOnScreen(true, "tmux split keeps the original pane's output on the display")
+            return added
+        }
+        // Zoom toggles: the zoomed pane fills the whole display and the toggle returns the split layout.
+        fun zoomPane(pane: String, zoomed: Boolean) {
+            sessionView(scenario, "Sessions")
+            clickPaneButton("Zoom $pane")
+            markerOnScreen(!zoomed, if (zoomed) "tmux zoom of $pane hides the original pane's output" else "tmux zoom toggle shows the original pane's output again")
         }
         // Agent view is another view of this same tmux display: Android back returns to its terminal,
         // the same xterm node with the same scrollback height, without reattaching.
@@ -3065,6 +3553,29 @@ class NativeWorkspaceTest {
             stripShows(renamed, false, "tab strip no longer shows the closed window")
             listed(stage = "Workspaces panel lists only the original windows again")
         }
+        // Two real fingers on the attached display run the default gestures against the real tmux client behind it. The split's pane is beta's active pane (the
+        // Sessions panel's zoom made it so), so a pinch zooms it and hides beta's original marker, a second pinch returns it, then a two-finger swipe left selects
+        // the next window and a swipe right the previous one. Each state is held long enough for the host's tmux sampler (about every 100 ms) to read the active window and zoom flag.
+        fun gestures() {
+            val canvas = "Array.from(document.querySelectorAll('.terminal-pane')).filter(p=>p.style.display!=='none').map(p=>p.querySelector('.terminal-canvas')).find(Boolean)"
+            fun at(vararg points: Double) = listOf(doubleArrayOf(points[0], points[1]), doubleArrayOf(points[2], points[3]))
+            val together = at(-40.0, 0.0, 40.0, 0.0)
+            val apart = at(-110.0, 0.0, 110.0, 0.0)
+            fun swipe(dx: Double) = twoFingerGesture(scenario, canvas, together, at(-40.0 + dx, 0.0, 40.0 + dx, 0.0))
+            val seen = 1_000L
+            markerOnScreen(true, "beta's original pane shown before the pinch")
+            twoFingerGesture(scenario, canvas, together, apart)
+            markerOnScreen(false, "a pinch out zooms the split pane")
+            Thread.sleep(seen)
+            twoFingerGesture(scenario, canvas, apart, together)
+            markerOnScreen(true, "a second pinch returns the split layout")
+            Thread.sleep(seen)
+            swipe(-120.0)
+            visible(alpha, beta, "a two-finger swipe left shows the next window")
+            Thread.sleep(seen)
+            swipe(120.0)
+            visible(beta, alpha, "a two-finger swipe right returns to beta")
+        }
         val lifecycle = tmux.getJSONArray("lifecycle")
         require(lifecycle.length() == 2) { "Owned tmux window names required" }
         var primaryFailure: Throwable? = null
@@ -3073,25 +3584,184 @@ class NativeWorkspaceTest {
             visible(alpha, beta, "attached tmux shows its current window")
             agentViewBack()
             visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            // Copy mode first: it needs the marker line right above the cursor, before Chat input adds lines to this pane.
+            verifyTmuxCopyMode(scenario, alpha.getString("marker"))
+            visible(alpha, beta, "tmux copy mode leaves the displayed window in place")
+            // Chat input returns to the pane this display shows (alpha), and the host reads that pane back by id.
+            tmux.optJSONObject("chat")?.let { verifyOwnedTmuxChat(scenario, it, alpha, server, label) }
+            visible(alpha, beta, "Chat input leaves the displayed tmux window in place")
             jump(beta, alpha)
             visible(beta, alpha, "tmux Jump To shows the selected window")
             numbered(alpha)
             visible(alpha, beta, "tmux numbered window control shows its window")
             jump(beta, alpha)
             visible(beta, alpha, "tmux Jump To returns to the selected window")
+            val added = splitBeta()
+            zoomPane(added, zoomed = true)
             detach("by closing its tab")
             attach(beta, "after detach")
+            // The zoom belongs to the host's window, so the reattached display still shows only the zoomed pane.
+            markerOnScreen(false, "reattached tmux keeps the zoomed pane")
+            zoomPane(added, zoomed = false)
             visible(beta, alpha, "reattached tmux shows the same selected window and pane")
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
+            gestures()
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, a created, renamed and closed window, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach and reattach completed")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            closeOwnedDisplay(scenario, child, primaryFailure)
+        }
+    }
+
+    // The host harness owns this pinned Zellij session and the command pane of each of its two tabs. This case drives only the
+    // packaged UI: product discovery, the session list, attach, the numbered tab control, tab-close detach and reattach. While it
+    // runs, the host reads the active tab back with `zellij action list-tabs --json` and afterwards proves that the original panes
+    // were never restarted.
+    private fun verifyOwnedZellij(scenario: ActivityScenario<MainActivity>, zellij: JSONObject, parent: String) {
+        val session = zellij.getString("name")
+        require(Regex("owned-zellij-[a-f0-9]{12}").matches(session)) { "Owned Zellij fixture required" }
+        val tabs = zellij.getJSONArray("tabs")
+        require(tabs.length() == 2) { "Owned Zellij topology required" }
+        val alpha = tabs.getJSONObject(0)
+        val beta = tabs.getJSONObject(1)
+        require(alpha.getInt("position") == 0 && alpha.getString("name") == "alpha" && beta.getInt("position") == 1 && beta.getString("name") == "beta")
+        for (tab in listOf(alpha, beta)) require(Regex("ZELLIJ_(ALPHA|BETA)_[a-f0-9]{32}").matches(tab.getString("marker")))
+        val child = "$parent / $session"
+        val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
+        require(observer.length <= 4096)
+        val panel = "section.multiplexer-panel"
+        val panelPath = "//section[contains(@class,'multiplexer-panel')]"
+        val controls = "section[aria-label='Zellij $session controls']"
+        val quote = JSONObject::quote
+        fun button(root: String, label: String) = "Array.from(document.querySelectorAll(${quote("$root button")})).filter(x=>x.textContent.trim()===${quote(label)} && !x.disabled).length===1"
+        fun clickButton(xpathRoot: String, label: String) =
+            onWebView().withElement(findElement(Locator.XPATH, "$xpathRoot//button[normalize-space(.)='$label']")).perform(webScrollIntoView()).perform(webClick())
+        // The Sessions panel names the pinned Zellij after product discovery and lists exactly this one session on request.
+        fun listSessions(stage: String) {
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "Zellij discovered $stage", """
+                (()=>{const panels=document.querySelectorAll(${quote(panel)});
+                  return panels.length===1 && !panels[0].querySelector('.loading,[role=alert]') &&
+                    /Zellij 0\.45\.1 \(Supported\)/.test(panels[0].querySelector('p.muted')?.textContent??'') && ${button(panel, "List zellij sessions")};})()
+            """)
+            clickButton(panelPath, "List zellij sessions")
+            awaitDocument(scenario, "Zellij session listed $stage", """
+                (()=>{const found=document.querySelector(${quote(panel)});
+                  if(!found || found.querySelector('.loading,[role=alert]'))return false;
+                  const rows=Array.from(found.querySelectorAll('.mux-row strong')).map(x=>x.textContent.trim()).filter(x=>x.startsWith('zellij: '));
+                  return rows.length===1 && rows[0]===${quote("zellij: $session")} && ${button(panel, "Attach zellij $session")};})()
+            """)
+        }
+        fun attach(stage: String) {
+            listSessions("before $stage")
+            clickButton(panelPath, "Attach zellij $session")
+            awaitDocument(scenario, "Zellij display attached $stage", """
+                (()=>{const open=document.querySelectorAll('.session-tabs [role=tab]');
+                  return open.length===2 && open[1].textContent.trim()===${quote(child)} && open[1].getAttribute('aria-selected')==='true';})()
+            """)
+        }
+        // The visible display is the real Zellij client of the selected tab: its own marker is on screen and the other tab's is not.
+        fun shows(target: JSONObject, other: JSONObject, stage: String) {
+            sessionView(scenario, "Terminal")
+            awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,${JSONArray(listOf(parent, child))},1,${quote(target.getString("marker"))},${JSONArray(listOf(other.getString("marker")))});})()")
+        }
+        // Control opens the quick-tab buttons of this session; the status line confirms the action reached Zellij.
+        fun numbered(target: JSONObject) {
+            val label = "Tab ${target.getInt("position") + 1}"
+            listSessions("before $label")
+            clickButton(panelPath, "Control Zellij $session")
+            awaitDocument(scenario, "Zellij $label control ready", button(controls, label))
+            clickButton("//section[@aria-label='Zellij $session controls']", label)
+            awaitDocument(scenario, "Zellij $label sent", """
+                ${button(controls, label)} && !document.querySelector(${quote("$controls [role=alert]")}) &&
+                  document.querySelector(${quote("$controls [role=status]")})?.textContent.trim()===${quote("Action sent to Zellij.")}
+            """)
+        }
+        fun detach(stage: String) {
+            endOwnedConnection(scenario, child)
+            awaitDocument(scenario, "Zellij display detached $stage", """
+                (()=>{const open=document.querySelectorAll('.session-tabs [role=tab]');return open.length===1 && open[0].textContent.trim()===${quote(parent)};})()
+            """)
+            if (evaluate(scenario, "document.querySelector('.session-tabs [role=tab]')?.getAttribute('aria-selected')==='true'") != "true") selectOwnedConnection(scenario, parent)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            attach("first")
+            shows(alpha, beta, "attached Zellij shows its first tab")
+            numbered(beta)
+            shows(beta, alpha, "Zellij numbered Tab 2 shows its tab")
+            detach("by closing its tab")
+            attach("again")
+            shows(beta, alpha, "reattached Zellij shows the same selected tab")
+            numbered(alpha)
+            shows(alpha, beta, "Zellij numbered Tab 1 shows its tab")
+            detach("after the second attach")
+            println("lazysh Zellij: live discovery, session list, attach, numbered tabs, tab-close detach and reattach completed")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            closeOwnedDisplay(scenario, child, primaryFailure)
+        }
+    }
+
+    // The saved create-if-missing default (#1764): a second saved host of the same owned sshd whose Default multiplexer is tmux, named for a
+    // session the owned server lacks. Connecting through the real host editor and connect flow must create and show that session, and after
+    // its connection ends, connecting again must attach the same one. The host independently proves one session created once in the login
+    // directory, attached, detached and attached again, with the original session and panes untouched. Saving the host copies the first host's
+    // pin for the same address and port, so no second fingerprint review follows.
+    private fun verifyOwnedTmuxDefault(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, parent: String, label: String) {
+        val session = fixture.getJSONObject("tmux").getString("defaultName")
+        // tmux's status line names the session in its first ten columns: `[` + name + `]`.
+        require(Regex("[A-Za-z0-9_-]{1,7}").matches(session) && session != fixture.getJSONObject("tmux").getString("name")) { "Owned tmux default session name required" }
+        val host = "$parent default"
+        val child = "$host / $session"
+        fun connect(stage: String) {
+            openOwnedConnect(scenario, host)
+            awaitDocument(scenario, "saved tmux default and SSH transport reach authentication $stage", """
+                (()=>{const transport=document.querySelector("[role=dialog] select:has(option[value='ssh'])");
+                  return transport?.value==='ssh' && Array.from(document.querySelectorAll('[role=dialog] .security-note'))
+                    .some(x=>x.textContent.includes(${JSONObject.quote("Enter tmux session $session directly after connecting.")}));})()
+            """)
+            chooseOwnedPrivateKey(scenario, fixture.getString("privateKey"), label)
+            submitOwnedConnect(scenario)
+            awaitDocument(scenario, "saved tmux default attached $stage", """
+                (()=>{const tabs=Array.from(document.querySelectorAll('.session-tabs [role=tab]'));
+                  const mine=tabs.filter(x=>x.textContent.trim()===${JSONObject.quote(child)});
+                  return tabs.length===2 && mine.length===1 && mine[0].getAttribute('aria-selected')==='true';})()
+            """)
+            sessionView(scenario, "Terminal")
+            // tmux's own status line names the session the display is attached to.
+            awaitDocument(scenario, "saved tmux default shows its session $stage", """
+                (()=>{const pane=Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none');
+                  return pane?.querySelector('.xterm-screen')?.textContent.includes(${JSONObject.quote("[$session]")})===true;})()
+            """)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            revealOwnedHosts(scenario)
+            addOwnedHost(scenario, host, "127.0.0.1", fixture.getString("username"), fixture.getInt("port")) {
+                selectNativeOption(scenario, fixture.getString("nonce"), "[role=dialog] select:has(option[value='tmux'])", "tmux")
+                typeInto(scenario, "[role=dialog] input[maxlength='200']", session)
+                selectNativeOption(scenario, fixture.getString("nonce"), "[role=dialog] select:has(option[value='ssh'])", "ssh")
+            }
+            connect("when the session is missing")
+            endOwnedConnection(scenario, child)
+            connect("again after its connection ended")
+            endOwnedConnection(scenario, child)
+            println("lazysh tmux default: the saved create-if-missing default created and showed its session, then attached the same one again")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
         } finally {
             try {
+                dismissOwnedAuthentication(scenario)
                 if (evaluate(scenario, present("button[aria-label='Disconnect $child']")) == "true") endOwnedConnection(scenario, child)
+                if (evaluate(scenario, present("button[aria-label='Connect to $host']")) == "true") deleteOwnedHost(scenario, host)
             } catch (cleanup: Throwable) {
                 if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
             }
@@ -3172,6 +3842,7 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
+    @Test fun ownedZellijThroughRealUi() = ownedSshUi(false, requireZellij = true)
 
     /**
      * Lost connection on a saved-credential tmux host (#1640). tests/support/androidLostConnection.ts runs the pinned
@@ -3181,50 +3852,24 @@ class NativeWorkspaceTest {
         val name = "Parity lost route"
         val label = "$name / owned-tmux"
         ownedParityCase(listOf(name)) { scenario, parity ->
-            val tmux = parity.fixture.getJSONObject("tmux")
-            require(tmux.getString("name") == "owned-tmux") { "Owned tmux fixture required" }
-            val alpha = tmux.getJSONArray("windows").getJSONObject(0).getString("marker")
-            require(Regex("TMUX_ALPHA_[a-f0-9]{32}").matches(alpha)) { "Owned tmux alpha marker required" }
-            val port = parity.port("primary")
+            val alpha = ownedTmuxAlpha(parity)
             val banner = "Array.from(document.querySelectorAll('section.connection-banner')).some(x=>" +
                 "x.querySelector('h2')?.textContent.trim()===${JSONObject.quote("Connection lost for $label")} && x.textContent.includes('Connection lost.'))"
-            fun awaitFact(stage: String, seconds: Long, accept: (JSONObject) -> Boolean): JSONObject {
-                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-                while (true) {
-                    val facts = parity.control("observe")
-                    if (accept(facts)) return facts
-                    assertTrue("Owned lost-connection host fact not reached at $stage: $facts", System.nanoTime() < deadline)
-                    Thread.sleep(250)
-                }
-            }
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port) {
-                // The default transport is Auto, which would try Mosh first; this case is about the SSH route.
-                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
-                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='herdr'])", "tmux")
-                typeInto(scenario, "[role=dialog] input[maxlength='200']", "owned-tmux")
-            }
-            openOwnedConnect(scenario, name)
-            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
-            // Saved credentials are what lets the app reconnect on its own; the key is never typed again below.
-            onWebView().withElement(findElement(Locator.XPATH,
-                "//*[@role='dialog']//label[contains(normalize-space(.),'Save credentials on this device')]/input[@type='checkbox']"))
-                .perform(webScrollIntoView()).perform(webClick())
-            submitOwnedConnect(scenario)
-            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:$port")
+            connectOwnedSaved(scenario, parity, name)
             awaitDocument(scenario, "owned tmux pane before the route is cut", terminalScreenContains(alpha))
-            assertEquals("Exactly one tmux client before the cut", 1, awaitFact("attached", 20) { it.getInt("clients") == 1 }.getInt("clients"))
+            assertEquals("Exactly one tmux client before the cut", 1, parity.awaitFact("attached", 20) { it.getInt("clients") == 1 }.getInt("clients"))
 
             parity.control("cut")
             awaitDocument(scenario, "lost-connection banner after the route is cut", banner)
-            awaitFact("tmux client gone with the route", 30) { it.getInt("clients") == 0 }
+            parity.awaitFact("tmux client gone with the route", 30) { it.getInt("clients") == 0 }
             // The host's observe call also proved the original tmux server and pane processes are still alive.
-            val refused = awaitFact("automatic retry refused by the cut route", 60) { it.getInt("refused") >= 1 }.getInt("refused")
+            val refused = parity.awaitFact("automatic retry refused by the cut route", 60) { it.getInt("refused") >= 1 }.getInt("refused")
             assertEquals("The banner must stay while the route is down", "true", evaluate(scenario, banner))
 
             parity.control("restore")
             awaitDocument(scenario, "banner closes by itself after the route returns", "!($banner)")
             awaitDocument(scenario, "reattached tmux pane shows its original output", terminalScreenContains(alpha))
-            val back = awaitFact("tmux client reattached", 30) { it.getInt("clients") == 1 }
+            val back = parity.awaitFact("tmux client reattached", 30) { it.getInt("clients") == 1 }
             assertTrue("Reconnect must not need a new credential or a dialog: $back refused=$refused",
                 evaluate(scenario, present("[role=dialog]")) == "false")
 
@@ -3241,6 +3886,103 @@ class NativeWorkspaceTest {
             println("lazysh lost connection: banner, refused automatic retry, same tmux pane after the route returned, and Close without reconnecting")
         }
     }
+
+    private val restoreOffer = ".workspace-restore-row > button:first-child"
+    private val restoreHost = "Parity restore"
+
+    /**
+     * What one restore case attaches: the multiplexer, its saved default session, the marker its first display shows, and
+     * whether the pane's tty echoes typed bytes (tmux runs a plain `sleep`; a Herdr receiver records them and echoes nothing,
+     * so the host's `typed` fact is the evidence that they arrived).
+     */
+    private inner class RestoreTarget(val multiplexer: String, val session: String, val echoes: Boolean, val marker: (OwnedParity) -> String) {
+        val label = "$restoreHost / $session"
+    }
+    private val restoreTmux = RestoreTarget("tmux", "owned-tmux", true, this::ownedTmuxAlpha)
+    private val restoreHerdr = RestoreTarget("herdr", "owned-guard", false, this::ownedHerdrSource)
+
+    /** The bytes the pane's tty echoes back when typed through the app, checked against the shape the host writes. */
+    private fun ownedRestoreToken(parity: OwnedParity) = parity.fixture.getString("restoreToken")
+        .also { require(Regex("RESTORE_[a-f0-9]{32}").matches(it)) { "Owned restore token required" } }
+
+    /** One half of a restore case: the shared host, session and the two fixture strings, around `ownedParityCase`. */
+    private fun ownedRestoreCase(target: RestoreTarget, keepOnSuccess: Boolean, body: (ActivityScenario<MainActivity>, OwnedParity, String, String) -> Unit) =
+        ownedParityCase(listOf(restoreHost), listOf(target.label), keepOnSuccess) { scenario, parity ->
+            body(scenario, parity, target.marker(parity), ownedRestoreToken(parity))
+        }
+
+    /**
+     * Waits until the one saved intent of the target's session has its host id in the WebView's on-disk Local Storage. The id
+     * is a random UUID, so an older run's descriptor cannot satisfy it, and page memory alone would not survive the host's force-stop.
+     */
+    private fun awaitWorkspaceOnDisk(scenario: ActivityScenario<MainActivity>, target: RestoreTarget) {
+        val intents = "JSON.stringify(JSON.parse(localStorage.getItem('lazysh.workspace.v1')||'[]')" +
+            ".filter(x=>x.attached&&x.attached.kind===${JSONObject.quote(target.multiplexer)}&&x.attached.name===${JSONObject.quote(target.session)}).map(x=>x.hostId))"
+        awaitDocument(scenario, "saved ${target.multiplexer} workspace intent", "($intents)!=='[]'")
+        val hostId = JSONArray(JSONTokener(evaluate(scenario, intents)).nextValue() as String).getString(0)
+        require(Regex("[a-f0-9-]{36}").matches(hostId)) { "Saved host id must be a UUID" }
+        val storage = java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.dataDir, "app_webview/Default/Local Storage")
+        val encodings = listOf(Charsets.UTF_8, Charsets.UTF_16LE).map { hostId.toByteArray(it) }
+        fun indexOf(bytes: ByteArray, needle: ByteArray): Boolean = bytes.size >= needle.size &&
+            (0..bytes.size - needle.size).any { start -> needle.indices.all { bytes[start + it] == needle[it] } }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+        while (true) {
+            val files = storage.walkTopDown().filter { it.isFile && it.length() in 1..(16L shl 20) }.take(256).toList()
+            if (files.any { file -> val bytes = file.readBytes(); encodings.any { indexOf(bytes, it) } }) return
+            assertTrue("The workspace descriptor never reached the WebView's on-disk storage (${files.size} files)", System.nanoTime() < deadline)
+            Thread.sleep(250)
+        }
+    }
+
+    /**
+     * First half of the restore after a force-stop (#1639, #1827). tests/support/androidForceStopRestore.ts runs this case, force-stops
+     * the app from the host and then runs the matching `...RestoreAfterForceStop` in a fresh instrumentation process; one method
+     * cannot do both because the instrumentation lives in the app process. A passing phase 1 leaves the host and its open
+     * session in place for phase 2.
+     */
+    private fun ownedRestoreBefore(target: RestoreTarget) {
+        ownedRestoreCase(target, keepOnSuccess = true) { scenario, parity, marker, token ->
+            connectOwnedSaved(scenario, parity, restoreHost, target.multiplexer, target.session)
+            awaitDocument(scenario, "owned ${target.multiplexer} display before the force-stop", terminalScreenContains(marker))
+            sendOwnedCommand(scenario, token, parity.label)
+            // tmux redraws what its pane echoed after the restore; a Herdr receiver echoes nothing, so only the host's byte file shows arrival.
+            if (target.echoes) awaitDocument(scenario, "bytes typed into the owned ${target.multiplexer} pane", terminalScreenContains(token))
+            else parity.awaitFact("typed bytes reached the owned ${target.multiplexer} receiver", 20) { it.getBoolean("typed") }
+            parity.awaitFact("one ${target.multiplexer} client before the force-stop", 20) { it.getInt("clients") == 1 }
+            awaitWorkspaceOnDisk(scenario, target)
+            println("lazysh restore phase 1: saved-credential ${target.multiplexer} session open, typed bytes in the pane and the workspace descriptor on disk")
+        }
+    }
+
+    /**
+     * Second half, in a fresh process after the host force-stopped the app: the restore offer shows with no terminal and no host
+     * client, and only a click on it reattaches the same display with the saved credential.
+     */
+    private fun ownedRestoreAfter(target: RestoreTarget) {
+        ownedRestoreCase(target, keepOnSuccess = false) { scenario, parity, marker, token ->
+            val offer = "Array.from(document.querySelectorAll(${JSONObject.quote(restoreOffer)})).some(x=>x.textContent.trim()==='Restore previous workspace' && !x.disabled)"
+            awaitDocument(scenario, "restore offer once the saved hosts load", offer)
+            assertEquals("Relaunch alone must not open a terminal or ask for a credential", "false", evaluate(scenario,
+                "Boolean(document.querySelector('.terminal-canvas .xterm-screen')||document.querySelector('[role=dialog]'))"))
+            // A wrongful automatic restore would attach within this window; the original pane must stay unattended.
+            Thread.sleep(5_000)
+            parity.awaitFact("no ${target.multiplexer} client after the relaunch", 5) { it.getInt("clients") == 0 }
+
+            clickOwnedButton("Restore previous workspace")
+            awaitDocument(scenario, "restored ${target.multiplexer} display shows what it showed before the force-stop",
+                terminalScreenContains(marker) + if (target.echoes) " && " + terminalScreenContains(token) else "")
+            // The host fails `observe` itself if the original server or processes changed, or a Herdr receiver got a byte it was not typed.
+            val restored = parity.awaitFact("exactly one ${target.multiplexer} client after the restore", 30) { it.getInt("clients") == 1 && (target.echoes || it.getBoolean("typed")) }
+            assertTrue("Restore must use the saved credential without a dialog: $restored", evaluate(scenario, present("[role=dialog]")) == "false")
+            assertEquals("The offer is gone once the workspace is restored", "false", evaluate(scenario, present(".workspace-restore")))
+            println("lazysh restore phase 2: offer only on click, same ${target.multiplexer} display and typed bytes back, one client, saved credential used")
+        }
+    }
+
+    @Test fun ownedTmuxRestoreBeforeForceStop() = ownedRestoreBefore(restoreTmux)
+    @Test fun ownedTmuxRestoreAfterForceStop() = ownedRestoreAfter(restoreTmux)
+    @Test fun ownedHerdrRestoreBeforeForceStop() = ownedRestoreBefore(restoreHerdr)
+    @Test fun ownedHerdrRestoreAfterForceStop() = ownedRestoreAfter(restoreHerdr)
 
     // The toolbar editor's Agents and Workspaces keys open each view for the real
     // connection, and the destination heading's back control returns to the terminal.
@@ -3331,6 +4073,120 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** One real finger tap at a point of the WebView given as [x, y, innerWidth] in CSS pixels. */
+    private fun tapWebViewAt(point: JSONArray) {
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+            val location = IntArray(2); view.getLocationOnScreen(location)
+            val scale = view.width / point.getDouble(2)
+            val x = point.getDouble(0) * scale; val y = point.getDouble(1) * scale
+            require(x > 0 && x < view.width && y > 0 && y < view.height) { "Owned tap outside WebView" }
+            floatArrayOf((location[0] + x).toFloat(), (location[1] + y).toFloat())
+        }, Press.FINGER))
+    }
+
+    /**
+     * One real finger tap on the one enabled, hit-testable control. A WebView file chooser needs a trusted user activation,
+     * which a scripted click does not give.
+     */
+    private fun tapOwnedControl(scenario: ActivityScenario<MainActivity>, selector: String) {
+        // Centered, so a sticky bar or the navigation cannot cover the target.
+        evaluate(scenario, "(()=>{document.querySelector(${JSONObject.quote(selector)})?.scrollIntoView({block:'center',behavior:'instant'});return true;})()")
+        val css = JSONArray(evaluate(scenario, """
+            (()=>{const matches=document.querySelectorAll(${JSONObject.quote(selector)});
+              if(matches.length!==1)throw Error('Owned tap target must be unique');
+              const element=matches[0],rect=element.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+              if(element.disabled||document.elementFromPoint(x,y)!==element)throw Error('Owned tap target must be enabled and hit-testable');
+              return [x,y,innerWidth];})()
+        """))
+        tapWebViewAt(css)
+    }
+
+    /**
+     * Installed Wry asks for the declared CAMERA permission before the explicit Photo action opens a camera, and answers the
+     * file chooser with null when it is denied. Over a staged draft this denies the real system sheet and proves that no
+     * camera opens and the draft is unchanged, then proves the ordinary Choose file input still reaches a system chooser that
+     * Back leaves unchanged. Selecting a file inside the chooser (#1752) and the Allow branch are not exercised.
+     */
+    private fun verifyAttachmentPhotoDenied(scenario: ActivityScenario<MainActivity>, panel: String, destination: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val device = UiDevice.getInstance(instrumentation)
+        val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameras = camera.cameraIdList.toSet()
+        assertTrue("Owned emulator camera must exist so an unwanted capture is observable", cameras.isNotEmpty())
+        assertEquals("Camera permission must start ungranted", PackageManager.PERMISSION_DENIED,
+            context.checkSelfPermission(android.Manifest.permission.CAMERA))
+        // An earlier denial may have set Don't ask again, which would hide the real sheet.
+        device.executeShellCommand("pm clear-permission-flags ${context.packageName} android.permission.CAMERA user-set user-fixed")
+        val sources = "$panel .attachment-sources"
+        val photo = "$sources input[capture]"
+        val chooser = "$sources input[type=file]:not([capture])"
+        val draft = """
+            (()=>{const panel=document.querySelector(${JSONObject.quote(panel)});
+              return {selected:panel.querySelector('.attachment-selected > summary')?.textContent??null,
+                destination:document.querySelector(${JSONObject.quote(destination)})?.value??null,
+                checkboxes:panel.querySelectorAll('input[type=checkbox]').length,uploaded:panel.querySelectorAll('input[readonly]').length,
+                alerts:panel.querySelectorAll('[role=alert]').length,
+                files:Array.from(panel.querySelectorAll('.attachment-sources input[type=file]')).map(x=>x.files.length)};})()
+        """
+        // Staging a draft closes the sources group; open it with an ordinary click.
+        if (evaluate(scenario, "document.querySelector(${JSONObject.quote(sources)})?.open===true") != "true")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$sources > summary")).perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "attachment sources open over the staged draft", "document.querySelector(${JSONObject.quote(sources)})?.open===true")
+        val before = evaluate(scenario, draft)
+        val staged = JSONObject(before)
+        assertTrue("A staged draft needs its selection and exact destination", !staged.isNull("selected") && staged.getString("destination").startsWith("./"))
+        assertEquals("The draft must start without an upload or an error", 0, staged.getInt("uploaded") + staged.getInt("alerts"))
+        assertEquals("The draft must start without a chosen file", "[0,0]", staged.getJSONArray("files").toString())
+        val observer = HandlerThread("owned-attachment-camera-observer").apply { start() }
+        val observation = QrCameraObservation(cameras)
+        camera.registerAvailabilityCallback(observation, Handler(observer.looper))
+        try {
+            assertTrue("Cameras must be idle before the explicit Photo action", observation.idle.await(5, TimeUnit.SECONDS))
+            observation.arm()
+            tapOwnedControl(scenario, photo)
+            chooseOwnedCameraPermission("permission_deny_button")
+            awaitDocument(scenario, "attachment panel after the denied camera sheet", "Boolean(document.querySelector(${JSONObject.quote(photo)}))")
+            assertEquals("Denied choice must leave camera permission ungranted", PackageManager.PERMISSION_DENIED,
+                context.checkSelfPermission(android.Manifest.permission.CAMERA))
+            assertEquals("A denied Photo action must leave the attachment draft unchanged", before, evaluate(scenario, draft))
+            // Absence is observed over a bounded window: Wry answers the chooser with null and launches nothing.
+            val settled = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            do {
+                assertEquals("No other app may take the foreground after a denied Photo action", context.packageName, device.currentPackageName)
+                assertTrue("A denied Photo action must not open any camera", !observation.openedAny())
+                Thread.sleep(200)
+            } while (System.nanoTime() < settled)
+            println("lazysh attachment photo: real CAMERA sheet denied; permission still denied; no camera opened; draft unchanged")
+            tapOwnedControl(scenario, chooser)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+            var owner = context.packageName
+            while (owner == context.packageName && System.nanoTime() < deadline) {
+                Thread.sleep(200)
+                owner = device.currentPackageName ?: context.packageName
+            }
+            assertTrue("Choose file must open a chooser window", owner != context.packageName)
+            require(Regex("[A-Za-z0-9_.]{1,255}").matches(owner)) { "Owned chooser package invalid" }
+            assertTrue("The chooser window must belong to a system package",
+                device.executeShellCommand("pm list packages -s $owner").lineSequence().any { it.trim() == "package:$owner" } &&
+                    owner != "android" && owner != "com.android.systemui")
+            // A picker may consume one Back to close its own drawer or selection before it finishes.
+            repeat(3) {
+                if (device.currentPackageName == owner) {
+                    assertTrue("Back must reach the system chooser", device.pressBack())
+                    device.wait(Until.gone(By.pkg(owner)), 5_000)
+                }
+            }
+            assertTrue("Back must return from the system chooser to the app", device.wait(Until.hasObject(By.pkg(context.packageName)), 10_000) == true)
+            awaitDocument(scenario, "attachment panel after the system chooser", "Boolean(document.querySelector(${JSONObject.quote(chooser)}))")
+            assertEquals("Leaving the system chooser must leave the attachment draft unchanged", before, evaluate(scenario, draft))
+            println("lazysh attachment chooser: Choose file opened a chooser from system package $owner; Back left the draft unchanged; no file was selected in it")
+        } finally {
+            camera.unregisterAvailabilityCallback(observation)
+            observer.quitSafely(); observer.join(5_000)
+        }
+    }
+
     private fun verifyManualAttachmentUpload(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -3372,7 +4228,7 @@ class NativeWorkspaceTest {
         fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
             "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
             .perform(webScrollIntoView()).perform(webClick())
-        fun stage(name: String) {
+        fun stage(name: String, upload: Boolean = true, beforeUpload: () -> Unit = {}) {
             sessionView(scenario, "Attach")
             awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
             instrumentation.runOnMainSync {clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))}
@@ -3382,17 +4238,20 @@ class NativeWorkspaceTest {
             closeSoftKeyboard()
             assertEquals("Exact owned relative upload path", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && !document.querySelector('$panel [role=alert]')"))
+            beforeUpload()
             assertEquals("One enabled manual upload action", "true", evaluate(scenario,
                 "Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Upload attachment'&&!x.disabled).length===1"))
-            click("Upload attachment")
+            if (upload) click("Upload attachment")
         }
-        stage(owned.getString("newName"))
-        awaitDocument(scenario, "manual large image upload completed", """
+        fun uploadedTo(name: String) = """
             (()=>{const fields=document.querySelectorAll('$panel input[readonly]');return fields.length===1 &&
-              fields[0].value.endsWith(${JSONObject.quote("/"+owned.getString("newName")+"'")}) &&
+              fields[0].value.endsWith(${JSONObject.quote("/$name'")}) &&
               !document.querySelector('$panel [role=alert]') &&
               document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
-        """)
+        """
+        // The first staged draft also carries the Photo denial and ordinary chooser checks; the upload below proves it survived them.
+        stage(owned.getString("newName")) { verifyAttachmentPhotoDenied(scenario, panel, destination) }
+        awaitDocument(scenario, "manual large image upload completed", uploadedTo(owned.getString("newName")))
         sessionView(scenario, "Terminal")
         awaitDocument(scenario, "successful upload panel retired", "!document.querySelector('$panel')")
         stage(owned.getString("collisionName"))
@@ -3403,7 +4262,78 @@ class NativeWorkspaceTest {
         """)
         sessionView(scenario, "Terminal")
         selectOwnedConnection(scenario, fixture.getString("name"), true)
-        println("lazysh manual attachment: large valid protected PNG uploaded; pre-existing destination rejected with SFTP Failure; original Mosh display selected")
+        verifyClosedControlUploadRecovery(scenario, fixture, label, ::stage, ::uploadedTo, ::click)
+        println("lazysh manual attachment: large valid protected PNG uploaded; pre-existing destination rejected with SFTP Failure; closed SSH control recovered by manual reauthentication; original Mosh display selected")
+    }
+
+    // #1523: the host closes only this app's relayed SSH stream while the Mosh daemon lives on. The explicit
+    // Upload then shows the closed-control recovery action and leaves the draft; manual authentication restores
+    // the upload connection without an automatic upload or a second terminal; a separate Upload writes the file.
+    private fun verifyClosedControlUploadRecovery(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String,
+        stage: (String, Boolean) -> Unit, uploadedTo: (String) -> String, click: (String) -> Unit) {
+        val nonce = fixture.getString("nonce")
+        val owned = fixture.getJSONObject("attachments")
+        val directory = owned.getString("directory")
+        val name = owned.getString("recoveryName")
+        require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+").matches(directory) && name == "owned-recovery-$nonce.png") { "Owned recovery fixture invalid" }
+        val panel = ".attachment-panel"
+        val destination = "$panel label:has(input:not([type]):not([readonly])) input"
+        val dialog = "[role=dialog][aria-label='Reconnect uploads to ${fixture.getString("name")}']"
+        val key = JSONObject.quote("__lazyshOwnedRecovery_$nonce")
+        val token = JSONObject.quote(UUID.randomUUID().toString())
+        // Send reopens the soft keyboard, which resizes the Mosh screen, and mosh-server drops the bottom rows of a
+        // shrink that a shell cannot redraw. Each proof is printed after a pause so it lands once that has settled.
+        fun typed(command: String, proof: String) {
+            sendOwnedCommand(scenario, command, label)
+            awaitDocument(scenario, "owned Mosh terminal printed its recovery proof", terminalScreenContains(proof))
+        }
+        fun same() = "owned.token===$token && owned.screen.isConnected && owned.screen===document.querySelector('.terminal-canvas .xterm-screen') && document.querySelectorAll('[role=tab]').length===owned.tabs"
+        assertEquals("Retain only the original Mosh terminal and tab", "true", evaluate(scenario, """
+            (()=>{const screen=document.querySelector('.terminal-canvas .xterm-screen');
+              if(!screen || Object.prototype.hasOwnProperty.call(window,$key))return false;
+              window[$key]={token:$token,screen,tabs:document.querySelectorAll('[role=tab]').length};return true;})()
+        """))
+        // The host answers this receipt by closing exactly the app's SSH stream, then releases the shell.
+        typed(hostReceipt(directory, "upload-control") + "sleep 5; printf 'CONTROL_%s_CLOSED\\n' '$nonce'", "CONTROL_${nonce}_CLOSED")
+        stage(name, false)
+        val draft = "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && " +
+            "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]')"
+        click("Upload attachment")
+        awaitDocument(scenario, "closed SSH control refuses the explicit upload and offers recovery", """
+            (()=>{const alerts=document.querySelectorAll('$panel [role=alert]');return alerts.length===1 &&
+              alerts[0].textContent.includes('The SSH file-transfer connection is closed') &&
+              Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Reconnect uploads'&&!x.disabled).length===1;})() && $draft
+        """)
+        click("Reconnect uploads")
+        awaitDocument(scenario, "manual upload reauthentication dialog", present(dialog))
+        assertEquals("Recovery offers no transport choice", "true", evaluate(scenario, "!document.querySelector(${JSONObject.quote("$dialog select")})"))
+        clickOwnedButton("Private key")
+        pasteOwnedText(scenario, "$dialog textarea", fixture.getString("privateKey"), label)
+        assertEquals("Recovery cannot remember credentials", "true", evaluate(scenario, "!document.querySelector(${JSONObject.quote("$dialog input[type=checkbox]")})"))
+        closeSoftKeyboard()
+        onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//button[normalize-space(.)='Reconnect uploads']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "manual authentication restored uploads and kept the draft", """
+            (()=>{const owned=window[$key];return !document.querySelector(${JSONObject.quote(dialog)}) && !document.querySelector('$panel [role=alert]') &&
+              Array.from(document.querySelectorAll('$panel [role=status]')).some(x=>x.textContent==='Uploads reconnected. Select Upload attachment to retry.') &&
+              !!owned && owned.token===$token && document.querySelectorAll('[role=tab]').length===owned.tabs;})() && $draft
+        """)
+        // The host requires the destination to stay absent for this long after the reconnect; wait it out, then upload explicitly.
+        Thread.sleep(2_500)
+        assertEquals("Reconnecting never uploads by itself", "true", evaluate(scenario, "$draft && !document.querySelector('$panel [role=alert]')"))
+        click("Upload attachment")
+        awaitDocument(scenario, "separate explicit upload after recovery completed", uploadedTo(name))
+        // A completed upload collapses the selected file; reopen it as a user would and repeat the same upload.
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel details.attachment-selected > summary"))
+            .perform(webScrollIntoView()).perform(webClick())
+        click("Upload attachment")
+        awaitDocument(scenario, "repeated upload refused by the existing remote file", """
+            (()=>{const alerts=document.querySelectorAll('$panel [role=alert]');return alerts.length===1 && alerts[0].textContent.startsWith('Failure: ') &&
+              !Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent.trim()==='Reconnect uploads');})()
+        """)
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "original Mosh terminal and tab retained", "(()=>{const owned=window[$key];return !!owned && ${same()};})()")
+        typed("sleep 5; printf 'CONTROL_%s_RECOVERED\\n' '$nonce'", "CONTROL_${nonce}_RECOVERED")
     }
 
     private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
@@ -3512,6 +4442,11 @@ class NativeWorkspaceTest {
         }
     }
 
+    // Publishes this shell's PID and start time as `<directory>/<name>`, then waits for the host's `<name>-ack`.
+    private fun hostReceipt(directory: String, name: String) =
+        "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/$name.tmp; " +
+            "mv $directory/$name.tmp $directory/$name; while ! test -f $directory/$name-ack; do sleep .1; done; "
+
     private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String, label: String) {
         val owned = fixture.getJSONObject("moshBackground")
         val directory = owned.getString("directory")
@@ -3548,9 +4483,7 @@ class NativeWorkspaceTest {
         }
         fun send(command: String) = sendOwnedCommand(scenario, command, label)
         fun proof(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun record(part: String) = "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/background-$part.tmp; " +
-            "mv $directory/background-$part.tmp $directory/background-$part; " +
-            "while ! test -f $directory/background-$part-ack; do sleep .1; done; "
+        fun record(part: String) = hostReceipt(directory, "background-$part")
         fun execution(active: Boolean) {
             val sample = connectionExecutionObservation()
             val valid = if (active) sample.getInt("serviceCount") == 1 && sample.getBoolean("foreground") &&
@@ -3847,11 +4780,10 @@ class NativeWorkspaceTest {
         assertFalse("Denied notifications must not be visible", context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled())
         assertTrue("Notification shade must open", device.openNotification())
         assertFalse("Denied connection notification must stay out of the shade", device.hasObject(By.text(context.getString(R.string.session_notification_title))))
-        assertTrue(device.pressBack())
-        // A phone-width connected workspace keeps Preferences in its tools menu.
-        if (evaluate(scenario, workspaceElementVisible("button[aria-label='Preferences']")) == "true")
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
-        else workspaceMenuAction(scenario, "Preferences")
+        // Back sent while the shade is still expanding is ignored and the shade then holds the focus: collapse it explicitly.
+        NativeActivityFixture.clearSystemOverlays()
+        awaitDocument(scenario, "shade closed after the denied-notification check", "true")
+        openPreferences(scenario)
         preferencesCategory(scenario, "android-notifications")
         webButton("Open Android notification settings")
         assertTrue("Android notification settings must open", device.wait(Until.hasObject(By.pkg("com.android.settings")), 10_000))
@@ -3902,29 +4834,6 @@ class NativeWorkspaceTest {
         clickOwnedButton("Trust key and connect")
     }
 
-    /** The host-written fixture of an owned SSH case, read once from its private device path. */
-    private fun ownedSshFixture(): JSONObject {
-        val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
-        require(path != null && Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/fixture[.]json").matches(path)) {
-            "An owned SSH fixture path is required"
-        }
-        val bytes = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path").use { descriptor ->
-            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
-                val buffer = ByteArray(32 * 1024 + 1)
-                var count = 0
-                while (count < buffer.size) {
-                    val read = stream.read(buffer, count, buffer.size - count)
-                    if (read < 0) break
-                    count += read
-                }
-                require(count <= 32 * 1024) { "Owned SSH fixture exceeds bound" }
-                buffer.copyOf(count)
-            }
-        }
-        return try { JSONObject(String(bytes, Charsets.UTF_8)) }
-        catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
-    }
-
     private fun clickOwnedButton(text: String) {
         onWebView().withElement(findElement(Locator.XPATH,
             "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
@@ -3963,7 +4872,8 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false) {
+        require(!requireZellij || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded && !requireTmux)) { "Owned Zellij mode must be isolated" }
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
         require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
@@ -3982,6 +4892,7 @@ class NativeWorkspaceTest {
         require(requireIme == fixture.has("ime")) { "Owned IME fixture mode mismatch" }
         require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
         require(requireTmux == fixture.has("tmux")) { "Owned tmux fixture mode mismatch" }
+        require(requireZellij == fixture.has("zellij")) { "Owned Zellij fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -4396,7 +5307,10 @@ class NativeWorkspaceTest {
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
             } else if (requireTmux) {
-                verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name)
+                verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label)
+                verifyOwnedTmuxDefault(scenario, fixture, name, label)
+            } else if (requireZellij) {
+                verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)
             } else if (requireDpad) {
                 verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {
@@ -4578,7 +5492,8 @@ class NativeWorkspaceTest {
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
             }
             val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name)
-                else if (requireTmux) listOf("$name / ${fixture.getJSONObject("tmux").getString("name")}", name) else listOf(name)
+                else if (requireTmux) listOf("$name / ${fixture.getJSONObject("tmux").getString("name")}", name)
+                else if (requireZellij) listOf("$name / ${fixture.getJSONObject("zellij").getString("name")}", name) else listOf(name)
             for (ownedName in ownedNames) {
                 cleanupUi {
                     cleanupStage = SshUiCleanupStage.SESSION_SELECT
@@ -4627,6 +5542,16 @@ class NativeWorkspaceTest {
                 return reply
             }
         }
+        /** Polls the host's closed `observe` facts until `accept` holds; the host fails the call itself if an original process is gone. */
+        fun awaitFact(stage: String, seconds: Long, accept: (JSONObject) -> Boolean): JSONObject {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+            while (true) {
+                val facts = control("observe")
+                if (accept(facts)) return facts
+                assertTrue("Owned host fact not reached at $stage: $facts", System.nanoTime() < deadline)
+                Thread.sleep(250)
+            }
+        }
         fun mark(vararg servers: String) { for (server in servers) control("mark", "server" to server) }
         fun observe(server: String) = control("observe", "server" to server)
     }
@@ -4634,8 +5559,49 @@ class NativeWorkspaceTest {
     private val parityPassword = "[role=dialog] form.form-stack > label > input[type=password]"
     private val parityKey = "[role=dialog] form.form-stack > label > textarea"
 
-    /** Runs one parity case, then dismisses its dialogs, ends its sessions and deletes its hosts. */
-    private fun ownedParityCase(hosts: List<String>, body: (ActivityScenario<MainActivity>, OwnedParity) -> Unit) {
+    /** The owned tmux fixture's first window marker, checked against the shape the host writes. */
+    private fun ownedTmuxAlpha(parity: OwnedParity): String {
+        val tmux = parity.fixture.getJSONObject("tmux")
+        require(tmux.getString("name") == "owned-tmux") { "Owned tmux fixture required" }
+        return tmux.getJSONArray("windows").getJSONObject(0).getString("marker")
+            .also { require(Regex("TMUX_ALPHA_[a-f0-9]{32}").matches(it)) { "Owned tmux alpha marker required" } }
+    }
+
+    /** The owned stock Herdr fixture's first display marker: its source receiver prints it after clearing the screen. */
+    private fun ownedHerdrSource(parity: OwnedParity): String {
+        val herdr = parity.fixture.getJSONObject("herdr")
+        require(herdr.getString("name") == "owned-guard") { "Owned Herdr fixture required" }
+        return herdr.getJSONObject("navigation").getJSONObject("source").getString("marker")
+            .also { require(Regex("NAV_SOURCE_[a-f0-9]{32}").matches(it)) { "Owned Herdr source marker required" } }
+    }
+
+    /**
+     * Adds a host whose default multiplexer is the owned `session` of `multiplexer`, connects with the fixture key over SSH, saves
+     * the credentials and trusts the host key. Saved credentials are what lets the app reconnect or restore on its own.
+     */
+    private fun connectOwnedSaved(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, name: String, multiplexer: String = "tmux", session: String = "owned-tmux") {
+        val port = parity.port("primary")
+        addOwnedHost(scenario, name, "127.0.0.1", parity.username, port) {
+            // The default transport is Auto, which would try Mosh first; these cases are about the SSH route.
+            selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
+            selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='herdr'])", multiplexer)
+            typeInto(scenario, "[role=dialog] input[maxlength='200']", session)
+        }
+        openOwnedConnect(scenario, name)
+        chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+        onWebView().withElement(findElement(Locator.XPATH,
+            "//*[@role='dialog']//label[contains(normalize-space(.),'Save credentials on this device')]/input[@type='checkbox']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        submitOwnedConnect(scenario)
+        trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:$port")
+    }
+
+    /**
+     * Runs one parity case, then dismisses its dialogs, ends its `sessions` and deletes its hosts. `keepOnSuccess` leaves a
+     * passing case's host and open session in place, for a case whose second half runs in a fresh process.
+     */
+    private fun ownedParityCase(hosts: List<String>, sessions: List<String> = hosts, keepOnSuccess: Boolean = false,
+        body: (ActivityScenario<MainActivity>, OwnedParity) -> Unit) {
         val parity = OwnedParity(ownedSshFixture())
         grantOwnedNotifications()
         val scenario = NativeActivityFixture.scenario
@@ -4645,9 +5611,9 @@ class NativeWorkspaceTest {
         catch (failure: Throwable) { primary = failure; throw failure }
         finally {
             android.util.Log.i("LazyshOwnedCase", "end:${parity.nonce}:pid:${android.os.Process.myPid()}")
-            val cleanup = runCatching {
+            val cleanup = if (keepOnSuccess && primary == null) null else runCatching {
                 dismissOwnedAuthentication(scenario)
-                for (name in hosts) if (evaluate(scenario, present("button[aria-label='Disconnect $name']")) == "true") endOwnedConnection(scenario, name)
+                for (name in sessions) if (evaluate(scenario, present("button[aria-label='Disconnect $name']")) == "true") endOwnedConnection(scenario, name)
                 for (name in hosts) if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") deleteOwnedHost(scenario, name)
             }.exceptionOrNull()
             if (cleanup != null) { if (primary != null) primary.addSuppressed(cleanup) else throw cleanup }
@@ -4677,6 +5643,16 @@ class NativeWorkspaceTest {
         clickOwnedButton("Private key")
         pasteOwnedText(scenario, parityKey, privateKey, label)
     }
+
+    /**
+     * A saved host starts on Auto, which tries Mosh first. An owned sshd that runs commands would start a real
+     * mosh-server for that attempt, and a Mosh startup that ends early surfaces as a refusal instead of the SSH
+     * fallback (CI: "Mosh connection ended before startup completed"). Cases that prove SSH features pick SSH in the
+     * Add Host dialog, as the other owned cases do: the saved preference reaches the connect dialog, where the
+     * transport select sits in the collapsed Connection options and so is not hit-testable.
+     */
+    private fun chooseOwnedSshTransport(scenario: ActivityScenario<MainActivity>, parity: OwnedParity) =
+        selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
 
     /** Waits for this refusal in the open dialog with no terminal; unlike awaitDocument, an alert is the goal. */
     private fun awaitOwnedRefusal(scenario: ActivityScenario<MainActivity>, stage: String, text: String) {
@@ -4910,7 +5886,7 @@ class NativeWorkspaceTest {
                 assertTrue("$stage: the forward must listen on a valid device port", local in 1..65535)
                 return local
             }
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("preview"))
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("preview")) { chooseOwnedSshTransport(scenario, parity) }
             parity.mark("preview")
             openOwnedConnect(scenario, name)
             chooseOwnedPrivateKey(scenario, preview.getString("privateKey"), parity.label)
@@ -4969,7 +5945,7 @@ class NativeWorkspaceTest {
             fun awaitIdle(stage: String, panel: String) = awaitPanel("$stage: $panel idle", "!document.querySelector('$panel [role=status]')")
             fun awaitAlert(stage: String, panel: String, text: String) = awaitPanel(stage,
                 "document.querySelector('$panel .inline-error[role=alert]')?.textContent.includes(${JSONObject.quote(text)})===true")
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("files"))
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("files")) { chooseOwnedSshTransport(scenario, parity) }
             parity.mark("files")
             openOwnedConnect(scenario, name)
             chooseOwnedPrivateKey(scenario, files.getString("privateKey"), parity.label)
@@ -5066,6 +6042,377 @@ class NativeWorkspaceTest {
             sessionView(scenario, "Terminal")
             endOwnedConnection(scenario, name)
             println("lazysh parity: Files browsed and read over SFTP with both refusals, and the repository's status, diffs, history, tree and remembered file reviewed over exec")
+        }
+    }
+
+    /** The text the system clipboard holds, read where the app itself reads it. */
+    private fun systemClipboardText(): String? {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        var text: String? = null
+        instrumentation.runOnMainSync {
+            text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(instrumentation.targetContext)?.toString()
+        }
+        return text
+    }
+
+    /** A real finger tap (or long press) at the point `point` reports in WebView CSS pixels as [x, y, innerWidth], measured once the keyboard is closed. */
+    private fun tapCss(tap: Tap = Tap.SINGLE, point: () -> JSONArray) {
+        closeSoftKeyboard()
+        val css = point()
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(tap, { view ->
+            val location = IntArray(2); view.getLocationOnScreen(location)
+            val scale = view.width / css.getDouble(2)
+            floatArrayOf((location[0] + css.getDouble(0) * scale).toFloat(), (location[1] + css.getDouble(1) * scale).toFloat())
+        }, Press.FINGER))
+    }
+
+    /** The one visible button with this label or text inside `within` (the whole page by default), hit-tested, as [x, y, innerWidth]. */
+    private fun buttonCenter(scenario: ActivityScenario<MainActivity>, label: String, within: String = "") = JSONArray(evaluate(scenario, """
+        (()=>{const matches=Array.from(document.querySelectorAll(${JSONObject.quote("$within button".trim())})).filter(x=>(x.getAttribute('aria-label')||x.textContent.trim())===${JSONObject.quote(label)});
+          if(matches.length!==1||matches[0].disabled)throw Error('Owned enabled button required');
+          const rect=matches[0].getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+          if(document.elementFromPoint(x,y)?.closest('button')!==matches[0])throw Error('Owned button hit target required');
+          return [x,y,innerWidth];})()
+    """))
+
+    /** The middle of `text` inside the terminal row that reads exactly `row`, as [x, y, innerWidth]. */
+    private fun terminalTextCenter(scenario: ActivityScenario<MainActivity>, row: String, text: String) = JSONArray(evaluate(scenario, """
+        (()=>{const lines=Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).filter(x=>x.textContent.replace(/\u00a0/g,' ').trim()===${JSONObject.quote(row)});
+          if(lines.length<1)throw Error('Owned terminal row required');
+          let offset=lines[0].textContent.indexOf(${JSONObject.quote(text)})+${text.length / 2};
+          const nodes=document.createTreeWalker(lines[0],NodeFilter.SHOW_TEXT);
+          for(let node=nodes.nextNode();node;node=nodes.nextNode()){
+            if(offset<node.textContent.length){const range=document.createRange();range.setStart(node,offset);range.setEnd(node,offset+1);
+              const box=range.getBoundingClientRect();return [box.left+box.width/2,box.top+box.height/2,innerWidth];}
+            offset-=node.textContent.length;}
+          throw Error('Owned terminal text was not drawn');})()
+    """))
+
+    /** True once a terminal row reads exactly `row` (blank cells may be drawn as no-break spaces). */
+    private fun rowShows(row: String) =
+        "Array.from(document.querySelectorAll('.terminal-canvas .xterm-rows > div')).some(x=>x.textContent.replace(/\\u00a0/g,' ').trim()===${JSONObject.quote(row)})"
+
+    private fun regionShows(label: String, text: String) =
+        "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')===${JSONObject.quote(label)} && x.textContent.includes(${JSONObject.quote(text)}))"
+
+    /** Adds the host, connects it to the primary sshd with the owned private key, trusts the host key and waits for the owned prompt. */
+    private fun connectOwnedPrimaryWithKey(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, name: String) {
+        addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+        openOwnedConnect(scenario, name)
+        chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+        submitOwnedConnect(scenario)
+        trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+        awaitDocument(scenario, "authenticated owned primary prompt", terminalScreenContains(parity.prompt("primary")))
+    }
+
+    /**
+     * What a remote shell can ask of the device, observed at the operating system: an OSC 52 write reaches the system
+     * clipboard only after the Allow tap, and Open on a terminal link starts an ACTION_VIEW intent for exactly that URL.
+     */
+    @Test fun ownedSshClipboardAndLinksReachTheSystemThroughRealUi() {
+        val name = "Parity clipboard links"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            connectOwnedPrimaryWithKey(scenario, parity, name)
+
+            val copied = "OSC52_${parity.nonce}"
+            val osc = "printf '\\033]52;c;%s\\007' \"\$(printf %s $copied | base64)\""
+            require(!osc.contains("]52;c;$copied")) { "Owned OSC 52 text must not appear in its input" }
+            sendOwnedCommand(scenario, osc, parity.label)
+            awaitDocument(scenario, "owned OSC 52 consent", regionShows("Remote clipboard request", copied))
+            // The composer's own paste left the command on the clipboard; the remote text must not replace it before consent.
+            assertTrue("The OSC 52 text must not reach the clipboard before Allow", systemClipboardText() != copied)
+            tapCss { buttonCenter(scenario, "Allow this copy") }
+            val copyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (systemClipboardText() != copied) {
+                assertTrue("Allow did not write the OSC 52 text to the system clipboard", System.nanoTime() < copyDeadline)
+                Thread.sleep(100)
+            }
+            // SystemUI previews the copied clip over the bottom-left for a few seconds; wait it out before the next tap.
+            awaitClipboardPreviewGone(System.nanoTime())
+
+            val url = "https://example.invalid/l/${parity.nonce.take(8)}"
+            sendOwnedCommand(scenario, "printf '%s\\n' $url", parity.label)
+            awaitDocument(scenario, "owned terminal link row", rowShows(url))
+            var offered = false
+            for (attempt in 1..4) {
+                if (offered) break
+                tapCss { terminalTextCenter(scenario, url, url) }
+                // A second tap could dismiss the prompt the first one is still opening, so give each tap time.
+                val offerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+                while (!offered && System.nanoTime() < offerDeadline) {
+                    offered = evaluate(scenario, regionShows("Terminal link", url)) == "true"
+                    if (!offered) Thread.sleep(100)
+                }
+            }
+            assertTrue("Tapping the terminal link did not offer it", offered)
+            val view = IntentFilter(Intent.ACTION_VIEW).apply {
+                addDataScheme("https"); addDataAuthority("example.invalid", null); addDataPath("/l/${parity.nonce.take(8)}", PatternMatcher.PATTERN_LITERAL)
+            }
+            // A blocking monitor stands in for the browser, so the intent is observed without any handler installed.
+            val monitor = instrumentation.addMonitor(view, Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true)
+            try {
+                tapCss { buttonCenter(scenario, "Open in browser") }
+                val openDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                while (monitor.hits < 1) {
+                    assertTrue("Open in browser did not start an ACTION_VIEW intent for $url", System.nanoTime() < openDeadline)
+                    Thread.sleep(50)
+                }
+                assertEquals("Open in browser must start exactly one ACTION_VIEW intent", 1, monitor.hits)
+            } finally { instrumentation.removeMonitor(monitor) }
+            println("lazysh parity: OSC 52 Allow wrote the system clipboard and Open in browser started an ACTION_VIEW intent for the terminal link")
+        }
+    }
+
+    private val parityOptions = "[role=dialog] .connection-options"
+
+    /** Opens the connection options and chooses the transport through the real native popup. */
+    private fun chooseOwnedTransport(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, transport: String) {
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$parityOptions > summary")).perform(webScrollIntoView()).perform(webClick())
+        selectNativeOption(scenario, parity.nonce, "$parityOptions select", transport)
+    }
+
+    /** Waits for the transport the workspace footer names, which is the one the session really uses. */
+    private fun awaitOwnedTransport(scenario: ActivityScenario<MainActivity>, shown: String) =
+        awaitDocument(scenario, "owned session over $shown", """
+            document.querySelector('.workspace-footer > span:last-of-type')?.textContent.startsWith(${JSONObject.quote(shown)}) &&
+              Boolean(document.querySelector('.terminal-canvas .xterm-screen'))
+        """)
+
+    /**
+     * Sets a number option the way React reads it. These fields are controlled: clearing one shows 0 again,
+     * so typing after a clear could never produce exactly the intended digits.
+     */
+    private fun setOwnedNumber(scenario: ActivityScenario<MainActivity>, selector: String, value: Int) =
+        assertEquals("Owned number option must take $value", "true", evaluate(scenario, """(()=>{
+            const input=document.querySelector(${JSONObject.quote(selector)});
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSONObject.quote(value.toString())});
+            input.dispatchEvent(new Event('input',{bubbles:true}));
+            return input.value===${JSONObject.quote(value.toString())};})()"""))
+
+    /** Proves a shell whose prompt is not known (ET and Mosh start the account's own login shell) by a fresh command's output. */
+    private fun proveOwnedCommand(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, tag: String) {
+        val proof = "PARITY_${tag}_${parity.nonce}"
+        val command = "printf 'PARITY_%s_%s\\n' '$tag' '${parity.nonce}'"
+        require(!command.contains(proof)) { "Owned $tag proof must not appear in its input" }
+        sendOwnedCommand(scenario, command, parity.label)
+        awaitDocument(scenario, "owned $tag shell proof", terminalScreenContains(proof))
+    }
+
+    @Test fun ownedSshAutoFallsBackToSshThroughRealUi() {
+        val name = "Parity auto fallback"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val port = parity.port("transport")
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port)
+            openOwnedConnect(scenario, name)
+            chooseOwnedTransport(scenario, parity, "auto")
+            // Neither helper exists on the host: both bootstraps exit at once instead of hanging on a shell.
+            replaceNativeText(scenario, "$parityOptions > fieldset:nth-of-type(1) input[maxlength='4096']", "/nonexistent/lazysh-mosh-server")
+            replaceNativeText(scenario, "$parityOptions > fieldset:nth-of-type(2) input[maxlength='4096']", "/nonexistent/lazysh-etterminal")
+            chooseOwnedPrivateKey(scenario, parity.fixture.getJSONObject("transport").getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("transport"), "127.0.0.1:$port")
+            proveOwnedShell(scenario, parity, parity.prompt("transport"), "AUTO")
+            awaitOwnedTransport(scenario, "SSH")
+            val notice = evaluate(scenario, "document.querySelector('.browser-banner[role=status]')?.textContent||''")
+            assertTrue("Auto must say it selected SSH: $notice", notice.contains("Auto selected SSH."))
+            val mosh = notice.indexOf("Mosh: Mosh server failed to start.")
+            val et = notice.indexOf("Eternal Terminal: ET helper did not start.")
+            assertTrue("Auto must report Mosh, then Eternal Terminal, as skipped: $notice", mosh in 0 until et)
+            println("lazysh parity: Auto tried Mosh then ET, kept the trusted SSH terminal and said why")
+        }
+    }
+
+    @Test fun ownedSshForcedEternalTerminalThroughRealUi() {
+        val name = "Parity forced ET"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val port = parity.port("transport")
+            val et = parity.fixture.getJSONObject("et")
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port)
+            openOwnedConnect(scenario, name)
+            chooseOwnedTransport(scenario, parity, "et")
+            replaceNativeText(scenario, "$parityOptions input[maxlength='4096']", et.getString("terminal"))
+            setOwnedNumber(scenario, "$parityOptions input[type=number]", et.getInt("port"))
+            chooseOwnedPrivateKey(scenario, parity.fixture.getJSONObject("transport").getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("transport"), "127.0.0.1:$port")
+            awaitOwnedTransport(scenario, "ET")
+            proveOwnedCommand(scenario, parity, "ET")
+            val facts = parity.control("et")
+            assertTrue("etserver must have started a terminal for this client: $facts", facts.getInt("sessions") >= 1)
+            println("lazysh parity: forced Eternal Terminal reached the owned etserver and ran a shell command")
+        }
+    }
+
+    @Test fun ownedSshMoshCustomServerPathAndPortRangeThroughRealUi() {
+        val name = "Parity Mosh options"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val mosh = parity.fixture.getJSONObject("mosh")
+            val host = mosh.getString("host")
+            val udpPort = mosh.getInt("udpPort")
+            addOwnedHost(scenario, name, host, parity.username, mosh.getInt("port"))
+            openOwnedConnect(scenario, name)
+            chooseOwnedTransport(scenario, parity, "mosh")
+            // The host's real mosh-server sits behind this wrapper; the default path would never reach it.
+            replaceNativeText(scenario, "$parityOptions input[maxlength='4096']", mosh.getString("serverPath"))
+            setOwnedNumber(scenario, "$parityOptions > fieldset label:nth-of-type(2) input", udpPort)
+            setOwnedNumber(scenario, "$parityOptions > fieldset label:nth-of-type(3) input", udpPort)
+            chooseOwnedPrivateKey(scenario, mosh.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("mosh"), "$host:${mosh.getInt("port")}")
+            awaitOwnedTransport(scenario, "Mosh")
+            proveOwnedCommand(scenario, parity, "MOSH")
+            val facts = parity.control("mosh")
+            val range = "$udpPort:$udpPort"
+            assertEquals("The custom server path must be bootstrapped once with the single-port range: $facts", listOf(range), parityList(facts, "ranges"))
+            assertEquals("The server must hold exactly the configured UDP port: $facts", listOf(udpPort.toString()), parityList(facts, "udpPorts"))
+            println("lazysh parity: Mosh ran the custom server path on the one configured UDP port")
+        }
+    }
+
+    /** Whether the open host editor's client-environment checkbox is ticked ("true" or "false"). */
+    private fun ownedClientEnvironmentChecked(scenario: ActivityScenario<MainActivity>) = evaluate(scenario,
+        "Array.from(document.querySelectorAll('[role=dialog] label')).find(x=>x.textContent.includes('Identify lazysh to this host'))?.querySelector('input')?.checked===true")
+
+    /** Opens a saved host's editor, reads its client-environment checkbox, and leaves without saving. */
+    private fun ownedSavedClientEnvironment(scenario: ActivityScenario<MainActivity>, name: String): String {
+        revealOwnedHosts(scenario)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Edit $name']")).perform(webClick())
+        awaitDocument(scenario, "host editor for $name", present(".port-field input"))
+        val checked = ownedClientEnvironmentChecked(scenario)
+        clickOwnedButton("Cancel")
+        awaitDocument(scenario, "host editor for $name closed", "!" + present(".port-field input"))
+        return checked
+    }
+
+    @Test fun ownedSshClientEnvironmentThroughRealUi() {
+        val off = "Parity env off"
+        val on = "Parity env on"
+        ownedParityCase(listOf(off, on)) { scenario, parity ->
+            addOwnedHost(scenario, off, "127.0.0.1", parity.username, parity.port("primary"))
+            addOwnedHost(scenario, on, "127.0.0.1", parity.username, parity.port("primary")) {
+                onWebView().withElement(findElement(Locator.XPATH,
+                    "//*[@role='dialog']//label[contains(normalize-space(.),'Identify lazysh to this host')]/input[@type='checkbox']"))
+                    .perform(webScrollIntoView()).perform(webClick())
+                assertEquals("The client environment must be opted in for this host only", "true", ownedClientEnvironmentChecked(scenario))
+            }
+            assertEquals("A new host must not identify lazysh by default", "false", ownedSavedClientEnvironment(scenario, off))
+            assertEquals("The opt-in must persist across reopening the host editor", "true", ownedSavedClientEnvironment(scenario, on))
+            val dollar = "$"
+            // The sshd admits `LANG LC_*`, so only the client's own choice decides what the remote shell sees.
+            for ((name, value) in listOf(off to "", on to "lazysh")) {
+                openOwnedConnect(scenario, name)
+                chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+                submitOwnedConnect(scenario)
+                // The first host pins this address and port, so the second shows no fingerprint review.
+                if (name == off) trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+                awaitDocument(scenario, "authenticated $name prompt", terminalScreenContains(parity.prompt("primary")))
+                val proof = "ENV_${value}_${parity.nonce}"
+                val command = "printf 'ENV_%s_%s\\n' \"${dollar}LC_TERMINAL\" '${parity.nonce}'"
+                require(!command.contains(proof)) { "Owned environment proof must not appear in its input" }
+                sendOwnedCommand(scenario, command, parity.label)
+                awaitDocument(scenario, "$name remote LC_TERMINAL", terminalScreenContains(proof))
+                if (value.isEmpty()) assertEquals("A host without the opt-in must not receive LC_TERMINAL", "false",
+                    evaluate(scenario, terminalScreenContains("ENV_lazysh_${parity.nonce}")))
+                endOwnedConnection(scenario, name)
+            }
+            println("lazysh parity: LC_TERMINAL=lazysh reached the remote shell only for the host that opted in")
+        }
+    }
+
+    /** This device's own display in pixels: the shape a host screenshot of this same device must have. */
+    @Suppress("DEPRECATION")
+    private fun realDisplaySize(): Point = Point().also {
+        InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.hardware.display.DisplayManager::class.java)
+            .getDisplay(Display.DEFAULT_DISPLAY).getRealSize(it)
+    }
+
+    // The host's adb server lists this very emulator, so the panel's Reboot, Shutdown and Boot controls (which would end the
+    // app under test) are checked for presence only and never pressed; input stays off. Lifecycle commands need a second
+    // owned AVD and stay with the host Cargo cases (docs/reference/devices-acceptance.md).
+    @Test fun ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi() {
+        val name = "Parity devices"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val devices = parity.fixture.getJSONObject("devices")
+            val serial = devices.getString("serial")
+            require(Regex("emulator-[0-9]{4,5}").matches(serial)) { "The owned device case needs an emulator serial" }
+            val panel = "section[aria-label='Host devices']"
+            val owned = "$panel select option[value='$serial']"
+            fun clickDeviceButton(label: String) = onWebView().withElement(findElement(Locator.XPATH,
+                "//section[@aria-label='Host devices']//button[normalize-space(text())='$label']")).perform(webScrollIntoView()).perform(webClick())
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("devices"))
+            openOwnedConnect(scenario, name)
+            // A new host connects with Auto, which tries Mosh first, and the runner has mosh-server; this case drives SSH exec channels.
+            chooseOwnedTransport(scenario, parity, "ssh")
+            chooseOwnedPrivateKey(scenario, devices.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("devices"), "127.0.0.1:${parity.port("devices")}")
+            proveOwnedShell(scenario, parity, parity.prompt("devices"), "DEVICES")
+            sessionView(scenario, "Devices")
+            awaitDocument(scenario, "device panel", present(panel))
+            clickDeviceButton("Find devices")
+            awaitDocument(scenario, "the owned emulator is listed as running", "document.querySelector(${JSONObject.quote(owned)})?.textContent.endsWith(' · running')===true")
+            assertEquals("The inventory must list the owned emulator once", "1", evaluate(scenario, "document.querySelectorAll(${JSONObject.quote(owned)}).length"))
+            selectNativeOption(scenario, parity.nonce, "$panel select:has(option[value='$serial'])", serial)
+            // An emulator offers capture, input, reboot and shutdown but not boot, which belongs to a stopped AVD.
+            val offered = JSONObject(evaluate(scenario, """(()=>{
+                const buttons=Array.from(document.querySelectorAll(${JSONObject.quote("$panel button")})),named=text=>buttons.find(item=>item.textContent.trim()===text);
+                return {capture:named('Capture screen')?.disabled===false,input:document.querySelector(${JSONObject.quote("$panel input[type=checkbox]")})?.disabled===false,
+                  reboot:Boolean(named('reboot')),shutdown:Boolean(named('shutdown')),boot:Boolean(named('boot'))};})()"""))
+            for ((control, expected) in listOf("capture" to true, "input" to true, "reboot" to true, "shutdown" to true, "boot" to false))
+                assertEquals("Offered $control for $serial: $offered", expected, offered.getBoolean(control))
+            clickDeviceButton("Capture screen")
+            awaitDocument(scenario, "captured frame decoded by the WebView", """(()=>{const image=document.querySelector(${JSONObject.quote("$panel img.device-frame")});
+                return Boolean(image) && image.complete && image.naturalWidth>0 && image.src.startsWith('data:image/jpeg;base64,');})()""")
+            val frame = JSONObject(evaluate(scenario, """(()=>{
+                const image=document.querySelector(${JSONObject.quote("$panel img.device-frame")}),canvas=document.createElement('canvas');
+                canvas.width=32;canvas.height=32;const context=canvas.getContext('2d');context.drawImage(image,0,0,32,32);
+                const pixels=context.getImageData(0,0,32,32).data,colors=new Set();
+                for(let index=0;index<pixels.length;index+=4)colors.add((pixels[index]>>4)<<8|(pixels[index+1]>>4)<<4|pixels[index+2]>>4);
+                return {width:image.naturalWidth,height:image.naturalHeight,colors:colors.size};})()"""))
+            val real = realDisplaySize()
+            assertTrue("The frame must have the shape of this emulator's own ${real.x}x${real.y} screen: $frame",
+                Math.abs(frame.getInt("width").toDouble() / frame.getInt("height") - real.x.toDouble() / real.y) < 0.02)
+            assertTrue("The frame must show a screen, not one flat colour: $frame", frame.getInt("colors") >= 4)
+            assertEquals("The panel must show no error", "false", evaluate(scenario, present("$panel [role=alert]")))
+            println("lazysh parity: the Device panel listed $serial as running and showed a ${frame.getInt("width")}x${frame.getInt("height")} frame of the ${real.x}x${real.y} screen")
+            sessionView(scenario, "Terminal")
+            endOwnedConnection(scenario, name)
+        }
+    }
+
+    /**
+     * Copy on a touch selection, observed at the operating system: a long press selects only the word under the finger,
+     * selecting alone leaves the system clipboard untouched, and Copy in the selection actions writes exactly that word.
+     */
+    @Test fun ownedSshTerminalSelectionCopyReachesTheSystemClipboardThroughRealUi() {
+        val name = "Parity selection copy"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            connectOwnedPrimaryWithKey(scenario, parity, name)
+
+            val marker = "COPY_${parity.nonce.take(8)}"
+            val row = "before $marker after"
+            // The marker is printed from two arguments, so the typed command never holds it as one word.
+            sendOwnedCommand(scenario, "printf 'before %s%s after\\n' COPY_ ${parity.nonce.take(8)}", parity.label)
+            awaitDocument(scenario, "owned selection row", rowShows(row))
+            assertTrue("The marker must not be on the system clipboard before the selection", systemClipboardText() != marker)
+
+            val actions = "[role=toolbar][aria-label='Selection actions']"
+            tapCss(Tap.LONG) { terminalTextCenter(scenario, row, marker) }
+            awaitDocument(scenario, "touch selection actions", present("$actions button"))
+            assertTrue("Selecting must not write the system clipboard", systemClipboardText() != marker)
+
+            tapCss { buttonCenter(scenario, "Copy", actions) }
+            val copiedAt = System.nanoTime()
+            val deadline = copiedAt + TimeUnit.SECONDS.toNanos(10)
+            while (systemClipboardText() != marker) {
+                assertTrue("Copy did not write exactly the selected word to the system clipboard (it holds ${systemClipboardText()?.take(80)})", System.nanoTime() < deadline)
+                Thread.sleep(100)
+            }
+            awaitDocument(scenario, "selection actions closed after Copy", "!(${present("$actions button")})")
+            awaitClipboardPreviewGone(copiedAt)
+            println("lazysh parity: a long press selected one terminal word and Copy wrote exactly that word to the system clipboard")
         }
     }
 
@@ -5637,6 +6984,13 @@ class NativeWorkspaceTest {
                 }
             } catch(_:Exception) {"unavailable"}
             primary.addSuppressed(AssertionError("Ntfy challenge state[enrollment=$enrollment registration=$registration busy=$busy]"))
+            // What the app did with each pushed message: all zero means the distributor never delivered one.
+            primary.addSuppressed(AssertionError(try {
+                val counts=native("EnrollmentController").getDeclaredMethod("deliveries").invoke(controller) as Map<*,*>
+                "Ntfy app deliveries["+checkNotNull(native("MessageOutcome").enumConstants).joinToString(" ") {
+                    "${it.toString().lowercase()}=${when(counts[it] as? Int ?: 0) {0 -> "zero";1 -> "one";else -> "many"}}"
+                }+"]"
+            } catch(_:Exception) {"Ntfy app deliveries[unavailable]"}))
             ntfyChallengeTrafficFailure(primary) {
                 val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/challenge-observation").openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
                 try {
@@ -5866,6 +7220,122 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    /** Awaits one promise-returning script in the bundled WebView and returns its JSON reply as a String, JSONArray or number. */
+    private fun voiceReply(scenario: ActivityScenario<MainActivity>, stage: String, call: String, seconds: Long = 120): Any {
+        evaluate(scenario, """(() => {
+          window.__lazyshVoiceResult = undefined;
+          $call.then(
+            value => { window.__lazyshVoiceResult = {ok:true,value:JSON.stringify(value === undefined ? null : value)}; },
+            error => { window.__lazyshVoiceResult = {ok:false,error:String(error)}; }
+          );
+          return true;
+        })()""")
+        awaitDocument(scenario, stage, "window.__lazyshVoiceResult !== undefined", System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds))
+        assertEquals("$stage was rejected", "\"\"", evaluate(scenario, "window.__lazyshVoiceResult.ok ? '' : window.__lazyshVoiceResult.error"))
+        // evaluateJavascript returns a JSON string literal; its content is the reply's own JSON.
+        return org.json.JSONTokener(JSONArray("[" + evaluate(scenario, "window.__lazyshVoiceResult.value") + "]").getString(0)).nextValue()
+    }
+
+    /** Runs a shell command as the shell user, like the SSH fixture read, and hands its output to `read`. */
+    private fun <T> shellOutput(command: String, read: (java.io.InputStream) -> T): T =
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).use { descriptor ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use(read)
+        }
+
+    /** The samples of a 16 kHz mono 16-bit PCM RIFF/WAVE file, scaled as the product's recorder sends them. */
+    private fun pcmSamples(wav: ByteArray): FloatArray {
+        val buffer = java.nio.ByteBuffer.wrap(wav).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        require(wav.size > 12 && String(wav, 0, 4, Charsets.US_ASCII) == "RIFF" && String(wav, 8, 4, Charsets.US_ASCII) == "WAVE") { "Sample is not a WAVE file" }
+        var offset = 12
+        var supported = false
+        while (offset + 8 <= wav.size) {
+            val length = buffer.getInt(offset + 4)
+            require(length >= 0 && offset + 8 + length <= wav.size) { "Sample chunk exceeds its file" }
+            when (String(wav, offset, 4, Charsets.US_ASCII)) {
+                "fmt " -> supported = length >= 16 && buffer.getShort(offset + 8).toInt() == 1 && buffer.getShort(offset + 10).toInt() == 1 &&
+                    buffer.getInt(offset + 12) == 16_000 && buffer.getShort(offset + 22).toInt() == 16
+                "data" -> {
+                    require(supported) { "Sample must be 16 kHz mono 16-bit PCM" }
+                    return FloatArray(length / 2) { buffer.getShort(offset + 8 + it * 2) / 32768f }
+                }
+            }
+            offset += 8 + length + (length and 1)
+        }
+        throw AssertionError("Sample has no data chunk")
+    }
+
+    /**
+     * Local Whisper on the device (#1604): imports the pinned English model through the product's chunked IPC, transcribes the
+     * public JFK sample with the bundled whisper.cpp, then removes the model. The owned acceptance run stages both files.
+     */
+    @Test fun ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView() {
+        val directory = InstrumentationRegistry.getArguments().getString("lazyshVoiceFixtures")
+        require(directory != null && Regex("/data/local/tmp/lazysh-voice-[a-f0-9]{32}").matches(directory)) {
+            "An owned Whisper fixture directory is required"
+        }
+        val model = "ggml-tiny.en.bin"
+        val name = JSONObject.quote(model)
+        val scenario = NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario, "Local Whisper IPC")
+        evaluate(scenario, """(() => {
+          const call = async (command, args) => {
+            const access = await window.__TAURI_INTERNALS__.invoke('app_lock_status', {});
+            return window.__TAURI_INTERNALS__.invoke(command, args, {headers: access.nonce ? {'X-Lazysh-Access':access.nonce} : {}});
+          };
+          // The panel sends each megabyte as a plain number array.
+          window.__lazyshVoice = {call, chunk: (id, offset, base64) =>
+            call('voice_import_chunk', {id, offset, bytes: Array.from(Uint8Array.from(atob(base64), c => c.charCodeAt(0)))})};
+          return true;
+        })()""")
+        fun call(stage: String, command: String, args: String, seconds: Long = 120) =
+            voiceReply(scenario, stage, "window.__lazyshVoice.call('$command', $args)", seconds)
+        fun models() = call("Whisper model list", "voice_models", "{}") as JSONArray
+        val size = shellOutput("stat -c %s $directory/$model") { String(it.readBytes(), Charsets.UTF_8).trim().toLong() }
+        assertTrue("The staged model is the pinned tiny.en weights", size in 1024..(160L * 1024 * 1024))
+        val samples = pcmSamples(shellOutput("cat $directory/jfk.wav") { it.readBytes() })
+        assertEquals("The JFK sample is eleven seconds of speech", 11, samples.size / 16_000)
+        assertEquals("A fresh emulator holds no Whisper model; remove it before this case", 0, models().length())
+        var openImport: String? = null
+        try {
+            val id = call("Whisper import begin", "voice_import_begin", "{name:$name, bytes:$size}") as String
+            openImport = id
+            shellOutput("cat $directory/$model") { stream ->
+                val buffer = ByteArray(1024 * 1024)
+                var offset = 0L
+                while (offset < size) {
+                    var count = 0
+                    while (count < buffer.size) {
+                        val read = stream.read(buffer, count, buffer.size - count)
+                        if (read < 0) break
+                        count += read
+                    }
+                    require(count > 0) { "Staged model ended at $offset of $size bytes" }
+                    voiceReply(scenario, "Whisper import chunk at $offset", "window.__lazyshVoice.chunk(${JSONObject.quote(id)}, $offset, " +
+                        "${JSONObject.quote(Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP))})")
+                    offset += count
+                }
+            }
+            call("Whisper import finish", "voice_import_finish", "{id:${JSONObject.quote(id)}, cancel:false}")
+            openImport = null
+            val installed = models()
+            assertEquals("Exactly the imported model is installed", 1, installed.length())
+            assertEquals(model, installed.getJSONObject(0).getString("id"))
+            assertEquals(size, installed.getJSONObject(0).getLong("bytes"))
+            val transcript = call("Whisper transcription", "voice_transcribe",
+                "{id:$name, language:'en', samples:[${samples.joinToString(",")}]}", 240) as String
+            val spoken = transcript.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+            assertTrue("Unexpected on-device transcription: $transcript", spoken.contains("ask not what your country can do for you"))
+            call("Whisper model removal", "voice_remove_model", "{id:$name}")
+            assertEquals("Removing the model frees its slot", 0, models().length())
+            println("lazysh native voice: model=$model bytes=$size samples=${samples.size} transcript=${JSONObject.quote(transcript)} removed=true")
+        } finally {
+            // Leave the emulator as found, whichever stage failed; a cleanup rejection never replaces the first failure.
+            runCatching { openImport?.let { call("Whisper import cancel", "voice_import_finish", "{id:${JSONObject.quote(it)}, cancel:true}") } }
+            runCatching { call("Whisper model cleanup", "voice_remove_model", "{id:$name}") }
+            runCatching { evaluate(scenario, "delete window.__lazyshVoice; delete window.__lazyshVoiceResult; true") }
+        }
+    }
+
     // `opened` is the selector a row that opens its own dialog, instead of a page, leaves shown.
     private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String, opened: String? = null) {
         val active = opened ?: ".settings-navigation [data-settings-page='$id']:not([hidden])"
@@ -5940,26 +7410,62 @@ class NativeWorkspaceTest {
         checkNotNull(callback)(Result.success("late"))
     }
 
-    private fun sendOwnedFinger(pointer: android.view.MotionEvent.PointerProperties, epoch: Long, action: Int, point: FloatArray) {
-        val coordinate = android.view.MotionEvent.PointerCoords().apply { x=point[0];y=point[1];pressure=1f;size=1f }
-        val event = android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,1,
-            arrayOf(pointer),arrayOf(coordinate),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
+    private fun sendOwnedFinger(pointer: android.view.MotionEvent.PointerProperties, epoch: Long, action: Int, point: FloatArray) =
+        sendOwnedFingers(listOf(pointer), epoch, action, listOf(point))
+
+    /** One MotionEvent of a touch stream with these pointers (ids 0, 1, ...) at these screen points. */
+    private fun sendOwnedFingers(pointers: List<android.view.MotionEvent.PointerProperties>, epoch: Long, action: Int, points: List<FloatArray>) {
+        val coordinates = points.map { android.view.MotionEvent.PointerCoords().apply { x=it[0];y=it[1];pressure=1f;size=1f } }
+        val event = android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,pointers.size,
+            pointers.toTypedArray(),coordinates.toTypedArray(),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
         try {
-            assertEquals("One owned native pointer identity",0,event.getPointerId(0))
+            assertEquals("Owned native pointer identities",pointers.indices.toList(),pointers.indices.map { event.getPointerId(it) })
             assertEquals("One owned native DOWN epoch",epoch,event.downTime)
             InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
         } finally {event.recycle()}
     }
 
-    /** One real finger held on the element's centre: its DOM geometry mapped to the screen, DOWN, the hold, then UP. */
-    private fun holdFinger(scenario: ActivityScenario<MainActivity>, selector: String, holdMillis: Long) {
-        val geometry = JSONArray(evaluate(scenario, "(()=>{const r=document.querySelector(${JSONObject.quote(selector)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
+    /** The centre of the element a JavaScript expression returns, in screen pixels, and the WebView's pixels per CSS pixel. */
+    private fun elementOnScreen(scenario: ActivityScenario<MainActivity>, element: String): Pair<FloatArray, Double> {
+        val geometry = JSONArray(evaluate(scenario, "(()=>{const r=($element).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
         val origin = IntArray(2); var scale = 0.0
         scenario.onActivity { activity ->
             val web = requireNotNull(webView(activity.window.decorView))
             web.getLocationOnScreen(origin); scale = web.width / geometry.getDouble(2)
         }
-        val point = floatArrayOf((origin[0] + geometry.getDouble(0) * scale).toFloat(), (origin[1] + geometry.getDouble(1) * scale).toFloat())
+        return floatArrayOf((origin[0] + geometry.getDouble(0) * scale).toFloat(), (origin[1] + geometry.getDouble(1) * scale).toFloat()) to scale
+    }
+
+    /**
+     * Two real fingers on the element, as one touch stream (DOWN, POINTER_DOWN, paced MOVEs, POINTER_UP, UP): finger 0 and 1 start at `from`
+     * and end at `to`, in CSS pixels from the element's centre. A pinch changes their distance; a swipe moves both the same way.
+     */
+    private fun twoFingerGesture(scenario: ActivityScenario<MainActivity>, element: String, from: List<DoubleArray>, to: List<DoubleArray>) {
+        val (centre, scale) = elementOnScreen(scenario, element)
+        val fingers = (0..1).map { android.view.MotionEvent.PointerProperties().apply { id = it; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER } }
+        val shift = android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT
+        fun screen(progress: Double) = from.indices.map { finger ->
+            floatArrayOf((centre[0] + (from[finger][0] + (to[finger][0] - from[finger][0]) * progress) * scale).toFloat(),
+                (centre[1] + (from[finger][1] + (to[finger][1] - from[finger][1]) * progress) * scale).toFloat())
+        }
+        val epoch = android.os.SystemClock.uptimeMillis()
+        var held = 0; var last = screen(0.0)
+        fun send(action: Int, points: List<FloatArray>, count: Int = 2) { last = points; sendOwnedFingers(fingers.take(count), epoch, action, points.take(count)) }
+        try {
+            send(android.view.MotionEvent.ACTION_DOWN, screen(0.0), 1); held = 1
+            send(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl shift), screen(0.0)); held = 2
+            for (step in 1..8) { Thread.sleep(16); send(android.view.MotionEvent.ACTION_MOVE, screen(step / 8.0)) }
+            send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl shift), screen(1.0)); held = 1
+            send(android.view.MotionEvent.ACTION_UP, screen(1.0), 1); held = 0
+        } finally {
+            // Never leave a touch stream open: the next real gesture would start inside it.
+            if (held > 0) runCatching { send(android.view.MotionEvent.ACTION_CANCEL, last, held) }
+        }
+    }
+
+    /** One real finger held on the element's centre: its DOM geometry mapped to the screen, DOWN, the hold, then UP. */
+    private fun holdFinger(scenario: ActivityScenario<MainActivity>, selector: String, holdMillis: Long) {
+        val point = elementOnScreen(scenario, "document.querySelector(${JSONObject.quote(selector)})").first
         val pointer = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }
         val epoch = android.os.SystemClock.uptimeMillis()
         sendOwnedFinger(pointer, epoch, android.view.MotionEvent.ACTION_DOWN, point)
@@ -6094,6 +7600,7 @@ class NativeWorkspaceTest {
             val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
             val pointer=android.view.MotionEvent.PointerProperties().apply {id=0;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER}
             var observer:OwnedFingerWindowObserver?=null
+            var viewportObserver:OwnedDpadViewportObservation?=null
             var held=false
             var point=floatArrayOf(x,start)
             var primary:Throwable?=null
@@ -6135,6 +7642,7 @@ class NativeWorkspaceTest {
                     val target=activity.window
                     val own=OwnedFingerWindowObserver(checkNotNull(target.callback),epoch)
                     target.callback=own;observer=own
+                    viewportObserver=OwnedDpadViewportObservation(target,web,epoch).also { it.install() }
                 }
                 fun dispatch(action:Int,y:Float) {
                     assertTrue("Past-bottom pointer stays within original five-second gesture budget",System.nanoTime()<deadline)
@@ -6155,10 +7663,16 @@ class NativeWorkspaceTest {
                     assertTrue("Original trusted touch pointer/source",row.getBoolean("pointerMatches")&&row.getBoolean("finger")&&row.getBoolean("touchscreen"))
                     assertEquals("Actual WebView handled native touch","handled",row.getString("outcome"))
                 }
-            }catch(failure:Throwable){primary=failure;throw failure}
+            }catch(failure:Throwable){
+                primary=failure
+                runCatching { failure.addSuppressed(AssertionError("Past-bottom native input[${observer?.verticalFailureSummary() ?: "unavailable"}]")) }
+                runCatching { failure.addSuppressed(AssertionError("Past-bottom native viewport[${viewportObserver?.failureSummary() ?: "unavailable"}]")) }
+                throw failure
+            }
             finally {
                 finishCleanup(primary,listOf<()->Unit>(
                     {if(held)sendOwnedFinger(pointer,epoch,android.view.MotionEvent.ACTION_CANCEL,point)},
+                    {scenario.onActivity {viewportObserver?.close()}},
                     {scenario.onActivity {activity->observer?.restore(activity.window)}},
                     {if(receiptAttempted)assertEquals("Passive touch receipt removed only by its owner","true",evaluate(scenario,
                         "(()=>{const own=window[$key];if(own?.token!==$token)return false;own.dispose();delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()",1000))}
@@ -6744,15 +8258,7 @@ class NativeWorkspaceTest {
         }
         val addedToolbarKeys=mutableListOf<String>()
         var originalToolbarOrder:String?=null
-        fun tapAt(bounds:JSONArray) {
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                val location = IntArray(2); view.getLocationOnScreen(location)
-                val scale = view.width / bounds.getDouble(2)
-                val x = bounds.getDouble(0) * scale; val y = bounds.getDouble(1) * scale
-                require(x>0 && x<view.width && y>0 && y<view.height) { "Owned tap outside WebView" }
-                floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
-            }, Press.FINGER))
-        }
+        fun tapAt(bounds:JSONArray)=tapWebViewAt(bounds)
         fun tapToolbar(name:String) {
             raw.original()
             onWebView().withElement(findElement(Locator.XPATH,"//*[contains(concat(' ',normalize-space(@class),' '),' terminal-keys ')]//button[normalize-space(.)='$name']")).perform(webScrollIntoView())
@@ -6862,11 +8368,22 @@ class NativeWorkspaceTest {
             var chatFailure: Throwable? = null
             try {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "form.chat-composer textarea")).perform(webScrollIntoView())
-                tapAt(JSONArray(evaluate(scenario, """
-                    (()=>{const area=$area,rect=area.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
-                      if(document.elementFromPoint(x,y)!==area)throw Error('Owned Chat composer hit target required');
-                      return [x,y,innerWidth];})()
-                """)))
+                // With the keyboard up the composer's lower part can sit under the key bar: bring it to the middle of its scroller.
+                evaluate(scenario, "($area.scrollIntoView({block:'center',inline:'nearest'}), true)")
+                val target = JSONObject(evaluate(scenario, """
+                    (()=>{const area=$area,rect=area.getBoundingClientRect(),x=rect.left+rect.width/2,
+                        y=(Math.max(rect.top,0)+Math.min(rect.bottom,innerHeight))/2;
+                      const hit=document.elementFromPoint(x,y), bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
+                      return {ok:hit===area,bounds:[x,y,innerWidth],diagnostic:{
+                        hit:hit===area?'textarea':hit===null?'none':area.contains(hit)?'descendant':
+                          hit.contains(area)?'ancestor':hit.closest('.dialog-backdrop')?'dialog':
+                          hit.closest('.sidebar, .sidebar-scrim')?'sidebar':hit.closest('.chat-panel')?'chat':
+                          hit.closest('.gesture-handle')?'gesture-handle':hit.closest('.bottom-menu, .bottom-menu-scrim')?'bottom-menu':
+                          hit.closest('.terminal-keys, .session-toolbar')?'keys':hit.closest('.workspace-header, .workspace-footer')?'workspace-bar':hit.closest('.terminal-canvas')?'terminal':hit.closest('.session-body')?'session':'other',
+                        rect:[rect.left,rect.top,rect.width,rect.height].map(bounded),viewport:[innerWidth,innerHeight].map(bounded)}};})()
+                """))
+                assertTrue("Owned Chat composer hit target required [${target.getJSONObject("diagnostic")}]", target.getBoolean("ok"))
+                tapAt(target.getJSONArray("bounds"))
                 awaitDocument(scenario, "Chat composer owns DOM focus", "document.activeElement===$area")
                 val editor = ime.awaitIme("Chat composer remote editor required") {
                     it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("remoteProxy") && it.getLong("generation") > previousGeneration
@@ -6919,11 +8436,12 @@ class NativeWorkspaceTest {
             finishImeOrder()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
-            // The last six are SwiftKey-shaped (predictive word, gesture word, Backspace inside the composing
-            // region, autocorrect by erase-and-commit, Backspace after a toolbar key ended ownership, and the
-            // letters-as-commits word with a composing-region rewrite that SwiftKey uses for a Chromium editor).
+            // The last seven are SwiftKey-shaped (predictive word, gesture word, Backspace inside the composing
+            // region, autocorrect by erase-and-commit, Backspace after a toolbar key ended ownership, the
+            // letters-as-commits word with a composing-region rewrite that SwiftKey uses for a Chromium editor, and a
+            // composing word erased whole, after which Chromium sends no compositionend).
             for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord",
-                    "predictWord", "swipeWord", "composingBackspace", "replacePrevious", "eraseOne", "webWord")) {
+                    "predictWord", "swipeWord", "composingBackspace", "replacePrevious", "eraseOne", "webWord", "dropWord")) {
                 if (operation == "eraseOne") tapToolbar("esc")
                 terminalEditor()
                 val result = ime.call(operation)

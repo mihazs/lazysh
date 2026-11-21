@@ -464,6 +464,8 @@ button svg {
   border-radius: 3px;
   font-size: 10px;
 }
+.terminal-engine-notice { display: flex; align-items: center; gap: 12px; }
+.terminal-engine-notice > span { flex: 1; min-width: 0; }
 .global-error {
   display: flex;
   align-items: center;
@@ -970,6 +972,10 @@ button svg {
   color: var(--theme-muted, #7f966e);
   font-size: 11px;
   margin-top: 6px;
+}
+/* A pane row is indented under its window row and tighter, so a window with several panes stays readable. */
+.mux-pane-row {
+  padding: 8px 5px 8px 24px;
 }
 .upload-confirm {
   padding: 16px 18px;
@@ -1546,6 +1552,7 @@ button svg {
 .multiplexer-panel .mux-row { flex-wrap: wrap; min-width: 0; }
 .multiplexer-panel .mux-row > div { min-width: 0; }
 .multiplexer-panel .mux-row small { overflow-wrap: anywhere; }
+.mux-history { max-height: 50vh; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font: 12px/1.45 "SFMono-Regular", Consolas, "Liberation Mono", monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
 .mux-layout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; align-items: start; }
 .mux-layout-list, .mux-layout-accordion { display: grid; gap: 10px; }
 .mux-shortcuts { margin-top: 12px; }
@@ -1717,6 +1724,12 @@ button svg {
 
 /* Attachment panels already provide their own content padding. */
 .tool-panel:not(.attachment-panel) > :is(h2, h3, p) { margin-inline: 18px; }
+/* Optional panel help (ToolHelp): closed by default, one 44px line, same gutter as the panel's own paragraphs. */
+.tool-help summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--theme-muted, var(--muted)); font-size: 13px; }
+.tool-help summary::before { content: '▸'; content: '▸' / ''; margin-inline-end: 6px; }
+.tool-help[open] summary::before { content: '▾'; content: '▾' / ''; }
+.tool-help p { margin: 0 0 8px; color: var(--theme-muted, var(--muted)); font-size: 12px; line-height: 1.5; }
+.tool-panel:not(.attachment-panel) > .tool-help { margin-inline: 18px; flex-shrink: 0; }
 
 /* Keep settings sections on one shared gutter, including native app lock. */
 .preferences-content { padding: 0 24px 24px; overflow-wrap: anywhere; }

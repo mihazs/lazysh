@@ -18,6 +18,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 65,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "KeyA",
@@ -51,6 +55,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 67,
+      "altGraph": false
     },
     "input": {
       "type": "key",
@@ -86,6 +94,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 67,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "KeyC",
@@ -119,6 +131,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 66,
+      "altGraph": false
     },
     "input": {
       "type": "key",
@@ -155,6 +171,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 37,
+      "altGraph": false
+    },
     "input": {
       "type": "key",
       "code": "ArrowLeft",
@@ -188,6 +208,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 81,
+      "altGraph": true
     },
     "input": {
       "type": "key",
@@ -223,6 +247,10 @@
       "release": false,
       "composing": false
     },
+    "fired": {
+      "keyCode": 69,
+      "altGraph": true
+    },
     "input": {
       "type": "key",
       "code": "KeyE",
@@ -256,6 +284,10 @@
       "repeat": false,
       "release": false,
       "composing": false
+    },
+    "fired": {
+      "keyCode": 81,
+      "altGraph": false
     },
     "input": {
       "type": "key",

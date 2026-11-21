@@ -1,14 +1,7 @@
 use super::*;
 use bzip2::{write::BzEncoder, Compression};
+use lazysh_common::test_support::{expose, private_tempdir as private_directory};
 use std::io::Cursor;
-use std::os::unix::fs::PermissionsExt;
-
-fn private_directory() -> TempDir {
-    tempfile::Builder::new()
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir()
-        .unwrap()
-}
 
 fn archive(entries: &[(&str, &[u8], tar::EntryType)]) -> Vec<u8> {
     let mut tar = tar::Builder::new(BzEncoder::new(Vec::new(), Compression::fast()));
@@ -83,7 +76,7 @@ fn unsafe_storage_fails_before_reading_any_model_bytes() {
         }
     }
     let root = private_directory();
-    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    expose(root.path());
     assert!(matches!(
         VerifiedBundle::read_in(NoRead, root.path()),
         Err(Error::Storage)
@@ -94,10 +87,17 @@ fn unsafe_storage_fails_before_reading_any_model_bytes() {
 fn authenticated_fixed_files_remain_owned_then_are_removed_on_drop() {
     let (bundle, _parent) = prepare_fixture(&fixture_entries()).unwrap();
     let path = bundle.directory.path().to_owned();
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    #[cfg(windows)]
+    lazysh_common::windows_acl::admit_path(&path, lazysh_common::windows_acl::Need::Private)
+        .unwrap();
     for file in bundle.files() {
         assert_eq!(std::fs::read(file).unwrap().len(), 8);
     }

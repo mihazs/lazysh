@@ -1,4 +1,4 @@
-//! `transcript-watch`: one long-lived stream of upserts for a Claude Code or Codex conversation.
+//! `transcript-watch`: one long-lived stream of upserts for a Claude Code, Codex or OpenCode conversation.
 //!
 //! The watcher never tails the file itself. A change of the file's identity, length or
 //! modification time re-projects the conversation with the same bounded readers the paged
@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Read, Write},
-    path::PathBuf,
-    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::mpsc::{Receiver, RecvTimeoutError},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -30,16 +30,21 @@ pub enum Source {
     Path(PathBuf),
     /// A provider session id resolved inside the agent's own data root, as `herdr-conversation`.
     Session(String),
+    /// One session of an OpenCode database, as `transcript --view conversation --session-id` reads it.
+    Database { path: PathBuf, session: String },
 }
 
 pub struct Options {
     pub agent: TranscriptAgent,
     pub path: Option<PathBuf>,
     pub session_id: Option<String>,
+    /// The OpenCode session to read from `path`, which then names the database.
+    pub database_session: Option<String>,
     pub limit: u8,
     pub interval: Duration,
     /// Previews of the user's attached images, as `transcript --view conversation --inline-images`.
     pub inline_images: bool,
+    pub allow_large_history: bool,
 }
 
 struct Entry {
@@ -53,6 +58,8 @@ struct Fingerprint {
     len: u64,
     modified: Option<SystemTime>,
     identity: Option<(u64, u64)>,
+    /// A write-ahead log holds a database's newest rows until a checkpoint moves them into the file.
+    wal: Option<(u64, Option<SystemTime>)>,
 }
 
 impl Fingerprint {
@@ -69,7 +76,18 @@ impl Fingerprint {
             len: metadata.len(),
             modified: metadata.modified().ok(),
             identity,
+            wal: None,
         })
+    }
+
+    fn of_database(path: &Path) -> Result<Self> {
+        let mut seen = Self::of(&super::open_transcript(path)?)?;
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        seen.wal = std::fs::metadata(wal)
+            .ok()
+            .map(|wal| (wal.len(), wal.modified().ok()));
+        Ok(seen)
     }
 }
 
@@ -78,6 +96,7 @@ pub struct Watcher {
     source: Source,
     limit: u8,
     inline_images: bool,
+    allow_large_history: bool,
     generation: u64,
     sequence: u64,
     entries: Vec<Entry>,
@@ -85,6 +104,7 @@ pub struct Watcher {
     queued: Vec<Value>,
     work: Option<Vec<Value>>,
     session: Option<Value>,
+    truncated: bool,
     seen: Option<Fingerprint>,
     located: Option<PathBuf>,
     /// Duration of the last projection; the next check waits at least three times as long.
@@ -114,8 +134,12 @@ fn evicted(old: &[Entry], incoming: &[(String, Value)]) -> Option<usize> {
 
 impl Watcher {
     pub fn new(agent: TranscriptAgent, source: Source, limit: u8) -> Result<Self> {
-        if !matches!(agent, TranscriptAgent::Claude | TranscriptAgent::Codex)
-            || !(1..=100).contains(&limit)
+        let database = matches!(source, Source::Database { .. });
+        if !match agent {
+            TranscriptAgent::Claude | TranscriptAgent::Codex => !database,
+            TranscriptAgent::Opencode => database,
+            _ => false,
+        } || !(1..=100).contains(&limit)
         {
             return Err(Error::InvalidArgument);
         }
@@ -124,6 +148,7 @@ impl Watcher {
             source,
             limit,
             inline_images: false,
+            allow_large_history: false,
             generation: 0,
             sequence: 0,
             entries: Vec::new(),
@@ -131,6 +156,7 @@ impl Watcher {
             queued: Vec::new(),
             work: None,
             session: None,
+            truncated: false,
             seen: None,
             located: None,
             cost: Duration::ZERO,
@@ -146,8 +172,17 @@ impl Watcher {
         Ok(self)
     }
 
+    pub fn with_large_history(mut self, allow: bool) -> Result<Self> {
+        if allow && !matches!(self.agent, TranscriptAgent::Codex) {
+            return Err(Error::InvalidArgument);
+        }
+        self.allow_large_history = allow;
+        Ok(self)
+    }
+
     fn fingerprint(&mut self) -> Result<Fingerprint> {
         let path = match (&self.source, &self.located) {
+            (Source::Database { path, .. }, _) => return Fingerprint::of_database(path),
             (Source::Path(path), _) | (Source::Session(_), Some(path)) => path.clone(),
             (Source::Session(id), None) => {
                 let path = herdr_session::locate(self.agent, id)?;
@@ -164,6 +199,27 @@ impl Watcher {
     }
 
     fn project(&self) -> Result<TranscriptPage> {
+        if self.allow_large_history {
+            return match &self.source {
+                Source::Path(path) => super::conversation_window_large(
+                    path,
+                    self.agent,
+                    self.limit,
+                    self.inline_images,
+                    &super::window::Window::Tail,
+                    true,
+                ),
+                Source::Session(id) => herdr_session::read_herdr_conversation_window_large(
+                    self.agent,
+                    id,
+                    self.limit,
+                    &super::window::Window::Tail,
+                    true,
+                ),
+                // `with_large_history` admits Codex only, and an OpenCode watch reads a database.
+                Source::Database { .. } => Err(Error::InvalidArgument),
+            };
+        }
         match &self.source {
             Source::Path(path)
                 if self.inline_images && matches!(self.agent, TranscriptAgent::Codex) =>
@@ -174,6 +230,9 @@ impl Watcher {
                 super::claude_conversation_images(path, self.limit)
             }
             Source::Path(path) => super::conversation(path, self.agent, self.limit),
+            Source::Database { path, session } => {
+                super::opencode_conversation(path, session, self.limit)
+            }
             Source::Session(id) => {
                 herdr_session::read_herdr_conversation(self.agent, id, self.limit)
             }
@@ -219,6 +278,8 @@ impl Watcher {
         self.work.clone_from(&page.work);
         let session_changed = self.session != page.session;
         self.session = page.session;
+        let truncated_changed = self.truncated != page.truncated;
+        self.truncated = page.truncated;
         let dropped = if rewritten || self.generation == 0 {
             None
         } else {
@@ -263,6 +324,7 @@ impl Watcher {
             || queued_changed
             || work_changed
             || session_changed
+            || truncated_changed
         {
             self.sequence += 1;
             let mut frame = json!({
@@ -281,6 +343,9 @@ impl Watcher {
             }
             if session_changed {
                 frame["session"] = json!(self.session);
+            }
+            if truncated_changed {
+                frame["truncated"] = json!(self.truncated);
             }
             Some(frame)
         } else {
@@ -333,15 +398,22 @@ pub fn run(
                 }
             }
         }
-        if quiet.elapsed() >= HEARTBEAT {
-            write_frame(out, &json!({"type":"heartbeat"}))?;
-            quiet = Instant::now();
-        }
-        if !matches!(
-            closed.recv_timeout(interval.max(watcher.cost * 3)),
-            Err(RecvTimeoutError::Timeout)
-        ) {
-            return Ok(());
+        // The wait after a slow projection can outlast several heartbeats, so they are sent during it.
+        let check = Instant::now() + interval.max(watcher.cost * 3);
+        loop {
+            if quiet.elapsed() >= HEARTBEAT {
+                write_frame(out, &json!({"type":"heartbeat"}))?;
+                quiet = Instant::now();
+            }
+            let wait = check
+                .saturating_duration_since(Instant::now())
+                .min(HEARTBEAT.saturating_sub(quiet.elapsed()));
+            if !matches!(closed.recv_timeout(wait), Err(RecvTimeoutError::Timeout)) {
+                return Ok(());
+            }
+            if Instant::now() >= check {
+                break;
+            }
         }
     }
 }
@@ -349,25 +421,20 @@ pub fn run(
 /// The command entry point: stdout carries the frames and a closed stdin (the SSH channel going
 /// away) ends the watch.
 pub fn run_stdio(options: Options) -> Result<()> {
-    let source = match (options.path, options.session_id) {
-        (Some(path), None) => Source::Path(path),
-        (None, Some(id)) => Source::Session(id),
+    let source = match (options.path, options.session_id, options.database_session) {
+        (Some(path), None, None) => Source::Path(path),
+        (Some(path), None, Some(session)) => Source::Database { path, session },
+        (None, Some(id), None) => Source::Session(id),
         _ => return Err(Error::InvalidArgument),
     };
-    let watcher =
-        Watcher::new(options.agent, source, options.limit)?.with_images(options.inline_images)?;
-    let (closed_tx, closed) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buffer = [0; 64];
-        let mut stdin = std::io::stdin();
-        while matches!(stdin.read(&mut buffer), Ok(count) if count > 0) {}
-        drop(closed_tx);
-    });
+    let watcher = Watcher::new(options.agent, source, options.limit)?
+        .with_images(options.inline_images)?
+        .with_large_history(options.allow_large_history)?;
     run(
         watcher,
         options.interval,
         &mut std::io::stdout().lock(),
-        &closed,
+        &crate::stdin_closed(),
     )
 }
 
@@ -397,6 +464,19 @@ mod tests {
     }
     fn watcher(path: &Path, limit: u8) -> Watcher {
         Watcher::new(TranscriptAgent::Claude, Source::Path(path.into()), limit).unwrap()
+    }
+    #[test]
+    fn paging_boundary_changes_are_sent_even_without_message_changes() {
+        let (_dir, path) = fixture(&chain(2));
+        let mut stream = watcher(&path, 50);
+        let mut page = stream.project().unwrap();
+        page.truncated = true;
+        let snapshot = stream.diff(page, false);
+        assert_eq!(snapshot[0]["truncated"], true);
+        let page = stream.project().unwrap();
+        let delta = stream.diff(page, false);
+        assert_eq!(delta[0]["type"], "delta");
+        assert_eq!(delta[0]["truncated"], false);
     }
     fn ids(frame: &Value, key: &str) -> Vec<String> {
         frame[key]
@@ -620,10 +700,23 @@ mod tests {
         assert!(watch.poll().unwrap().is_empty());
     }
 
+    /// Keeps what `run` writes; the closure sees the earlier output and the bytes about to join it.
+    struct Tap<F>(Vec<u8>, F);
+    impl<F: FnMut(&[u8], &[u8]) -> std::io::Result<()>> Write for Tap<F> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            (self.1)(&self.0, bytes)?;
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn an_unreadable_source_ends_at_once_and_a_stuck_one_after_the_retry_budget() {
         let directory = tempfile::tempdir().unwrap();
-        let (_tx, closed) = mpsc::channel();
+        let (_tx, closed) = std::sync::mpsc::channel();
         let mut out = Vec::new();
         let missing = watcher(&directory.path().join("gone.jsonl"), 50);
         assert!(run(missing, Duration::from_millis(1), &mut out, &closed).is_err());
@@ -632,21 +725,16 @@ mod tests {
         assert!(lines.lines().next().unwrap().contains("\"hello\""));
         assert!(lines.lines().last().unwrap().contains("\"end\""));
         // The file turns unreadable right after the first frames went out.
-        struct Corrupting(Vec<u8>, PathBuf);
-        impl Write for Corrupting {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                if self.0.contains(&b'\n') {
-                    fs::write(&self.1, "{ not json\n")?;
-                }
-                self.0.extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
         let (_directory, path) = fixture(&chain(2));
-        let mut out = Corrupting(Vec::new(), path.clone());
+        let mut out = Tap(
+            Vec::new(),
+            |written: &[u8], _: &[u8]| -> std::io::Result<()> {
+                if written.contains(&b'\n') {
+                    fs::write(&path, "{ not json\n")?;
+                }
+                Ok(())
+            },
+        );
         assert!(run(
             watcher(&path, 50),
             Duration::from_millis(1),
@@ -665,6 +753,30 @@ mod tests {
             lines.last().unwrap(),
             &json!({"type":"end","reason":"InvalidEvent"})
         );
+    }
+
+    #[test]
+    fn a_heartbeat_is_sent_on_time_during_the_wait_that_follows_a_slow_projection() {
+        let (_directory, path) = fixture(&chain(2));
+        let mut watch = watcher(&path, 50);
+        watch.poll().unwrap();
+        // An unchanged file is not projected again, so the cost of a 10 s projection stays: a 30 s wait.
+        watch.cost = Duration::from_secs(10);
+        let (close, closed) = std::sync::mpsc::channel();
+        // Ends the watch at the first heartbeat, as a client closing the channel would.
+        let mut out = Tap(
+            Vec::new(),
+            |_: &[u8], frame: &[u8]| -> std::io::Result<()> {
+                if frame.starts_with(br#"{"type":"heartbeat"}"#) {
+                    let _ = close.send(());
+                }
+                Ok(())
+            },
+        );
+        let started = Instant::now();
+        run(watch, Duration::from_millis(1), &mut out, &closed).unwrap();
+        let waited = started.elapsed();
+        assert!(waited >= HEARTBEAT && waited < HEARTBEAT * 3, "{waited:?}");
     }
 
     #[test]

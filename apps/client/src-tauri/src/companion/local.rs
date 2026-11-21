@@ -1,7 +1,8 @@
 //! The companion on this device: no SSH and no POSIX probe. The builders' one-line commands are
 //! split back into argv and run on the executable found here, never through a shell.
-use super::{error, Result};
+use super::{error, words, Result};
 use crate::host::Cmd;
+use serde::Serialize;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -12,43 +13,6 @@ const NAME: &str = if cfg!(windows) {
 } else {
     "lazysh-agent"
 };
-
-/// A command line made only of bare safe words and `ssh::quote`d text, the form every companion
-/// builder writes, as the words it stands for. Anything a shell would interpret is refused.
-fn words(line: &str) -> Result<Vec<String>> {
-    let (mut words, mut word, mut started, mut quoted) = (Vec::new(), String::new(), false, false);
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match (quoted, c) {
-            (true, '\'') => quoted = false,
-            (true, c) => word.push(c),
-            (false, '\'') => (quoted, started) = (true, true),
-            // `quote` writes a literal single quote as `'\''`.
-            (false, '\\') if chars.as_str().starts_with('\'') => {
-                chars.next();
-                word.push('\'');
-                started = true;
-            }
-            (false, ' ') if started => {
-                words.push(std::mem::take(&mut word));
-                started = false;
-            }
-            (false, ' ') => {}
-            (false, c) if c.is_ascii_alphanumeric() || "-_./:,+@=".contains(c) => {
-                word.push(c);
-                started = true;
-            }
-            _ => return Err(error("companion_command", "Invalid companion command")),
-        }
-    }
-    if quoted {
-        return Err(error("companion_command", "Invalid companion command"));
-    }
-    if started {
-        words.push(word);
-    }
-    Ok(words)
-}
 
 fn runnable(path: &Path) -> bool {
     #[cfg(unix)]
@@ -101,40 +65,53 @@ fn managed_dir(data: Option<PathBuf>) -> Option<PathBuf> {
     };
     Some(data.join("lazysh/companion"))
 }
+/// Where the resolved companion came from, as the companion panel names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Source {
+    Bundled,
+    Managed,
+    Path,
+}
 /// Bundled beside the app executable, then the managed copy, then the PATH.
-fn find(exe_dir: Option<&Path>, managed_dir: Option<&Path>, path: &OsStr) -> Option<PathBuf> {
+fn find(
+    exe_dir: Option<&Path>,
+    managed_dir: Option<&Path>,
+    path: &OsStr,
+) -> Option<(PathBuf, Source)> {
     let bundled = exe_dir
         .map(|dir| dir.join(NAME))
-        .filter(|file| runnable(file));
+        .filter(|file| runnable(file))
+        .map(|file| (file, Source::Bundled));
     let managed = managed_dir
         .map(|dir| dir.join(NAME))
-        .filter(|file| owned_managed(file));
+        .filter(|file| owned_managed(file))
+        .map(|file| (file, Source::Managed));
     bundled.or(managed).or_else(|| {
         std::env::split_paths(path)
             .filter(|dir| dir.is_absolute())
             .map(|dir| dir.join(NAME))
             .find(|file| runnable(file))
+            .map(|file| (file, Source::Path))
     })
 }
-async fn program() -> Option<String> {
+async fn resolve() -> Option<(String, Source)> {
     let path = crate::host::login_path()
         .await
         .cloned()
         .or_else(|| std::env::var_os("PATH"))
         .unwrap_or_default();
     let exe = std::env::current_exe().ok()?;
-    find(exe.parent(), managed_dir(None).as_deref(), &path)?
-        .into_os_string()
-        .into_string()
-        .ok()
+    let (file, source) = find(exe.parent(), managed_dir(None).as_deref(), &path)?;
+    Some((file.into_os_string().into_string().ok()?, source))
 }
-/// Whether a local session can run the companion at all.
-pub(crate) async fn available() -> bool {
-    program().await.is_some()
+/// Which companion a local session would run, or `None` when it cannot run one at all.
+pub(crate) async fn source() -> Option<Source> {
+    resolve().await.map(|(_, source)| source)
 }
 /// The argv of a companion command line with the program resolved to an absolute path.
 pub(crate) async fn command(line: &str) -> Result<Cmd> {
-    let program = program().await.ok_or_else(|| {
+    let (program, _) = resolve().await.ok_or_else(|| {
         error(
             "remote_command_failed",
             "lazysh-agent is not available on this device",
@@ -147,17 +124,38 @@ fn argv(line: &str, program: &str) -> Result<Cmd> {
     if words.next().as_deref() != Some("lazysh-agent") {
         return Err(error("companion_command", "Invalid companion command"));
     }
-    Ok(words.fold(Cmd::new(&[], &[program]), |cmd, word| cmd.arg(&word)))
+    Ok(words.fold(
+        Cmd::new(
+            &[("LAZYSH_APP_VERSION", env!("CARGO_PKG_VERSION"))],
+            &[program],
+        ),
+        |cmd, word| cmd.arg(&word),
+    ))
 }
 
 /// `lazysh-agent --version` of an executable that answers in time: the bare version.
 async fn version_of(path: &Path) -> Option<String> {
-    let run = tokio::process::Command::new(path)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
+    let run = async {
+        let mut attempts = 0;
+        loop {
+            let output = tokio::process::Command::new(path)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            match output {
+                Err(ref error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 100 =>
+                {
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                result => break result,
+            }
+        }
+    };
     let output = tokio::time::timeout(std::time::Duration::from_secs(10), run)
         .await
         .ok()?

@@ -83,6 +83,22 @@ test('an actual unique commit succeeds and prints the zero-duplicate instruction
   expect((await git(f, 'config', '--local', '--get', 'core.hooksPath')).stdout.trim()).toBe('.githooks');
 }, 20_000);
 
+test('a staged changeset fragment must follow the structured format and the hook names the line to fix', async () => {
+  const f = await fixture();
+  for (const name of ['lint-fragments.ts', 'changelog-model.mjs']) await put(f, `.changeset/${name}`, await readFile(join(project, '.changeset', name), 'utf8'));
+  await git(f, 'add', '.changeset');
+  await git(f, 'commit', '--quiet', '-m', 'Add the fragment linter');
+  await put(f, '.changeset/free-text.md', '---\n"@lazysh/client": patch\n---\n\nKeep the binding.\n');
+  await git(f, 'add', '.changeset/free-text.md');
+  const rejected = await run(f, ['git', 'commit', '--quiet', '-m', 'Reject a free-text fragment'], false);
+  expect(rejected.code).not.toBe(0);
+  expect(rejected.stdout + rejected.stderr).toContain('.changeset/free-text.md:5: the first line must be "type(scope): headline"');
+  await put(f, '.changeset/free-text.md', '---\n"@lazysh/client": patch\n---\n\nfix(ssh): Keep the binding\n');
+  await git(f, 'add', '.changeset/free-text.md');
+  await git(f, 'commit', '--quiet', '-m', 'Accept a structured fragment');
+  expect((await git(f, 'show', '--stat', '--format=', 'HEAD')).stdout).toContain('.changeset/free-text.md');
+}, 30_000);
+
 test('any duplicated source blocks commit and restores unrelated changes', async () => {
   const f = await fixture();
   await put(f, 'new copy with spaces.ts', source);

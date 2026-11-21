@@ -146,10 +146,10 @@ mod metadata {
                 "claude" => self.selected("CLAUDE_CONFIG_DIR", ".claude", ""),
                 "codex" => self.selected("CODEX_HOME", ".codex", ""),
                 "cline" => self.cline_profile(),
-                "copilot" if matches!(self.schema_version, 2 | 3) => {
+                "copilot" if self.schema_version >= 2 => {
                     self.literal_profile("COPILOT_HOME", ".copilot")
                 }
-                "amp" if self.schema_version == 3 => self.amp_profile(),
+                "amp" if self.schema_version >= 3 => self.amp_profile(),
                 "kimi" => {
                     let mut profiles = vec![
                         self.literal_profile("KIMI_CODE_HOME", ".kimi-code"),
@@ -296,8 +296,10 @@ mod metadata {
             ("aider", "aider", "healthOnly"),
         ] {
             let profiles = scan.profiles(agent);
-            let setup = if (agent == "copilot" && matches!(schema_version, 2 | 3))
-                || (agent == "amp" && schema_version == 3)
+            // Each schema keeps every earlier schema's managed providers; Kimi Code 2.4 is the profile listed first.
+            let setup = if (agent == "copilot" && schema_version >= 2)
+                || (agent == "amp" && schema_version >= 3)
+                || (agent == "kimi" && schema_version >= 4)
             {
                 "managed"
             } else {
@@ -344,6 +346,6 @@ mod metadata {
                 scan.truncated = true;
             }
         }
-        json!({"schemaVersion":schema_version,"supported":true,"managedSetupSupported":cfg!(target_os="linux"),"agents":agents,"truncated":scan.truncated})
+        json!({"schemaVersion":schema_version,"supported":true,"managedSetupSupported":true,"agents":agents,"truncated":scan.truncated})
     }
 }

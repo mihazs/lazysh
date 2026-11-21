@@ -23,7 +23,8 @@ function checkTree(value: unknown): WorkflowTree {
   const tree = value as Partial<WorkflowTree> | null;
   if (!tree || typeof tree !== 'object' || !Array.isArray(tree.phases) || tree.phases.length > 50 || !Array.isArray(tree.agents) || tree.agents.length > 200
     || !tree.totals || !isCount(tree.totals.agents) || !isCount(tree.totals.tokens) || !isCount(tree.totals.toolCalls)
-    || (tree.name !== undefined && !text(tree.name))
+    // A companion before this fix sends `name: null` for a run whose summary file is missing: no name, not an invalid page.
+    || (tree.name != null && !text(tree.name))
     || tree.phases.some(phase => !phase || !text(phase.title) || ![...states, 'pending'].includes(phase.state))
     || tree.agents.some(agent => !agent || !text(agent.agentId) || !text(agent.label) || !states.includes(agent.state)
       || (['phase', 'last', 'childPath'] as const).some(key => agent[key] !== undefined && !text(agent[key]))

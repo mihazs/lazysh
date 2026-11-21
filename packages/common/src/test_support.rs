@@ -1,3 +1,41 @@
+/// A temporary directory only the current user can reach: owner-only mode on Unix, a protected DACL on Windows.
+pub fn private_tempdir() -> tempfile::TempDir {
+    #[cfg(unix)]
+    let directory = {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    };
+    #[cfg(windows)]
+    let directory = {
+        let directory = tempfile::tempdir().unwrap();
+        crate::windows_acl::fixtures::restrict(directory.path());
+        directory
+    };
+    directory
+}
+
+/// Lets every account modify `path` (and, on Windows, what it holds).
+pub fn expose(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::windows_acl::fixtures::expose(path);
+}
+
+/// A directory link at `link` that leads to `target`: a symbolic link on Unix, a junction on Windows.
+pub fn link_directory(link: &std::path::Path, target: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    crate::windows_acl::fixtures::junction(link, target);
+}
+
 pub fn words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -79,6 +117,36 @@ pub fn regular_state_metadata(
     message: &'static str,
 ) -> std::io::Result<Option<std::fs::Metadata>> {
     crate::private_state::regular_state_metadata(path, message)
+}
+
+/// A page that is one solid green and titled `Green`.
+pub const GREEN_PAGE: &str =
+    "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
+
+/// A page on loopback, served to a real browser for `seconds`.
+pub fn loopback_page(body: &'static str, seconds: u64) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        // The browser asks for the page and a favicon; stop when the test drops its relay and connections stop.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            };
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, server)
 }
 
 #[cfg(test)]
