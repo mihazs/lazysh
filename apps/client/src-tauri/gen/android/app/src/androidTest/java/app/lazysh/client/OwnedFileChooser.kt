@@ -96,6 +96,16 @@ internal object OwnedFileChooser {
         try {
             val info = instrumentation.targetContext.packageManager.getApplicationInfo(picker, 0)
             assertTrue("The file picker must be a system application: $picker", info.flags and ApplicationInfo.FLAG_SYSTEM != 0)
+            // API 33+ answers an image/* input with the Photo Picker, which names no file: it lists media newest first, and the
+            // fixture was published moments ago, so its first tile is the fixture (the page then proves the decoded content).
+            val photoGrid = By.pkg(picker).res(picker, "picker_tab_recyclerview")
+            if (device.wait(Until.hasObject(photoGrid), 3_000)) {
+                val tile = device.wait(Until.findObject(By.pkg(picker).clickable(true).hasAncestor(photoGrid)), 10_000)
+                    ?: throw AssertionError("The Photo Picker lists no image")
+                tile.click()
+                assertTrue("The picker must close after the entry is chosen", device.wait(Until.gone(By.pkg(picker)), 10_000))
+                return
+            }
             val entry = By.pkg(picker).desc(Pattern.compile(Pattern.quote(name) + ", .*"))
             val title = By.pkg(picker).text(name)
             fun entries(untilNanos: Long): List<UiObject2> {
