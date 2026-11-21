@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.93.8
+
+### Patch Changes
+
+- test(android): pick the QR fixture first in the Photo Picker and tap the Chat composer where it is not covered ([#2286](https://github.com/mihazs/lazysh/pull/2286))
+
+  <details><summary>Details</summary>
+
+  The QR picker case could choose another image, so the page failed to decode it, and the Chat composer CJK step tapped the centre of a composer that the phone's key bar covered. Test only. No user-visible behaviour changes.
+
+  </details>
+
 ## 1.93.7
 
 ### Patch Changes
