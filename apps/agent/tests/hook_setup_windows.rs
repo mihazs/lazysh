@@ -55,33 +55,7 @@ fn icacls(path: &Path, args: &[&str]) -> String {
     );
     listing
 }
-/// Leaves only the current user and the system with access, inheritable, whatever the volume grants.
-fn restrict(directory: &Path) {
-    let user = format!("*{}:(OI)(CI)F", windows_acl::current_user().unwrap());
-    icacls(
-        directory,
-        &[
-            "/inheritance:r",
-            "/grant:r",
-            &user,
-            "/grant:r",
-            "*S-1-5-18:(OI)(CI)F",
-        ],
-    );
-}
-fn junction(link: &Path, target: &Path) {
-    let made = Command::new("cmd")
-        .args(["/c", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .output()
-        .unwrap();
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stdout)
-    );
-}
+use windows_acl::fixtures::{junction, restrict};
 
 struct Fixture {
     root: tempfile::TempDir,
