@@ -109,15 +109,7 @@ async fn check(app: &App, id: &str, directory: &Path) {
             &["workspace", "create", "--label", label, "--cwd", home],
         );
     }
-    let snapshot: Value = serde_json::from_slice(&run(directory, &["api", "snapshot"])).unwrap();
-    let hidden = snapshot["result"]["snapshot"]["panes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|pane| pane["focused"] == false)
-        .unwrap()
-        .clone();
-    let pane = hidden["pane_id"].as_str().unwrap().to_owned();
+    let pane = lazysh_common::test_support::unfocused_herdr_pane(&run(directory, &["api", "snapshot"]));
     report(directory, &pane, "working");
 
     let target = || WatchTarget::HerdrEvents {

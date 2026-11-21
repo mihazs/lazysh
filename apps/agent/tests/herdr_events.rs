@@ -284,15 +284,7 @@ fn real_herdr_reports_a_stub_agent_turning_blocked_and_done_within_a_bound() {
             server.home.path().to_str().unwrap(),
         ]);
     }
-    let snapshot: Value = serde_json::from_slice(&server.herdr(&["api", "snapshot"])).unwrap();
-    let hidden = snapshot["result"]["snapshot"]["panes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|pane| pane["focused"] == false)
-        .unwrap()
-        .clone();
-    let pane = hidden["pane_id"].as_str().unwrap();
+    let pane = &lazysh_common::test_support::unfocused_herdr_pane(&server.herdr(&["api", "snapshot"]));
     server.report(pane, "working");
     let frames = Frames::start(companion(server.home.path(), &server.path, "default"));
     assert_eq!(
