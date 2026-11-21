@@ -1677,7 +1677,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function chooseLiveSession(id:string) {
     agentDrawerOffset.current=undefined;
     if(pendingMuxRequest || !sessionsRef.current.some(session=>session.id===id && session.connected))return;
+    const from=active,target=sessionsRef.current.find(session=>session.id===id);
     setActiveId(id);setView('terminal');setSidebar(false);
+    // Another session picked in the left menu while the Agent view is shown opens in the Agent view too.
+    if(from && target && sessionViewOf(from)!=='terminal' && sessionViewOf(target)==='terminal')chooseSessionView(target,'agent');
   }
   function tmuxJumped(sessionId: string, snapshot: import('./bridge').TmuxJumpSnapshot) {
     if (!mounted.current || currentView.current.activeId !== sessionId) return;
@@ -2107,6 +2110,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     }
   }
   async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean,fromAgent=false) {
+    const keepAgentView=sessionViewOf(source)!=='terminal';
     const selectedNavigation=navigationState.current[source.id];
     if(!selectedNavigation && !fromAgent)throw new LocalUiError('herdrNavigationChanged');
     if(fromAgent && (source.attached?.kind!=='herdr' || source.attached.name!==name || !target))throw new LocalUiError('herdrNavigationChanged');
@@ -2139,6 +2143,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       }
       setActiveId(destination.id);setView('terminal');setSidebar(false);
       if(fromAgent)chooseSessionView(destination,'terminal');
+      // Picking an agent in the left menu while the Agent view is shown keeps the Agent view, also on another display of the server.
+      else if(keepAgentView && sessionViewOf(destination)==='terminal')chooseSessionView(destination,'agent');
     } catch(error) {
       const cause=captureUiError(error);
       if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
