@@ -6,8 +6,8 @@
 use super::*;
 use lazysh_terminal_renderer_wgpu::Policy;
 use lazysh_terminal_runtime::{
-    Config, Hooks, Hub, HubConfig, Image, Offer, Origin, PtyWriter, ReferenceRenderer, Refused,
-    SelectionKind, Size,
+    CellPos, CellRange, Config, Hooks, Hub, HubConfig, Image, Offer, Origin, PtyWriter,
+    ReferenceRenderer, Refused, Selection, SelectionKind, Size,
 };
 
 const COLS: u16 = 24;
@@ -267,11 +267,15 @@ fn the_selection_and_composing_text_are_drawn_like_the_reference() {
         anchor: (2, 0),
         head: (7, 0),
     };
-    shown.host.set_selection(Some(selection)).unwrap();
+    let cell = |(x, y): (u16, u16)| CellPos { x, y: y.into() };
+    shown.session.set_selection(Some(CellRange {
+        start: cell(selection.anchor),
+        end: cell(selection.head),
+    }));
     let selected = reference(&text, &look(), Some(selection));
     assert_ne!(selected, plain);
     shown.shows(&selected, "the selection");
-    shown.host.set_selection(None).unwrap();
+    shown.session.set_selection(None);
     shown.shows(&plain, "the selection is gone");
 
     // What a keyboard composes looks like underlined text at the cursor, with the cursor after it.

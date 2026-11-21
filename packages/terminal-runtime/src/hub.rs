@@ -33,7 +33,9 @@
 use crate::frame::Frame;
 use crate::ingress::{IngressHandle, Offer};
 use crate::input::{KeyInput, MouseInput};
+use crate::render::Selection;
 use crate::runtime::{Config, Error, TerminalRuntime};
+use crate::selection::CellRange;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -281,6 +283,8 @@ struct Cell {
     /// Turns that parsed bytes so far: a compaction armed for an older count is stale.
     generation: AtomicU64,
     compactions: AtomicU64,
+    /// What the reader selected, for the view that draws it; the VT state knows nothing of it.
+    selection: Mutex<Option<CellRange>>,
 }
 
 impl Cell {
@@ -517,6 +521,7 @@ impl Hub {
             scroll_on_user_input: AtomicBool::new(true),
             generation: AtomicU64::new(0),
             compactions: AtomicU64::new(0),
+            selection: Mutex::new(None),
         });
         registry.sessions.insert(id, Arc::clone(&cell));
         Ok(Session { cell })
@@ -698,6 +703,25 @@ impl Session {
     /// text (the control plane) that draws nothing; a new session starts inactive.
     pub fn set_active(&self, active: bool) {
         self.cell.attached.store(active, Release);
+    }
+
+    /// The cells to highlight, in absolute rows (`None` clears them). An attached view is woken to draw them.
+    pub fn set_selection(&self, range: Option<CellRange>) {
+        *lock(&self.cell.selection) = range;
+        if self.cell.attached.load(Acquire) {
+            if let Some(changed) = &self.cell.hooks.changed {
+                changed();
+            }
+        }
+    }
+
+    /// The visible part of what [`set_selection`](Self::set_selection) holds, in viewport cells: the overlay a
+    /// renderer draws with each frame, so the highlight stays on its rows while the reader scrolls.
+    pub fn selection_overlay(&self) -> Result<Option<Selection>, SessionError> {
+        let Some(range) = *lock(&self.cell.selection) else {
+            return Ok(None);
+        };
+        Ok(self.with(|runtime| runtime.selection_overlay(range))??)
     }
 
     pub fn take_frame(&self) -> Result<Option<Frame>, SessionError> {

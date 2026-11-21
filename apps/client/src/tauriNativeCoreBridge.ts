@@ -7,7 +7,7 @@
 import {Channel, invoke as unguardedInvoke, isTauri} from '@tauri-apps/api/core';
 import {isAccessReady, protectedInvoke, sessionOutput, subscribeAccess} from './access';
 import type {SshEvent} from './bridge';
-import type {NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from './nativeCoreBridge';
+import type {NativeCoreAnswer, NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeTerminalAdapter, type NativeAdapterOptions} from './nativeTerminalAdapter';
 import {registerSessionOutput} from './pendingSessions';
 import type {BackendProbe} from './terminalBackendRegistry';
@@ -122,6 +122,11 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
       await call('terminal_core_input', {input: {type: 'text', text}});
     },
     async key(input) { await call('terminal_core_input', {input}); },
+    query<Q extends NativeCoreQuery>({kind, ...args}: Q) {
+      // One command per question: `selectionText` is `terminal_core_selection_text`, with the question's fields as its arguments.
+      return call<NativeCoreAnswer<Q>>(`terminal_core_${kind.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)}`, args);
+    },
+    select(range) { call('terminal_core_select', {range: range ?? null}).catch(noop); },
     setActive(value) {
       active = value;
       call('terminal_core_set_active', {active}).catch(noop);

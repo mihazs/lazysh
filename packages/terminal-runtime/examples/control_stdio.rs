@@ -8,14 +8,16 @@
 //! notifications (`method: "event"`, `params` a `ControlEvent`), written before the answer of the request that read the
 //! state. Methods, each with an optional `window` where it answers with the state:
 //! `open {columns, rows, scrollbackLines}`, `feed {data}` (base64; parsed before it answers), `snapshot`, `scroll {action}`,
-//! `resize {columns, rows}`, `input {text}`, `setActive {active}` and `close`, which ends the process.
+//! `resize {columns, rows}`, `input {text}`, `setActive {active}`, `query {query}` (a `ControlQuery` about the buffer's
+//! text, answered with text, a range or a hit), `select {range}` (the cells to highlight, or none) and `close`, which
+//! ends the process.
 //! `cargo run --example control_stdio`.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use lazysh_terminal_runtime::{
-    control_window, ffi, scrollback_bytes_for_lines, Config, ControlSnapshot, Doorbell, Error,
-    Hooks, Hub, HubConfig, KeyInput, Offer, Origin, PtyWriter, Refused, ScrollAction, Session,
-    Size, TerminalRuntime,
+    control_window, ffi, scrollback_bytes_for_lines, CellRange, Config, ControlQuery,
+    ControlSnapshot, Doorbell, Error, Hooks, Hub, HubConfig, KeyInput, Offer, Origin, PtyWriter,
+    Refused, ScrollAction, Session, Size, TerminalRuntime,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -84,6 +86,16 @@ struct Resize {
 #[derive(Deserialize)]
 struct Input {
     text: String,
+}
+
+#[derive(Deserialize)]
+struct Query {
+    query: ControlQuery,
+}
+
+#[derive(Deserialize)]
+struct Select {
+    range: Option<CellRange>,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +252,20 @@ fn call(hub: &Hub, core: &mut Option<Core>, method: &str, input: Value) -> Resul
             if active {
                 core.doorbell.wake();
             }
+            Ok(Value::Null)
+        }
+        "query" => {
+            let Query { query } = params(input)?;
+            let answer = core
+                .session
+                .with(|runtime| runtime.control_query(query))
+                .map_err(failed)?
+                .map_err(failed)?;
+            serde_json::to_value(answer).map_err(failed)
+        }
+        "select" => {
+            let Select { range } = params(input)?;
+            core.session.set_selection(range);
             Ok(Value::Null)
         }
         "close" => {

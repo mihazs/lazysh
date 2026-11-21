@@ -3,7 +3,7 @@
  * This is a control plane: every value is a size, a position, a mode flag or the TEXT of rows. No command returns a
  * cell grid, styles or pixels; the renderer reads those inside the runtime.
  */
-import type {Disposable, TerminalInputOrigin, TerminalModes, TerminalScrollAction, TerminalTheme, TerminalViewport} from './terminalAdapter';
+import type {Disposable, TerminalCell, TerminalInputOrigin, TerminalModes, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalTheme, TerminalViewport} from './terminalAdapter';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 
 export type NativeCoreState = {
@@ -31,6 +31,23 @@ export type NativeCoreEvent =
   | {type: 'cwd'; path: string}
   | {type: 'clipboard'; text: string};
 
+/** A question about the buffer's text, which the core answers from its own state: absolute rows, both ends of a range inclusive. */
+export type NativeCoreQuery =
+  | {kind: 'selectionText'; range: TerminalRange}
+  /** `from` is the previous hit's row. */
+  | {kind: 'search'; query: string; direction: 'forward' | 'backward'; from?: number}
+  | {kind: 'wordAt'; cell: TerminalCell}
+  | {kind: 'lineAt'; row: number}
+  | {kind: 'bufferRange'}
+  | {kind: 'copyScreen'};
+
+/** Text, a range or a hit: `null` where there is none (no match, an empty buffer). Never cells. */
+export type NativeCoreAnswer<Q extends NativeCoreQuery> =
+  Q extends {kind: 'selectionText' | 'copyScreen'} ? string
+  : Q extends {kind: 'search'} ? TerminalSearchHit | null
+  : Q extends {kind: 'bufferRange'} ? TerminalRange | null
+  : TerminalRange;
+
 export interface NativeCoreBridge {
   snapshot(): Promise<NativeCoreSnapshot>;
   scroll(action: TerminalScrollAction): Promise<NativeCoreSnapshot>;
@@ -46,6 +63,10 @@ export interface NativeCoreBridge {
   setActive?(active: boolean): void;
   /** The app's terminal theme changed: the core reports these colours to the programs that ask for them from now on. */
   setTheme?(theme: TerminalTheme): void;
+  /** Present when the core answers questions about the text itself; without it the adapter reads the window of rows. */
+  query?<Q extends NativeCoreQuery>(query: Q): Promise<NativeCoreAnswer<Q>>;
+  /** The cells the core's renderer highlights as selected; `undefined` clears them. */
+  select?(range: TerminalRange | undefined): void;
   subscribe(listener: (event: NativeCoreEvent) => void): Disposable;
   /** Frees the core. Idempotent. */
   close(): Promise<void>;

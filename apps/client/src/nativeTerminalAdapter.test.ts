@@ -4,7 +4,7 @@ import {createHeadlessCore, type HeadlessCore, type HeadlessCoreOptions} from '.
 import {nativeCapabilities, openNativeTerminalAdapter} from './nativeTerminalAdapter';
 import {mountScreenReaderMirror} from './terminalScreenReader';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
-import type {NativeCoreBridge, NativeCoreSnapshot} from './nativeCoreBridge';
+import type {NativeCoreBridge, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 
 const text = (value: string) => new TextEncoder().encode(value);
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -235,6 +235,89 @@ describe('native runtime path (the core owns the transport)', () => {
       expect(steps).toEqual([...steps].sort((x, y) => x - y));
     }
     await Promise.all(sessions.map(({adapter}) => adapter.dispose()));
+  });
+});
+
+describe('native text queries (a core that reads its own text)', () => {
+  /** The stand-in core plus the questions of a core that answers about its text; the test answers each one. */
+  async function asking() {
+    const questions: {query: NativeCoreQuery; answer(value: unknown): void}[] = [], highlighted: unknown[] = [];
+    const bridge: NativeCoreBridge = Object.create(createHeadlessCore(), {
+      query: {value: (query: NativeCoreQuery) => new Promise(answer => { questions.push({query, answer}); })},
+      select: {value: (range: unknown) => { highlighted.push(range); }},
+    });
+    const adapter = await openNativeTerminalAdapter(bridge);
+    await adapter.attach(anchor());
+    const answer = async (value: unknown) => { questions.shift()!.answer(value); await sleep(0); };
+    return {adapter, questions, highlighted, answer};
+  }
+  const row = (from: number, to: number) => ({start: {x: from, y: 0}, end: {x: to, y: 0}});
+
+  it('reads the selected text from the window until the core answers, then gives the core\'s', async () => {
+    const {adapter, questions, highlighted, answer} = await asking();
+    await adapter.write!(text('hello world'));
+    adapter.select(row(0, 4));
+    expect(adapter.selectedText()).toBe('hello');
+    await sleep(0);
+    expect(questions.map(question => question.query)).toEqual([{kind: 'selectionText', range: row(0, 4)}]);
+    await answer('as the core reads it');
+    expect(adapter.selectedText()).toBe('as the core reads it');
+    expect(adapter.getSelection()).toEqual({range: row(0, 4), text: 'as the core reads it'});
+    expect(highlighted).toEqual([row(0, 4)]);
+    adapter.clearSelection();
+    expect(adapter.selectedText()).toBe('');
+    expect(highlighted).toEqual([row(0, 4), undefined]);
+    await adapter.dispose();
+  });
+
+  it('asks one question at a time and never shows the text of an earlier selection', async () => {
+    const {adapter, questions, answer} = await asking();
+    await adapter.write!(text('hello world'));
+    adapter.select(row(0, 4));
+    adapter.select(row(6, 10));
+    await sleep(0);
+    expect(questions).toHaveLength(1);
+    await answer('hello');
+    // The answer was for the first selection: the second keeps the window's text and is asked now.
+    expect(adapter.selectedText()).toBe('world');
+    expect(questions.map(question => question.query)).toEqual([{kind: 'selectionText', range: row(6, 10)}]);
+    await answer('WORLD');
+    expect(adapter.selectedText()).toBe('WORLD');
+    expect(questions).toEqual([]);
+    await adapter.dispose();
+  });
+
+  it('reads the selection again when output changed the screen under it', async () => {
+    const {adapter, questions, answer} = await asking();
+    await adapter.write!(text('hello'));
+    adapter.select(row(0, 4));
+    await sleep(0);
+    await answer('hello');
+    const written = adapter.write!(text('\rHELLO'));
+    await sleep(0);
+    await written;
+    await sleep(0);
+    expect(questions.map(question => question.query)).toEqual([{kind: 'selectionText', range: row(0, 4)}]);
+    await answer('HELLO');
+    expect(adapter.selectedText()).toBe('HELLO');
+    await adapter.dispose();
+  });
+
+  it('searches the whole buffer through the core, and has no such search without one', async () => {
+    const {adapter, questions, answer} = await asking();
+    const none = adapter.searchBuffer!('needle', -1, 3), found = adapter.searchBuffer!('needle', 1);
+    await sleep(0);
+    expect(questions[0].query).toEqual({kind: 'search', query: 'needle', direction: 'backward', from: 3});
+    await answer(null);
+    expect(await none).toBeUndefined();
+    expect(questions[0].query).toEqual({kind: 'search', query: 'needle', direction: 'forward', from: undefined});
+    await answer({row: 7, column: 2, length: 9});
+    expect(await found).toEqual({row: 7, column: 2, length: 9});
+    await adapter.dispose();
+    expect(await adapter.searchBuffer!('needle', 1)).toBeUndefined();
+    const plain = await openNativeTerminalAdapter(createHeadlessCore());
+    expect(plain.searchBuffer).toBeUndefined();
+    await plain.dispose();
   });
 });
 
