@@ -129,7 +129,12 @@ async fn read_features(host: &Host, access: &AccessLease) -> Result<Option<HostF
         Host::Remote(session) => session,
         #[cfg(desktop)]
         Host::Local(_) => {
-            return parse_features(&host.companion(access, line.into()).await?).map(Some)
+            // No local companion (or one without the switches) means no switches: a local session still scans.
+            return match host.companion(access, line.into()).await {
+                Ok(text) => parse_features(&text).map(Some),
+                Err(error) if error.kind() == "remote_command_failed" => Ok(None),
+                Err(error) => Err(error),
+            };
         }
     };
     let unix = crate::companion::positive_unix(session, access).await?;
