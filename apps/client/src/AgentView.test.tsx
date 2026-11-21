@@ -338,12 +338,12 @@ it('enters the exact selected Herdr pane without reading a conversation',async()
   await advance(5000);expect(invoke).not.toHaveBeenCalled();
   view.rerender(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onShowTerminal={()=>{}}/>);
   await advance(0);
-  expect(screen.getByText('builder')).toBeTruthy();expect(screen.getByText('other')).toBeTruthy();
+  expect(screen.getAllByText('builder').length).toBeGreaterThan(0);expect(screen.getAllByText('other').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Herdr server')).toHaveProperty('disabled',true);
   expect(screen.queryByText('No agent conversation for this terminal.')).toBeNull();
   expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
   expect(screen.queryByRole('button',{name:'Open conversation'})).toBeNull();
-  fireEvent.click(within(screen.getByText('builder').closest('article')!).getByRole('button',{name:'Enter session'}));
+  fireEvent.click(within(within(screen.getByRole('region',{name:'Live Herdr agents'})).getByText('builder').closest('article')!).getByRole('button',{name:'Enter session'}));
   expect(enter).toHaveBeenCalledExactlyOnceWith('owned',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.anything(),expect.any(Function));
   expect(calls('agent_transcript')).toEqual([]);
 });
@@ -621,13 +621,17 @@ it('lets the user look at another agent and come back to the pane\'s own, keepin
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
 });
 
-it('focuses the pane of an agent chosen in the Agent view so its composer shows',async()=>{
-  const state={focus:'w2E:p3'};server(state);
+/** A Herdr server whose focus moves to the pane a focus action names, as the real server does. */
+function focusFollowsActions(state:{focus:string}) {
   const base=vi.mocked(invoke).getMockImplementation()!;
   vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
     if(command==='herdr_action'){state.focus=(args as {action:{target:string}}).action.target;return {};}
     return base(command,args,options);
   });
+}
+it('focuses the pane of an agent chosen in the Agent view so its composer shows',async()=>{
+  const state={focus:'w2E:p3'};server(state);
+  focusFollowsActions(state);
   render(view());await advance(0);
   expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
   fireEvent.click(within(screen.getByText('/work/two').closest('article')!).getByRole('button',{name:/Open conversation/}));await advance(0);await advance(0);
@@ -635,6 +639,36 @@ it('focuses the pane of an agent chosen in the Agent view so its composer shows'
   expect(screen.getByText('Answer of session-two')).toBeTruthy();
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
   expect(screen.queryByText('Not this pane')).toBeNull();
+});
+
+it('switches agent from the header switcher: marks the current one, focuses the pane and shows its composer',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  focusFollowsActions(state);
+  render(view());await advance(0);
+  const trigger=screen.getByRole('button',{name:/^Switch agent/});
+  expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(trigger);
+  const list=screen.getByRole('group',{name:'Switch agent'});
+  const rows=within(list).getAllByRole('button');
+  expect(rows).toHaveLength(2);
+  expect(rows[0].getAttribute('aria-current')).toBe('true');expect(rows[1].getAttribute('aria-current')).toBeNull();
+  expect(rows[1].textContent).toContain('Working');
+  fireEvent.click(rows[1]);await advance(0);await advance(0);
+  expect(screen.queryByRole('group',{name:'Switch agent'})).toBeNull();
+  expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusPane',target:'w2E:p2'}}]);
+  expect(screen.getByText('Answer of session-two')).toBeTruthy();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:/^Switch agent/}));
+  expect(within(screen.getByRole('group',{name:'Switch agent'})).getAllByRole('button')[1].getAttribute('aria-current')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('group',{name:'Switch agent'}),{key:'Escape'});
+  expect(screen.queryByRole('group',{name:'Switch agent'})).toBeNull();
+});
+
+it('opens the switcher with its shortcut only when there is another agent to switch to',async()=>{
+  const state={focus:'w2E:p1',agents:['w2E:p1']};server(state);
+  render(view());await advance(0);
+  fireEvent.keyDown(window,{key:'L',ctrlKey:true,shiftKey:true});
+  expect(screen.queryByRole('group',{name:'Switch agent'})).toBeNull();
 });
 
 it('drops a hand-picked conversation when focus moves to another pane',async()=>{

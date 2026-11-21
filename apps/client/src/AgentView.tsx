@@ -7,6 +7,8 @@ import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDi
 import AgentStartFolder from './AgentStartFolder';
 import {knownDirectories} from './herdrCreate';
 import {herdrFocusAction} from './multiplexerTabs';
+import AgentSwitcher from './AgentSwitcher';
+import {agentSwitchShortcut,useCapturedShortcut} from './keyboard';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
@@ -18,7 +20,7 @@ import {conversationAgents, conversationSource, recordsAgents} from './agentConv
 import {parseTerminalSnapshot, type TerminalInputLabels, type ZellijTarget} from './ChatTerminalInput';
 import {zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
-import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
+import {herdrStatusKeys, useHerdrNavigation, type LiveAgent} from './useHerdrNavigation';
 import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
 import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiting';
 import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
@@ -285,10 +287,21 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     request.current++;setSelecting(false);setUnavailable(false);
     const target={kind:'pane' as const,workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id};
     setPicked(herdrSelection(live,server,{focusKey:lastFocus.current,enter:{server,target}}));
-    // Switching agents here also focuses its pane, so the terminal follows and the pane's own composer shows; a refused focus leaves the read-only pick.
+    focusPane(server,target);
+  };
+  // Switching agents here also focuses its pane, so the terminal follows and the pane's own composer shows; a refused focus leaves the view as it was.
+  const focusPane=(server:string,target:HerdrNavigationTarget)=>{
     const snapshot=navigation.data?.snapshot;
     if(herdrSession && snapshot)void (async()=>{await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(snapshot,target)});await navigation.refresh();})().catch(()=>undefined);
   };
+  const [switching,setSwitching]=useState(false);
+  const switchTo=(live:LiveAgent)=>{
+    request.current++;setPicked(undefined);setChoosing(false);setHistory(undefined);setMenu(false);
+    focusPane(navigation.data!.server,{kind:'pane',workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id});
+  };
+  const switchRows=herdrSession && fresh && navigation.data?.loaded ? navigation.data.rows : [];
+  const canSwitch=shown && switchRows.length>1;
+  useCapturedShortcut(agentSwitchShortcut,()=>{if(!canSwitch)return false;setMenu(false);setSwitching(open=>!open);});
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;
   const focusCreated=(workspace:string)=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined);
   const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={knownDirectories(navigation.data?.snapshot,sessions.map(session=>session.project))} disabled={!shown} onStaged={onShowTerminal}/>;
@@ -311,6 +324,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
           {reader && <AgentHeaderPills session={info}/>}
         </div>
       </div>
+      {canSwitch && <AgentSwitcher rows={switchRows} current={navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.pane_id} open={switching} onOpenChange={setSwitching} onSwitch={switchTo}/>}
       {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
