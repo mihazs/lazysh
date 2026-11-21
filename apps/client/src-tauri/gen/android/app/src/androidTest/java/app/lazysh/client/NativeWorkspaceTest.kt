@@ -8357,9 +8357,15 @@ class NativeWorkspaceTest {
             try {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "form.chat-composer textarea")).perform(webScrollIntoView())
                 val target = JSONObject(evaluate(scenario, """
-                    (()=>{const area=$area,rect=area.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
-                      const hit=document.elementFromPoint(x,y), bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
+                    (()=>{const area=$area;area.scrollIntoView({block:'center',inline:'nearest'});
+                      const rect=area.getBoundingClientRect(),bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
+                      // A phone's keyboard and key bar can cover part of the composer: tap a point of it that is on top.
+                      const x=rect.left+rect.width/2,top=Math.max(rect.top,0),bottom=Math.min(rect.bottom,innerHeight);
+                      let y=rect.top+rect.height/2;
+                      for(let i=1;i<=8&&document.elementFromPoint(x,y)!==area;i++)y=top+(bottom-top)*i/9;
+                      const hit=document.elementFromPoint(x,y);
                       return {ok:hit===area,bounds:[x,y,innerWidth],diagnostic:{
+                        covering:hit&&hit!==area?hit.tagName+'.'+String(hit.className).slice(0,60)+' in '+String(hit.parentElement?.className).slice(0,60):null,
                         hit:hit===area?'textarea':hit===null?'none':area.contains(hit)?'descendant':
                           hit.contains(area)?'ancestor':hit.closest('.dialog-backdrop')?'dialog':
                           hit.closest('.sidebar, .sidebar-scrim')?'sidebar':hit.closest('.chat-panel')?'chat':

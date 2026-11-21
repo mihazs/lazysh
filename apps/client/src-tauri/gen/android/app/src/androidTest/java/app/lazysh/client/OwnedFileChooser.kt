@@ -44,6 +44,9 @@ internal object OwnedFileChooser {
             put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
             put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/lazysh-owned")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
+            // The Photo Picker lists newest first by date taken and the emulator holds other images (earlier cases publish
+            // theirs too), so a date ahead of them keeps the fixture the first tile.
+            put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis() + 24L * 60 * 60 * 1000)
         })) { "MediaStore refused the picker fixture" }
         try {
             instrumentation.context.assets.open(asset).use { input ->
