@@ -40,5 +40,5 @@ export default function AgentWorkingRow({state, label, since, tokens, tool}: {st
     tokens ? t('agentTurnTokens', {tokens: formatNumber(tokens, {notation: 'compact'})}) : undefined,
     state === 'working' ? tool : undefined,
   ].filter(Boolean);
-  return <p className="agent-working-row" role="status" data-state={state}><span className="agent-working-dot" aria-hidden="true"/><span>{parts.join(' · ')}</span></p>;
+  return <p className="agent-working-row" role="status" data-state={state}><span className="agent-working-dots" aria-hidden="true"><i/><i/><i/></span><span>{parts.join(' · ')}</span></p>;
 }

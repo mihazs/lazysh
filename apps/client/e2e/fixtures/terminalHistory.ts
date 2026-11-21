@@ -1,5 +1,6 @@
 import {expect,type Page} from '@playwright/test';
 import {installNativeBridge} from './nativeBridge';
+import {onAdapter,terminalBounds,terminalCell,terminalDrawn} from './terminalState';
 import type {mountTerminalHistoryHarness} from './TerminalHistoryHarness';
 declare global {interface Window {ownedHistory:ReturnType<typeof mountTerminalHistoryHarness>;ownedHistoryInput?:(data:string)=>void;edgeLog:string[]}}
 
@@ -23,7 +24,7 @@ export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=
     window.edgeLog=[];
     window.ownedHistory=fixture.mountTerminalHistoryHarness({mosh,topAnchored,edgeLog:edge?window.edgeLog:undefined,edgeClose:edge?.close,input:data=>window.ownedHistoryInput?.(data)});
   },{mosh,topAnchored,edge});
-  await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
+  await terminalDrawn(page);
   // A Mosh terminal adopts its geometry only from the first authoritative frame.
   if(mosh)await expect.poll(()=>page.evaluate(()=>window.ownedHistory.resizes.length)).toBeGreaterThan(0);
   await settle(page);
@@ -51,16 +52,14 @@ export function historyView(page:Page) {
   });
 }
 
-export async function rowHeight(page:Page) {
-  return page.locator('.terminal-canvas .xterm-screen').evaluate(node=>node.getBoundingClientRect().height/window.ownedHistory.terminal.rows);
-}
+export const rowHeight=(page:Page)=>onAdapter(page,adapter=>adapter.screenBounds()!.height/adapter.size().rows);
 
 /** Moves the reader up by `rows` with the project's own input: wheel notches or finger moves of `step` rows. */
 export async function scrollHistory(page:Page,phone:boolean,rows:number,between:()=>Promise<unknown>=async()=>{},step=1) {
-  const box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!,height=await rowHeight(page);
+  const box=(await terminalBounds(page))!,height=await rowHeight(page);
   // A soft keyboard can leave part of a panned Mosh screen outside the pane.
-  const pane=(await page.locator('.terminal-canvas').boundingBox())!,top=Math.max(box.y,pane.y),bottom=Math.min(box.y+box.height,pane.y+pane.height);
-  const x=box.x+box.width/2,y=top+(bottom-top)/4;
+  const pane=(await page.locator('.terminal-canvas').boundingBox())!,top=Math.max(box.top,pane.y),bottom=Math.min(box.top+box.height,pane.y+pane.height);
+  const x=box.left+box.width/2,y=top+(bottom-top)/4;
   if(!phone) {
     await page.mouse.move(x,y);
     for(let row=0;row<rows;row++){await page.mouse.wheel(0,-height);await between();}
@@ -81,12 +80,7 @@ export async function fingerDrag(page:Page,start:{x:number;y:number},height:numb
 }
 
 /** Centre of a visible terminal cell in viewport coordinates. */
-export function cell(page:Page,row:number,column:number) {
-  return page.evaluate(([row,column])=>{
-    const t=window.ownedHistory.terminal,r=t.element!.querySelector('.xterm-screen')!.getBoundingClientRect();
-    return {x:r.left+(column+.5)*r.width/t.cols,y:r.top+(row+.5)*r.height/t.rows};
-  },[row,column] as const);
-}
+export const cell=terminalCell;
 /** A still finger held past the selection delay, then lifted. */
 export async function longPress(page:Page,point:{x:number;y:number}) {
   const input=await page.context().newCDPSession(page);

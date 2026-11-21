@@ -44,7 +44,7 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   await index.getByRole('button',{name:'Terminal and accessibility',exact:true}).click();
   const terminal=dialog.locator('[data-settings-page="terminal"]');
   await expect(terminal.getByRole('heading',{name:'Terminal and accessibility',level:2})).toBeFocused();
-  expect(await terminal.locator('h3.settings-group-title').allTextContents()).toEqual(['Cursor and history','Accessibility']);
+  expect(await terminal.locator('h3.settings-group-title').allTextContents()).toEqual(['Cursor and history','Accessibility','Terminal engine']);
   await page.screenshot({path:testInfo.outputPath('settings-terminal.png')});
   await terminal.getByRole('radio',{name:'block',exact:true}).check();
   await expect(terminal.getByRole('radio',{name:'block',exact:true})).toBeChecked();

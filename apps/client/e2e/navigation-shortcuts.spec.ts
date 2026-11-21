@@ -22,6 +22,8 @@ async function openConnectedTerminal(page:Page,testInfo:TestInfo,toolbar?:string
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='multiplexer_sessions')return [];
       if(command==='get_companion_settings')return {schemaVersion:1,revision:1,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+      if(command==='get_host_browser_settings')return {schemaVersion:1,revision:0,hostBrowserEnabled:false};
+      if(command==='get_notification_policy')return {schemaVersion:1,revision:0,nestedAgentSuppressionEnabled:false,suppressWhileDesktopUnlocked:false};
       if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic keep-awake unavailable',epoch:'0/11111111-1111-4111-8111-111111111111',ticket:1};
       if(command==='apple_status_capability')return {available:false,reason:'Synthetic status unavailable'};
       if(['write_stdin','resize','ack_output','disconnect','cancel_credential_auth'].includes(command)||command.startsWith('plugin:'))return command.startsWith('plugin:event|')?1:undefined;
@@ -137,6 +139,7 @@ test('Agents and Workspaces toolbar keys open their views and return',async({pag
 });
 
 test('in a local terminal, which has no Agents, the Agents chord and swipe stay with the shell',async({page},testInfo)=>{
+  test.setTimeout(60_000);
   const phone=testInfo.project.name==='phone';
   await installLocalTerminal(page);
   await page.goto('/');
@@ -147,13 +150,24 @@ test('in a local terminal, which has no Agents, the Agents chord and swipe stay 
   if(!phone){
     await canvas.click();
     // Unclaimed, the chord stays an ordinary terminal keypress: it reaches the terminal's own handlers unprevented, and nothing opens.
-    const reached=page.evaluate(()=>new Promise(resolve=>{
-      const input=document.querySelector('.terminal-canvas .xterm-helper-textarea')!;
-      const seen=(event:Event)=>{if((event as KeyboardEvent).key.toLowerCase()!=='a')return;input.removeEventListener('keydown',seen);resolve({prevented:event.defaultPrevented});};
+    await page.evaluate(()=>{
+      const input=document.querySelector<HTMLTextAreaElement>('.terminal-canvas .xterm-helper-textarea')!;
+      input.dataset.localChord='pending';
+      const seen=(event:KeyboardEvent)=>{if(event.key.toLowerCase()!=='a')return;input.removeEventListener('keydown',seen);input.dataset.localChord=event.defaultPrevented?'prevented':'delivered';};
       input.addEventListener('keydown',seen);
-    }));
+    });
     await page.keyboard.press('Control+Shift+A');
-    expect(await reached).toEqual({prevented:false});
+    let observation:{result:string;focused:boolean}|undefined;
+    try {
+      await expect.poll(async()=>{
+        observation=await page.evaluate(()=>{
+          const input=document.querySelector<HTMLTextAreaElement>('.terminal-canvas .xterm-helper-textarea');
+          const value=input?.dataset.localChord;
+          return {result:value==='pending'||value==='prevented'||value==='delivered'?value:'missing',focused:!!input && document.activeElement===input};
+        });
+        return observation.result;
+      },{timeout:25_000}).toBe('delivered');
+    } catch(error) {throw new Error(`Local chord observation ${JSON.stringify(observation??null)}`,{cause:error});}
     await expect(heading(page)).toHaveCount(0);
   }
   const {swipe,cdp}=await twoFingerSwipes(page,phone);

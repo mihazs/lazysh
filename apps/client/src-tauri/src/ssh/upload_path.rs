@@ -8,7 +8,7 @@ fn invalid() -> SshError {
         "The server did not provide a bounded absolute SFTP destination",
     )
 }
-fn bounded(path: &str) -> Result<()> {
+pub(crate) fn bounded(path: &str) -> Result<()> {
     check_path(path)?;
     if path.chars().any(char::is_control) {
         return Err(invalid());
@@ -68,7 +68,8 @@ pub(super) struct Target {
 }
 const SHARED_TEMPORARY: &str = "/tmp";
 const NAME_LIMIT: usize = 255;
-fn temporary_name(name: &str) -> Result<String> {
+/// `lazysh-<random>-<name>`, bounded to one file name that keeps the extension.
+pub(crate) fn temporary_name(name: &str) -> Result<String> {
     bounded(name)?;
     if name.contains(['/', '\\']) || matches!(name, "." | "..") {
         return Err(SshError::new(

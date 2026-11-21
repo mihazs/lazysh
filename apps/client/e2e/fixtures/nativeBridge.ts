@@ -46,3 +46,10 @@ export async function installSyntheticAudio(page: Page) {
     }});
   });
 }
+
+/** What an idle host answers for the host settings panel's three reads; pass it to `page.addInitScript` as its argument. */
+export const idleHostSettings={
+  get_companion_settings:{schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true},
+  get_host_browser_settings:{schemaVersion:1,revision:0,hostBrowserEnabled:false},
+  get_notification_policy:{schemaVersion:1,revision:0,nestedAgentSuppressionEnabled:false,suppressWhileDesktopUnlocked:false},
+};

@@ -3,7 +3,7 @@ import {isUiLanguage, t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import { xtermOptions } from "./xtermOptions";
-import type { TerminalPreferences, TerminalTheme } from "./terminalAdapter";
+import type { TerminalBackendId, TerminalPreferences, TerminalTheme } from "./terminalAdapter";
 import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
 import type { UsageBarMode } from "./usageAgentProvider";
 
@@ -85,10 +85,10 @@ export const edgeGestureZone = {min: 16, max: 96, step: 2, default: 40} as const
 /** How the gestures start: `auto` is handles (and swipes beside them) on Android gesture navigation and true edge swipes everywhere else. */
 export const gestureModes = ["auto", "handles", "edges", "off"] as const;
 export type GestureModePreference = typeof gestureModes[number];
-export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number; mode: GestureModePreference};
+export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number; mode: GestureModePreference; /** Draw the grip lines of the handles; hidden by default. */ showLines: boolean};
 /** The saved form: `mode` is absent until the user picks one. */
-export type StoredEdgeGestures = Omit<EdgeGestureSettings, "mode"> & {mode?: GestureModePreference};
-const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default, mode: "auto"};
+export type StoredEdgeGestures = Omit<EdgeGestureSettings, "mode" | "showLines"> & {mode?: GestureModePreference; showLines?: boolean};
+const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default, mode: "auto", showLines: false};
 /** The saved edge gesture settings with the defaults filled in. */
 export function edgeGestureSettings(p: Pick<Preferences, "edgeGestures">): EdgeGestureSettings { return {...edgeGestureDefaults, ...p.edgeGestures}; }
 function parseEdgeGestures(value: unknown): StoredEdgeGestures | undefined {
@@ -98,6 +98,7 @@ function parseEdgeGestures(value: unknown): StoredEdgeGestures | undefined {
     ...Object.fromEntries(edgeGestureIds.map(id => [id, source[id] !== false])) as Record<EdgeGestureId, boolean>,
     zoneWidth: typeof zone === "number" && Number.isInteger(zone) && zone >= edgeGestureZone.min && zone <= edgeGestureZone.max ? zone : edgeGestureZone.default,
     mode: gestureModes.find(mode => mode === source.mode) ?? edgeGestureDefaults.mode,
+    showLines: source.showLines === true,
   };
   return (Object.keys(parsed) as (keyof EdgeGestureSettings)[]).every(name => parsed[name] === edgeGestureDefaults[name]) ? undefined : parsed;
 }
@@ -139,6 +140,8 @@ export type Preferences = {
   composerLayout?: "floating";
   /** The multiplexer tab strip on this device: omitted for Auto (phones, when the session has more than one tab), else forced on or off. */
   tabStrip?: "on" | "off";
+  /** The terminal engine new sessions ask for on this device (an open session keeps its engine); omitted for Auto, so the registry picks and records why. Device-local, like the tab strip. */
+  terminalEngine?: TerminalBackendId;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
@@ -236,6 +239,7 @@ export function parsePreferences(value: unknown): Preferences {
     ...(usageProvider ? {usageProvider} : {}),
     ...(p.composerLayout === "floating" ? {composerLayout: "floating" as const} : {}),
     ...(p.tabStrip === "on" || p.tabStrip === "off" ? {tabStrip: p.tabStrip} : {}),
+    ...(p.terminalEngine === "native" || p.terminalEngine === "xterm" ? {terminalEngine: p.terminalEngine} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
@@ -247,12 +251,12 @@ export function parsePreferences(value: unknown): Preferences {
   };
 }
 /** Settings that describe this device's screen stay on it: sync neither uploads them nor lets a download replace them. */
-export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard" | "toolbarHidden" | "composerLayout" | "tabStrip"> {
-  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, toolbarHidden: _hidden, composerLayout: _layout, tabStrip: _strip, ...shared} = value;
+export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard" | "toolbarHidden" | "composerLayout" | "tabStrip" | "terminalEngine"> {
+  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, toolbarHidden: _hidden, composerLayout: _layout, tabStrip: _strip, terminalEngine: _engine, ...shared} = value;
   return shared;
 }
 export function keepDevicePreferences(imported: unknown, local: Preferences): unknown {
-  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard, toolbarHidden: local.toolbarHidden, composerLayout: local.composerLayout, tabStrip: local.tabStrip} : imported;
+  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard, toolbarHidden: local.toolbarHidden, composerLayout: local.composerLayout, tabStrip: local.tabStrip, terminalEngine: local.terminalEngine} : imported;
 }
 let cached: Preferences | undefined;
 let nativeUiLanguage: UiLanguage | undefined;

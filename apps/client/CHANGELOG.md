@@ -1,5 +1,1510 @@
 # @lazysh/client
 
+## 1.95.6
+
+### Patch Changes
+
+- test(android): retry the Zellij fixture's tab readback when the command fails ([#2320](https://github.com/mihazs/lazysh/pull/2320))
+
+  <details><summary>Details</summary>
+
+  The first readback after the session starts could exit 1 under load and fail the whole case. A failing command is now retried like an unreadable answer; one that keeps failing still surfaces its own error. Test only. No user-visible behaviour changes.
+
+  </details>
+
+## 1.95.5
+
+### Patch Changes
+
+- fix(agents): choosing another agent in the Agent view now focuses its terminal pane and shows its composer ([#2301](https://github.com/mihazs/lazysh/pull/2301))
+
+  <details><summary>Details</summary>
+
+  Switching agent from the Agent view's live list moves the Herdr focus to that agent's pane, so the terminal follows and the composer for the newly shown agent appears instead of "Not this pane". Picking an agent or session in the left menu while the Agent view is shown keeps the Agent view open.
+
+  </details>
+
+## 1.95.4
+
+### Patch Changes
+
+- build(ci): provision Zig and the Ghostty archives through one composite action ([#2307](https://github.com/mihazs/lazysh/pull/2307))
+
+  <details><summary>Details</summary>
+
+  The checksum-verified Zig 0.16.0 and the admitted libghostty-vt archives are set up by a single `ghostty-zig` composite action instead of copied workflow steps, so the Android release build can use the same provisioning. CI behaviour is unchanged and nothing changes for users.
+
+  </details>
+
+## 1.95.3
+
+### Patch Changes
+
+- test(android): collapse the notification shade and system dialogs before a case and when the window loses focus ([#2310](https://github.com/mihazs/lazysh/pull/2310))
+
+  <details><summary>Details</summary>
+
+  Back sent while the notification shade was still expanding left it open, so the app window never regained focus and every later owned SSH case failed with "Native workspace not ready". The cases now collapse the shade through the shell. Test only. No user-visible behaviour changes.
+
+  An instrumented case that blocks now fails after 15 minutes (runner argument `timeout_msec`) instead of holding the job until its 75 minute limit.
+
+  </details>
+
+## 1.95.2
+
+### Patch Changes
+
+- feat(terminal): add a build-time kill switch that keeps every session on xterm.js ([#2154](https://github.com/mihazs/lazysh/pull/2154))
+
+  <details><summary>Details</summary>
+
+  A build made with `LAZYSH_NATIVE_TERMINAL=off` (read by the client build and by the Tauri build script, so one variable sets both) never selects, probes or creates the native backend whatever the saved engine choice or the developer override says, records `disabled in this build` as the reason with its translation in English, Brazilian Portuguese and Spanish, leaves Native out of the list the Settings choice will show, and leaves the native core out of the app even when it is compiled in. Any other value than `on` or `off` fails the build. Part of #1342 and #1302. No default changes: release builds do not set the variable, so nothing changes for users.
+
+  </details>
+
+## 1.95.1
+
+### Patch Changes
+
+- test(android): make the QR fixture the only image the Photo Picker can list ([#2305](https://github.com/mihazs/lazysh/pull/2305))
+
+  <details><summary>Details</summary>
+
+  The Photo Picker's order put another image first on most runs, so the QR case failed to decode it. The case now removes the other indexed images before staging its fixture. Test only. No user-visible behaviour changes.
+
+  </details>
+
+## 1.95.0
+
+### Minor Changes
+
+- feat(terminal): hide the gesture indicator lines by default and add a setting to show them ([#2303](https://github.com/mihazs/lazysh/pull/2303))
+
+  <details><summary>Details</summary>
+
+  The thin lines that mark the edge-gesture handles are now hidden. The handles and gestures work as before; turn on Settings > Input > Terminal touch gestures > Show gesture lines to draw them again.
+
+  </details>
+
+### Patch Changes
+
+- fix(terminal): Long-press a URL selects and copies the whole address, however it wraps ([#2295](https://github.com/mihazs/lazysh/pull/2295))
+
+  <details><summary>Details</summary>
+
+  A URL that wraps over several terminal rows, or that an agent prints hard-wrapped inside a box, was copied cut at the row end or with line breaks, borders and spaces in it, so the pasted address was broken. Long-pressing any part of a URL now selects all of it and Copy puts exactly the URL on the clipboard.
+
+  </details>
+
+## 1.94.0
+
+### Minor Changes
+
+- feat(multiplexers): read the pane's scrollback from tmux, Zellij and Herdr in the Sessions panel ([#1994](https://github.com/mihazs/lazysh/pull/1994))
+
+  <details><summary>Details</summary>
+
+  Read the scrollback of the pane you are viewing from the multiplexer on the host. A new **Pane history** section in the Sessions panel of an attached tmux, Zellij or Herdr terminal fetches the history from the multiplexer itself (tmux `capture-pane`, Zellij `dump-screen --full`, Herdr `pane read`), so it no longer depends on the terminal's own buffer or on tmux copy mode, and shows it read-only with a line search and **Copy these lines**. It keeps the newest 20,000 lines or 2 MiB and says when older output was left out; Herdr serves at most its newest 1,000 lines. New command `multiplexer_history`; the capability record's `history` entry is missing for Zellij older than 0.45 and for Herdr outside 0.9.3 to 0.9.5. No defaults change.
+
+  </details>
+
+## 1.93.9
+
+### Patch Changes
+
+- feat(terminal): select text with the pointer on the native terminal adapter ([#2291](https://github.com/mihazs/lazysh/pull/2291))
+
+  <details><summary>Details</summary>
+
+  A mouse drag, a double click (word), a triple click (line), shift-click and a touch long press now select on the native adapter's anchor. The native engine stays opt-in; xterm.js remains the default.
+
+  </details>
+
+## 1.93.8
+
+### Patch Changes
+
+- test(android): pick the QR fixture first in the Photo Picker and tap the Chat composer where it is not covered ([#2286](https://github.com/mihazs/lazysh/pull/2286))
+
+  <details><summary>Details</summary>
+
+  The QR picker case could choose another image, so the page failed to decode it, and the Chat composer CJK step tapped the centre of a composer that the phone's key bar covered. Test only. No user-visible behaviour changes.
+
+  </details>
+
+## 1.93.7
+
+### Patch Changes
+
+- fix(zellij): list no sessions as an empty list instead of a command error ([#1979](https://github.com/mihazs/lazysh/pull/1979))
+
+  <details><summary>Details</summary>
+
+  Fix **Sessions** showing a command error for a host that has Zellij but no session (#1145). Zellij prints "No active zellij sessions found." and exits 1 when none is left, which lazysh read as a failure; the list now says "No running zellij sessions." and offers to create one. The same listing, which also names exited sessions Zellij can resurrect, is used before a saved Zellij entry attaches. Any other failure, such as Zellij missing from the host, is still an error.
+
+  </details>
+
+## 1.93.6
+
+### Patch Changes
+
+- test(android): read the system clipboard after Copy of a terminal selection ([#1989](https://github.com/mihazs/lazysh/pull/1989))
+
+  <details><summary>Details</summary>
+
+  Add an Android instrumentation case that long-presses a word in an owned SSH terminal, taps Copy in the selection actions and reads the system `ClipboardManager`, which must hold exactly that word and must not hold it before Copy. Test coverage only; no app behaviour changes.
+
+  </details>
+
+## 1.93.5
+
+### Patch Changes
+
+- feat(terminal): Take the word under a touch and select all from the native core ([#2287](https://github.com/mihazs/lazysh/pull/2287))
+
+  <details><summary>Details</summary>
+
+  Part of #1334. The native adapter asks the core for the word under a cell and for the whole buffer, so a double tap or Select all covers wrapped lines, wide characters and scrollback outside the adapter's window of rows. No released build can select the native engine, so terminal behaviour and defaults do not change and xterm.js stays the only engine a user can run.
+
+  </details>
+
+## 1.93.4
+
+### Patch Changes
+
+- test(android): prove the stock Herdr display restores only on click after a force-stop and relaunch ([#1976](https://github.com/mihazs/lazysh/pull/1976))
+
+  <details><summary>Details</summary>
+
+  Verify through the real Android app that a force-stopped and relaunched app offers "Restore previous workspace" only on click and then reattaches the same stock Herdr display with the saved credential. The owned stock Herdr job runs it as two instrumentation processes with a host force-stop between them and checks the receiver's bytes are the ones typed before it.
+
+  </details>
+- test(android): prove the tmux pane restores only on click after a force-stop and relaunch ([#1976](https://github.com/mihazs/lazysh/pull/1976))
+
+  <details><summary>Details</summary>
+
+  Verify through the real Android app that a force-stopped and relaunched app offers "Restore previous workspace" only on click and then reattaches the same tmux pane with the saved credential. The owned tmux job runs it as two instrumentation processes with a host force-stop between them.
+
+  </details>
+
+## 1.93.3
+
+### Patch Changes
+
+- fix(agent-view): keep Send, Stage and Stop usable while a touch keyboard holds an open composition ([#1982](https://github.com/mihazs/lazysh/pull/1982))
+
+  <details><summary>Details</summary>
+
+  Fix the Agent view's Send and Stop buttons staying disabled while a touch keyboard keeps the last word of the draft as an open composition (#1840). Seen on an Android 13 WebView (Waydroid, LatinIME) in 3 of about 12 runs: after a paste the field got `compositionstart` and `compositionupdate` but never `compositionend`, so both buttons were disabled with the draft intact and no message. The buttons now stay enabled; tapping Send, Stage in terminal or Stop first leaves the field, which ends the composition as a tap elsewhere does, then acts on the committed draft once. Enter on a hardware keyboard is still ignored while composing. Not yet checked on a physical phone with Gboard or SwiftKey, so #1840 stays open for that check; no defaults change.
+
+  </details>
+
+## 1.93.2
+
+### Patch Changes
+
+- feat(terminal): Serve selection text, search, word and line lookups from the native core and draw the selection ([#2228](https://github.com/mihazs/lazysh/pull/2228))
+
+  <details><summary>Details</summary>
+
+  Part of #1320 and #1302. The app has a command for each question about a native terminal's text (selected text, search, the word at a cell, the line at a row, the whole buffer and the screen) and one that hands the selection to the session, where the renderer host draws its visible part. The native adapter asks the core for the selected text and for the find box's search, so both cover the whole scrollback, wrapped lines and wide characters; OSC 52 writes reach the consent panel through the core's policy with the same 64 KiB bound. No released build can select the native engine, so terminal behaviour and defaults do not change and xterm.js stays the only engine a user can run.
+
+  </details>
+
+## 1.93.1
+
+### Patch Changes
+
+- test(terminal): run the native core test on Waydroid with an owned SSH fixture, thaw the guest and record failure details ([#2282](https://github.com/mihazs/lazysh/pull/2282))
+
+## 1.93.0
+
+### Minor Changes
+
+- feat(notifications): add the nested-agent and unlocked-desktop switches to the host settings panel ([#1972](https://github.com/mihazs/lazysh/pull/1972))
+
+  <details><summary>Details</summary>
+
+  Add the two notification switches to the host settings panel: **Do not notify for nested agents** and **Do not notify while this desktop is unlocked**, in their own form with their own revision and **Save notification switches** button, so saving them never changes the three host switches. Both are off by default; nothing changes until you turn one on. They read and save the companion's `settings notifications` setting and appear only for a companion that answers it; an older companion shows an update message. The panel says that the unlocked-desktop switch works on Linux hosts only (any other host always notifies) and that the nested-agent switch relies on process ancestry on Linux and macOS and on `LAZYSH_PARENT_SESSION_ID` on every host. The strings are in English, Portuguese (Brazil) and Spanish.
+
+  </details>
+
+### Patch Changes
+
+- feat(agents): send a dialog's keys only after the host reads the pane again and finds that dialog once ([#1968](https://github.com/mihazs/lazysh/pull/1968))
+
+  <details><summary>Details</summary>
+
+  Answer an agent's list dialog from the Agent view only after the host reads the pane again: each arrow, Enter and dialog Cancel now carries the rows of the dialog the card was read from, and the app sends no key unless the pane, captured right before it, still shows exactly that dialog once. A dialog answered at the terminal first, replaced by another prompt in the same pane, drawn twice or gone gets nothing and the card says the dialog changed; the connection stays usable. The fresh capture is tmux's: a pane followed through Herdr or Zellij is answered after their own destination check, as before.
+
+  </details>
+- test(zellij): drive the Zellij shortcut panel against a real session in the Linux GUI ([#1991](https://github.com/mihazs/lazysh/pull/1991))
+
+  <details><summary>Details</summary>
+
+  Add a Linux native GUI case that attaches a real Zellij 0.45.1 session over owned OpenSSH, drives the Zellij shortcut panel (create tab, previous and next tab, quick tab) and asserts each tab change on the host, and checks that a Zellij-attached tab offers no Jump To. The SSH test fixture gained a pinned-Zellij option and the native Linux CI job installs the pinned Zellij before the GUI step. Test infrastructure only; no product change.
+
+  </details>
+- test(android): choose the QR fixture in the Photo Picker that API 36 opens for image inputs ([#2276](https://github.com/mihazs/lazysh/pull/2276))
+
+  <details><summary>Details</summary>
+
+  The QR picker case looked for the fixture by file name, but an image input opens the Photo Picker, which names no file. The case now takes the newest tile. Test only. No user-visible behaviour changes.
+
+  </details>
+
+## 1.92.3
+
+### Patch Changes
+
+- fix(agents): show what the agent said in a long turn and fill the Agent view with earlier messages ([#2261](https://github.com/mihazs/lazysh/pull/2261))
+
+  <details><summary>Details</summary>
+
+  The Agent view folded everything between a prompt and its closing answer into one row, so a session that worked for hours on one prompt was two rows ("Thought for…", "Ran 83 commands") and loading earlier messages only made the count larger. What the agent says between its tool calls is now shown as messages, with the work between them folded. When the newest page does not fill the view, earlier pages are read until it does, and the view stays at the newest message.
+
+  </details>
+
+## 1.92.2
+
+### Patch Changes
+
+- test(terminal): record the first Waydroid lane run of the native core, which stops at the missing owned SSH fixture ([#2278](https://github.com/mihazs/lazysh/pull/2278))
+
+## 1.92.1
+
+### Patch Changes
+
+- ci(android): upload the x86_64 debug and androidTest APKs for the Waydroid lane ([#2277](https://github.com/mihazs/lazysh/pull/2277))
+
+  <details><summary>Details</summary>
+
+  The `native-android-terminal-core` job now uploads `lazysh-android-debug-x86_64` (7 days) with the x86_64 debug APK and the instrumentation APK it already builds, so the Waydroid lane can install them with `--apk`. Nothing changes for users or in what the job builds.
+
+  </details>
+- feat(linux): draw a native terminal session on the Wayland subsurface with wgpu, native builds only ([#2272](https://github.com/mihazs/lazysh/pull/2272))
+
+  <details><summary>Details</summary>
+
+  In builds with the `native-terminal` feature, which no release enables, a session that has a native core is drawn on its Wayland subsurface by the renderer host: GDK's display and the subsurface go to wgpu as raw handles, and the swapchain follows the pane's anchor and the window's scale. Released builds are unchanged: the terminal stays xterm.js.
+
+  </details>
+
+## 1.92.0
+
+### Minor Changes
+
+- feat(settings): add the Terminal engine control with Auto, Native and xterm.js to Settings ([#2197](https://github.com/mihazs/lazysh/pull/2197))
+
+  <details><summary>Details</summary>
+
+  Settings, Terminal and accessibility, now has a Terminal engine choice on every platform (#2092, part of #1302): Auto, Native or xterm.js, in English, Brazilian Portuguese and Spanish, reachable with the keyboard like the other choices there. It sets the engine of sessions you open from now on; a session that is already open keeps its engine. The choice is stored on this device only and is never part of encrypted sync. Native is never hidden: while the engine registry refuses it (this platform has no native surface yet or its probe fails, or a screen reader is active and the native engine cannot be read by it) Native is disabled and Settings shows the registry's reason beside it. No release build passes the native probe yet, so Native is disabled everywhere, Auto still uses xterm.js and nothing changes for users; no default changes.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): add the typed-input editor for native terminal sessions on desktop and iOS ([#2161](https://github.com/mihazs/lazysh/pull/2161))
+
+  <details><summary>Details</summary>
+
+  First slice of #1334: a hidden text field in the terminal's container that takes keys, input-method composition and paste. Keys go to the core as DOM-shaped key inputs after the platform rules for Option and AltGr; Shift+PageUp and Shift+PageDown scroll the history by a page and are not sent to the program, as with xterm.js; composition shows its preedit at the cursor and commits once whichever order the browser fires its events in; a paste is bracketed for a program that asked for it. Android keeps its native input connection and gets no editor. No release build selects the native terminal, so xterm.js stays the default and nothing changes for users.
+
+  </details>
+- feat(terminal): find web addresses, file paths and hyperlinks in the shared terminal core ([#2198](https://github.com/mihazs/lazysh/pull/2198))
+
+  <details><summary>Details</summary>
+
+  Part of #1320 and #1302. The shared Rust terminal core can now find the web addresses (URLs) and host file paths on a row of its screen or scrollback, including those a program wrapped over several rows or broke at a box border, and read the hyperlinks (OSC 8) an application draws. On 33 shared screens it returns the same addresses, paths, line and column numbers and cell ranges as the existing xterm.js link code. The core is not wired into the app and xterm.js stays the only engine and the default, so terminal behaviour does not change and no defaults change.
+
+  </details>
+- test(android): run the real terminal core inside the app on the CI emulator ([#2147](https://github.com/mihazs/lazysh/pull/2147))
+
+  <details><summary>Details</summary>
+
+  A new `native-android-terminal-core` job builds the app with the optional `native-terminal` feature for arm64 (compiled and linked) and x86_64 and prints the size of each library, and an instrumentation case opens a core through the renderer's IPC, connects to an owned OpenSSH and reads back the shell's output with `terminal_core_text` on the CI emulator. The same harness runs against the Waydroid guest once its session can start. The feature stays off in every release build, so the app, its settings and its defaults are unchanged and nothing changes for users.
+
+  </details>
+- test(ntfy): record what the Android app did with each pushed challenge when confirmation times out ([#1966](https://github.com/mihazs/lazysh/pull/1966))
+
+  <details><summary>Details</summary>
+
+  Count in memory what the Android app does with each pushed ntfy challenge message and retain only those closed counts in the failure receipt when the unchanged 15-second challenge confirmation fails. This separates a message the distributor never delivered from one the app dropped; it is diagnostic evidence, not a confirmation or delivery fix.
+
+  </details>
+- feat(terminal): give the native core the app's colours and the Mosh canonical-frame mode at session open ([#2160](https://github.com/mihazs/lazysh/pull/2160))
+
+  <details><summary>Details</summary>
+
+  Give the native terminal core the app's colours and the Mosh canonical-frame mode when a session opens: `terminal_core_open` takes an optional config with the app's terminal theme and `canonicalFrames`, and `terminal_core_theme` changes the colours of a running session, so a program that asks the core for its colours hears the theme the user chose and a theme change answers the next query. The client's bridge passes the theme when it opens a core and sends a changed theme. Nothing registers the native engine yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+
+  </details>
+
+## 1.91.4
+
+### Patch Changes
+
+- feat(linux): place a native terminal surface below the web view on Wayland, in builds with the native terminal only ([#2262](https://github.com/mihazs/lazysh/pull/2262))
+
+  <details><summary>Details</summary>
+
+  Builds with the `native-terminal` feature, which no release enables, get a Linux surface host: the three surface commands place a Wayland subsurface of the app window below a transparent web view at the pane's anchor, and the device probe refuses native on X11 and Xwayland with the display named. The surface shows the pane background; no renderer draws on it yet. Released builds are unchanged: their window stays opaque and the terminal stays xterm.js.
+
+  </details>
+
+## 1.91.3
+
+### Patch Changes
+
+- test(terminal): stop the daemons a program test starts when the test ends ([#2269](https://github.com/mihazs/lazysh/pull/2269))
+
+## 1.91.2
+
+### Patch Changes
+
+- ci(checks): skip the OSC 52 clipboard step when its Playwright install was skipped ([#2247](https://github.com/mihazs/lazysh/pull/2247))
+
+  <details><summary>Details</summary>
+
+  In the `native-linux-runtimes` job the OSC 52 clipboard step ran after any earlier failure, but the Playwright install steps before it did not, so it failed with "Executable doesn't exist" and added a misleading second failure to the job. It now runs only when the Chromium install succeeded. An earlier failure still fails the job. CI only; the app is unchanged.
+
+  </details>
+- feat(accessibility): mirror a native terminal session's rows for a screen reader while Screen reader mode is on ([#2241](https://github.com/mihazs/lazysh/pull/2241))
+
+  <details><summary>Details</summary>
+
+  A session on the native engine has no text a screen reader can reach, so while Screen reader mode is on the terminal pane now mirrors its visible rows into a hidden list with a polite, bounded log of new output, and the session reports itself accessible only while that mirror is mounted. Nothing changes for users in this release: a session started with Screen reader mode on still gets xterm.js, native stays a developer-only choice, and no default changes.
+
+  </details>
+- test(android): choose the theme QR image in the real system file picker and check its decoded preview ([#1931](https://github.com/mihazs/lazysh/pull/1931))
+
+  <details><summary>Details</summary>
+
+  Select the owned theme QR PNG through the real Android system file picker from the QR image fallback input and verify the decoded preview appears without applying preferences. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+- feat(herdr): keep the managed Herdr build from replacing itself with a stock release ([#1934](https://github.com/mihazs/lazysh/pull/1934))
+
+  <details><summary>Details</summary>
+
+  In the optional `lazysh-managed` guarded Herdr build, `herdr update`, the self-update behind `herdr channel set` and the background update check refuse or never run, with the reason that updates arrive only through lazysh. The Herdr native job proves on the real built binary that none of them downloads or replaces anything. Default Herdr builds and every shipped default are unchanged.
+
+  </details>
+- feat(terminal): Draw real text in the native terminal renderer, with font fallback and correct cell widths ([#2224](https://github.com/mihazs/lazysh/pull/2224))
+
+  <details><summary>Details</summary>
+
+  Closes #1325, part of #1302. The wgpu renderer of the native terminal engine now draws glyphs from fonts instead of placeholder patterns: each grapheme cluster is shaped on its own with `swash` (pure Rust), takes the first family of the font list that covers it (a color face for emoji) and is fitted to the one or two cells the terminal core gave it, so CJK, combining marks, ZWJ emoji, flags and keycaps do not move the grid. Bold and italic use the family's own faces and are synthesized when it has none; color emoji have their own atlas. With the optional `native-terminal` feature the renderer host draws with the fonts installed on the machine for the Preferences font list and size (Android and Linux font directories), the platform's monospace font for `monospace`, one CJK and one emoji font, and a bundled subset of DejaVu Sans Mono when nothing else is installed. Fonts imported in Preferences are not drawn by the native engine yet (#2223). Nothing attaches the host and no released build enables the feature, so terminal behaviour and defaults do not change and xterm.js stays the only engine a user can run.
+
+  </details>
+- ci(herdr): build the managed Herdr as a release-profile executable and state its libc floor ([#1932](https://github.com/mihazs/lazysh/pull/1932))
+
+  <details><summary>Details</summary>
+
+  The Herdr native job builds the optional managed Herdr derivative as a release-profile Linux x86-64 executable, runs the owned real-server acceptance against those exact bytes, fails when the executable needs a glibc above the documented 2.35 floor, and retains it with a receipt binding the source commit, original manifest digest, feature set, toolchains and SHA-256. Nothing is published and no platform support is claimed yet.
+
+  </details>
+
+## 1.91.1
+
+### Patch Changes
+
+- change: Probe whether a native surface can sit below the transparent web view on macOS (#1333) ([#2152](https://github.com/mihazs/lazysh/pull/2152))
+
+  <details><summary>Details</summary>
+
+  Probe whether a native surface can sit below the transparent web view on macOS (#1333): a standalone test host builds the real tao and wry window, puts a `CAMetalLayer` view below the `WKWebView` inside wry's `WryWebViewParent`, and a macOS CI job reads the window back from the window server to judge placement, DOM overlap, resize and recreate at 1x and 2x. Test infrastructure only; the app is unchanged and xterm.js stays the terminal on macOS.
+
+  </details>
+- build: Build and test the shared terminal core and its wgpu renderer on Windows (#1332, part of #1302) ([#2127](https://github.com/mihazs/lazysh/pull/2127))
+
+  <details><summary>Details</summary>
+
+  Build and test the shared terminal core and its wgpu renderer on Windows (#1332, part of #1302): a `terminal-windows` CI job on `windows-latest` compiles libghostty-vt with Zig 0.16.0 for `x86_64-pc-windows-msvc` against the runner's MSVC and Windows SDK headers (`LIBGHOSTTY_VT_WINDOWS_LIBC`), runs the runtime crate's tests, and runs the renderer crate's tests on Direct3D 12 with the WARP software adapter. Build and CI only; the app does not use the core yet, no Windows surface exists, and xterm.js stays the only engine.
+
+  </details>
+
+## 1.91.0
+
+### Minor Changes
+
+- feat(hooks): install, update and remove Kimi Code 2.4 approval hooks from Agent hook setup ([#1947](https://github.com/mihazs/lazysh/pull/1947))
+
+  <details><summary>Details</summary>
+
+  **Agent hook setup** lists Kimi Code (`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and installs three `[[hooks]]` entries (`PermissionRequest`, `PermissionResult`, `SessionEnd`, five seconds) as an owned block at the very end of the profile's existing `config.toml`. Every earlier byte, including comments, secrets, CRLF line endings, foreign hooks and the file mode, is kept; a UTF-8 BOM is refused unchanged because Kimi Code 2.4.1 rejects it. The result is validated as TOML before it is written, a missing `config.toml` is refused instead of created, and update or remove act only on that exact end-of-file block (an edit after it, a moved block or an inline `hooks` setting is a conflict, never a rewrite). It needs the updated host companion: the app asks for discovery schema 4 first and falls back to 3 and 2 for older companions, which keep Kimi manual, as do the legacy Kimi CLI 1.52 profile and custom config paths. No default changes. A one-off run of the official Kimi Code 2.4.1 `kimi doctor` accepted the result; macOS, Windows and a real authenticated Kimi session were not exercised.
+
+  </details>
+- feat(herdr): add the explicit install and removal of the optional managed Herdr over SSH ([#1941](https://github.com/mihazs/lazysh/pull/1941))
+
+  <details><summary>Details</summary>
+
+  A collapsed **Managed Herdr on this host** section in the Multiplexer workspaces panel with **Install** and **Remove**. Install uploads the verified release file for the host's own platform, has the host check its size, digest and CPU and refuse a stale plan, an unsafe destination or an executable that does not run, and publishes it as `<data>/lazysh/herdr/lazysh-herdr` by one rename; removal deletes only that file. The system Herdr, its configuration, running servers and sessions are never touched. The release set lists no managed Herdr yet, so the install stops with a clear message until it is published; no release or platform support is claimed.
+
+  </details>
+- feat(hooks): list the seven readiness steps of an agent in the Agent hook setup panel ([#1945](https://github.com/mihazs/lazysh/pull/1945))
+
+  <details><summary>Details</summary>
+
+  List seven readiness steps in the Agent hook setup panel after Inspect setup (companion, hook files, provider reload, provider trust, lifecycle event received on this host, pane, remote delivery), in English, Portuguese and Spanish. Configured hooks with no recorded event show a hint; an older companion's status reads as not checked.
+
+  </details>
+
+### Patch Changes
+
+- feat(herdr): run every native Herdr call on the one Herdr a connection captured, nothing changes for users yet ([#1942](https://github.com/mihazs/lazysh/pull/1942))
+
+  <details><summary>Details</summary>
+
+  Make every native Herdr call run one Herdr that the connection captured once: the host's own `herdr` or the optional managed derivative at its fixed path `~/.local/libexec/lazysh-herdr/herdr`. Discovery, the session list, the tree and its actions, workspace creation, SSH and Mosh attachment, the guard's capability check and RPCs, and the display's owning actor all use the captured choice; a different second choice is refused, a missing or untrusted managed file never falls back to the host's own Herdr, and the choice is a closed name, never a path or command. Nothing installs the managed Herdr and the app offers no choice yet, so behaviour and defaults are unchanged.
+
+  </details>
+- change: Refuse a companion release response when its version differs from the requested update version ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+- test: Verify theme import by QR image file and by an OS `lazysh://` link in the Linux native GUI suite ([#1890](https://github.com/mihazs/lazysh/pull/1890))
+
+  <details><summary>Details</summary>
+
+  No user-visible behaviour changes.
+
+  </details>
+- test(android): cover pinch zoom and two-finger window swipes on a real tmux session ([#1887](https://github.com/mihazs/lazysh/pull/1887))
+
+  <details><summary>Details</summary>
+
+  Extend the Android tmux acceptance case with real two-finger gestures: a pinch out and a pinch in on the attached tmux display zoom and unzoom the pane the split added, and a two-finger swipe left and right select the next and the previous window. The host reads the active window and `#{window_zoomed_flag}` back from the tmux server and requires them to change in exactly that order. Test-only; no behaviour changes.
+
+  </details>
+- change: Generate and check the redistribution notice inventory of the optional managed Herdr derivative in the Herdr… ([#1936](https://github.com/mihazs/lazysh/pull/1936))
+
+  <details><summary>Details</summary>
+
+  Generate and check the redistribution notice inventory of the optional managed Herdr derivative in the Herdr native job: every Cargo package and Zig package the Linux x86-64 managed build resolves, with version, source URL, license and license texts, the modified upstream files with their change notices, the original manifest digest and the lazysh files with their licenses. The job fails when a package has no recorded license, a license nobody reviewed, or no license text, and retains `notices.json` and `NOTICES.txt` as a CI artifact. The audit result is recorded in `PROVENANCE.md`. Nothing is published and no platform support is claimed.
+
+  </details>
+- test(herdr): accept the managed Herdr beside a stock server of the same session name ([#1937](https://github.com/mihazs/lazysh/pull/1937))
+
+  <details><summary>Details</summary>
+
+  Accept the managed Herdr derivative beside an unchanged stock server in the Herdr native job: a stock and a managed server of the same session name share one `HOME` and set of XDG roots, the stock server's process, sockets, configuration and workload stay exactly as they were, everything the managed server adds sits in its own `lazysh-herdr` directory, its pane children keep `HOME`, every XDG root and the provider profile, and only the managed executable advertises guarded attachment. The owned acceptance can now run on an executable named by `LAZYSH_TEST_HERDR_MANAGED`, so a retained or downloaded release asset can be accepted instead of a rebuild. Nothing is published, no install or removal is added and no platform support is claimed yet.
+
+  </details>
+- test(desktop): verify the Linux keep-awake control through the real app and an owned portal server ([#1958](https://github.com/mihazs/lazysh/pull/1958))
+
+  <details><summary>Details</summary>
+
+  Verify the Linux desktop keep-awake control through the real app: the Agent board's request to the desktop portal, its closing on window focus loss, on leaving the board and on turning the control off, and the error shown without a portal. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+- test(android): deny the Attachment Photo camera permission through the real system sheet ([#1928](https://github.com/mihazs/lazysh/pull/1928))
+
+  <details><summary>Details</summary>
+
+  The owned Mosh attachment case now denies the camera permission and verifies no camera opens, the draft is unchanged and the ordinary file chooser still opens. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+- test(android): sample the glass chrome material in the Android WebView ([#1893](https://github.com/mihazs/lazysh/pull/1893))
+
+  <details><summary>Details</summary>
+
+  Adds an Android runtime case that samples the glass chrome material in the Android WebView (#1723): for the Workspace tools dialog and Preferences it reads the computed `backdrop-filter` and translucent background and the conditions under which they fall back to opaque, then lays a black and white underlay beneath the dialog and measures the device screenshot across its edge, so a blur or translucency that the WebView declares but does not composite fails it. Test infrastructure only; the app is unchanged.
+
+  </details>
+
+## 1.90.0
+
+### Minor Changes
+
+- feat: Add the app's bridge to the host browser relay ([#1886](https://github.com/mihazs/lazysh/pull/1886))
+
+  <details><summary>Details</summary>
+
+  Add the app's bridge to the host browser relay: six Tauri commands (`host_browser_start`, `host_browser_next`, `host_browser_ack`, `host_browser_pause`, `host_browser_resume`, `host_browser_stop`) run `lazysh-agent host-browser serve` on one SSH exec channel and hand the viewer its frames as bytes, one pull at a time. A browser stops, and its channel closes, on stop, lock, a dropped connection and the end of the session; one runs per session and two per app. A companion without the relay, or with the host browser switch off, is named and never retried, and nothing about a page is written to a log or to storage. Nothing in the app calls the commands yet: the viewer ships in the next slice of the same feature.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): check the device's GPU before the native terminal engine is offered ([#2221](https://github.com/mihazs/lazysh/pull/2221))
+
+  <details><summary>Details</summary>
+
+  The app asks the renderer for a graphics adapter before a session may use the native
+  engine. A device with only a software rasterizer, with no adapter, or whose driver
+  takes longer than 2 seconds to answer keeps xterm.js, and the engine line says why.
+  No release build includes the native engine yet, so nothing changes for users.
+  Changed defaults: none.
+
+  </details>
+- fix(release): List changes from every package in the release notes, not only the client's ([#2232](https://github.com/mihazs/lazysh/pull/2232))
+
+  <details><summary>Details</summary>
+
+  The GitHub release notes and the release section of the root `CHANGELOG.md` were built from the client's changelog alone, so a change whose fragment named another package, such as the companion, was missing from them. They now take the version's entries from every `@lazysh/*` package changelog and list a change that names several packages once. Releases already published are not rewritten. No application behaviour and no defaults change.
+
+  </details>
+
+## 1.89.1
+
+### Patch Changes
+
+- test(android): cover tmux copy mode and copying a line in the Android tmux acceptance case ([#1881](https://github.com/mihazs/lazysh/pull/1881))
+
+  <details><summary>Details</summary>
+
+  Extend the Android tmux acceptance case: through the real UI it now enters copy mode from the tmux prefix shortcut, selects and copies the pane's marker line with native keys, and requires the line to reach the system clipboard only after a real tap on Allow in the terminal's clipboard request. The host checks that the pane entered and left copy mode and that tmux's own buffer is that line. Test-only; no behaviour changes.
+
+  </details>
+
+## 1.89.0
+
+### Minor Changes
+
+- feat(zellij): open the Zellij pane that raised an agent notification ([#1872](https://github.com/mihazs/lazysh/pull/1872))
+
+  <details><summary>Details</summary>
+
+  Opening an inbox row, tapping a desktop notification or choosing **Open session** for an agent that ran in a Zellij pane now also focuses that pane, and the tab that holds it, in the Zellij session your terminal is attached to, so the Agent view follows that agent and not another one in the session (#1690, part of #1146). A pane of another Zellij session, or of another multiplexer, is left alone, and a pane that has gone still opens the session. No defaults change.
+
+  </details>
+- feat(tmux): list the panes of every tmux window in Jump To and move to the exact pane you choose. ([#1875](https://github.com/mihazs/lazysh/pull/1875))
+- feat(zellij): rename and close sessions and panes, and move pane dividers, from the Workspaces panel ([#1870](https://github.com/mihazs/lazysh/pull/1870))
+
+  <details><summary>Details</summary>
+
+  Rename and close Zellij sessions and panes, and move pane dividers, from the Workspaces panel on Zellij 0.45.1: **Control Zellij** lists the session's panes and gains Rename pane, four divider arrows and Close pane for each, and Rename Zellij session and Close Zellij session for the session. Closing asks first with a confirmation that names the pane or session and sends one exact action only when confirmed. No defaults change.
+
+  </details>
+
+### Patch Changes
+
+- test(multiplexers): verify that a copy in tmux, Zellij and Herdr reaches the device clipboard ([#1874](https://github.com/mihazs/lazysh/pull/1874))
+
+  <details><summary>Details</summary>
+
+  Verifies that text copied in tmux, Zellij and Herdr reaches the device clipboard through the OSC 52 consent prompt (#1699, part of #1147), and documents the option each multiplexer needs. No behavior or default change. `native-linux-runtimes` now drives real tmux, Zellij 0.45.1 and stock Herdr clients in the terminal pane, and Windows runs the unit tests of the client's OSC 52 handler.
+
+  </details>
+
+## 1.88.0
+
+### Minor Changes
+
+- feat(companion): run the companion on Windows hosts reached over OpenSSH ([#1903](https://github.com/mihazs/lazysh/pull/1903))
+
+  <details><summary>Details</summary>
+
+  Run the companion on Windows hosts reached over OpenSSH (#1725, part of #490). A host whose POSIX probe exits non-zero is now asked a second, PowerShell probe (`powershell.exe -EncodedCommand`) that reports its architecture, SID and local application data directory, and every companion command is sent to it as one encoded PowerShell line that `cmd.exe`, Windows PowerShell and POSIX quoting pass unchanged. Arguments Windows PowerShell 5.1 cannot pass faithfully are refused. Hosts that answer the POSIX probe are unchanged; installation, hook setup and the Herdr lookup stay Unix-only. Changed default: a host whose POSIX probe fails also gets the Windows probe.
+
+  </details>
+- feat(desktop): run Files and Diff inside a WSL target on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+
+  <details><summary>Details</summary>
+
+  Run **Files** and **Diff** inside a WSL target on Windows (#1745, part of #1135). A WSL session runs Git and every other host command as `wsl.exe -d <distro> --cd ~ -e <argv>` (argv, no shell string, the same deadline, output bound and process-tree cleanup as a native command) and reads and lists files through `\\wsl.localhost\<distro>\`. Only a Linux path, a `\\wsl.localhost\<distro>\` path of the same distribution or a Windows drive path (translated with `wslpath`) is accepted; other UNC hosts, other distributions, device paths and `..` escapes are refused. A distribution reports **Files** and **Diff** once `git` starts inside it. Native Windows, Linux and macOS targets are unchanged.
+
+  </details>
+- feat(desktop): choose PowerShell, Git Bash or a WSL distribution for a local terminal on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+
+  <details><summary>Details</summary>
+
+  Choose PowerShell 7, Windows PowerShell, Git Bash or a WSL distribution for a local terminal on Windows. The target list is detected natively, the app sends only the chosen id, an id that is not installed is refused, and a session saves its target for workspace restore. The default shell is unchanged. WSL targets open the distribution's login shell.
+
+  </details>
+- feat(agents): add an opt-in "All hosts" scope to the Agents board ([#1915](https://github.com/mihazs/lazysh/pull/1915))
+
+  <details><summary>Details</summary>
+
+  Part of #1743 and #991. With two or more saved hosts connected, a "This host / All hosts" switch appears above the board; "This host" stays the default and the per-connection board is unchanged. "All hosts" reads the reported activity of every connected host and groups it by state, then host, then project. Each host is read through its own connection every five seconds while the board is shown (up to 32 hosts, four reads at a time; sessions of one saved host count once), and a host that cannot answer shows its own error row while the others stay. A row opens that host's connection, like an inbox notification. Archive and Restore stay on each host's own board under its own key: the merged board only hides what that board archived. Nothing changes on the host or on disk and no default changes.
+
+  </details>
+
+### Patch Changes
+
+- test(android): cover the Device panel against the owned emulator over owned OpenSSH ([#1895](https://github.com/mihazs/lazysh/pull/1895))
+
+  <details><summary>Details</summary>
+
+  Adds an owned Android runtime case for the Device panel (#1730, #19): through the real UI over owned OpenSSH with the current `lazysh-agent` and the job's Android SDK, it finds the owned emulator as running, checks the controls its capabilities offer and shows a decoded capture of the emulator's own screen. It never presses reboot, shutdown or boot, since the emulator under test runs the app; the lifecycle half stays a documented limit. Test infrastructure only; the app is unchanged.
+
+  </details>
+- test(share): verify the share thumbnail fetch against the real share service ([#1918](https://github.com/mihazs/lazysh/pull/1918))
+
+  <details><summary>Details</summary>
+
+  A desktop test uploads a PNG to the real service router behind a throwaway-certificate TLS front, fetches it back through the client's thumbnail download, decodes it to a preview with the original dimensions, and sees the fetch refused once the share is deleted (#994, #1738). Test infrastructure only; the app is unchanged.
+
+  </details>
+- feat(desktop): attach native Zellij and Herdr sessions on Windows through the ConPTY ([#1926](https://github.com/mihazs/lazysh/pull/1926))
+
+  <details><summary>Details</summary>
+
+  Let `local_connect` attach a native Zellij or Herdr session on Windows through the ConPTY. The program is found on the `PATH` before the PTY starts, trying each directory in order with the name plus the `PATHEXT` extensions a process can be started from (`.com` and `.exe`; a batch file never resolves), and a program that is not installed is named in the error. tmux has no native Windows build, so a tmux entry is still refused there. The interface does not offer the choice yet, and attaching on Linux and macOS behaves as before.
+
+  </details>
+- feat(multiplexers): run the guarded Herdr input in local terminals ([#1922](https://github.com/mihazs/lazysh/pull/1922))
+
+  <details><summary>Details</summary>
+
+  Run the guarded Herdr input in local terminals: a local `herdr` that admits the guard is attached with `--guarded-attach`, its private first frame is taken off the PTY before any byte reaches the terminal, the ticket is claimed through a one-shot `herdr api guarded` child, and the same guard actor then serves `herdr_chat` for `local:` ids over the same receipts, budgets and access leases as SSH. A claim that fails closes the terminal and never falls back to an ordinary attach. The interface does not offer the local attach yet, and SSH Herdr behaves as before.
+
+  </details>
+- test(android): record cancelled pointer sequences when diagnosing the native chooser ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+
+  <details><summary>Details</summary>
+
+  Record cancelled pointer sequences when diagnosing the Android native chooser.
+
+  </details>
+- test(android): verify the saved tmux create-if-missing default through the real host editor ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+
+  <details><summary>Details</summary>
+
+  Verify the saved tmux create-if-missing default on Android: a second host whose Default multiplexer is tmux creates and attaches a session the server lacks through the real host editor and connect flow, and connecting again attaches the same session. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+
+## 1.87.1
+
+### Patch Changes
+
+- feat(terminal): Add the renderer host that draws a native terminal session on a platform surface ([#2219](https://github.com/mihazs/lazysh/pull/2219))
+
+  <details><summary>Details</summary>
+
+  Part of #2215 and #1302. With the optional `native-terminal` feature the app has a renderer host: it draws a core session's frames with the wgpu renderer only when something changed, suspends, survives a lost surface or GPU device, and draws the selection, composing text and the theme and font of the preferences. The renderer can present on a window given as raw handles. Nothing calls the host yet and no released build enables the feature, so terminal behaviour and defaults do not change and xterm.js stays the only engine a user can run.
+
+  </details>
+
+## 1.87.0
+
+### Minor Changes
+
+- feat(terminal): add the one-time notice that the terminal engine changed and where to switch back ([#2211](https://github.com/mihazs/lazysh/pull/2211))
+
+  <details><summary>Details</summary>
+
+  When the terminal engine that Automatic selects on this device differs from the one the device last used by default, the app shows a notice above the session tabs: "The terminal engine changed on this platform. Switch back in Settings, Terminal engine." It has an Open Settings button and a Dismiss button, stays until one of them is pressed and then does not return. It is not shown on a fresh install or to anyone who chose an engine in Settings, and that choice is not reset. In English, Brazilian Portuguese and Spanish. No default changes in this release: sessions still use xterm.js, so the notice does not appear yet.
+
+  </details>
+
+### Patch Changes
+
+- fix(release): publish releases again by admitting the Google Android APK that carries the Parakeet runtime ([#2213](https://github.com/mihazs/lazysh/pull/2213))
+
+  <details><summary>Details</summary>
+
+  Every release after 1.83.1 stopped in the Android packaging step: the Google APK, which
+  now links the Parakeet speech runtime, is 51.6 MiB and the release size guard allowed
+  47 MiB. Its ceiling is now 78 MiB, 1.5 times the measured size. The FOSS APK keeps its
+  47 MiB ceiling, and the guard still refuses a missing, linked, empty or oversized
+  package. Changed defaults: none.
+
+  </details>
+
+## 1.86.0
+
+### Minor Changes
+
+- feat(client): name the companion a local session runs in the Agents setup ([#1852](https://github.com/mihazs/lazysh/pull/1852))
+
+  <details><summary>Details</summary>
+
+  Name the companion a local session runs (#1667, part of #1132). The Agents setup of a local session shows **Bundled**, **Managed copy** or **On PATH**, from the new `tools.companionSource` that `local_capability` reports for the default target (`null` when no companion resolved). A local session without `lazysh-agent` now says to put it beside the app, install a managed copy or add it to the PATH. No defaults change.
+
+  </details>
+- feat(agents): show a Copilot CLI, Kimi CLI or Droid session's records in the Agent view, labelled as partial ([#1846](https://github.com/mihazs/lazysh/pull/1846))
+
+  <details><summary>Details</summary>
+
+  A GitHub Copilot CLI, Kimi CLI or Droid pane that reports a session now shows that session's records in the Agent view: read-only, under a partial label, with the hook state in the header and Show terminal. The companion's `discover` names `sessionId` for these three adapters (additive). Agents the view cannot read (Pi, OMP, Hermes, Cursor, Amp, Grok Build) now say that the view shows only their last reported state instead of pointing at a setting that cannot fix it. No defaults change. Refs #1658, #1125.
+
+  </details>
+- feat(herdr): choose a list, accordion or grid layout for the Herdr Spaces tree ([#1835](https://github.com/mihazs/lazysh/pull/1835))
+
+  <details><summary>Details</summary>
+
+  Choose a list, accordion or grid layout for the Herdr Spaces tree, with the same remembered preference as tmux Jump To. The list shows every space open, the accordion opens only the focused space (any space still opens by hand) and the grid sets spaces side by side as cards when the sidebar is wide enough for two. Choosing a layout also changes the other multiplexer panels, and a layout chosen there is now the one Spaces opens in.
+
+  </details>
+- feat(client): show This device on the Agents board, transcripts, usage reports and inbox ([#1852](https://github.com/mihazs/lazysh/pull/1852))
+
+  <details><summary>Details</summary>
+
+  Show the Agents board, transcripts, usage reports, approvals and notification inbox for a local session (#1667, part of #1132). Local sessions share one host key, `local:default`, and the label **This device**, so their reports group, archive and notify like a saved host's, and every local tab on the target is polled once. The views appear when the local target reports the companion (`tools.companion`); a target without it hides them and the session details say that `lazysh-agent` was not found on this device. The companion panel offers no SSH install for a local session, and hook discovery and setup reach the local companion. Remote sessions, saved hosts and their polling are unchanged; no default changes.
+
+  </details>
+- feat(herdr): close, rename and resize Herdr panes and close Herdr workspaces from the Workspaces panel ([#1869](https://github.com/mihazs/lazysh/pull/1869))
+
+  <details><summary>Details</summary>
+
+  Each pane row shows its label and gains Rename, four divider arrows and Close, and each workspace gains Close. Closing asks first with a confirmation that names the pane or workspace and sends one exact-id command only when confirmed. A workspace that still has linked worktree workspaces is refused by Herdr and lazysh never closes the group. No defaults change.
+
+  </details>
+- feat(agents): follow a Grok Build session in the Agent view ([#1845](https://github.com/mihazs/lazysh/pull/1845))
+
+  <details><summary>Details</summary>
+
+  With the updated host companion, print the opted-in hook fragment (`lazysh-agent grok-config --reported-history`), review it and save it as `~/.grok/hooks/lazysh.json`: a Grok Build hook then reports the session id, the pane it ran in and the path of its session log (`updates.jsonl`), and the Agent view of that tmux pane shows the conversation (turns, thinking, tool calls with their output and status, the plan card) and the state (working, done, failed, waiting for an approval), polling the log about every two seconds, with the guarded send. The Claude Code hooks reach Grok Build too (it runs `~/.claude/settings.json`), so a report that carries Grok's own input is now shown as **Grok Build**, not as a Claude Code session. Nothing is guessed from processes or from the newest file of a folder: a report without a log path binds nothing, a sub-agent's events are ignored, and two different paths for one session stay unusable. Questions and approvals stay in the terminal; the view says so and holds the draft, and it offers Grok Build no Stop key and no `@` or `/` suggestions because no key was checked on a real Grok Build. The same terminal notice now also appears when Gemini CLI or OpenCode waits for an approval or a plan decision, which the view cannot answer. A session past 10,000 log records or 16 MiB shows the reader's error and leaves the terminal. Verified with synthetic fixtures built from the pinned official source and the real executable on Linux; no Grok Build binary or account was available, so a run against a real agent is still open on #1842. No defaults change.
+
+  </details>
+
+### Patch Changes
+
+- change: Add an Android emulator case on the pinned Zellij 0.45.1… ([#1837](https://github.com/mihazs/lazysh/pull/1837))
+
+  <details><summary>Details</summary>
+
+  Add an Android emulator case on the pinned Zellij 0.45.1 (new `native-android-zellij` job, `bun run test:android-zellij`): through the packaged UI the app discovers Zellij, lists the one owned session, attaches it, switches to Tab 2 and Tab 1 from the Zellij controls, detaches by closing the tab and reattaches it, while the host reads the session's active tab back with `zellij action list-tabs --json` and checks that both command panes started exactly once. The SSH test fixture gained a pinned-Zellij option. Test-only; no behaviour changes.
+
+  </details>
+- test(agents): run the Agent view native GUI cases against an agent in a real guarded Herdr pane ([#1839](https://github.com/mihazs/lazysh/pull/1839))
+
+  <details><summary>Details</summary>
+
+  Run the Agent view's mid-turn Terminal, Agent, Terminal round trip, a prompt sent from the Agent view and a prompt typed in the terminal through the real native GUI against a stand-in agent in a real guarded Herdr pane, with the same cases the tmux pane already runs. Test and fixture only: the application is unchanged.
+
+  </details>
+- change: Extend the Android tmux acceptance case ([#1838](https://github.com/mihazs/lazysh/pull/1838))
+
+  <details><summary>Details</summary>
+
+  Extend the Android tmux acceptance case: it now opens a synthetic transcript through the real companion, stages a draft in Chat, and sends it with the explicit Choose, Confirm and Send steps to the pane the attached tmux display shows, and the host reads that pane back by id to require the draft there once and nowhere else, with no extra display client. Test-only; no behaviour changes.
+
+  </details>
+- test(agents): run the Agent view native GUI cases against a reporting agent in a real tmux pane ([#1839](https://github.com/mihazs/lazysh/pull/1839))
+
+  <details><summary>Details</summary>
+
+  Run the Agent view's mid-turn Terminal, Agent, Terminal round trip, a prompt sent from the Agent view and a prompt typed in the terminal through the real native GUI against a hook-reporting stand-in agent in a real tmux pane. Test and fixture only: the application is unchanged.
+
+  </details>
+- test(android): verify the client environment flag sends LC_TERMINAL to an AcceptEnv LC_* host ([#1830](https://github.com/mihazs/lazysh/pull/1830))
+
+  <details><summary>Details</summary>
+
+  Through the real Android app, the optional client environment flag is saved with a host and sends `LC_TERMINAL=lazysh` to an OpenSSH server that accepts `LC_*`, while a host without the flag does not. The owned SSH test fixture can now start an sshd with `AcceptEnv LANG LC_*`.
+
+  </details>
+- test(herdr): assert live Herdr agent states and the current marker on Android and the Linux GUI ([#1833](https://github.com/mihazs/lazysh/pull/1833))
+
+  <details><summary>Details</summary>
+
+  The Android shared-navigation case requires each Agents row to render its real Working or Needs attention state and checks the current space, tab and pane before every Spaces switch. A new Linux GUI case moves the live agent from Unknown to Working to Needs attention and moves the real server focus from the Spaces tree. Test coverage only; no product change.
+
+  </details>
+
+## 1.85.1
+
+### Patch Changes
+
+- build(terminal): Compile the wgpu renderer into the app with the optional native-terminal feature ([#2205](https://github.com/mihazs/lazysh/pull/2205))
+
+  <details><summary>Details</summary>
+
+  Part of #2201 and #1302. The app now depends on `lazysh-terminal-renderer-wgpu` by path, only with the `native-terminal` feature, and the root `Cargo.lock` pins wgpu 30.0.2 and the 37 other crates it brings. Build-only: nothing in the app calls the renderer yet, the feature stays off in every released build, default builds compile no wgpu (the `native-terminal-bridge` job checks that) and xterm.js stays the only engine a user can run.
+
+  </details>
+
+## 1.85.0
+
+### Minor Changes
+
+- feat(terminal): show which terminal engine the current session uses and why ([#2202](https://github.com/mihazs/lazysh/pull/2202))
+
+  <details><summary>Details</summary>
+
+  The Connections page of Workspace tools and Settings, Terminal and accessibility, now say which engine draws the current session and why the app chose it: automatically, in Settings, by the developer override, or, when xterm.js stands in for the native engine, the reason the native engine was refused (a screen reader is active, or the engine cannot run in this build). In English, Brazilian Portuguese and Spanish. No default changes: sessions still use xterm.js.
+
+  </details>
+
+## 1.84.0
+
+### Minor Changes
+
+- feat(voice): offer the local Parakeet engine in the Google build of the Android app ([#1819](https://github.com/mihazs/lazysh/pull/1819))
+
+  <details><summary>Details</summary>
+
+  Voice on a phone can now select Parakeet next to Whisper, for arm64-v8a and x86_64: pinned ONNX Runtime and sherpa-onnx, the model in the app's private storage, and a free-space check (about 1.6 GB) before it is downloaded or prepared. The F-Droid build does not include it. No defaults change: Whisper stays the default and nothing downloads Parakeet until you choose it.
+
+  </details>
+- feat(voice): offer the Parakeet local dictation engine on Windows x86_64 ([#1825](https://github.com/mihazs/lazysh/pull/1825))
+
+  <details><summary>Details</summary>
+
+  Whisper stays the default; Parakeet needs an explicit model download, as on Linux, and its model files live in a private folder that only the current user, the administrators and the system can reach.
+
+  </details>
+
+### Patch Changes
+
+- test: Prove local Whisper on Android with the real engine ([#1806](https://github.com/mihazs/lazysh/pull/1806))
+
+  <details><summary>Details</summary>
+
+  Prove local Whisper on Android with the real engine: the emulator job imports the pinned English model through the Voice import commands, transcribes the public JFK sample with the bundled whisper.cpp and removes the model again. The Linux runtime job and the Android job now take their speech fixtures from one pinned download script.
+
+  </details>
+- feat(companion): explain where the host companion is installed and what is verified before it starts ([#1787](https://github.com/mihazs/lazysh/pull/1787))
+
+  <details><summary>Details</summary>
+
+  Agents now says where the companion goes, what the host verifies and that nothing changes until the button is pressed. An unsupported host architecture is covered by an owned OpenSSH test (both routes refuse it before anything is fetched or written). Installation behaviour is unchanged.
+
+  </details>
+- test(android): prove upload recovery after the SSH control stream closes on the owned emulator ([#1785](https://github.com/mihazs/lazysh/pull/1785))
+
+  <details><summary>Details</summary>
+
+  Extend the Android Mosh attachment acceptance case: the owned device now reaches its SSH daemon through the owned relay, the host closes only the app's SSH stream (server-attributed) while the Mosh daemon stays alive, and the real UI shows the closed-control upload error with its Reconnect uploads action, restores uploads by manual authentication without an automatic upload or a second terminal, and then uploads the exact bytes by a separate explicit Upload (a repeated Upload leaves the file untouched). Test-only; no behaviour changes.
+
+  </details>
+- change: Add an owned Android emulator case for encrypted sync (#1540, child of #17) ([#1804](https://github.com/mihazs/lazysh/pull/1804))
+
+  <details><summary>Details</summary>
+
+  Add an owned Android emulator case for encrypted sync (#1540, child of #17): through the real Sync panel it enrolls against an owned HTTPS WebDAV server, shows the recovery key again from the native credential store after a restart, checks that nothing is uploaded before the explicit action and that credentials stay off, uploads settings as age ciphertext, then enrolls a reset install with the recovery key and previews and applies the saved host list. Owned emulator builds trust one extra root for `127.0.0.1` through the `sync-tls-acceptance` Cargo feature; published builds do not compile it, and production sync still requires HTTPS with the web PKI roots. Test infrastructure only.
+
+  </details>
+- test(agents): stop the dialog picker's digit-key test from timing out at random in CI ([#2207](https://github.com/mihazs/lazysh/pull/2207))
+
+  <details><summary>Details</summary>
+
+  The test pressed the digit as soon as the option was enabled, which could be
+  before the picker began listening for keys on a busy runner; the key was then
+  lost and the test waited out its 5 s limit. It now runs the 400 ms safety delay
+  on fake timers inside `act()`, so the listener is attached before the key is
+  pressed. Its assertions are unchanged, and the app's behaviour does not change.
+
+  </details>
+- change: Add two Linux native GUI cases for the command palette and Files over a real SSH session ([#1788](https://github.com/mihazs/lazysh/pull/1788))
+
+  <details><summary>Details</summary>
+
+  Add two Linux native GUI cases for the command palette and Files over a real SSH session: the palette opens with Ctrl+Shift+P from the focused terminal and with Ctrl+K elsewhere and runs the Files tool, the Terminal tool and End connection from the keyboard, and Files shows Markdown, a PNG and an SVG read over SFTP without running their content (#993). Test-only; no behavior change.
+
+  </details>
+- feat(agent): add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent review status` and `review diff` to the host companion: the Diff view's changed files and one file's patch from a terminal on the host, as plain text or one JSON line, read-only and under the app's size bounds, with its help in English, Brazilian Portuguese and Spanish. The app and the companion now build their Git review commands in one shared module; the app's behavior does not change.
+
+  </details>
+- change: Add the owned Windows OpenSSH server the Windows GUI SSH case will connect to, and a hosted Windows check… ([#1826](https://github.com/mihazs/lazysh/pull/1826))
+
+  <details><summary>Details</summary>
+
+  Add the owned Windows OpenSSH server the Windows GUI SSH case will connect to, and a hosted Windows check that proves it with the real `ssh.exe`: a second `sshd` run by the job user on a fresh loopback port with one throwaway key, accepting only that key, offering the fingerprint the application must show, and leaving the machine's own `sshd` service and every other file untouched. Test infrastructure only; the application, its defaults and the release artifacts are unchanged.
+
+  </details>
+- fix: Fix Android Appium CI task selection so the regression suite runs ([#1804](https://github.com/mihazs/lazysh/pull/1804))
+
+## 1.83.1
+
+### Patch Changes
+
+- feat(terminal): register the native backend behind a probe that no release build passes ([#2164](https://github.com/mihazs/lazysh/pull/2164))
+
+  <details><summary>Details</summary>
+
+  Register the native terminal backend in the engine registry behind a probe, the developer override and recorded reasons (#1309, part of #1302). The new `terminal_core_available` command says whether this build has the native core compiled in and a platform host to draw it on (Android only so far); the Native choice and the developer override `lazysh.terminal.backend=native` select the native engine only when it says yes, and otherwise the session uses xterm.js and records the reason. Auto still picks xterm.js, and a screen reader still refuses the native engine. No release build passes the probe, so nothing changes for users; no default changes.
+
+  </details>
+- test(terminal): Hold Herdr's navigation-cell detection to both terminal backends ([#2189](https://github.com/mihazs/lazysh/pull/2189))
+
+  <details><summary>Details</summary>
+
+  Part of #1318 and #1302. `herdrNavigationCells.test.ts` now runs each case over the xterm.js adapter and over the native terminal adapter on the stand-in core, on the same bytes, so the right-trimmed, bounded window of rows the native adapter reads gives the same switch-button, switcher and on-screen answers as xterm.js. Test-only: no behaviour, engine or default changes, and xterm.js stays the only registered engine.
+
+  </details>
+
+## 1.83.0
+
+### Patch Changes
+
+- fix: Fix the triple tap gesture never running on a touch screen, and execute triple tap and the desktop session… ([#1777](https://github.com/mihazs/lazysh/pull/1777))
+
+  <details><summary>Details</summary>
+
+  Fix the triple tap gesture never running on a touch screen, and execute triple tap and the desktop session shortcuts in Playwright.
+
+  </details>
+- change: Fold the optional hints of the Zellij quick tabs, the Host devices panel, the Preview panel's automatic… ([#1786](https://github.com/mihazs/lazysh/pull/1786))
+
+  <details><summary>Details</summary>
+
+  Fold the optional hints of the Zellij quick tabs, the Host devices panel, the Preview panel's automatic refresh and the Dictation panel behind one closed 44 px line each: **About tab shortcuts**, **About device tools**, **About automatic refresh**, **About dictation**, **About Whisper models** and **About Parakeet**, in English, Brazilian Portuguese and Spanish. The always-visible explanatory text drops from 151, 152, 242 and 135 characters to 19, 18, 23 and 15, and from 212 and 146 characters to 116 and 64 for the Whisper and Parakeet engines. What stays visible: the Preview note that a preview uses the SSH connection, each on-device engine's "audio stays on this device" line (with the Hugging Face download source and the trusted-file advice for Whisper) and the Dictation delivery warning that Auto-send presses Enter and can run commands. No settings or defaults change.
+
+  </details>
+
+## 1.82.1
+
+### Patch Changes
+
+- ci(release): retry release Android builds when a Gradle dependency download fails ([#2185](https://github.com/mihazs/lazysh/pull/2185))
+
+  <details><summary>Details</summary>
+
+  The release source build and the Android artifact job rerun their Gradle build, up to five
+  attempts 1, 3, 6 and 10 minutes apart, when Gradle reports a failed dependency download (a Maven
+  registry 429 or 5xx, a dropped connection, a truncated POM or a missing group:artifact lookup).
+  The Android project's buildSrc also falls back to Maven Central when the plugin portal reports its
+  Kotlin classpath missing. Compile, test, lint and dependency-verification failures are never
+  retried, and no dependency cache or refresh is added, so release dependencies are still
+  downloaded and verified every time.
+
+  </details>
+
+## 1.82.0
+
+### Minor Changes
+
+- feat(herdr): collapse completed agent groups by default ([#1772](https://github.com/mihazs/lazysh/pull/1772))
+
+  <details><summary>Details</summary>
+
+  Completed live Herdr agents are collapsed under Done by default, leaving other statuses visible. Expand Done to see its agents; searching temporarily reveals matching groups and refreshes retain your choice. Changed default: the Done group of live Herdr agents starts collapsed; it was expanded before.
+
+  </details>
+- feat(devices): touch an Android device on its video preview ([#1773](https://github.com/mihazs/lazysh/pull/1773))
+
+  <details><summary>Details</summary>
+
+  With **Enable device input** ticked, a tap or swipe on the video is mapped to the display's pixel size that **Verify Android video tools** reports and sent with that size to the host companion (`lazysh-agent devices android tap` and `swipe`). The companion reads the display size again and refuses the gesture with `DeviceDimensionsChanged` when it changed (a rotation or resize) or the point is outside it, so a gesture never lands on the wrong point; the refusal also stops the video. A 180-degree rotation that keeps the size is not detected. Needs the updated host companion; an older one keeps the video view-only. A real Waydroid Android 13 guest accepted and refused gestures as described; the published CI emulator has not run the new case yet. Changed default: the Android video preview is no longer always view-only.
+
+  </details>
+- feat(desktop): bundle lazysh-agent with the Linux and Windows packages and prove it in the release ([#1855](https://github.com/mihazs/lazysh/pull/1855))
+
+  <details><summary>Details</summary>
+
+  Ship the matching `lazysh-agent` companion with every desktop package and prove it in the release checks (#1666, part of #1132). The Linux Debian package (`/usr/bin/lazysh-agent`) and AppImage and the Windows installer (`lazysh-agent.exe` beside the app) now carry the very companion the release's companion job built and verified for that platform, so a fresh install has a local companion where the local arm looks first (beside the app, then the managed copy, then the `PATH`, unchanged). The desktop release builds download that artifact, bind its receipt to the commit and version, and stage it through a Tauri `bundle.externalBin` entry used by release builds only. The release job unpacks each package and refuses to publish one whose companion is missing, not executable or different from the published one; the installer acceptance also checks it after the install and after the same-version repair. The AppImage copy is compared with its `RUNPATH` section rewritten by linuxdeploy ignored. The installers grow by one companion executable (about 11 MB). No defaults change; remote companion resolution and installation are unchanged, and macOS packages, which stay deferred, have the check in place but unexercised.
+
+  </details>
+
+### Patch Changes
+
+- fix(account-usage): stop a stalled Windows credential store from holding the Cline quota check ([#1778](https://github.com/mihazs/lazysh/pull/1778))
+
+  <details><summary>Details</summary>
+
+  The Cline store is now read on its own thread with a 3 second deadline: a file on an unreachable share or a cloud placeholder that never finishes downloading is reported as "not signed in" instead of keeping the collection waiting, Windows is asked to cancel the pending read, and at most four such reads can be left behind. The opened file must also be a disk file, so a path replaced by a pipe or device is refused. Cancellation is best effort: it bounds how long the check waits and how many threads it can strand, not the Windows request itself. Linux and macOS are unchanged. Following the Cline profile environment variables on Windows is tracked in #1748 and stays unavailable. No defaults change.
+
+  </details>
+- test(android): let the owned tmux fixture forward a DCS-wrapped OSC 52 to its attached client ([#1807](https://github.com/mihazs/lazysh/pull/1807))
+
+  <details><summary>Details</summary>
+
+  The pinned server starts with `allow-passthrough on` (tmux 3.3 or later is now required) and the beta window is an interactive shell, so a test can print the sequence there. A host test attaches a real client and sees the unwrapped request. Test fixture only; no app behaviour changes (#1546).
+
+  </details>
+
+## 1.81.0
+
+### Minor Changes
+
+- feat(herdr): mark the Spaces row this device's own guarded client shows as current ([#1783](https://github.com/mihazs/lazysh/pull/1783))
+
+  <details><summary>Details</summary>
+
+  Issue #591. Stock Herdr only reports the server's shared focus, which another connection can move, so the marker still follows that focus there. With the optional guarded Herdr host attached, the attached client reports its own workspace, tab and pane, and Spaces marks those instead, but only when the report names the server being read; while a Chat turn holds the guard the last reading is kept, and without the guard the marker returns to the shared focus. Needs a guarded Herdr host; it is built from the repository and not distributed yet (#1522). Real two-client acceptance on a device is not part of this change. No defaults change.
+
+  </details>
+- feat(devices): inspect and act on an Android device's screen elements from the device controls ([#1774](https://github.com/mihazs/lazysh/pull/1774))
+
+  <details><summary>Details</summary>
+
+  Issue #19. **Inspect screen elements** lists what Android's accessibility service reports on the foreground screen (label, class, resource id, bounds and actionable flags, at most 300), and **Tap** and **Long press** act on one element: the host companion (`lazysh-agent devices android ui tree` and `ui act`) re-reads the screen, finds the one enabled element with that identity and touches the centre of its bounds, or fails without touching anything when none matches. The buttons need **Enable device input**. No scrolling, text entry or iOS accessibility yet. Needs the updated host companion. No defaults change.
+
+  </details>
+
+### Patch Changes
+
+- test(terminal): Run the terminal adapter contract suite against the real core in CI and fail on an untested capability ([#2169](https://github.com/mihazs/lazysh/pull/2169))
+
+  <details><summary>Details</summary>
+
+  Part of #1305 and #1302. A test-only JSON-RPC process over stdio in the terminal runtime crate (`examples/control_stdio.rs`) calls the same session, doorbell and control-plane functions as the app's `terminal_core_*` commands, and the `herdr-native` CI job, which has Zig and Bun, runs the unchanged contract suite over it through the native terminal adapter. A guard now fails when a backend claims a capability that no passing test case verifies, and every backend registered in `terminalBackends.ts` must pass the suite and the cases of each capability it declares. No behaviour changes: the app, the terminal engines and every default are untouched, and xterm.js stays the only registered engine.
+
+  </details>
+- fix(client): show the Herdr New workspace and New worktree flow as a full-screen page on phones ([#1776](https://github.com/mihazs/lazysh/pull/1776))
+
+  <details><summary>Details</summary>
+
+  Issue #588. The flow is a long form with a command review and a result, but it opened as a bottom sheet that left the form and its **Cancel** / **Review commands** buttons squeezed under a partial-height card. On a phone window (up to 600 px wide) it now fills the screen under a header whose Close button stays visible while the form scrolls, including at short heights and with the keyboard open; Back, Escape, the explicit command review and the wait for the host to finish are unchanged. Larger windows keep the same centred dialog. No default changes.
+
+  </details>
+
+## 1.80.4
+
+### Patch Changes
+
+- docs(changelog): Write release notes as New, Improved and Fixed lists with one linked line per change ([#2165](https://github.com/mihazs/lazysh/pull/2165))
+
+  <details><summary>Details</summary>
+
+  Each release's notes on GitHub and in `CHANGELOG.md` are now generated from the changeset fragments: a fragment's first line is `type(scope): headline`, the rest is collapsed details, and the notes group the lines as New, Improved, Fixed, Documentation and Under the hood with a link to the pull request. They no longer carry commit hashes, dependency-update lines or repeated "Also included" blocks; the versions that were prepared but never published are listed in one line. Root `CHANGELOG.md` now has a section per release, and its earlier hand-written log is grouped under "Development history". A separate `[Unreleased]` entry is no longer required. No application behaviour and no defaults change.
+
+  </details>
+
+## 1.80.3
+
+### Patch Changes
+
+- 931483b: Teach the shared Rust terminal core to answer what text is under a selection (a range of cells, a word, a line, the whole buffer or the visible screen), to find text in the screen and scrollback, and to apply the clipboard consent limits (64 KiB, valid UTF-8, never partial) to the clipboard writes a terminal program makes with OSC 52, with the same results as the xterm.js engine on shared fixtures that cover wide and combining characters and wrapped lines. Five differences in what OSC 52 offers the user (a write to `s`, `cs` or `ccc` is no longer offered, an unknown target letter is, an empty write is not) are recorded next to the fixture and registered as open, and the primary-only write is settled because the existing policy rejects it too. The core is not wired into the app and xterm.js stays the only engine and the default, so terminal behaviour does not change and no defaults change.
+- @lazysh/account-usage@1.80.3
+  - @lazysh/common@1.80.3
+  - @lazysh/display-idle@1.80.3
+  - @lazysh/et-transport@1.80.3
+  - @lazysh/mosh-transport@1.80.3
+
+## 1.80.2
+
+### Patch Changes
+
+- d173b72: Run the Linux native surface composition probe in CI: a new `native-linux-surface` job builds `packages/terminal-runtime/prototypes/linux-surface` and runs its checks under a headless sway compositor (pixels read back with grim) for `wl_shm` and a wgpu Vulkan swapchain on lavapipe at scale 1 and 2, and on Xvfb for X11, asserting exact anchor pixels, overlap, resize and recreate. CI and prototype only; no behaviour changes.
+- 5cdafc7: Keep the Playwright e2e fixtures out of the `src` type-check that the release source build runs. The terminal backend selection and `onAdapter` now live in a Playwright-free module under `src`, so the F-Droid build, which removes `playwright-core`, type-checks again; the terminal e2e specs behave as before. Internal build fix: no behaviour changes for users.
+- 578289d: Build the client with Bun (`bun build/build.ts`: Bun transpiles the TypeScript and bundles it, with code splitting) instead of `tsc -b && vite build`, so the build is much faster and a type error in a test or an e2e fixture can no longer fail a release source build. `tsc -b` now only type-checks, in `client:check`, which `checks` and the main verdict still run. Vite stays the dev server and the Vitest and Playwright runtime. Build tooling only; the app's behaviour does not change.
+- @lazysh/account-usage@1.80.2
+  - @lazysh/common@1.80.2
+  - @lazysh/display-idle@1.80.2
+  - @lazysh/et-transport@1.80.2
+  - @lazysh/mosh-transport@1.80.2
+
+## 1.80.1
+
+### Patch Changes
+
+- e331eae: Add a Windows composition probe for the native terminal engine (#1332, part of #1302): a standalone tao and wry program under `packages/terminal-runtime/prototypes/windows-surface` and a `windows-surface-probe` workflow that opens the real window and WebView2 page on a `windows-latest` runner, stacks a child window below the transparent web view (GDI-painted and as a Direct3D 12 swapchain) and above it with the page's overlay cut out of it, reads its own window back with `PrintWindow` and a screen copy, and writes what it saw. On the hosted runner a Direct3D 12 child below the transparent WebView2 shows through exactly, with an opaque or a transparent tao window; the job fails if that stops holding. Nothing in the app, its terminal engine or its defaults changes: Windows keeps xterm.js and Auto resolves to xterm.js there.
+- ed94471: Add the client's bridge over the native terminal core's commands: it opens a core, hands the transport the Channel the core's reports arrive on, pulls the screen's state at most once per 16 ms however much output arrives, sends typed text and pastes, drops input while the app is locked and wakes the core again after the unlock. Nothing registers the native engine yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+- @lazysh/account-usage@1.80.1
+  - @lazysh/common@1.80.1
+  - @lazysh/display-idle@1.80.1
+  - @lazysh/et-transport@1.80.1
+  - @lazysh/mosh-transport@1.80.1
+
+## 1.80.0
+
+### Minor Changes
+
+- 1772589: Add the Host browser switch to host settings: a separate row, off by default, that reads and saves the companion's `settings host-browser` setting with its own revision, and asks once per host on this device, naming what the browser can reach, before it is turned on. The confirmation stays on the device and never enters the encrypted sync. A companion without the command shows the row as unavailable with an update message. The browser view itself ships with the Chrome viewer.
+
+### Patch Changes
+
+- b522053: Build libghostty-vt against the Apple SDK and run the terminal core's and the wgpu renderer's tests on `macos-latest` (aarch64-apple-darwin, the renderer on Metal) in a new report-only `terminal-macos` CI job on pushes to `main`, so a break that only shows on macOS no longer waits for a native surface to be written. The first hosted run found that a macOS build of libghostty-vt sends no ESC prefix for Alt unless told Option is Alt, so the core now says so on every key encode; two tests that assumed a non-Apple host were fixed. The core is not wired into the app yet: no behaviour changes for users.
+- 62e9f7f: Add the native terminal core's control-plane commands and event stream: state, scrolling, sizing and a bounded window of row text, never cell data, plus a change doorbell and the program's title, bell, directory and clipboard reports on the session's Channel. Nothing creates a native session yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+- ea11422: Compact the scrollback of native terminal sessions nobody is looking at (#1338): a session with no view attached that has received nothing for two seconds has its history compressed by libghostty-vt in small steps on an idle worker, and it is restored on access. On one desktop host a full session went from about 4 MiB to about 0.5 MiB resident and ten sessions from about 40 MiB to about 8 MiB when nine were idle, with the history unchanged. The native core is not the default engine: xterm.js stays the default, and no setting or default changes.
+- @lazysh/account-usage@1.80.0
+  - @lazysh/common@1.80.0
+  - @lazysh/display-idle@1.80.0
+  - @lazysh/et-transport@1.80.0
+  - @lazysh/mosh-transport@1.80.0
+
+## 1.79.7
+
+### Patch Changes
+
+- 173aa0d: Run the six named terminal end-to-end specs per terminal backend (#1703): `LAZYSH_E2E_TERMINAL_BACKEND=xterm|native bun run test:e2e:terminal` sets the developer override before the page loads and `onAdapter` fails the spec when the terminal on screen is another backend, so a silent fallback cannot pass as the requested engine. CI runs the xterm arm and a native arm that is reported skipped, with the backend registry's reason, until the native backend is registered. Test code and CI only; no product behaviour changes.
+- @lazysh/account-usage@1.79.7
+  - @lazysh/common@1.79.7
+  - @lazysh/display-idle@1.79.7
+  - @lazysh/et-transport@1.79.7
+  - @lazysh/mosh-transport@1.79.7
+
+## 1.79.6
+
+### Patch Changes
+
+- 5d29b1a: Fix the owned Android SSH parity job on its CI emulator (#1737): the Files and preview cases connected on the Auto transport, which starts a real mosh-server on their command-running sshds and failed intermittently with "Mosh connection ended before startup completed". Both cases now choose SSH in the Add Host dialog. Test infrastructure only; the app is unchanged.
+- 6d90b09: Teach the wgpu renderer of the native terminal engine to blink the cursor from one shared timer (no timer at all while blink is off or the cursor is hidden), pace frames to the display refresh, follow a display scale change, and recover from a lost GPU device from the core's state with the same pixels. It is not wired into the app yet and xterm.js stays the only engine and the default, so nothing changes for users; this is groundwork for trying the native engine behind an explicit opt-in.
+- @lazysh/account-usage@1.79.6
+  - @lazysh/common@1.79.6
+  - @lazysh/display-idle@1.79.6
+  - @lazysh/et-transport@1.79.6
+  - @lazysh/mosh-transport@1.79.6
+
+## 1.79.5
+
+### Patch Changes
+
+- b0e1608: Run the native terminal core's performance gate (`terminal-perf`) on pull requests that touch `packages/terminal-runtime`, `packages/terminal-renderer-wgpu` or the vendored ghostty-vt binding, not only on pushes to `main`, so a regression in parse-to-frame cost, allocations, scrollback rows, memory per session or renderer upload volume shows on the pull request that causes it (#2141, part of #1302). The job keeps its injected-slowdown and injected-allocation self-checks and stays report-only, because making it a required check is a repository ruleset change. CI only; the app, its terminal engine and its defaults are unchanged.
+- 08a6272: Add the program workloads of the terminal benchmark suite (W5 vim, W6 tmux and Zellij, W7 Mosh resize and reconnect, W8 agent screens and streaming, W11 background, resume and surface recreation): renderer-neutral replayable workloads built from the recorded captures, an xterm.js page runner and Playwright spec that can also drive an Android WebView on the Waydroid lane, and a native core example that replays the same bytes against the same screens. Test and documentation only; no behaviour changes.
+- @lazysh/account-usage@1.79.5
+  - @lazysh/common@1.79.5
+  - @lazysh/display-idle@1.79.5
+  - @lazysh/et-transport@1.79.5
+  - @lazysh/mosh-transport@1.79.5
+
+## 1.79.4
+
+### Patch Changes
+
+- 46786ee: Remember a per-device terminal engine choice (Auto, Native or xterm.js) and record, for every new session, which engine it got and why, with the reasons in English, Brazilian Portuguese and Spanish (#2092, first slice, part of #1302). New sessions ask the registry for the saved choice, the developer override still wins, and an open session keeps its engine. The choice is never part of encrypted sync. There is no Settings control yet and only xterm.js is registered, so every choice runs xterm.js and nothing changes for users; no default changes.
+- 76f1473: Mount a native terminal session through its anchor: the terminal pane attaches a native adapter to its container, places the Android native surface on it through the anchor tracker and takes it down when the pane is hidden or ends, and while a surface is shown every ancestor of the container stops painting its background so the surface below the page is visible, with the composer and other overlays above it. An xterm.js pane is unchanged. No backend registration gives a session a native terminal and release builds refuse the surface commands, so xterm.js stays the only engine and the default and nothing changes for users.
+- @lazysh/account-usage@1.79.4
+  - @lazysh/common@1.79.4
+  - @lazysh/display-idle@1.79.4
+  - @lazysh/et-transport@1.79.4
+  - @lazysh/mosh-transport@1.79.4
+
+## 1.79.3
+
+### Patch Changes
+
+- ec4ad0f: Add the iOS native surface composition proof of concept: a standalone simulator host stacks an `MTKView` below a transparent `WKWebView` and an XCUITest in the iOS simulator job reads placement, DOM overlap, touch routing, scrolling, keyboard resize, safe areas, rotation and lifecycle from the composited pixels. Test-only; the app, its web view and its capabilities are unchanged.
+- @lazysh/account-usage@1.79.3
+  - @lazysh/common@1.79.3
+  - @lazysh/display-idle@1.79.3
+  - @lazysh/et-transport@1.79.3
+  - @lazysh/mosh-transport@1.79.3
+
+## 1.79.2
+
+### Patch Changes
+
+- 02c6e90: Add the Waydroid lane harness for the native terminal engine's Android acceptance (`apps/client/bench/waydroid-lane.sh` and its runbook): it starts or attaches to a headless Waydroid session, installs APKs, runs named instrumentation classes and benchmark commands, tears down and writes an evidence JSON with the guest's environment and the accepted-risk block, and it refuses to run, or to skip, with its own exit code. Test and documentation only; no behaviour changes.
+- @lazysh/account-usage@1.79.2
+  - @lazysh/common@1.79.2
+  - @lazysh/display-idle@1.79.2
+  - @lazysh/et-transport@1.79.2
+  - @lazysh/mosh-transport@1.79.2
+
+## 1.79.1
+
+### Patch Changes
+
+- 74d15b8: Add the page side of the developer-only Android native terminal surface: a tracker that keeps the surface on a DOM element through layout, scroll, zoom and transitions, with at most one placement command in flight, no work while the page is idle, and the surface taken down when the element has no box, the shell refuses, or tracking stops. Nothing in the app creates a tracker yet and release builds refuse the commands, so xterm.js stays the only engine and the default and nothing changes for users.
+- 0b79706: Settle every open difference between the shared Rust terminal core and xterm.js (#1314, slice 1314b, part of #1302): each entry of the divergence registry now carries a recorded decision and the test that pins it, and tmux, vim, bash, Herdr, Claude Code, Codex and OpenCode run on a pty with the core as their terminal in the core's own tests. The review approves the core's Unicode 11 and later widths (emoji, ZWJ and skin-tone sequences take two cells), the standard Alt+arrow encodings, the Kitty keyboard reports Codex and Herdr ask for, libghostty-vt's device attributes, the OSC 52 selection filter and reflow on resize, and moves Shift+PageUp routing to #1334. The core is not wired into the app and xterm.js stays the only engine and the default, so nothing changes for users; the release notes of the Android default (#2094) must call out the widths, the Alt+arrow form, reflow and the dropped primary-selection writes.
+- @lazysh/account-usage@1.79.1
+  - @lazysh/common@1.79.1
+  - @lazysh/display-idle@1.79.1
+  - @lazysh/et-transport@1.79.1
+  - @lazysh/mosh-transport@1.79.1
+
+## 1.79.0
+
+### Patch Changes
+
+- 51fd7f4: Compile the app's native terminal bridge with the `native-terminal` feature in CI and run its real-core tests (the local PTY, the 100-session churn, the core's input encoding and the transport cases) in a new `native-terminal-bridge` job, so a change to the terminal core crate that breaks the bridge fails on its pull request instead of reaching `main` unnoticed (#1620). The 100-session churn test now waits for the core to finish parsing a session's last output instead of reading the screen the moment the PTY closes, which failed on a loaded host.
+- 3d71ef8: Refuse to stage or publish a release package that is more than 1.5 times the size measured on v1.62.0, and record the measured sizes of every published package in the release documentation. Release tooling only; installed applications do not change.
+- 20cc3da: Record which tmux or rmux server a hook's pane belongs to. A pane id such as `%7` is unique only inside one server, so a report from `tmux -L work` and one from the default server could carry the same id; the companion now adds `paneServer` (`tmux:work`, `rmux:default`) read from the `TMUX` or `RMUX` socket path, the Agents panel's report details show it, and a socket given with `-S` records none. The field is optional in the snapshot, so an older companion or client works unchanged.
+- @lazysh/account-usage@1.79.0
+  - @lazysh/common@1.79.0
+  - @lazysh/display-idle@1.79.0
+  - @lazysh/et-transport@1.79.0
+  - @lazysh/mosh-transport@1.79.0
+
+## 1.78.2
+
+### Patch Changes
+
+- 2005943: Extend the Android tmux acceptance case: it now splits a window's pane top/bottom and zooms and unzooms the new pane from the Sessions panel (the tmux client's display is the witness, also after a detach and reattach), and the host checks that the original pane process is untouched. Test-only; no behaviour changes.
+- @lazysh/account-usage@1.78.2
+  - @lazysh/common@1.78.2
+  - @lazysh/display-idle@1.78.2
+  - @lazysh/et-transport@1.78.2
+  - @lazysh/mosh-transport@1.78.2
+
+## 1.78.1
+
+### Patch Changes
+
+- e163639: Let the native terminal bridge receive the text a soft keyboard or an IME committed (#1791, part of #1328): a `text` event reaches the terminal verbatim, whatever keyboard protocol or bracketed paste the program enabled. The core is not wired into the app, so nothing changes for users: xterm.js stays the only engine and no setting or default changes.
+- 2355d62: Extend the Android shared Herdr navigation case: it now drives the Sessions panel's Herdr browser to create a workspace, rename it, split its pane down and zoom it, and the host reads the workspace back from Herdr (label, directory, two panes and the zoom flag) while the navigation receivers stay at zero bytes. Test-only; no behaviour changes.
+- 08ac1dd: Teach the shared Rust terminal core to answer the colour queries programs send to pick a light or dark scheme (default foreground, background and cursor with `OSC 10`, `11` and `12`, and the palette with `OSC 4`) from a theme in its configuration, with the replies xterm.js gives (#1314). The core is not wired into the app and xterm.js stays the only engine and the default, so nothing changes for users; this removes one recorded difference before a native engine can be offered as an opt-in.
+- @lazysh/account-usage@1.78.1
+  - @lazysh/common@1.78.1
+  - @lazysh/display-idle@1.78.1
+  - @lazysh/et-transport@1.78.1
+  - @lazysh/mosh-transport@1.78.1
+
+## 1.78.0
+
+### Minor Changes
+
+- 3911078: Attach files and open previews of development servers from a local desktop session.
+- 0eb9271: Add Check for updates to the Host companion installation panel and run the host's own `lazysh-agent update` command when available.
+
+### Patch Changes
+
+- f64ec4c: Verify the Agent board in the Linux desktop app with real companion hook events: one row per session in Needs you, Working and Done, grouped by project and host, a pending approval listed above the board and answered from it. Test and documentation only. No user-visible behaviour changes.
+- 7da1e6b: Read terminal state through the TerminalAdapter in the terminal end-to-end specs (#1703): a new Playwright fixture (`e2e/fixtures/terminalState.ts`) takes rows, viewport, selection, geometry and the input element from the adapter of the terminal on screen, and `terminal-ime`, `terminal-swiftkey`, `terminal-selection`, `terminal-clipboard`, `herdr-switch-tap` and `mosh-resize` use it instead of xterm's `.xterm-*` DOM. Test code only; no product behaviour changes, and the specs keep every assertion and pass unchanged on xterm.js at the desktop and phone viewports.
+- @lazysh/account-usage@1.78.0
+  - @lazysh/common@1.78.0
+  - @lazysh/display-idle@1.78.0
+  - @lazysh/et-transport@1.78.0
+  - @lazysh/mosh-transport@1.78.0
+
+## 1.77.2
+
+### Patch Changes
+
+- 7fd3f2a: Add the host browser's input as client components, driven in the developer-only prototype viewer and covered by a real-Chromium test: a Control switch that is off at every start and sends nothing while off, tap, double tap, long press, drag, Select, pinch with Zoom page, and the phone keyboard with composition, accents, emoji and key chords. Not in the app until the host browser view ships; no default changes.
+- @lazysh/account-usage@1.77.2
+  - @lazysh/common@1.77.2
+  - @lazysh/display-idle@1.77.2
+  - @lazysh/et-transport@1.77.2
+  - @lazysh/mosh-transport@1.77.2
+
+## 1.77.1
+
+### Patch Changes
+
+- b377e2e: Let the native multiplexer commands (tmux, Herdr and Zellij discovery, session lists, tmux and Zellij actions and the Zellij tab list) run against a local desktop session as argument lists, with a Rust `PATH` lookup and an owner-checked `~/.local/bin` fallback for Herdr. The interface still hides these views for local sessions, and SSH sessions behave as before.
+- 9254cea: Build the shared terminal runtime for Android arm64 and x86_64 (#2098, part of #1312 and #1302): the Herdr binding's build script maps `aarch64-linux-android` and `x86_64-linux-android` to the Zig targets of libghostty-vt, and CI checks and links the runtime for both ABIs with the pinned NDK. Build and CI only; nothing runs on Android, the app does not use the runtime yet, and xterm.js stays the only engine.
+- @lazysh/account-usage@1.77.1
+  - @lazysh/common@1.77.1
+  - @lazysh/display-idle@1.77.1
+  - @lazysh/et-transport@1.77.1
+  - @lazysh/mosh-transport@1.77.1
+
+## 1.77.0
+
+### Minor Changes
+
+- b4b60b0: Start an agent in a new Git worktree, or in a chosen folder, from the Agent view's empty state.
+
+### Patch Changes
+
+- 8fb356d: Add the tmux and Zellij launch primitive (#1141): a confirmed plan that checks the agent, optionally creates a Git worktree and starts the agent's literal argv in a new tmux window or Zellij pane of the attached session, returning the new pane's ID. Backend only: nothing in the app calls it yet, and no defaults change.
+- cb119e8: Add the keyboard side of an Android native terminal surface for developer builds: an app-owned `InputConnection` that holds composing text on the device, turns autocorrect and prediction edits into the shortest edit on the host and never replays an edit it cannot follow, and forwards hardware keys as key identities for the shared core to encode. Nothing in the app creates it yet, so xterm.js stays the only engine and the default and nothing changes for users; this is groundwork for the Android native-engine opt-in.
+- @lazysh/account-usage@1.77.0
+  - @lazysh/common@1.77.0
+  - @lazysh/display-idle@1.77.0
+  - @lazysh/et-transport@1.77.0
+  - @lazysh/mosh-transport@1.77.0
+
+## 1.76.0
+
+### Minor Changes
+
+- 0f9abbf: Check a sign-in hint against the host's listeners. A new native command asks the host which process listens on the port a sign-in command printed (the host companion's `lazysh-agent listeners`, or `ss` and `lsof` for a companion that predates it) and tells whether the listener started within two minutes before or half a minute after the hint, is older, is another user's, or is not there; `confirmHint` turns a series of answers into one confirmation, counting a listener that appeared after the port was empty. Nothing is tunnelled and no screen uses it yet.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.76.0
+  - @lazysh/common@1.76.0
+  - @lazysh/display-idle@1.76.0
+  - @lazysh/et-transport@1.76.0
+  - @lazysh/mosh-transport@1.76.0
+
+## 1.75.1
+
+### Patch Changes
+
+- 7514d76: Verify through the real Android app that Mosh runs the configured server path on the configured single-port UDP range, with the host confirming the UDP port the owned mosh-server holds.
+- 7514d76: Verify through the real Android app that Auto falls back to the trusted SSH terminal and reports why Mosh and Eternal Terminal were skipped, and that forced Eternal Terminal reaches an owned `etserver`. The official ET 7.0.0 fixture build now lives in one script shared by the Linux runtime and Android SSH parity jobs.
+- @lazysh/account-usage@1.75.1
+  - @lazysh/common@1.75.1
+  - @lazysh/display-idle@1.75.1
+  - @lazysh/et-transport@1.75.1
+  - @lazysh/mosh-transport@1.75.1
+
+## 1.75.0
+
+### Minor Changes
+
+- 57e0866: Show the last response's context for Claude Code in the Usage view and the recorded context remaining (window minus the last response) where the transcript records a window; unknown stays unknown.
+
+### Patch Changes
+
+- dd08c7c: Add a performance regression gate for the native terminal core to CI (#1341): a separate, non-required job (pushes to `main` only) runs the core's parse, frame, allocation, scrollback and memory metrics against limits and fails when one regresses, and proves on every run that it fails on an injected slowdown and on injected allocations. Nothing in the app changes: xterm.js stays the only terminal engine and the default, and no setting or default changes.
+- 71cad89: Prepare screen-reader access for a native terminal surface: a hidden, bounded mirror of the visible rows with a polite announcement log, and a rule that a session read with a screen reader never gets a terminal engine that cannot reach one. xterm.js stays the only engine and nothing offers another one yet, so terminal behaviour and defaults do not change.
+- @lazysh/account-usage@1.75.0
+  - @lazysh/common@1.75.0
+  - @lazysh/display-idle@1.75.0
+  - @lazysh/et-transport@1.75.0
+  - @lazysh/mosh-transport@1.75.0
+
+## 1.74.0
+
+### Minor Changes
+
+- f2eaf0d: Add the sign-in tunnel engine: a loopback listener on the host CLI's callback port that forwards one checked browser request per connection to the host over the session's SSH connection, with a request guard, per-host consent policy, caps and a one-shot lifetime. Groundwork for automatic SSO sign-in from the device (#1504); nothing in the app starts a tunnel yet.
+
+### Patch Changes
+
+- 2fdde45: Record the cold start of the WebAssembly build of the terminal core against xterm.js in Node, as measured evidence for the terminal engine decision (#1323). Benchmark script and raw results only: the terminal engine is unchanged, xterm.js with its DOM renderer stays the only engine and the default, and no setting or default changes.
+- @lazysh/account-usage@1.74.0
+  - @lazysh/common@1.74.0
+  - @lazysh/display-idle@1.74.0
+  - @lazysh/et-transport@1.74.0
+  - @lazysh/mosh-transport@1.74.0
+
+## 1.73.1
+
+### Patch Changes
+
+- bd84bc4: Add the native terminal engine's adapter (control plane only) and make it pass the terminal adapter contract suite against a stand-in core. Nothing selects it yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+- eac00bf: Keep the Android startup cover over a rendering WebView until its first frame is painted, so the app no longer flashes the page's earlier placeholder frame after the cover leaves. The WebView stays inert behind the cover, the cover keeps its logo instead of showing the lock controls while it waits, and a 300 ms limit keeps the app from ever staying covered.
+- @lazysh/account-usage@1.73.1
+  - @lazysh/common@1.73.1
+  - @lazysh/display-idle@1.73.1
+  - @lazysh/et-transport@1.73.1
+  - @lazysh/mosh-transport@1.73.1
+
+## 1.73.0
+
+### Minor Changes
+
+- abd2014: Answer a Claude Code agent's permission requests and questions from the Agent view under Herdr, as on tmux. For the agent of the focused Herdr pane the approval dock decides the hook request (matched by session id, because a Herdr hook has no tmux pane) and the open question is answered with the keys a person presses, through Herdr's own `agent send-keys`, on a stock or a guarded host.
+- abd2014: Answer the list dialogs of Claude Code and Codex from the Agent view under Herdr, as on tmux: the `/model` and `/resume` pickers, the trust prompt, the plan decision and Codex's approval prompt. The Agent view reads the followed agent's pane through Herdr (`agent read`), shows the dialog as a card, and answers with the arrows and Enter a person presses through Herdr's own `agent send-keys`, reading the highlight back before Enter. The agent's report names what it waits for, so a permission request or a question keeps its own card. The header of a blocked Herdr agent now says what it waits for and since when. A typed free-text answer to a question under Herdr now picks the free-text row and goes to the pane as one literal line and its Enter.
+- abd2014: Answer the questions and dialogs of the agent followed in a Zellij pane from the Agent view, as on tmux and Herdr. The host reads the agent's own pane (`zellij action dump-screen --pane-id`, new read-only command `zellij_agent_screen`) because the terminal shows Zellij's composite screen, the dialog card shows the list dialog that is open (`/model`, `/resume`, the trust prompt, the plan decision, Codex's approval prompt), and a tap sends the arrows and Enter a person presses with Zellij's own `send-keys`, which writes an arrow for the cursor-key mode of that pane, after reading the highlight back. A Claude Code question is answered with its option's digit, or a typed line and its Enter, through the same input. The host proves the pane runs the agent before every key.
+
+### Patch Changes
+
+- d6b93c0: Split the 2,500-line `App.test.tsx` client suite into ten per-area files that share one harness, so vitest runs them in parallel and no single file holds the client check's critical path. Test-only: no application behaviour changes.
+- @lazysh/account-usage@1.73.0
+  - @lazysh/common@1.73.0
+  - @lazysh/display-idle@1.73.0
+  - @lazysh/et-transport@1.73.0
+  - @lazysh/mosh-transport@1.73.0
+
+## 1.72.0
+
+### Patch Changes
+
+- 17ebbc2: Keep the Usage view's intro text behind a disclosure and show its recorded-usage panel again.
+- 2320cc2: Bind a remote approval to the exact Zellij or Herdr pane its hook runs in: the request carries `zellij:<session>:<pane>` or `herdr:<session>:<pane id>` in its hash and decision, and any other pane, session or multiplexer is refused.
+- 5962a51: Add a developer-only native terminal surface host to the Android app: a `SurfaceView` stacked below the page that a native terminal engine will draw on, placed from a DOM element and kept across stop and start and Activity recreation. Release builds refuse every command and nothing in the app calls it yet, so xterm.js stays the only engine and the default and nothing changes for users; this is groundwork for the Android native-engine opt-in.
+- 9dddd58: Map the History lines setting to the byte budget of the native terminal core, so the core keeps at least that many rows of plain, coloured and syntax-highlighted output at any width instead of a fixed number of bytes that held 5,300 rows at 80 columns and 2,200 at 200. `terminal_core_open` now takes the setting in lines. The native core is not reachable from the app yet and xterm.js stays the only engine, so terminal behaviour does not change and no defaults change.
+- @lazysh/account-usage@1.72.0
+  - @lazysh/common@1.72.0
+  - @lazysh/display-idle@1.72.0
+  - @lazysh/et-transport@1.72.0
+  - @lazysh/mosh-transport@1.72.0
+
+## 1.71.0
+
+### Minor Changes
+
+- 9e0b1c3: Redesign the work rows of the Agent view: tool calls, thinking, folded activity and sub-agents as quiet tonal rows with a status mark and a chevron, the plan as a checklist whose chip fills as steps finish, and borderless question and failure cards.
+- 9e0b1c3: Redesign the Agent view message box: a rounded field that grows with the text, round 44 px controls, a Send button that shows when a message is being delivered, and Commands and Files chips that insert / and @ for touch keyboards.
+- 9e0b1c3: Redesign the frame of the Agent view: a two-line header with state and chips, a floating Jump to latest button, a typing-dots working line, an empty state, tinted errors and a compact layout for short windows.
+- 9e0b1c3: Redesign how the Agent view reads a conversation: a compact prompt bubble, the answer as plain text in a centred column, code blocks with a language label, Copy code and syntax colours, GitHub-flavoured Markdown tables, restyled quotes, and the time a message was sent on a tap.
+
+### Patch Changes
+
+- 366455d: Check the native terminal core's data path against real servers in CI: a real OpenSSH server, the official mosh-server and the official Eternal Terminal server. A deterministic workload through a real PTY reaches a core byte-exact and in order (Mosh: its final screen arrives) with at most one credit window queued and no output message on the WebView channel. No user-visible change: the native terminal engine is not exposed in settings yet and xterm.js stays the only terminal.
+- fcca240: Fix the toolbar paste key on the Linux desktop app: the window now has page clipboard access, so WebKitGTK allows the clipboard read instead of showing "Clipboard access was unavailable".
+- @lazysh/account-usage@1.71.0
+  - @lazysh/common@1.71.0
+  - @lazysh/display-idle@1.71.0
+  - @lazysh/et-transport@1.71.0
+  - @lazysh/mosh-transport@1.71.0
+
+## 1.70.0
+
+### Minor Changes
+
+- d64fc31: Stream an OpenCode session into the Agent view instead of polling it. `lazysh-agent transcript-watch` now takes `--agent opencode --path DATABASE --database-session ID` and watches the database together with its write-ahead log, where OpenCode's newest rows sit until a checkpoint, so a reply that grows or a tool result that lands reaches the view within a second. The view opens the same live channel for an OpenCode pane as for Claude Code and Codex, and falls back to polling when the host companion is older.
+- a7c46e9: Detect sign-in callbacks in terminal output. When a command on the host (`aws sso login`, `codex login`, `gcloud auth login`, `wrangler login`, `terraform login`, `vault login -method=oidc` and similar) prints an authorize URL whose `redirect_uri` is `http://localhost:PORT`, the native output path now notices it, also while the WebView is suspended, and announces a sign-in hint (port, callback path, identity provider host, whether the URL carries a PKCE challenge) to the app. Colours, hyperlinks, a URL the program wrapped and any chunking of the output are handled; dev-server addresses, redirects to public hosts, ports below 1024 and URLs over 4096 bytes are ignored, and no query value (`code`, `state`) is ever kept. Nothing is tunnelled or opened yet: the hint is only reported.
+
+### Patch Changes
+
+- 31a2337: Require a regression test or a stated reason on every `fix(...)` pull request: an AGENTS.md rule, a "Regression test" section in the pull request template and the bug template, and a `regression-test` check that also lists the Appium regression specs by issue. Workflow only; no product change.
+- fb49d1a: Compare the native terminal engine with xterm.js: 91 replayable screens (colours, cursor, editing, Unicode, alternate screen, modes, paste, resize, captures of vim, less, tmux, Claude Code, Codex, OpenCode, Zellij and Herdr, and the six captured Mosh frames), 75 key presses and 130 mouse reports run through xterm.js 5.5.0 and through the Rust core, with 28 differences recorded and explained. The comparison also fixed a defect in the core's mouse reporting: under any-event tracking a resting pointer sent a report for every pointer event in one cell, where xterm.js sends one. The core is not wired in as an engine you can choose yet, so nothing changes in the app; xterm.js stays the terminal engine.
+- @lazysh/account-usage@1.70.0
+  - @lazysh/common@1.70.0
+  - @lazysh/display-idle@1.70.0
+  - @lazysh/et-transport@1.70.0
+  - @lazysh/mosh-transport@1.70.0
+
+## 1.69.0
+
+### Minor Changes
+
+- 9bccde7: Let the host companion update itself to this app's version. Every command the app runs on a Linux or macOS host now carries the app's version in `LAZYSH_APP_VERSION` (companions that do not know it ignore it). When a companion that is older than the app updates itself, the Agents panel shows one non-blocking line, "Updating the host companion to X…", then the new version, and views that were waiting for a newer companion (the live conversation stream) ask again at once. Host companion settings gain **Companion updates** (Update automatically, Only tell me, Never) for a companion that has `lazysh-agent auto-update`. English, Brazilian Portuguese and Spanish.
+
+### Patch Changes
+
+- 5484ebb: Fix typing stopping in the terminal with the SwiftKey keyboard until Backspace was pressed (#1505): the terminal now notices that Android's WebView dropped a composition the keyboard erased whole, instead of waiting for an end that never comes and holding back every key after it.
+- @lazysh/account-usage@1.69.0
+  - @lazysh/common@1.69.0
+  - @lazysh/display-idle@1.69.0
+  - @lazysh/et-transport@1.69.0
+  - @lazysh/mosh-transport@1.69.0
+
+## 1.68.3
+
+### Patch Changes
+
+- e49e9b7: Keep the host adb server's own log (`adb-server-log.txt`, last 1 MiB) in the Android runtime artifact when a job fails, so an interrupted emulator transport records why the server dropped it (`connection terminated: <reason>`). Test infrastructure only; no product change.
+- 910aef8: Run the companion's exact pane focus against a real stock Herdr server in the desktop acceptance: a live pane without focus becomes the only focused pane and its tab becomes the focused tab. Test coverage only; no product change.
+- 8f2a455: Make the client's unit tests compile on Windows again: the ConPTY lifecycle test called `desktop::connect` without the `attach` argument added with local multiplexer attach, so no Windows step that builds the client library tests could run (#1905). Test-only; no user-visible change.
+- @lazysh/account-usage@1.68.3
+  - @lazysh/common@1.68.3
+  - @lazysh/display-idle@1.68.3
+  - @lazysh/et-transport@1.68.3
+  - @lazysh/mosh-transport@1.68.3
+
+## 1.68.2
+
+### Patch Changes
+
+- 8f2308a: Pin the Android tmux acceptance case's host readback for the window rename: a real-tmux test requires it to refuse a rename that reached an original window and an original pane that was replaced, and the parity matrix records that the create, rename and close step ran green on `main`. Test and documentation only; no behaviour changes.
+- 24e0b21: Make the installed Windows GUI check blocking. It passed in a `main` run (run 43790076928, push of `b5668f94`, `native-desktop (windows-latest)`: the identity, `--host` and `--dir` scenarios, `3 pass`, `0 fail`), which was the condition for removing `continue-on-error` from its workflow step, so a failure of the installed application's window, saved-host dialog or singleton delivery on Windows now fails the job instead of being reported as a success. Test-only; the application is unchanged.
+- @lazysh/account-usage@1.68.2
+  - @lazysh/common@1.68.2
+  - @lazysh/display-idle@1.68.2
+  - @lazysh/et-transport@1.68.2
+  - @lazysh/mosh-transport@1.68.2
+
+## 1.68.1
+
+### Patch Changes
+
+- d998491: Retry a briefly busy local companion executable during version checks (#1923).
+- d998491: For ordinary sessions, continue the Auto transport fallback sequence when a Mosh startup fails, instead of refusing with "Mosh connection ended before startup completed": the startup error the Mosh or Eternal Terminal worker reports now wins over the cancel that follows it. Once a Mosh multiplexer entry has been started, a failed startup retains its explicit non-fallback error.
+- d998491: Keep changed terminal dialogs disabled until their safety delay has elapsed, reject stale option descriptions or pane checks, and keep pending answers from being re-enabled by older responses.
+- @lazysh/account-usage@1.68.1
+  - @lazysh/common@1.68.1
+  - @lazysh/display-idle@1.68.1
+  - @lazysh/et-transport@1.68.1
+  - @lazysh/mosh-transport@1.68.1
+
+## 1.68.0
+
+### Minor Changes
+
+- 8881a6b: Open and page through larger Codex conversations using a bounded full-history index.
+
+### Patch Changes
+
+- 8881a6b: Fix Android Appium CI task selection so the regression suite runs.
+- 8881a6b: Fix the owned Android SSH parity job on the Ubuntu 22.04 CI runner (#1737): its host-side check of the Files fixture read the SFTP listing as OpenSSH 10 prints it (path-prefixed names) and found nothing in OpenSSH 8.9's bare names, so the job failed after the emulator cases had passed. The listing now accepts both. Test infrastructure only; the app is unchanged.
+- 8881a6b: Open a conversation whose workflow has no summary file instead of refusing the page.
+- 8881a6b: Show a clear notice when a Herdr agent conversation exceeds its supported size.
+- 8881a6b: Accept the compaction line of a Codex conversation in the Agent view instead of refusing the page.
+- @lazysh/account-usage@1.68.0
+  - @lazysh/common@1.68.0
+  - @lazysh/display-idle@1.68.0
+  - @lazysh/et-transport@1.68.0
+  - @lazysh/mosh-transport@1.68.0
+
+## 1.67.1
+
+### Patch Changes
+
+- deedfe4: Mark the Agent board and remote-approval rows of the parity matrix that the real companion hook cases already proved on `main` (desktop owned OpenSSH, Android companion install) as verified, and list what remains. Documentation only. No user-visible behaviour changes.
+- @lazysh/account-usage@1.67.1
+  - @lazysh/common@1.67.1
+  - @lazysh/display-idle@1.67.1
+  - @lazysh/et-transport@1.67.1
+  - @lazysh/mosh-transport@1.67.1
+
+## 1.67.0
+
+### Patch Changes
+
+- 93d2e86: Add an Android instrumentation case that observes the operating system after a remote OSC 52 request is allowed (the system clipboard) and after Open in browser is tapped on a terminal link (an `ACTION_VIEW` intent for that URL). Test coverage only; no app behaviour changes.
+- f25f379: Mark the Windows installed-application cases that passed in a `main` run (run 43790076928: identity, saved-host dialog, singleton `--host` and `--dir` delivery) in the parity matrix, and list what remains for the Windows GUI (the authenticated SSH terminal and saved-host add, edit, delete and persist). Documentation only. No user-visible behaviour changes.
+- @lazysh/account-usage@1.67.0
+  - @lazysh/common@1.67.0
+  - @lazysh/display-idle@1.67.0
+  - @lazysh/et-transport@1.67.0
+  - @lazysh/mosh-transport@1.67.0
+
 ## 1.66.1
 
 ### Patch Changes

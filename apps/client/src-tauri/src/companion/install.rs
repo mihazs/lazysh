@@ -1,11 +1,36 @@
 use super::*;
 use tokio::sync::{watch, OwnedSemaphorePermit};
+mod herdr;
 mod host;
-/// Who downloads the companion: the host (the default) or, as the labelled offline fallback, this device.
+pub(crate) use herdr::remove as remove_herdr;
+pub(crate) use host::Checked;
+/// How an install reaches the host: the host downloads the companion (the default), this device downloads and uploads
+/// it (the labelled offline fallback), or this device uploads the managed Herdr, which only that route can place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     Host,
     Device,
+    Herdr,
+}
+/// What an upload route stages on the host: the companion or the managed Herdr, each with its own closed target.
+#[derive(Clone, Copy)]
+enum Subject {
+    Companion,
+    Herdr,
+}
+impl Subject {
+    fn target(self, unix: &resolve::Unix) -> String {
+        match self {
+            Self::Companion => unix.target(),
+            Self::Herdr => unix.herdr_target(),
+        }
+    }
+    fn file(self) -> &'static str {
+        match self {
+            Self::Companion => "lazysh-agent",
+            Self::Herdr => "lazysh-herdr",
+        }
+    }
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,6 +74,47 @@ struct Operation {
     flight: Arc<Flight>,
     stop: watch::Sender<bool>,
     deadline: tokio::time::Instant,
+}
+impl Route {
+    fn seconds(self) -> u64 {
+        match self {
+            Route::Host => host::OPERATION_SECONDS,
+            Route::Device | Route::Herdr => 240,
+        }
+    }
+}
+impl Operation {
+    /// One operation per session at a time: a second one is refused while the first, or its late
+    /// peer confirmation, still owns the session's permit.
+    fn start(
+        route: Route,
+        session: Arc<Session>,
+        lease: &AccessLease,
+        progress: Channel<Progress>,
+        seconds: u64,
+    ) -> Result<Self> {
+        let permit = session
+            .bindings
+            .companion_install
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                error(
+                    "companion_install_busy",
+                    "Companion installation is already running for this session",
+                )
+            })?;
+        let (stop, _) = watch::channel(false);
+        Ok(Self {
+            route,
+            session,
+            lease: lease.clone(),
+            progress,
+            flight: Arc::new(Flight { _permit: permit }),
+            stop,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(seconds),
+        })
+    }
 }
 impl Drop for Operation {
     fn drop(&mut self) {
@@ -101,36 +167,36 @@ impl Operation {
         self.work_stage(&mut work.phase, Stage::Detecting);
         resolve::detect(&self.session, &self.lease)
             .await?
-            .ok_or_else(|| {
-                error(
-                    "companion_install_unsupported",
-                    "Installation requires a positively identified Linux or macOS SSH shell",
-                )
-            })
+            .and_then(resolve::Host::unix)
+            .ok_or_else(unsupported)
     }
     /// The host and the verified release for it: the metadata is all either route asks the publisher for first.
     async fn resolve(
         &self,
         work: &mut Work,
         publisher: &release::Publisher,
+        subject: Subject,
     ) -> Result<(resolve::Unix, release::Selection)> {
         let unix = self.detect(work).await?;
         self.work_stage(&mut work.phase, Stage::CheckingRelease);
-        let selection = publisher.select(&unix.target()).await?;
+        let selection = publisher.select(&subject.target(&unix)).await?;
         Ok((unix, selection))
     }
     async fn perform(&self, work: &mut Work, publisher: &release::Publisher) -> Result<Installed> {
         match self.route {
             Route::Host => self.perform_host(work, publisher).await,
             Route::Device => self.perform_device(work, publisher).await,
+            Route::Herdr => self.perform_herdr(work, publisher).await,
         }
     }
-    async fn perform_device(
+    /// Downloads the verified release file on this device and stages it on the host over SFTP, then reads it back.
+    async fn stage_upload(
         &self,
         work: &mut Work,
         publisher: &release::Publisher,
-    ) -> Result<Installed> {
-        let (unix, selection) = self.resolve(work, publisher).await?;
+        subject: Subject,
+    ) -> Result<(resolve::Unix, release::Selection)> {
+        let (unix, selection) = self.resolve(work, publisher, subject).await?;
         self.work_stage(&mut work.phase, Stage::Downloading);
         let bytes = publisher.download(&selection).await?;
         self.work_stage(&mut work.phase, Stage::Uploading);
@@ -141,11 +207,27 @@ impl Operation {
             self.flight.clone(),
         )
         .await?;
-        work.staging = Some(transfer::Staging::new(raw, &unix, &selection));
+        work.staging = Some(transfer::Staging::new(
+            raw,
+            &unix,
+            &selection,
+            subject.file(),
+        ));
         let staging = work.staging.as_mut().unwrap();
         staging.upload(&unix.home, &bytes).await?;
         self.work_stage(&mut work.phase, Stage::Verifying);
         staging.verify(&staging.path, 0o600).await?;
+        Ok((unix, selection))
+    }
+    async fn perform_device(
+        &self,
+        work: &mut Work,
+        publisher: &release::Publisher,
+    ) -> Result<Installed> {
+        let (unix, selection) = self
+            .stage_upload(work, publisher, Subject::Companion)
+            .await?;
+        let staging = work.staging.as_mut().unwrap();
         staging.executable().await?;
         let plan: Plan = serde_json::from_str(
             &self
@@ -218,6 +300,12 @@ impl Operation {
         ))
     }
 }
+fn unsupported() -> SshError {
+    error(
+        "companion_install_unsupported",
+        "Installation requires a positively identified Linux or macOS SSH shell",
+    )
+}
 fn invalid() -> SshError {
     error(
         "companion_installer_invalid",
@@ -274,6 +362,20 @@ fn result(
         cleanup_failure: None,
     }
 }
+/// One install or removal at a time per session, companion and managed Herdr alike.
+fn permit(session: &Session) -> Result<OwnedSemaphorePermit> {
+    session
+        .bindings
+        .companion_install
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            error(
+                "companion_install_busy",
+                "Companion installation is already running for this session",
+            )
+        })
+}
 pub(super) async fn run(
     session: Arc<Session>,
     lease: &AccessLease,
@@ -289,31 +391,7 @@ pub(super) async fn run_with(
     publisher: &release::Publisher,
     route: Route,
 ) -> std::result::Result<Installed, InstallFailure> {
-    let permit = session
-        .bindings
-        .companion_install
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| {
-            error(
-                "companion_install_busy",
-                "Companion installation is already running for this session",
-            )
-        })?;
-    let (stop, _) = watch::channel(false);
-    let op = Operation {
-        route,
-        session,
-        lease: lease.clone(),
-        progress,
-        flight: Arc::new(Flight { _permit: permit }),
-        stop,
-        deadline: tokio::time::Instant::now()
-            + Duration::from_secs(match route {
-                Route::Host => host::OPERATION_SECONDS,
-                Route::Device => 240,
-            }),
-    };
+    let op = Operation::start(route, session, lease, progress, route.seconds())?;
     let mut work = Work::default();
     let outcome = op
         .active(op.perform(&mut work, publisher))
@@ -378,6 +456,16 @@ pub(super) async fn run_with(
         },
     }
 }
+/// Reads, without changing anything, what is installed on the host and how it compares with the latest release.
+pub(super) async fn check(
+    session: Arc<Session>,
+    lease: &AccessLease,
+    publisher: &release::Publisher,
+) -> Result<host::Checked> {
+    let op = Operation::start(Route::Host, session, lease, Channel::new(|_| Ok(())), 60)?;
+    op.active(op.check(publisher)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

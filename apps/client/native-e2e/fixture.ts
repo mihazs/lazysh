@@ -51,8 +51,10 @@ export class NativeGui {
   private secretMembers:OwnedPid[]=[];
   private credentialItem?:string;
   private driver?:OwnedProcess;
-  private notifications?:OwnedProcess;
+  private readonly servers=new Map<string,OwnedProcess>();
   private clientObserver?:ClientTargetObserver;
+  private xclipFile='';
+  private readonly clipboardOwners:OwnedProcess[]=[];
   private env:NodeJS.ProcessEnv;
   private busAddress:string;
   private xSocket='';
@@ -318,27 +320,84 @@ export class NativeGui {
     if(!owned||await readlink(`/proc/${pid}/exe`)!==this.binary||(await identity(pid))?.start!==owned.start)throw new Error('Singleton owner is not the owned GUI binary');
     return {name,pid,start:owned.start};
   }
+  private async xclip(args:string[],target='UTF8_STRING') {
+    this.xclipFile||=await executable(process.env.LAZYSH_NATIVE_GUI_XCLIP??'/usr/bin/xclip','xclip','xclip');
+    await this.assertDisplay();
+    return new OwnedProcess(this.xclipFile,['-selection','clipboard','-target',target,...args],this.directory,this.env);
+  }
+  /** The text another X client reads from CLIPBOARD, or undefined while no client owns it. */
+  async readClipboard(target='UTF8_STRING'):Promise<string|undefined> {
+    return (await this.xclip(['-out'],target)).finish('owned X clipboard read',5000).catch(error=>{
+      if(/exit=1$/.test((error as Error).message))return undefined;throw error;
+    });
+  }
+  /** Makes a separate X client own CLIPBOARD with `text`; it serves the selection until replaced or the fixture stops. */
+  async seedClipboard(text:string,target='UTF8_STRING') {
+    const owner=await this.xclip(['-quiet','-in'],target);
+    this.clipboardOwners.push(owner);
+    owner.child.stdin!.end(text);
+    await until('owned X clipboard seed',async()=>await this.readClipboard(target)===text?true:undefined,5000);
+  }
+  /** Puts a recording `xdg-open` first on the application's PATH; returns the URLs it was asked to open so far. */
+  async stubUrlOpener() {
+    const directory=join(this.directory,'bin'),log=join(directory,'opened');
+    await mkdir(directory,{mode:0o700});
+    await writeFile(join(directory,'xdg-open'),`#!/bin/sh\nprintf '%s\\n' "$1" >> '${log}'\n`,{mode:0o700,flag:'wx'});
+    return async()=>(await readFile(log,'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;})).split('\n').filter(Boolean);
+  }
   async secondary(args:string[],cwd=this.directory) {
     const canonical=await realpath(cwd);
     if(canonical!==this.directory && !canonical.startsWith(this.directory+'/'))throw new Error('Secondary cwd must stay within the owned fixture');
+    await this.handoff('actual secondary CLI handoff','/usr/bin/env',['--chdir',canonical,this.binary,...args]);
+  }
+  /** Opens `url` with the real `xdg-open`, the owned binary being the private profile's registered handler of `lazysh://` links. */
+  async openUrl(url:string) {
+    if(!/^lazysh:\/\/[A-Za-z0-9_=?&.:/-]+$/.test(url)||!/^[A-Za-z0-9_./-]+$/.test(this.binary))throw new Error('Invalid owned URL dispatch');
+    const applications=join(this.directory,'data','applications');
+    await mkdir(applications,{recursive:true,mode:0o700});
+    await writeFile(join(applications,'lazysh-gui-fixture.desktop'),`[Desktop Entry]\nType=Application\nName=lazysh GUI fixture\nExec=${this.binary} %u\nMimeType=x-scheme-handler/lazysh;\nNoDisplay=true\n`,{mode:0o600});
+    await writeFile(join(this.directory,'config','mimeapps.list'),'[Default Applications]\nx-scheme-handler/lazysh=lazysh-gui-fixture.desktop\n',{mode:0o600});
+    await this.handoff('actual OS URL dispatch','/usr/bin/xdg-open',[url]);
+  }
+  private async handoff(stage:string,program:string,args:string[]) {
     const original=await this.appOwner();
-    await this.namespaced('/usr/bin/env',['--chdir',canonical,this.binary,...args]).finish('actual secondary CLI handoff',10_000);
+    await this.namespaced(program,args).finish(stage,10_000);
     const current=await this.appOwner();
     if(JSON.stringify(current)!==JSON.stringify(original))throw new Error('Secondary CLI replaced the original GUI owner');
     if((await this.browser!.getWindowHandles()).length!==1)throw new Error('Secondary CLI created another native window');
   }
-  /** An owned Desktop Notifications server on this private bus; see ownedNotifications.py. */
-  async notificationServer() {
-    if(this.notifications)throw new Error('Owned notification server already started');
+  /** Start an owned Python helper that prints `{"event":"ready"}` once it is serving. */
+  private async helper(script:string,args:string[]) {
+    if(this.servers.has(script))throw new Error(`Owned ${script} already started`);
     const interpreter=await realpath(process.env.LAZYSH_NATIVE_GUI_PYTHON??'/usr/bin/python3'),name=basename(interpreter);
-    if(!/^python3(?:\.[0-9]+)?$/.test(name))throw new Error('Owned notification server requires the system Python 3');
-    const server=this.notifications=new OwnedProcess(await executable(interpreter,'owned notification server interpreter',name),
-      ['-I',join(dirname(fileURLToPath(import.meta.url)),'ownedNotifications.py'),this.busAddress],this.directory,this.env);
-    await until('owned notification server',async()=>{
-      if(!await server.liveIdentity())throw new Error('Owned notification server stopped during startup');
+    if(!/^python3(?:\.[0-9]+)?$/.test(name))throw new Error('Owned native GUI helpers require the system Python 3');
+    const server=new OwnedProcess(await executable(interpreter,'owned helper interpreter',name),
+      ['-I','-B',join(dirname(fileURLToPath(import.meta.url)),script),...args],this.directory,this.env);
+    this.servers.set(script,server);
+    await until(script,async()=>{
+      if(!await server.liveIdentity())throw new Error(`Owned ${script} stopped during startup`);
       return server.stdout.startsWith('{"event":"ready"}\n')?true:undefined;
     },10_000);
     return server;
+  }
+  /** An owned Desktop Notifications server on this private bus; see ownedNotifications.py. */
+  notificationServer() {return this.helper('ownedNotifications.py',[this.busAddress]);}
+  /** An owned xdg-desktop-portal Inhibit server on this private bus; see ownedPortal.py. */
+  async portalServer() {
+    // The bus answers StartServiceByName only for a name with an activation file. While the server owns the name
+    // nothing is launched; once it is gone the bus runs `false`, so activation fails as it does without a portal.
+    await writeFile(join(this.directory,'services','org.freedesktop.portal.Desktop.service'),'[D-BUS Service]\nName=org.freedesktop.portal.Desktop\nExec=/usr/bin/false\n',{mode:0o600,flag:'wx'});
+    return this.helper('ownedPortal.py',[this.busAddress]);
+  }
+  /** Move the pointer off and back onto the application window, which on this display gives up and regains its focus; see ownedPointer.py. */
+  async pointer() {
+    const helper=await this.helper('ownedPointer.py',[]);
+    const move=async(command:'leave'|'enter')=>{
+      const lines=()=>helper.stdout.split('\n').filter(Boolean).length,seen=lines();
+      helper.child.stdin!.write(`${command}\n`);
+      await until(`owned pointer ${command}`,async()=>lines()>seen?true:undefined,5000);
+    };
+    return {leave:()=>move('leave'),enter:()=>move('enter')};
   }
   async screenshot() {
     await this.appOwner();
@@ -356,7 +415,8 @@ export class NativeGui {
         return live.some(Boolean)?undefined:true;
       },2000);},
       async()=>{await this.stopDisposableVault();},
-      async()=>{if(this.notifications)await this.notifications.stop();},
+      async()=>{for(const server of this.servers.values())await server.stop();},
+      async()=>{for(const owner of this.clipboardOwners)await owner.stop();},
       async()=>{if(this.display)await this.display.stop();},
       async()=>{if(this.bus)await this.bus.stop();},
       async()=>{if(this.clientObserver){this.clientObserver.stop();console.info(`Owned test-worker observer: ${this.clientObserver.status()}; target connections=${this.clientObserver.targetConnections}`);}},

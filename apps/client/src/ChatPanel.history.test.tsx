@@ -21,6 +21,13 @@ function host(window?: {before?: string; after?: string; fromStart?: boolean}) {
   return {schemaVersion: 1, agent: 'claude', view: 'active_branch', nextOffset: 0, hasMore: false, branchId: 'u', truncated: from > 0,
     ...(to < TOTAL ? {hasNewer: true} : {}), messages: Array.from({length: to - from}, (_, offset) => message(from + offset))};
 }
+/** Messages on screen: the ones inside a closed fold take no room. */
+const shownRows = (root: ParentNode = document) => Array.from(root.querySelectorAll('article')).filter(node => !node.closest('details:not([open])')).length;
+/** One prompt, then 199 records of autonomous work: a command and its result, and every tenth record something the agent says. */
+const work = (n: number) => n === 0 ? {id: 'm0', role: 'user', blocks: [{type: 'text', text: 'Do the long job'}]}
+  : n % 10 === 0 ? {id: `m${n}`, role: 'assistant', blocks: [{type: 'text', text: `note ${n}`}]}
+  : n % 2 ? {id: `m${n}`, role: 'assistant', blocks: [{type: 'tool_use', id: `t${n}`, name: 'Bash', text: 'ls'}]}
+  : {id: `m${n}`, role: 'tool', blocks: [{type: 'tool_result', id: `t${n - 1}`, text: 'ok'}]};
 let oldCompanion: boolean;
 const transcriptCalls = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === 'agent_transcript').map(([, args]) => (args as {window?: unknown}).window);
 const articles = () => screen.queryAllByRole('article').map(node => node.textContent);
@@ -45,6 +52,75 @@ const open = async () => {
 };
 
 describe('reading a 12k message session from the Agent view', () => {
+  it('opts into Codex history paging and reaches the start', async () => {
+    TOTAL = 75;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'agent_transcript') {
+        const options = args as {window?: Parameters<typeof host>[0]; allowLargeHistory?: boolean};
+        expect(options.allowLargeHistory).toBe(true);
+        return {...host(options.window), agent: 'codex'};
+      }
+      if (command === 'agent_watch_start') throw new Error('no channel');
+      throw new Error(`Unexpected ${command}`);
+    });
+    render(<ChatPanel sessionId="host" bound={{agent: 'codex', path: '/host/session.jsonl'}} />);
+    await screen.findByText('message 74');
+    expect(screen.getByRole('button', {name: 'Jump to start'})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', {name: 'Load earlier messages'}));
+    await screen.findByText('message 0');
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+    expect(screen.queryByRole('button', {name: 'Load earlier messages'})).toBeNull();
+  });
+
+  it('shows what the agent said during a long tool-heavy turn, and its prompt once the pages reach it', async () => {
+    TOTAL = 200;
+    const pages = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const page = await pages(command, args) as ReturnType<typeof host>;
+      return command === 'agent_transcript' ? {...page, messages: page.messages.map(row => work(Number(row.id.slice(1))))} : page;
+    });
+    render(<ChatPanel sessionId="host" timeline bound={{agent: 'claude', path: '/host/session.jsonl'}} />);
+    await screen.findByText('note 190');
+    expect(screen.getAllByRole('region', {name: 'Turn'})).toHaveLength(1);
+    expect(shownRows()).toBe(5);
+    for (const rows of [10, 15, 20]) {
+      fireEvent.click(screen.getByRole('button', {name: 'Load earlier messages'}));
+      await waitFor(() => expect(shownRows()).toBe(rows));
+    }
+    expect(screen.getByRole('article', {name: 'user'}).textContent).toContain('Do the long job');
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+  });
+
+  describe('when the newest page does not fill the list', () => {
+    // The list is 1200 px tall and every message takes 10 px, so a page of 50 leaves it unscrollable.
+    beforeEach(() => {
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {configurable: true, get(this: HTMLElement) {return this.classList.contains('chat-messages') ? 1200 : 0;}});
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {configurable: true, get(this: HTMLElement) {return shownRows(this) * 10;}});
+    });
+    afterEach(() => {
+      const prototype = HTMLElement.prototype as unknown as Record<string, unknown>;
+      delete prototype.clientHeight; delete prototype.scrollHeight;
+    });
+
+    it('reads earlier pages until the list scrolls, and stays at the newest message', async () => {
+      TOTAL = 1_000;
+      await open();
+      await screen.findByText('message 850');
+      await waitFor(() => expect((screen.getByRole('button', {name: 'Load earlier messages'}) as HTMLButtonElement).disabled).toBe(false));
+      expect(transcriptCalls()).toEqual([undefined, {before: 'm950'}, {before: 'm900'}]);
+      expect(articles()).toHaveLength(3 * PAGE);
+      expect(screen.getByRole('region', {name: 'Conversation messages'}).scrollTop).toBe(1500);
+    });
+
+    it('asks a host that cannot page only once', async () => {
+      oldCompanion = true;
+      await open();
+      await screen.findByText(/Update the host companion/);
+      await waitFor(() => expect((screen.getByRole('button', {name: 'Load earlier messages'}) as HTMLButtonElement).disabled).toBe(false));
+      expect(transcriptCalls()).toEqual([undefined, {before: `m${TOTAL - PAGE}`}]);
+    });
+  });
+
   it('loads earlier pages in place until the first message, and never holds more than the window', async () => {
     TOTAL = 1_000;
     await open();

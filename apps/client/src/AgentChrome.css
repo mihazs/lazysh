@@ -1,0 +1,84 @@
+/* The frame around the conversation: the header, the floating jump to the latest message, the empty and the error states, and the
+ * compact layout for a short window (a landscape phone, or a portrait phone with the on-screen keyboard up). */
+
+/* Header: the agent and what it is doing on two short lines, then two 44 px buttons. A hairline, not a border, separates it. */
+.agent-view-header { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 0 4px 0 14px; border: 0; box-shadow: 0 1px 0 var(--av-rule); flex-shrink: 0; container-type: inline-size; }
+.agent-view-header > .status-ring { width: 26px; height: 26px; flex: 0 0 26px; }
+.agent-view-header > .status-ring > b { font-size: 12px; }
+.agent-view-heading { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; padding-block: 3px; }
+.agent-view-heading > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; line-height: 1.2; }
+.agent-view-facts { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 18px; color: var(--muted); }
+.agent-view-facts > .agent-view-state { flex: none; }
+.agent-view-state[data-tone="working"] { color: var(--accent); }
+.agent-view-state[data-tone="attention"] { color: var(--theme-warning, var(--accent)); }
+.agent-view-header > .icon-button { flex: 0 0 auto; width: 44px; height: 44px; min-width: 44px; min-height: 44px; margin: 0; padding: 0; border-radius: 50%; }
+.agent-view-header > .icon-button:hover:not(:disabled) { background: var(--av-row-hover); }
+/* Search sits under the header as one tonal bar; the field is a pill. */
+.agent-view .agent-search { gap: 2px; padding: 6px 8px; border: 0; box-shadow: 0 1px 0 var(--av-rule); }
+.agent-view .agent-search > input[type="search"] { border: 0; border-radius: 999px; background: var(--av-row); padding-inline: 14px; }
+.agent-view .agent-search > .icon-button { border-radius: 50%; }
+/* The model, mode and context chips: quiet tonal pills that give way to the state when the line is short. */
+.agent-pills { display: flex; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.agent-pill { padding: 0 8px; border-radius: 999px; font-size: 12px; line-height: 18px; background: var(--av-row-hover); color: var(--av-quiet); }
+.agent-pill[data-mode="plan"] { color: var(--accent); }
+.agent-pill[data-low="warn"] { color: var(--theme-warning, var(--accent)); }
+.agent-pill[data-low="danger"] { color: var(--danger); }
+.agent-view-menu { position: absolute; z-index: 5; top: 46px; inset-inline-end: 8px; max-width: min(360px, calc(100% - 16px)); display: grid; gap: 6px; padding: 8px; border: 0; border-radius: 18px; background: var(--av-row-hover); box-shadow: 0 12px 32px rgb(0 0 0 / 32%); }
+.agent-view-menu > :is(p, div) { margin: 4px 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.agent-view-menu > button { min-height: 40px; justify-content: flex-start; text-align: start; border-radius: 12px; }
+
+/* Jump to the latest message: a round button that floats over the end of the timeline, so it never moves a line. The row it sits
+ * in has no height; the button is drawn upwards from its edge. "Jump to start" joins it only while earlier messages are not loaded. */
+.agent-view > .chat-panel[data-bound] > .agent-jump { position: relative; z-index: 3; flex: 0 0 0; height: 0; margin: 0; }
+.agent-jump-box { position: absolute; inset: auto 0 12px; display: flex; align-items: center; justify-content: center; gap: 8px; pointer-events: none; }
+.agent-jump-box > * { pointer-events: auto; }
+.agent-jump-box > button { min-height: 44px; border: 0; border-radius: 999px; background: var(--av-row-hover); color: var(--theme-text); box-shadow: 0 4px 14px rgb(0 0 0 / 28%), inset 0 0 0 1px var(--av-rule); font-size: 13px; }
+.agent-jump-box > .agent-jump-latest { display: inline-flex; align-items: center; justify-content: center; width: 44px; padding: 0; }
+.agent-jump-box > button:not(.agent-jump-latest) { padding: 0 16px; }
+.agent-jump-box > button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, var(--av-row-hover)); }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-jump-box > button { animation: agent-jump-in 0.16s ease-out; }
+}
+@keyframes agent-jump-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* A wide window gets the same column, not a wider one: what sits under the timeline lines up with the messages above it. */
+.agent-view .agent-composer, .agent-view .agent-status, .agent-view .agent-plan-chip, .agent-view .agent-working-row, .agent-view .chat-watch-note, .agent-view .inline-error {
+  margin-inline: max(12px, calc((100% - var(--av-measure)) / 2));
+}
+.agent-view .chat-panel > :is(.agent-working-row, .chat-watch-note) { margin-inline: max(16px, calc((100% - var(--av-measure)) / 2 + 4px)); }
+.agent-jump-box { inset-inline: max(0px, calc((100% - var(--av-measure)) / 2)); }
+
+/* Nothing yet: say so and what to do, in the middle of the timeline. */
+.agent-empty { display: grid; justify-items: center; align-self: center; gap: 6px; margin: 12vh auto; padding: 24px 16px; max-width: 22rem; text-align: center; color: var(--muted); }
+.agent-empty > svg { color: var(--muted); opacity: 0.8; }
+.agent-empty > strong { color: var(--theme-text); font-size: 15px; }
+.agent-empty > p { margin: 0; font-size: 13px; line-height: 1.5; }
+/* The screens before a conversation (no agent found, a partial agent, a choice of conversation) are the same empty state. */
+.agent-view .agent-view-fallback { display: grid; justify-items: center; gap: 12px; margin: auto; padding: 24px 16px; max-width: 24rem; text-align: center; }
+.agent-view .agent-view-fallback::before { content: ''; width: 36px; height: 36px; background: var(--muted); opacity: 0.8;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 8V4H8'/%3E%3Crect width='16' height='12' x='4' y='8' rx='2'/%3E%3Cpath d='M2 14h2M20 14h2M15 13v2M9 13v2'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 8V4H8'/%3E%3Crect width='16' height='12' x='4' y='8' rx='2'/%3E%3Cpath d='M2 14h2M20 14h2M15 13v2M9 13v2'/%3E%3C/svg%3E") center / contain no-repeat; }
+.agent-view .agent-view-fallback > p { margin: 0; color: var(--av-quiet); }
+.agent-view .agent-view-fallback .button-row { justify-content: center; }
+
+/* An error is a tinted card with the cause, not a red box. */
+.agent-view .inline-error { margin-block: 8px; padding: 10px 14px; border: 0; border-radius: 14px; background: color-mix(in srgb, var(--theme-danger, #ffb2aa) 13%, var(--theme-bg, #101311)); color: var(--theme-text); font-size: 13px; line-height: 1.5; }
+
+/* Compact: a window under 620 px tall (a landscape phone, or the keyboard up) keeps the conversation and the field and gives up the rest. */
+@media (max-height: 620px) {
+  .agent-view-header { min-height: 36px; padding-left: 12px; }
+  .agent-view-header > .status-ring { width: 22px; height: 22px; flex-basis: 22px; }
+  .agent-view-header > .icon-button { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+  .agent-view-heading { padding-block: 0; }
+  .agent-view-heading > strong { font-size: 14px; }
+  .agent-view-facts { display: none; }
+  .agent-view .agent-turn { margin-block: 8px; gap: 10px; }
+  .agent-view > .chat-panel[data-bound] > .chat-messages { padding-block: 4px 12px; }
+  .agent-working-row { min-height: 20px; }
+  .agent-view .agent-composer { margin: 4px 8px 6px; padding: 3px; border-radius: 22px; }
+  .agent-view .agent-composer:focus-within .agent-composer-insert { display: none; }
+  .agent-view .agent-composer-row > textarea { min-height: 40px; padding-block: 9px; }
+  .agent-view .agent-composer-row > .icon-button, .agent-view .agent-composer-row > .agent-composer-send { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+  .agent-view .agent-status-bar > button, .agent-view .agent-plan-chip > button { min-height: 36px; }
+  .agent-view .agent-tool > summary, .agent-view .agent-turn-activity > summary, .agent-view .agent-thinking > summary { min-height: 40px; }
+}

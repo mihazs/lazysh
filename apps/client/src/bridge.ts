@@ -1,11 +1,14 @@
 import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
+import type { AuthHint } from './authHints';
 import { registerSessionOutput } from './pendingSessions';
 
 export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
 export type UsageFreshness = "fresh" | "stale" | "unknown";
 export type RecordedUsageContext = {
-  source: "codex_token_count"; usedTokens: number | null; limitTokens: number | null;
+  source: "codex_token_count" | "claude_last_response"; usedTokens: number | null; limitTokens: number | null;
+  /** The recorded window minus the last response; absent from older companions. */
+  remainingTokens?: number | null;
   recordedAt: string | null; freshness: UsageFreshness;
 };
 export type RecordedProviderWindow = {
@@ -35,7 +38,8 @@ export type Host = {
 };
 export type SshEvent =
   | { type: "data"; data: number[] }
-  | { type: "closed"; message?: string; lost?: boolean };
+  | { type: "closed"; message?: string; lost?: boolean }
+  | { type: "authHint"; hint: AuthHint };
 export type SshError = { kind: string; message: string; fingerprint?: string; hostId?: string };
 export type FileEntry = { name: string; isDir: boolean; size: number };
 export type MuxSession = {
@@ -52,15 +56,18 @@ export type Credentials = {
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
 /** Discovery's per-host version gate: `missing` names capabilities this version lacks. */
 export type MultiplexerTool = { kind: MultiplexerKind; version: string | null; support: 'full' | 'degraded'; missing: string[] };
-export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean};
+export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean;/** Herdr only: the backend the connection captures, so a restored entry names the one it ran on. */backend?:'system'|'managed'};
 export type HerdrNavigationTarget =
   | {kind:'workspace';workspace:string}
   | {kind:'tab';workspace:string;tab:string}
   | {kind:'pane';workspace:string;tab:string;pane:string;terminal:string};
+/** One pane of a tmux window. `title` is empty while the pane still has tmux's default title (the host name). */
+export type TmuxJumpPane = { id: string; index: number; title: string; command: string; active: boolean };
+/** `panes`, `zoomed` and `current.paneId` come from a host-side binding that lists panes; without them the tree stays at the window level. */
 export type TmuxJumpSnapshot = {
   generation: string;
-  current: { sessionId: string; windowId: string };
-  sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string }[] }[];
+  current: { sessionId: string; windowId: string; paneId?: string };
+  sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string; zoomed?: boolean; panes?: TmuxJumpPane[] }[] }[];
 };
 
 /** What to show before a sign-in page opens on this device: the host, never the query. */
@@ -85,23 +92,30 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   if(args.sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   return createSession(command,args,onEvent);
 }
-function installCompanionVia(command:'install_companion'|'install_companion_from_device',sessionId:string,onProgress:(value:unknown)=>void) {
+function installCompanionVia(command:'install_companion'|'install_companion_from_device'|'install_managed_herdr',sessionId:string,onProgress:(value:unknown)=>void) {
   if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
   return remoteInvoke<unknown>(command,{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
 }
 export const api = {
   accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
-  companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
-  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
+  /** The hook commands run on the host's companion; a local session runs it on this device, so they take any session id. */
+  companionHookDiscovery: (sessionId:string,schemaVersion?:1|2|3|4) => invoke<unknown>('companion_hook_discovery',{sessionId,...(schemaVersion===undefined?{}:{schemaVersion})}),
+  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp'|'kimi-code';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => invoke<unknown>('companion_hooks',{sessionId,request}),
   /** The host downloads and installs the companion; this device sends only a pin. */
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion',sessionId,onProgress),
+  /** Compares the installed companion with the latest verified release; changes nothing. */
+  checkCompanionUpdate: (sessionId:string) => remoteInvoke<unknown>('check_companion_update',{sessionId}),
   /** The labelled offline fallback: this device downloads the companion and uploads it to a host that cannot reach GitHub. */
   installCompanionFromDevice: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion_from_device',sessionId,onProgress),
+  /** Uploads the verified managed Herdr for this host over the connected session; the system Herdr, its configuration and its servers are untouched. */
+  installManagedHerdr: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_managed_herdr',sessionId,onProgress),
+  /** Deletes only the managed Herdr binary: never a server, a session or the system Herdr. */
+  removeManagedHerdr: (sessionId:string) => remoteInvoke<unknown>('remove_managed_herdr',{sessionId}),
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
   clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
   clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),
-  connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {})},onEvent),
+  connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string, target?:string) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {}),...(target && target!=='default' ? {target} : {})},onEvent),
   connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession("connect_et", {sessionId, options, cols:100, rows:30},onEvent);
   },
@@ -176,19 +190,19 @@ export const api = {
   hostClipboardCopy: (sessionId: string, uploadId: string) =>
     remoteInvoke<void>("host_clipboard_copy", {sessionId,uploadId}),
   reserveUpload: (sessionId: string, size: number) =>
-    remoteInvoke<{uploadId:string}>("upload_reserve", { sessionId, size }),
+    invoke<{uploadId:string}>("upload_reserve", { sessionId, size }),
   cancelUpload: (sessionId: string, uploadId: string) =>
-    remoteInvoke<{outcome:'cancellation_requested'|'unknown_or_settled'}>("upload_cancel", { sessionId, uploadId }),
+    invoke<{outcome:'cancellation_requested'|'unknown_or_settled'}>("upload_cancel", { sessionId, uploadId }),
   /** `temporary` sends only a file name; the host saves a private, uniquely named file under /tmp. */
   uploadFile: (sessionId: string, path: string, data: number[], uploadId: string, temporary = false) =>
-    remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
+    invoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
   diff: (sessionId: string, path: string, staged = false) =>
     invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
-  tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string) =>
-    remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId }),
+  tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string, paneId?: string) =>
+    remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId, ...(paneId === undefined ? {} : { paneId }) }),
   attachTmux: (
     sessionId: string,
     name: string,

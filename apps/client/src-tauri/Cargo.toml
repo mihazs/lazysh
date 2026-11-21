@@ -11,10 +11,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 fdroid = ["tauri-plugin-lazysh-push/fdroid"]
-# Optional interop test harness; independent of Linux x86_64 product availability.
+# Optional interop test harness; independent of Linux and Windows x86_64 product availability.
 parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
-# The native terminal core (libghostty-vt, built with Zig 0.16.0): off by default so no build needs Zig.
-native-terminal = ["dep:lazysh-terminal-runtime"]
+# Android's Google build links the pinned prebuilt ONNX Runtime for local Parakeet. It is opt-in so the F-Droid recipe,
+# which must compile every native library from source, keeps its Whisper-only graph.
+parakeet-android = ["dep:lazysh-parakeet-runtime"]
+# The native terminal core (libghostty-vt, built with Zig 0.16.0) and its wgpu renderer: off by default so no
+# build needs Zig or compiles wgpu.
+native-terminal = ["dep:lazysh-terminal-runtime", "dep:lazysh-terminal-renderer-wgpu", "dep:unicode-segmentation", "dep:unicode-width", "dep:gtk", "dep:gdk", "dep:wayland-client", "dep:wayland-backend"]
+# Owned emulator builds only: trusts one extra root for the loopback WebDAV fixture (see `sync.rs`). Never a product feature.
+sync-tls-acceptance = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -26,15 +32,20 @@ path = "../../../packages/deep-link-vendor/tests/manifest.rs"
 [dependencies]
 lazysh-account-usage = { path = "../../../packages/account-usage" }
 tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
-lazysh-common = { path = "../../../packages/common", features = ["url"] }
+lazysh-common = { path = "../../../packages/common", features = ["url", "repository-review"] }
 lazysh-companion-release = { path = "../../../packages/companion-release" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
 lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }
+lazysh-terminal-renderer-wgpu = { path = "../../../packages/terminal-renderer-wgpu", optional = true }
+# The cells of composing (IME preedit) text in the renderer host; both are in the lock through other crates.
+unicode-segmentation = { version = "1", optional = true }
+unicode-width = { version = "0.2", optional = true }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+base64 = "0.22"
 russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "2.1"
 futures-util = "0.3"
@@ -44,6 +55,7 @@ zeroize = "1"
 age = { version = "0.11.5", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots"] }
 hyper = { version = "1", features = ["http1", "client", "server"] }
+httparse = "1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 whisper-rs = { version = "0.16", default-features = false }
@@ -59,6 +71,14 @@ tauri-plugin-deep-link = "=2.6.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 quircs = "=0.10.3"
 
+# The Linux native terminal surface (a Wayland subsurface of GDK's toplevel, #1331): only with `native-terminal`.
+# gtk and gdk are the versions tauri links; `client_system` wraps GDK's own `wl_display`.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }
+gdk = { version = "0.18", optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-backend = { version = "0.3", features = ["client_system"], optional = true }
+
 [target.'cfg(windows)'.dependencies]
 dunce = "=1.0.5"
 
@@ -70,10 +90,10 @@ lazysh-account-usage = { path = "../../../packages/account-usage", features = ["
 portable-pty = { version = "0.9", path = "../../../packages/portable-pty-vendor", default-features = false }
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))'.dependencies]
 libc = "0.2"
 
-[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+[target.'cfg(all(any(target_os = "linux", target_os = "windows"), target_arch = "x86_64"))'.dependencies]
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime" }
 
 [dev-dependencies]

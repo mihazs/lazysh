@@ -38,11 +38,14 @@ jobs:
       companion: ${{ steps.paths.outputs.companion }}
       herdr: ${{ steps.paths.outputs.herdr }}
       terminal_runtime: ${{ steps.paths.outputs.terminal_runtime }}
+      terminal_bridge: ${{ steps.paths.outputs.terminal_bridge }}
+      terminal_windows: ${{ steps.paths.outputs.terminal_windows }}
       linux: ${{ steps.paths.outputs.linux }}
       linux_runtimes: ${{ steps.paths.outputs.linux_runtimes }}
       desktop: ${{ steps.paths.outputs.desktop }}
       android: ${{ steps.paths.outputs.android }}
       android_runtime: ${{ steps.paths.outputs.android_runtime }}
+      android_terminal_core: ${{ steps.paths.outputs.android_terminal_core }}
       android_mosh: ${{ steps.paths.outputs.android_mosh }}
       android_herdr: ${{ steps.paths.outputs.android_herdr }}
       android_appium: ${{ steps.paths.outputs.android_appium }}
@@ -53,6 +56,9 @@ jobs:
       ntfy_variants: ${{ steps.paths.outputs.ntfy_variants }}
       native: ${{ steps.paths.outputs.native }}
       docs_only: ${{ steps.paths.outputs.docs_only }}
+      terminal_perf: ${{ steps.paths.outputs.terminal_perf }}
+      terminal_macos: ${{ steps.paths.outputs.terminal_macos }}
+      linux_surface: ${{ steps.paths.outputs.linux_surface }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,11 +125,13 @@ jobs:
       - name: Build, type-check and test the client
         if: github.event_name != 'pull_request'
         run: bunx moon run client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -c 1
-      - name: Resolve the locked Playwright version
+      - &playwright-version
+        name: Resolve the locked Playwright version
         id: playwright
         working-directory: apps/client
         run: echo "version=$(bun -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
-      - name: Restore Playwright browsers for the locked version
+      - &playwright-browsers
+        name: Restore Playwright browsers for the locked version
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -132,9 +140,23 @@ jobs:
       # tmux feeds e2e/tmux-clipboard.spec.ts; with CI set that spec fails instead of skipping without it.
       - run: sudo sh .github/scripts/apt-install.sh tmux
       # Still installs the system dependencies; a cached browser only skips its download.
-      - run: bunx playwright install --with-deps chromium
+      - &playwright-chromium
+        id: playwright-chromium
+        run: bunx playwright install --with-deps chromium
         working-directory: apps/client
+      # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
+      # for xterm.js through the developer override, and a terminal of another backend fails them.
       - run: bunx moon run client:test-e2e
+        env:
+          LAZYSH_E2E_TERMINAL_BACKEND: xterm
+      # The native arm: skipped, with the backend registry's reason in the log, until the native backend is registered; then it runs.
+      - run: bun run test:e2e:terminal
+        working-directory: apps/client
+        env:
+          LAZYSH_E2E_TERMINAL_BACKEND: native
+      # The kill switch (#1342): a production bundle built with LAZYSH_NATIVE_TERMINAL=off keeps every new session on xterm.js.
+      - run: bun run test:e2e:kill-switch
+        working-directory: apps/client
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
@@ -162,12 +184,15 @@ jobs:
         with: &rust-cache-main
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bun install --frozen-lockfile
-      - name: Install bounded storage observation tool
-        run: sudo sh .github/scripts/apt-install.sh strace
+      - name: Install bounded storage observation tool and the tmux the pane-server case runs
+        run: sudo sh .github/scripts/apt-install.sh strace tmux
       - name: Check companion and service packages
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
+          # The hosted image's Firefox (160 at the time of writing) is the one the host browser tests drive; without
+          # this a missing or too old Firefox would skip those tests instead of failing them.
+          LAZYSH_REQUIRE_FIREFOX: "1"
           MOON_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD' }}
         run: |
           # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.
@@ -189,6 +214,10 @@ jobs:
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
         run: cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
+      - name: Name the server of a hook run in a real named tmux pane
+        if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
+        timeout-minutes: 3
+        run: cargo test --locked --package lazysh-agent --test pane_server a_hook_inside_a_real_named_tmux_server_reports_that_server_and_pane -- --ignored --exact
 
   # This optional product workspace is deliberately outside root Cargo/Turbo builds.
   # Build outside the checkout: Zig 0.16.0 writes source-local zig-pkg dependencies.
@@ -203,22 +232,22 @@ jobs:
       stock-sha256: ${{ steps.stock-artifact.outputs.sha256 }}
       guarded-id: ${{ steps.guarded-upload.outputs.artifact-id }}
       stock-id: ${{ steps.stock-upload.outputs.artifact-id }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: "2"
+      # The one feature set the managed release build, its acceptance and its receipt share.
+      HERDR_FEATURES: lazysh-managed
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: Set task-owned external source, target and tool paths
+      - &herdr-task-paths
+        name: Set the task-owned external source and target paths (the Zig paths come from the ghostty-zig action)
         run: |
           printf '%s\n' \
             "HERDR_CI_ROOT=$RUNNER_TEMP/lazysh-herdr-native" \
-            "CARGO_TARGET_DIR=$RUNNER_TEMP/lazysh-herdr-native/target" \
-            "ZIG_LOCAL_CACHE_DIR=$RUNNER_TEMP/lazysh-herdr-native/zig-local" \
-            "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TEMP/lazysh-herdr-native/zig-global" \
-            "ZIG=$RUNNER_TEMP/lazysh-herdr-native/zig-x86_64-linux-0.16.0/zig" >> "$GITHUB_ENV"
+            "CARGO_TARGET_DIR=$RUNNER_TEMP/lazysh-herdr-native/target" >> "$GITHUB_ENV"
       - name: Verify original source exclusions and copy both guarded siblings
         run: |
           bun test tests/herdr-source.test.ts
@@ -238,18 +267,21 @@ jobs:
           diff --recursive --brief --no-dereference packages/terminal-renderer-wgpu "$HERDR_CI_ROOT/terminal-renderer-wgpu"
           diff packages/common/src/hex_digest.rs "$HERDR_CI_ROOT/common/src/hex_digest.rs"
           diff packages/common/src/guarded_target.rs "$HERDR_CI_ROOT/common/src/guarded_target.rs"
-      - name: Check the pinned official Rust release manifest
+      - &rust-release-manifest
+        name: Check the pinned official Rust release manifest
         # Receipt: https://static.rust-lang.org/dist/channel-rust-1.96.1.toml.sha256
         # Rustup independently verifies the component archives against this release manifest.
         run: |
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 https://static.rust-lang.org/dist/channel-rust-1.96.1.toml -o "$HERDR_CI_ROOT/channel-rust-1.96.1.toml"
           printf '%s  %s\n' '87eb76c53073e72b766083bed5530820694253b832a762d8385bda5759f03975' "$HERDR_CI_ROOT/channel-rust-1.96.1.toml" | sha256sum --check --strict
-      - uses: dtolnay/rust-toolchain@1.96.1
+      - &rust-1-96-1
+        uses: dtolnay/rust-toolchain@1.96.1
         with:
           components: rustfmt, clippy
       # Only crate downloads, which Cargo checks against Herdr's Cargo.lock; both Herdr targets
       # still compile from source in task-owned directories.
-      - name: Restore Herdr's locked crate downloads
+      - &herdr-cargo-downloads
+        name: Restore Herdr's locked crate downloads
         uses: actions/cache@v4
         with:
           path: |
@@ -257,20 +289,6 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: herdr-cargo-downloads-${{ runner.os }}-${{ hashFiles('packages/herdr-upstream/Cargo.lock') }}
-      # Only Zig's compressed package tarballs (zig-global/p), never compiled objects. Zig checks
-      # every package against its pinned hash each time it unpacks one, so a changed entry fails
-      # the build, and an unreadable one is dropped here so Zig downloads it again.
-      - name: Restore Herdr's hash-addressed Zig package downloads
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/lazysh-herdr-native/zig-global/p
-          key: herdr-zig-packages-v1-${{ runner.os }}-zig0.16.0-${{ hashFiles('packages/herdr-upstream/vendor/libghostty-vt/build.zig.zon', 'packages/herdr-upstream/vendor/libghostty-vt/pkg/*/build.zig.zon') }}
-      - name: Drop unreadable cached Zig packages
-        id: zig-package-scrub
-        run: |
-          for package in "$ZIG_GLOBAL_CACHE_DIR"/p/*; do
-            if [ -e "$package" ] && ! gzip --test "$package" 2>/dev/null; then rm -f "$package"; fi
-          done
       # Restored files are reused only when they match their pin, and each step still checks it.
       - &pinned-download-cache
         name: Restore pinned fixture downloads
@@ -278,61 +296,8 @@ jobs:
         with:
           path: ${{ runner.temp }}/lazysh-pinned-downloads
           key: lazysh-pinned-downloads-${{ github.job }}-v2-zig70e49664-tmux551ab8de-tmux38e79c699c-mosh872e4b13-et3065d282-zellij40bcc2e0-agent1280d8f0bab9-agent1334b37f2b67
-      - name: Provision checksum-verified Zig 0.16.0 outside the checkout
-        # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-linux].shasum
-        run: |
-          sh .github/scripts/pinned-download.sh 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 "$HERDR_CI_ROOT/zig-x86_64-linux-0.16.0.tar.xz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
-          printf '%s  %s\n' '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00' "$HERDR_CI_ROOT/zig-x86_64-linux-0.16.0.tar.xz" | sha256sum --check --strict
-          tar -xJf "$HERDR_CI_ROOT/zig-x86_64-linux-0.16.0.tar.xz" -C "$HERDR_CI_ROOT"
-          "$ZIG" version
-          rustc +1.96.1 --version
-          cargo +1.96.1 --version
-      - name: Download the pinned uucode archive once before local admission
-        env:
-          HERDR_ARCHIVE_NAME: uucode
-          HERDR_ARCHIVE_URL: https://deps.files.ghostty.org/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz
-        run: &herdr-archive-download |
-          archive="$HERDR_CI_ROOT/$HERDR_ARCHIVE_NAME.tar.gz"
-          curl --fail --silent --show-error --location --max-redirs 5 --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 --max-filesize 33554432 --output "$archive" --write-out 'archive http=%{http_code} bytes=%{size_download} seconds=%{time_total}\n' "$HERDR_ARCHIVE_URL"
-          sha256sum "$archive"
-      - name: Admit local uucode only with the unchanged Zig package hash
-        id: uucode-admission
-        working-directory: &herdr-archive-directory ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream/vendor/libghostty-vt
-        env:
-          HERDR_ARCHIVE_NAME: uucode
-          HERDR_PACKAGE_HASH: uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA
-        run: &herdr-archive-admission |
-          archive="$HERDR_CI_ROOT/$HERDR_ARCHIVE_NAME.tar.gz"
-          timeout --kill-after=5s 20s gzip --test "$archive"
-          actual=$(timeout --kill-after=5s 60s "$ZIG" fetch "$archive")
-          if [ "$actual" != "$HERDR_PACKAGE_HASH" ]; then
-            printf '%s\n' 'Herdr archive package hash mismatch' >&2
-            exit 1
-          fi
-      - name: Download the pinned Highway archive once before local admission
-        env:
-          HERDR_ARCHIVE_NAME: highway
-          HERDR_ARCHIVE_URL: https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz
-        run: *herdr-archive-download
-      - name: Admit local Highway only with the unchanged Zig package hash
-        id: highway-admission
-        working-directory: *herdr-archive-directory
-        env:
-          HERDR_ARCHIVE_NAME: highway
-          HERDR_PACKAGE_HASH: N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE
-        run: *herdr-archive-admission
-      - name: Download the pinned pixels archive once before local admission
-        env:
-          HERDR_ARCHIVE_NAME: pixels
-          HERDR_ARCHIVE_URL: https://deps.files.ghostty.org/pixels-12207ff340169c7d40c570b4b6a97db614fe47e0d83b5801a932dcd44917424c8806.tar.gz
-        run: *herdr-archive-download
-      - name: Admit local pixels only with the unchanged Zig package hash
-        id: pixels-admission
-        working-directory: *herdr-archive-directory
-        env:
-          HERDR_ARCHIVE_NAME: pixels
-          HERDR_PACKAGE_HASH: N-V-__8AADYiAAB_80AWnH1AxXC0tql9thT-R-DYO1gBqTLc
-        run: *herdr-archive-admission
+      - &ghostty-zig
+        uses: ./.github/actions/ghostty-zig
       - name: Exercise real local archive rejection controls
         env:
           LAZYSH_HERDR_ARCHIVE_FIXTURES: "1"
@@ -340,6 +305,24 @@ jobs:
       - name: Build the real optional Herdr binary
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked
+      # The dependency set of the managed executable: the same target and feature the release build uses, from the
+      # crates and Zig packages this build just fetched. Fails when anything it would ship has no recorded license.
+      - name: Generate and verify the notice inventory of the managed Herdr executable
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
+        env:
+          HERDR_TARGET: x86_64-unknown-linux-gnu
+          HERDR_FEATURES: lazysh-managed
+        run: |
+          cargo +1.96.1 metadata --locked --format-version 1 --filter-platform "$HERDR_TARGET" --features "$HERDR_FEATURES" > "$HERDR_CI_ROOT/cargo-metadata.json"
+          bun "$GITHUB_WORKSPACE/.github/scripts/herdr-notices.ts" --repo "$GITHUB_WORKSPACE" --checkout "$GITHUB_SHA" \
+            --metadata "$HERDR_CI_ROOT/cargo-metadata.json" --zig-packages "$PWD/vendor/libghostty-vt/zig-pkg" \
+            --target "$HERDR_TARGET" --features "$HERDR_FEATURES" --out "$HERDR_CI_ROOT/notices"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-notices-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-herdr-native/notices/
+          if-no-files-found: error
+          retention-days: 14
       - name: Exercise guarded protocol, API ownership and runtime identity
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: |
@@ -366,16 +349,36 @@ jobs:
           unset HERDR_UPDATE_API_SCHEMA
           cargo +1.96.1 test --locked --bin herdr api::schema::tests::generated_protocol_schema_artifact_is_current -- --exact
 
+      # tests/programs runs these on a pty with the core as their terminal; with CI set a missing one fails the run.
+      - name: Install the programs the terminal runtime tests run on a pty
+        run: sudo sh .github/scripts/apt-install.sh tmux vim-nox
+
       # Same herdr-upstream copy, Zig, admitted archives and Zig caches as above; only the Cargo build of the binding repeats.
       - name: Test the shared terminal runtime against the same libghostty-vt build
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
-        env:
+        env: &terminal-runtime-fixtures
           LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-herdr-native/mosh-resize-frames.json
           LAZYSH_PLATFORM_KEYS_FIXTURES: ${{ runner.temp }}/lazysh-herdr-native/platform-keys
+          # The guarded Herdr built above, as the program tests/programs starts.
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-herdr-native/target/debug/herdr
         run: |
           cargo +1.96.1 fmt --check
           cargo +1.96.1 clippy --locked --all-targets -- -D warnings
           cargo +1.96.1 test --locked
+
+      # G1 (#1305): the client's adapter contract suite, unchanged, over the real core. The runtime's stdio harness is an
+      # example of the crate tested above (same Zig, same libghostty-vt build); vitest drives NativeTerminalAdapter over it.
+      - name: Build the runtime's stdio harness for the adapter contract suite
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: cargo +1.96.1 build --locked --example control_stdio
+      - name: Run the adapter contract suite over the real core
+        env:
+          LAZYSH_CONTROL_STDIO: ${{ runner.temp }}/lazysh-herdr-native/target/debug/examples/control_stdio
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd apps/client vitest run src/nativeTerminalAdapter.realCore.test.ts --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/real-core.json"
+          # The file skips itself without the harness: a run that skipped is not a pass.
+          jq -e '.numPassedTests > 0 and .numPendingTests == 0 and .numFailedTests == 0' "$RUNNER_TEMP/real-core.json"
 
       # The wgpu renderer has its own lock file and nested workspace. The runner has no GPU: its tests run
       # on Mesa's software Vulkan (lavapipe) or software OpenGL, which the test policy accepts and the
@@ -414,7 +417,7 @@ jobs:
         env:
           HERDR_ARCHIVE_NAME: stock-source
           HERDR_ARCHIVE_URL: https://codeload.github.com/herdrdev/herdr/tar.gz/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01
-        run: *herdr-archive-download
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" download
       - name: Verify and extract original stock source
         id: stock-source
         run: |
@@ -462,13 +465,309 @@ jobs:
           path: ${{ runner.temp }}/lazysh-herdr-native/stock-artifact/
           if-no-files-found: error
           retention-days: 3
-      # Last on purpose: the feature rebuilds target/debug/herdr, and both artifacts above are already sealed.
-      - name: Exercise the managed build's own application namespace with real servers
-        id: managed-namespace
+      # The managed derivative as it would ship (#1756): the release profile, built from the same copied pinned source.
+      # Its own target profile leaves the sealed debug artifacts above untouched. The acceptance below runs the
+      # managed-namespace cases too, so no separate debug run is needed. Linux x86-64 only until another host has native evidence.
+      - name: Build the release-profile managed Herdr
+        id: managed-build
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         run: |
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --release --features "$HERDR_FEATURES" --bin herdr
+          printf 'sha256=%s\n' "$(sha256sum "$CARGO_TARGET_DIR/release/herdr" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Exercise the owned acceptance against that exact release executable
+        id: managed-acceptance
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
+        env:
+          MANAGED_SHA256: ${{ steps.managed-build.outputs.sha256 }}
+        run: |
           export HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture"
-          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input acceptance::
+          cargo +1.96.1 test --locked --release --features "$HERDR_FEATURES" --test guarded_input acceptance::
+          # Cargo must have reused the built executable: acceptance ran against these bytes and no others.
+          printf '%s  %s\n' "$MANAGED_SHA256" "$CARGO_TARGET_DIR/release/herdr" | sha256sum --check --strict
+      - name: Measure the libc floor and seal the managed executable with its receipt
+        id: managed-receipt
+        env:
+          HERDR_SOURCE_COMMIT: 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01
+        run: |
+          artifact="$HERDR_CI_ROOT/managed-artifact"
+          mkdir -p "$artifact"
+          cp "$CARGO_TARGET_DIR/release/herdr" "$artifact/herdr"
+          sh .github/scripts/herdr-release-receipt.sh "$artifact/herdr" packages/herdr-upstream/SOURCE-MANIFEST.sha256 "$artifact/receipt.json"
+          cat "$artifact/receipt.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: managed-herdr-linux-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-herdr-native/managed-artifact/
+          if-no-files-found: error
+          retention-days: 14
+      # Debug profile, after every artifact above is sealed. The managed build and the unchanged stock server it shares a host with (#1761): one session name, one HOME and XDG roots.
+      - name: Exercise the managed build beside an unchanged stock server of the same session name
+        id: managed-beside-stock
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
+        env:
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-herdr-native/stock-artifact/herdr
+          # The retained stock executable is a debug build, which keeps upstream's debug application directory.
+          LAZYSH_TEST_HERDR_STOCK_NAMESPACE: herdr-dev
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input managed_and_stock -- --list --ignored | grep -c ': test$' | grep -Fx 1
+          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input managed_and_stock -- --ignored
+
+      # The terminal runtime for Android, with the same admitted Zig, archives and caches as above. Last, because
+      # nothing sealed above depends on it. Compiling and linking only: nothing runs on Android here.
+      - name: Provision the pinned Android NDK
+        if: needs.changes.outputs.terminal_runtime == 'true'
+        uses: ./.github/actions/android-toolchains
+      - name: Check and link the terminal runtime for Android arm64 and x86_64 with the pinned NDK
+        id: terminal-android-target
+        if: needs.changes.outputs.terminal_runtime == 'true'
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          rustup target add --toolchain 1.96.1 aarch64-linux-android x86_64-linux-android
+          # The runner image presets ANDROID_NDK_HOME to its own NDK, which libghostty-vt's Zig build reads first.
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          ndk_bin="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for abi in aarch64 x86_64; do
+            triple="$abi-linux-android"
+            # API 24 is the app's minSdkVersion: a libc symbol newer than that fails to link here as it would in the app.
+            export "CARGO_TARGET_${abi^^}_LINUX_ANDROID_LINKER=$ndk_bin/${triple}24-clang"
+            cargo +1.96.1 check --locked --target "$triple"
+            cargo +1.96.1 test --locked --no-run --target "$triple"
+          done
+
+  # The regression gate of the native terminal core (#1341). It is a job of its own, not a step of
+  # herdr-native, so a regression (or a flaky host) can never skip the jobs that consume herdr-native's
+  # binaries, and the gate runs alone on its runner: nothing else competes for the CPU while it measures.
+  # It repeats herdr-native's checksum-verified Zig provisioning by reusing those steps. Not a required check:
+  # it runs on pushes to main and on a pull request that selects the terminal runtime area (native-changes.sh).
+  terminal-perf:
+    needs: changes
+    if: needs.changes.outputs.terminal_perf == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - *herdr-task-paths
+      - name: Copy the runtime and the Herdr sources it builds against
+        run: |
+          mkdir -p "$HERDR_CI_ROOT"
+          cp -a packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
+          cp -a packages/terminal-runtime "$HERDR_CI_ROOT/terminal-runtime"
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - *herdr-cargo-downloads
+      - *pinned-download-cache
+      - *ghostty-zig
+      - name: Build the gate in release mode
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --release --locked --example perf_gate
+      - name: Fail when a metric regressed beyond its limit
+        run: |
+          set -o pipefail
+          "$CARGO_TARGET_DIR/release/examples/perf_gate" | tee "$RUNNER_TEMP/perf-gate.md"
+          { echo '### Terminal runtime performance gate'; cat "$RUNNER_TEMP/perf-gate.md"; } >> "$GITHUB_STEP_SUMMARY"
+      # Exit 1 is a failed gate; a crash exits differently and does not count as the gate working.
+      - name: Prove the gate fails on an injected slowdown, injected allocations and no scrollback compaction
+        run: |
+          for mode in slow allocs nocompaction; do
+            status=0
+            "$CARGO_TARGET_DIR/release/examples/perf_gate" --inject "$mode" > "$RUNNER_TEMP/inject-$mode.md" || status=$?
+            [ "$status" -eq 1 ] || { echo "::error::perf_gate --inject $mode exited $status, expected 1"; exit 1; }
+            { echo "### Injected $mode regression (must fail)"; cat "$RUNNER_TEMP/inject-$mode.md"; } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  # The terminal core and the wgpu renderer on Apple silicon (#1333). herdr-native and terminal-perf compile
+  # them for Linux and Android only; here libghostty-vt is built by Zig against the runner's Apple SDK and
+  # the core and renderer crates are built and tested for aarch64-apple-darwin, the renderer on Metal. The
+  # runner's GPU is a virtual machine's: Metal runs, but nothing here says how a real Mac's GPU, Retina
+  # display, IME or VoiceOver behave. Not a required check, so it runs on pushes to main only (native-changes.sh).
+  # It reuses herdr-native's admitted archives and caches by alias; only the Zig tarball and the checksum
+  # tools are macOS's own.
+  terminal-macos:
+    needs: changes
+    if: needs.changes.outputs.terminal_macos == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - uses: actions/checkout@v4
+      # macOS has no sha256sum or timeout, which the aliased steps below use.
+      - name: Install GNU coreutils for the checksum and timeout tools of the shared steps
+        run: |
+          brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+      - *herdr-task-paths
+      - name: Copy the runtime, the renderer and the Herdr sources they build against
+        run: |
+          mkdir -p "$HERDR_CI_ROOT"
+          cp -a packages/herdr-upstream packages/terminal-runtime packages/terminal-renderer-wgpu "$HERDR_CI_ROOT"
+          # The same fixtures herdr-native replays.
+          cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
+          cp -a apps/client/e2e/fixtures/platform-keys "$HERDR_CI_ROOT/platform-keys"
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - name: Report the host and require Apple silicon with an Apple SDK
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx --show-sdk-version
+          host=$(rustc +1.96.1 -vV | sed -n 's/^host: //p')
+          [ "$host" = aarch64-apple-darwin ] || { echo "::error::the runner's Rust host is $host, expected aarch64-apple-darwin"; exit 1; }
+      - *herdr-cargo-downloads
+      - *pinned-download-cache
+      - uses: ./.github/actions/ghostty-zig
+        with:
+          zig-target: aarch64-macos
+          zig-sha256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+      - name: Build libghostty-vt and the runtime for aarch64-apple-darwin
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run
+      - name: Test the runtime on macOS
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        env: *terminal-runtime-fixtures
+        run: |
+          cargo +1.96.1 clippy --locked --all-targets -- -D warnings
+          cargo +1.96.1 test --locked --no-fail-fast
+      # The renderer's tests fail without an adapter instead of skipping, and the Apple policy allows Metal alone.
+      # Independent of the runtime's result, and without stopping at the first failing test file: one run reports every macOS failure.
+      - name: Test the wgpu renderer on Metal
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-renderer-wgpu
+        run: |
+          cargo +1.96.1 clippy --locked --all-targets -- -D warnings
+          cargo +1.96.1 test --locked --no-fail-fast
+      - name: Report the Metal adapter the renderer ran on
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-renderer-wgpu
+        run: cargo +1.96.1 test --locked --test frames -- --exact --nocapture on_apple_the_renderer_runs_on_metal
+
+  # The Linux composition probe (#1331, gate G19): a native surface next to the WebKitGTK web view, read back as the
+  # compositor's own pixels. Wayland runs in a headless sway (wlroots, pixman, no GPU) captured with grim, for wl_shm
+  # buffers and for a wgpu Vulkan swapchain on Mesa's software driver (lavapipe), at scale 1 and 2; X11 runs on Xvfb and
+  # is asserted to fail the overlap check, which is why the Linux default there stays xterm.js. Every check is exact.
+  # The probe has no GPU or real input here (docs/architecture/linux-surface-composition-poc.md, "What this does not establish").
+  native-linux-surface:
+    needs: changes
+    if: needs.changes.outputs.linux_surface == 'true'
+    runs-on: ubuntu-24.04
+    # The 24.04 runners' apt mirror can serve one package every few seconds (native-linux-runtimes spent 33 minutes in apt on
+    # 2026-11-18, and this job's first two runs were cancelled mid-install), so the install is slimmed below and the budget is wide.
+    timeout-minutes: 60
+    env:
+      # The runner restricts unprivileged user namespaces, which WebKitGTK's bubblewrap sandbox needs; the fixture page is ours.
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.1
+      - run: sudo sh .github/scripts/apt-install.sh --no-install-recommends build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libwayland-dev sway grim mesa-vulkan-drivers libvulkan1 xvfb xdotool imagemagick python3-numpy python3-pil dbus-daemon
+      # Pull requests restore main's entry and never save their own, like the other Rust caches.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/terminal-runtime/prototypes/linux-surface
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+        working-directory: packages/terminal-runtime/prototypes/linux-surface
+      - name: Run the probe's own checks under headless sway and Xvfb
+        run: packages/terminal-runtime/prototypes/linux-surface/scripts/ci.sh "$RUNNER_TEMP/linux-surface"
+      - name: Retain the compositor's screenshots of every step
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-linux-surface
+          path: ${{ runner.temp }}/linux-surface
+          if-no-files-found: warn
+          retention-days: 7
+
+  # The terminal core and its wgpu renderer on Windows (#1332). A Linux host has no MSVC headers for
+  # libghostty-vt's Zig build, so this is the only place `x86_64-pc-windows-msvc` is built: Zig compiles the
+  # library against the runner's MSVC and Windows SDK (the file LIBGHOSTTY_VT_WINDOWS_LIBC names), then both
+  # crates run their own tests. The runner has no GPU: the renderer tests run on Direct3D 12 with WARP, the CPU
+  # adapter that ships with Windows, which the test policy accepts and the shipping policy refuses.
+  terminal-windows:
+    needs: changes
+    if: needs.changes.outputs.terminal_windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The runner's Git converts line endings on checkout; the Zig sources, fixtures and goldens must be the bytes Linux builds.
+      - name: Check out LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Set task-owned source, target and tool paths
+        run: |
+          root="$(cygpath -m "$RUNNER_TEMP")/lazysh-terminal-windows"
+          printf '%s\n' \
+            "HERDR_CI_ROOT=$root" \
+            "CARGO_TARGET_DIR=$root/target" \
+            "ZIG_LOCAL_CACHE_DIR=$root/zig-local" \
+            "ZIG_GLOBAL_CACHE_DIR=$root/zig-global" \
+            "ZIG=$root/zig-x86_64-windows-0.16.0/zig.exe" \
+            "LIBGHOSTTY_VT_WINDOWS_LIBC=$root/windows-libc.txt" \
+            "LAZYSH_CI_SCRIPTS=$(cygpath -m "$GITHUB_WORKSPACE")/.github/scripts" >> "$GITHUB_ENV"
+      - name: Copy the runtime, the renderer and the Herdr sources they build against
+        run: |
+          mkdir -p "$HERDR_CI_ROOT"
+          cp -a packages/herdr-upstream packages/terminal-runtime packages/terminal-renderer-wgpu "$HERDR_CI_ROOT/"
+          # The same shared fixtures herdr-native hands the runtime tests.
+          cp apps/client/e2e/fixtures/mosh-resize-frames.json "$HERDR_CI_ROOT/mosh-resize-frames.json"
+          cp -a apps/client/e2e/fixtures/platform-keys "$HERDR_CI_ROOT/platform-keys"
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - name: Restore the pinned Zig download
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lazysh-pinned-downloads
+          key: lazysh-pinned-downloads-${{ github.job }}-v1-zig68659eb5
+      - name: Provision checksum-verified Zig 0.16.0 outside the checkout
+        # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-windows].shasum
+        run: |
+          archive="$HERDR_CI_ROOT/zig-x86_64-windows-0.16.0.zip"
+          sh "$LAZYSH_CI_SCRIPTS/pinned-download.sh" 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip
+          printf '%s  %s\n' '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e' "$archive" | sha256sum --check --strict
+          pwsh -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$HERDR_CI_ROOT'"
+          "$ZIG" version
+          rustc +1.96.1 --version
+          cargo +1.96.1 --version
+      # Zig finds the Visual Studio C++ tools and the Windows SDK on this host and writes their directories
+      # (`include_dir`, `sys_include_dir`, `crt_dir`, `msvc_lib_dir`, `kernel32_lib_dir`) in the file build.rs
+      # forwards to `zig build --libc`; reading it back fails on a directory that does not exist.
+      # Zig 0.16.0 bundles Clang 21 and the runner's newest MSVC STL (14.52) stops any Clang older than 22 with
+      # STL1000, which fails the C++ half of libghostty-vt (simdutf, highway); the previous toolset (14.51) accepted it.
+      # Microsoft's switch for this is _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH. The Zig build takes no flags from
+      # here, so the libc file names a copy of the MSVC headers that defines it instead of the runner's own.
+      - name: Describe the runner's MSVC and Windows SDK headers for the Zig build
+        run: |
+          "$ZIG" libc > "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          msvc_include="$(sed -n 's/^sys_include_dir=//p' "$LIBGHOSTTY_VT_WINDOWS_LIBC" | tr -d '\r')"
+          cp -a "$(cygpath -u "$msvc_include")" "$HERDR_CI_ROOT/msvc-include"
+          chmod -R u+w "$HERDR_CI_ROOT/msvc-include"
+          sed -i '1i #define _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH' "$HERDR_CI_ROOT/msvc-include/yvals_core.h"
+          sed -i "s|^sys_include_dir=.*|sys_include_dir=$HERDR_CI_ROOT/msvc-include|" "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          cat "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+          "$ZIG" libc "$LIBGHOSTTY_VT_WINDOWS_LIBC"
+      - name: Build libghostty-vt for Windows and the runtime's tests
+        working-directory: ${{ runner.temp }}/lazysh-terminal-windows/terminal-runtime
+        run: sh "$LAZYSH_CI_SCRIPTS/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run
+      - name: Test the shared terminal runtime on Windows
+        working-directory: ${{ runner.temp }}/lazysh-terminal-windows/terminal-runtime
+        env:
+          LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-terminal-windows/mosh-resize-frames.json
+          LAZYSH_PLATFORM_KEYS_FIXTURES: ${{ runner.temp }}/lazysh-terminal-windows/platform-keys
+        run: cargo +1.96.1 test --locked
+      - name: Test the wgpu renderer on Direct3D 12 and WARP against the runtime and the reference renderer
+        working-directory: ${{ runner.temp }}/lazysh-terminal-windows/terminal-renderer-wgpu
+        run: |
+          cargo +1.96.1 test --locked
+          # Name the adapter the tests drew on in the log: Direct3D 12 on a hosted runner is WARP.
+          cargo +1.96.1 test --locked --test frames windows_draws_on_direct3d_12 -- --nocapture
 
   native-linux:
     needs: [changes, herdr-native]
@@ -489,7 +788,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap python3-gi
+      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth xclip webkit2gtk-driver bubblewrap python3-gi xdg-utils
       - name: Verify native GUI namespace prerequisites
         env:
           LAZYSH_NATIVE_NAMESPACE_NETWORK: private
@@ -572,7 +871,19 @@ jobs:
           timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
+          managed=ssh::tmux_jump_fixture::real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_executable
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$managed" -- --list --ignored --exact | grep -Fx -- "$managed: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$managed" -- --ignored --exact
           printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
+      - name: Exercise the guarded Herdr input on a local PTY with the same guarded binary
+        env:
+          CASE_NAME: local::attach_tests::runtime::guarded_herdr_input_on_a_local_pty_reaches_only_the_confirmed_pane
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
       # The two published companions that real hosts still run. The owned SSH case updates a host that has each one.
       - name: Fetch the pinned published 1.28.0 and 1.33.4 companions for the owned update hosts
         run: |
@@ -589,11 +900,18 @@ jobs:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
         run: |
           cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver
-          cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_attachments_default_to_private_unique_tmp_files ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_agent_board_and_approvals_through_companion_hooks ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell companion::local::tests::real_local_hooks_report_to_the_board_and_a_permission_request_is_answered)
+          cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_attachments_default_to_private_unique_tmp_files ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_managed_herdr_installs_and_removes_only_its_own_binary ssh::tests::openssh_companion_install_refuses_an_unsupported_architecture ssh::tests::openssh_agent_board_and_approvals_through_companion_hooks ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tests::openssh_and_mosh_deliver_checksummed_output_to_a_core ssh::tests::openssh_host_browser_streams_a_real_page_and_closing_the_channel_ends_the_browser ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell companion::local::tests::real_local_hooks_report_to_the_board_and_a_permission_request_is_answered)
           for case_name in "${cases[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
+      - name: Exercise the sign-in listener check over owned SSH
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
+        run: |
+          case_name=ssh::tests::openssh_auth_listener_check_uses_the_companion_then_falls_back_to_ss
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Check combined native voice startup and clean shutdown without models
@@ -612,15 +930,27 @@ jobs:
       - name: Prepare owned native GUI system tools
         run: |
           tools_dir=$(mktemp -d "$RUNNER_TEMP/lazysh-native-tools.XXXXXX")
-          for tool in WebKitWebDriver Xvfb gnome-keyring-daemon python3; do
+          for tool in WebKitWebDriver Xvfb xclip gnome-keyring-daemon python3; do
             source=$(readlink -f "/usr/bin/$tool")
             install -m 0755 "$source" "$tools_dir/$tool"
             cmp "$source" "$tools_dir/$tool"
           done
           echo "LAZYSH_NATIVE_GUI_WEBKIT_DRIVER=$tools_dir/WebKitWebDriver" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_XVFB=$tools_dir/Xvfb" >> "$GITHUB_ENV"
+          echo "LAZYSH_NATIVE_GUI_XCLIP=$tools_dir/xclip" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_SECRET_SERVICE=$tools_dir/gnome-keyring-daemon" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_PYTHON=$tools_dir/python3" >> "$GITHUB_ENV"
+      - &pinned-zellij
+        name: Install the pinned official Zellij 0.45.1 release outside the checkout (the native GUI drives it)
+        # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
+        run: |
+          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
+          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
+          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
+          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
+          echo "$zellij_root" >> "$GITHUB_PATH"
+          echo "LAZYSH_TEST_ZELLIJ=$zellij_root/zellij" >> "$GITHUB_ENV"
       - name: Exercise owned Linux native singleton GUI delivery
         id: native-gui
         env:
@@ -659,6 +989,13 @@ jobs:
           case_name=ssh::tmux_jump_fixture::agent_session::real_tmux_agent_session_runs_from_the_guarded_agent_view_inputs_only
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      - name: Answer a recorded dialog only while the pane still shows it, on supported tmux
+        shell: bash
+        run: |
+          test "$(tmux -V)" = 'tmux 3.4'
+          case_name=ssh::tmux_jump_fixture::pick_screen::real_tmux_pick_is_delivered_only_to_the_dialog_it_was_read_from
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Reject unsupported apt tmux loops without binding authority and report it degraded
         shell: bash
         env:
@@ -673,17 +1010,6 @@ jobs:
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           LAZYSH_EXPECT_MUX_SUPPORT='tmux=degraded' cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact --nocapture
       # Last: the stock verification replaces LAZYSH_TEST_HERDR for any later step.
-      - &pinned-zellij
-        name: Install the pinned official Zellij 0.45.1 release outside the checkout
-        # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
-        run: |
-          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
-          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
-          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
-          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
-          echo "$zellij_root" >> "$GITHUB_PATH"
-          echo "LAZYSH_TEST_ZELLIJ=$zellij_root/zellij" >> "$GITHUB_ENV"
       - &stock-herdr-guard
         name: Validate producer artifact ID
         env:
@@ -713,6 +1039,16 @@ jobs:
           if(Object.keys(receipt).length!==Object.keys(expected).length || Object.entries(expected).some(([key,value])=>receipt[key]!==value))throw new Error("Stock Herdr provenance mismatch");'
           chmod 700 herdr
           printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-stock-herdr/herdr" >> "$GITHUB_ENV"
+      - name: Exercise the pinned pane input actor against the unchanged stock Herdr
+        shell: bash
+        env:
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: |
+          # The actor needs SO_PEERPIDFD (Linux 6.5); the kernel is part of the evidence.
+          uname -r
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-agent --test herdr_pane_input_stock -- --list --ignored | grep -c ': test$' | grep -Fx 5
+          cargo test --locked -p lazysh-agent --test herdr_pane_input_stock -- --ignored --test-threads=1
       - name: Exercise ordinary Mosh Herdr entries from PATH and the default user installation
         shell: bash
         env:
@@ -722,6 +1058,132 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact
+
+  # The app bridge (terminal_core.rs, local.rs, ssh.rs) links the shared terminal core only with the optional
+  # `native-terminal` feature, which no other job enables, so a change to the core crate's API could break the
+  # bridge unnoticed (#1620). This job compiles the app library and its tests with the feature, which also
+  # compiles the wgpu renderer from the root lock file (#2201), and runs the real-core cases. It provisions Zig
+  # 0.16.0 and the admitted Ghostty archives with the steps of herdr-native (aliases), in the checkout's own
+  # libghostty-vt directory, and leaves herdr-native's checks as they are.
+  native-terminal-bridge:
+    needs: changes
+    if: needs.changes.outputs.terminal_bridge == 'true'
+    # Match the glibc floor of herdr-native and native-linux.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - *pinned-download-cache
+      # The link puts the checkout's Herdr source where the admission runs, so the app's build script finds the admitted packages.
+      - &ghostty-zig-checkout
+        uses: ./.github/actions/ghostty-zig
+        with:
+          link-source: 'true'
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev openssh-server
+      - uses: ./.github/actions/parakeet-onnxruntime
+      # Pull requests restore main's entry and never save their own, like the other Rust caches.
+      - uses: Swatinem/rust-cache@v2
+        with: *rust-cache-main
+      # The feature must bring the wgpu renderer in, and a build without it must not compile wgpu: `cargo tree -i`
+      # fails when the package is not in the selected graph.
+      - name: Check that only the native-terminal feature brings the wgpu renderer into the app
+        run: |
+          cargo tree --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal -e normal -i lazysh-terminal-renderer-wgpu
+          if cargo tree --manifest-path apps/client/src-tauri/Cargo.toml --locked --target all -e normal -i wgpu; then
+            echo "::error::a build without the native-terminal feature would compile wgpu"; exit 1
+          fi
+      - name: Build the app library and its tests with the native terminal core and the wgpu renderer
+        run: sh .github/scripts/retry-zig-fetch.sh cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib --no-run
+      # The real-core cases exist only with the feature, so each guard case must be listed before the run: a rename
+      # or a missing feature must not turn this step into a partial pass. The filters select every bridge case that
+      # names a core, and the churn case by name. They read the process-wide hub, so they run one at a time.
+      - name: Run the real-core bridge tests one at a time
+        run: |
+          filters=(core a_hundred_terminals)
+          guards=(
+            local::tests::history_lines_set_the_scrollback_the_real_core_reserves_for_a_session
+            local::tests::local_pty_output_is_parsed_by_the_real_core_and_readable_as_text
+            local::tests::a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget
+            terminal_core::native::tests::paste_is_bracketed_only_after_the_program_enabled_it
+            terminal_core::native::tests::a_core_answers_a_reader_from_the_real_screen_and_never_with_a_cell
+            terminal_core::native::tests::a_locked_app_is_told_nothing_and_the_next_reader_brings_the_core_back_to_life
+            terminal_core::native::tests::colour_queries_get_the_apps_theme_and_a_theme_change_changes_the_next_answer
+            terminal_core::native::tests::a_theme_that_is_not_a_set_of_hex_colours_opens_no_core_and_changes_nothing
+            terminal_core::native::tests::a_mosh_session_follows_the_sizes_of_its_frames_and_a_plain_one_does_not
+            local::tests::the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --test-threads=1 "${filters[@]}"
+      # The renderer host (#2215) draws real sessions with the wgpu renderer on an offscreen target. The runner has no
+      # GPU, so the tests run on Mesa's software Vulkan (lavapipe), which their policy accepts and the shipping policy
+      # refuses, and fail without an adapter. Each guard case must be listed, so a rename is not a partial pass.
+      - name: Install a software Vulkan driver for the renderer host tests
+        run: sudo sh .github/scripts/apt-install.sh mesa-vulkan-drivers libvulkan1
+      - name: Run the renderer host tests on a software GPU
+        run: |
+          guards=(
+            a_fed_session_is_drawn_with_the_pixels_of_the_reference_renderer
+            an_idle_session_submits_nothing_to_the_gpu
+            a_suspended_host_draws_nothing_and_resuming_shows_what_arrived_meanwhile
+            a_lost_surface_detaches_and_a_newer_generation_draws_the_same_pixels_from_a_snapshot
+            a_lost_device_is_rebuilt_and_the_screen_is_drawn_again_identically
+            the_selection_and_composing_text_are_drawn_like_the_reference
+            composing_text_stops_at_the_end_of_the_row_and_never_leaves_half_a_wide_character
+            a_blinking_cursor_redraws_only_its_row_once_per_phase_without_any_output
+            the_preferences_decide_the_cells_the_colours_and_the_fonts
+            with_system_fonts_text_is_drawn_from_a_font_and_follows_the_family_list
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "native_renderer::tests::$case_name" | grep -Fx -- "native_renderer::tests::$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- native_renderer::tests::
+      # Real OpenSSH and the official Mosh server (#1564), built with the feature on. The fixture's core is a stand-in.
+      - *official-mosh-fixture
+      - name: Deliver real OpenSSH and Mosh output to a core with the feature on
+        env:
+          CASE_NAME: ssh::tests::openssh_and_mosh_deliver_checksummed_output_to_a_core
+        run: |
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --ignored --exact "$CASE_NAME" | grep -Fx -- "$CASE_NAME: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --ignored --exact --test-threads=1 "$CASE_NAME"
+      # The Linux surface host (#1331) in the real app. A debug build with the feature loads its page from the dev URL, where
+      # the composition probe's harness serves a fixture page that calls the app's own surface commands; a headless sway
+      # shows the window and grim reads the compositor's pixels back. On Xvfb the probe and the host must refuse. The
+      # fixture page is ours, and the WebKitGTK sandbox needs user namespaces the harness does not set up.
+      - name: Install a headless compositor, an X server and the tools that read their pixels
+        run: sudo sh .github/scripts/apt-install.sh --no-install-recommends sway grim xvfb imagemagick python3-numpy python3-pil dbus
+      - name: Build the app with the native terminal
+        run: sh .github/scripts/retry-zig-fetch.sh cargo build --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal
+      - name: Place a native surface below the real app window on Wayland and refuse it on X11
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+          POC_APP: ${{ github.workspace }}/target/debug/lazysh
+        run: packages/terminal-runtime/prototypes/linux-surface/scripts/ci.sh "$RUNNER_TEMP/linux-surface-app"
+      - name: Retain the compositor's screenshots of every step
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-linux-surface-app
+          path: ${{ runner.temp }}/linux-surface-app
+          if-no-files-found: warn
+          retention-days: 7
+      # The kill switch (#1342): with LAZYSH_NATIVE_TERMINAL=off the app leaves the real core out even though the feature is on, and the
+      # bridge and surface commands say so. The guards fail the step if a rename leaves a case unlisted.
+      - name: Check that the kill switch removes the real core from a build with the feature on
+        env:
+          LAZYSH_NATIVE_TERMINAL: 'off'
+        run: |
+          guards=(
+            terminal_core::tests::without_the_real_core_the_commands_say_why
+            native_terminal_surface::tests::the_surface_is_refused_disabled_in_this_build
+          )
+          for case_name in "${guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --exact "${guards[@]}"
 
   native-desktop:
     needs: changes
@@ -786,8 +1248,10 @@ jobs:
         run: "cargo test --locked -p lazysh-common --lib windows_acl::"
       - name: Exercise native companion WAL admission and recovery
         run: bun run test:storage
-      - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
+      - name: Exercise managed hook setup against native macOS ACLs, links and replacement races
         if: runner.os == 'macOS'
+        run: cargo test --locked -p lazysh-agent --test hook_setup
+      - name: Build pinned Parakeet runtime and exercise native ACL storage
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Exercise native desktop launch parsing and original-lease admission
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
@@ -800,6 +1264,10 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-agent --lib herdr:: -- --list | grep -Fx 'herdr::tests::real_named_pipe_carries_the_focus_request_and_reports_a_missing_pipe: test'
           cargo test --locked -p lazysh-agent --lib herdr::
+      # The OSC 52 handler is client code (xterm parser, bounded decoding, consent), so Windows runs its unit tests; no job runs a Windows client against a real multiplexer (#1747).
+      - name: Exercise the client OSC 52 handler
+        if: runner.os == 'Windows'
+        run: bun run --cwd apps/client test:osc52
       - name: Exercise the remote Herdr user-install admission script with Darwin stat
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
@@ -818,6 +1286,16 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
+      - name: Exercise the Windows companion adapter through real cmd.exe and Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
+        run: |
+          for case_name in companion::powershell::native_tests::real_windows_shells_identify_the_host_through_the_encoded_probe companion::powershell::native_tests::real_windows_shells_run_the_companion_with_every_argument_and_its_exit_status; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          done
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:
@@ -827,14 +1305,26 @@ jobs:
         run: bunx moon run display-idle:test-rust
       - name: Exercise native resume policy persistence and cancellation
         run: bunx moon run client-native:test-resume-policy
+      - name: Exercise Parakeet on Windows x86_64
+        if: runner.os == 'Windows'
+        timeout-minutes: 60
+        uses: ./.github/actions/windows-parakeet
       # Last, and keyed on the installer step, so an unrelated native failure neither hides nor causes it.
-      # Non-blocking until its first qualifying hosted pass is recorded on #492; then remove continue-on-error.
+      # Blocking since it passed in a `main` run (43790076928, #1632); a failure here fails the job.
       - name: Exercise the installed Windows application GUI
         if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
         # A composite step cannot carry its own timeout: the runner rejects the manifest. This bounds the driver install and the case.
         timeout-minutes: 30
-        continue-on-error: true
         uses: ./.github/actions/windows-installed-gui
+      # The SSH server the Windows GUI SSH case will connect to. Non-blocking until its first qualifying hosted pass is recorded on #1632.
+      - name: Exercise the owned Windows OpenSSH server fixture
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        timeout-minutes: 10
+        continue-on-error: true
+        shell: bash
+        env:
+          LAZYSH_TEST_WINDOWS_SSH: '1'
+        run: bun test tests/windows-ssh-server.test.ts --test-name-pattern 'owned Windows OpenSSH server'
 
   native-android:
     needs: changes
@@ -885,8 +1375,8 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-22.04
-    # Every guarded case passing needs more than 30 minutes; a cancelled job retains no verdict.
-    timeout-minutes: 40
+    # Every guarded case passing needs more than 30 minutes of test time after an ~8 minute setup, and the GitHub-hosted emulator cancelled it at 40 minutes with no verdict.
+    timeout-minutes: 75
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: guarded
@@ -905,7 +1395,7 @@ jobs:
           targets: x86_64-linux-android
       - &android-owned-host-dependencies
         name: Install native Mosh fixture dependencies
-        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap libnss-wrapper protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
+        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap libnss-wrapper protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl libsodium-dev libunwind-dev libutempter-dev
       - &android-owned-namespace
         name: Verify native GUI namespace prerequisites
         env:
@@ -913,6 +1403,10 @@ jobs:
         run: *native-fixture-namespace
       - *pinned-download-cache
       - *official-mosh-fixture
+      - name: Build the pinned official ET 7.0.0 fixture outside the checkout
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
+        timeout-minutes: 15
+        run: sh .github/scripts/build-official-et.sh
       - name: Install the distribution tmux and pinned tmux build dependencies
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
         run: sudo sh .github/scripts/apt-install.sh --no-update tmux libevent-dev bison
@@ -954,6 +1448,13 @@ jobs:
           cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'ssh-parity'
+      # The tmux owner needs only the companion binary: it reads the synthetic transcript the Chat case opens.
+      # The owned device case runs `lazysh-agent devices ...` over its own sshd; no receiver or companion install is needed.
+      - name: Build the real companion for the owned tmux Chat and device cases
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux' || env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
+        run: |
+          cargo build --locked -p lazysh-agent --bin lazysh-agent
+          printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" >> "$GITHUB_ENV"
       - &android-owned-kvm
         name: Grant this runner access to KVM
         run: |
@@ -997,6 +1498,7 @@ jobs:
             capture cpu-load adb shell dumpsys cpuinfo;
             capture lastanr adb shell dumpsys activity lastanr;
             capture lastanr-traces adb shell dumpsys activity lastanr-traces;
+            capture adb-server-log tail -c 1048576 "${TMPDIR:-/tmp}/adb.$(id -u).log";
             fi;
             kill %1 2>/dev/null || true;
             wait "$collector_pid"; local collector_result=$?;
@@ -1016,21 +1518,25 @@ jobs:
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
             tmux) bun run test:android-tmux; exit $? ;;
+            zellij) bun run test:android-zellij; exit $? ;;
+            terminal-core) bun run test:android-terminal-core:ci; exit $? ;;
             ssh-parity) bun run test:android-ssh-parity; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
             biometric) bun run test:android-biometric; exit $? ;;
-            appium) bun run test:mobile-e2e:ci; exit $? ;;
+            appium) LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:mobile-e2e:ci; exit $? ;;
             auxiliary) ;;
             *) printf "%s\n" "Unknown Android runtime owner" >&2; exit 1 ;;
             esac;
             bun run test:android-fdroid;
             fdroid_result=$?;
             if (( fdroid_result != 0 )); then exit "$fdroid_result"; fi;
-            LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
-            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture &&
-            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change -- --ignored --exact --nocapture;
-            exit $?;
+            LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr || exit $?;
+            bun run test:android-voice || exit $?;
+            for device_case in devices::tests::android_owned_emulator_inventory_and_screenshot devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change devices::tests::android_owned_emulator_video_gestures_follow_the_display_size; do
+            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib "$device_case" -- --ignored --exact --nocapture || exit $?;
+            done;
+            exit 0;
             '
       - name: Save Gradle dependency and wrapper downloads from main
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded' && steps.android-toolchains.outputs.gradle-cache-hit != 'true' }}
@@ -1096,14 +1602,76 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-  # Owned OpenSSH password, encrypted-key, rotated-key, bastion and agent-forwarding
-  # parity cases (#985) and the browser preview forward and teardown case (#994) on the
-  # emulator; separate so their verdict is attributable.
+  # The real terminal core inside the packaged app (#2145): the app built with the optional native-terminal feature for arm64
+  # (compiled and linked, never run) and x86_64, and the NativeTerminalCoreTest case, which opens a core through the renderer's IPC
+  # and reads back what the app's core parsed from an owned OpenSSH shell. Zig 0.16.0 and the admitted Ghostty archives come from the
+  # steps of herdr-native (aliases), as in native-terminal-bridge; the pinned NDK from the Android toolchains action. Both APKs are
+  # built before the emulator boots. Not a required check, like the bridge job.
+  native-android-terminal-core:
+    needs: changes
+    if: needs.changes.outputs.android_terminal_core == 'true'
+    runs-on: ubuntu-22.04
+    # Two cold app builds with Zig, then the emulator.
+    timeout-minutes: 60
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: terminal-core
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *pinned-download-cache
+      - *ghostty-zig-checkout
+      - *rust-release-manifest
+      # Only the version check of the Zig provisioning needs 1.96.1; the app builds with stable, set as the default next.
+      - *rust-1-96-1
+      - *android-toolchains
+      # The runner image presets ANDROID_NDK_HOME to its own NDK, which libghostty-vt's Zig build reads first.
+      - name: Make the Zig build use the pinned NDK
+        run: echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+      - *android-owned-rust
+      - run: rustup target add aarch64-linux-android
+      - *android-owned-host-dependencies
+      - *android-cache-identity
+      - *android-owned-cache
+      - run: bun install --frozen-lockfile
+      - name: Build the arm64 debug app with the terminal core (compiled and linked, not run)
+        run: sh .github/scripts/retry-zig-fetch.sh bun run build:android:terminal-core
+      - run: sh .github/scripts/native-lib-size.sh arm64-v8a
+      # Measured and not needed again; the runner's disk is shared with the x86_64 build, the emulator image and Gradle.
+      - run: rm -rf target/aarch64-linux-android apps/client/src-tauri/gen/android/app/build
+      - name: Build the x86_64 debug app with the terminal core
+        run: sh .github/scripts/retry-zig-fetch.sh bun run build:android:emulator:terminal-core
+      - run: sh .github/scripts/native-lib-size.sh x86_64
+      - *android-owned-kvm
+      - *android-runtime-emulator
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-android-terminal-core-results
+          path: *android-runtime-result-paths
+          if-no-files-found: warn
+          retention-days: 3
+      # What the Waydroid lane installs (waydroid-lane.sh --apk): Waydroid cannot run the arm64 artifact of native-android.
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: lazysh-android-debug-x86_64
+          path: |
+            apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+            apps/client/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
+  # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the
+  # Device panel inventory and capture case (#1730) on the emulator; separate so their verdict is
+  # attributable.
   native-android-ssh-parity:
     needs: changes
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Includes the official ET 7.0.0 build.
+    timeout-minutes: 45
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: ssh-parity
@@ -1121,6 +1689,38 @@ jobs:
       LAZYSH_ANDROID_RUNTIME_OWNER: tmux
       LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-tmux-results
     steps: *android-owned-runtime-steps
+
+  # Owned pinned Zellij 0.45.1 on the emulator (#1645); separate so its verdict is attributable. It needs no companion
+  # or tmux build: the session, its two tabs and the host readback come from the owned fixture and the pinned release.
+  native-android-zellij:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: zellij
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *android-toolchains
+      - *android-owned-rust
+      - *android-owned-host-dependencies
+      - *android-owned-namespace
+      - *pinned-download-cache
+      - *pinned-zellij
+      - run: bun install --frozen-lockfile
+      - *android-cache-identity
+      - *android-owned-cache
+      - *android-owned-kvm
+      - *android-runtime-emulator
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-android-zellij-results
+          path: *android-runtime-result-paths
+          if-no-files-found: warn
+          retention-days: 3
 
   # The Appium + WebdriverIO device suite (ADR 0002, #1412) on the same API 36 emulator, with owned SSH and stock Herdr hosts
   # and the real companion. Report-only: not a required check until it has passed 20 consecutive runs of main and the
@@ -1230,17 +1830,7 @@ jobs:
         run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish libncurses-dev libevent-dev bison
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
-        # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
-        run: |
-          et_root=$(mktemp -d "$RUNNER_TEMP/lazysh-et-7.0.0-XXXXXX")
-          sh .github/scripts/pinned-download.sh 3065d282c552bc40b8f0d455e1cae2089847c9c4f7f9b4ca07b89f7c653af98e "$et_root/et_7.0.0.orig.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 300 --max-filesize 29021963 https://github.com/MisterTea/EternalTerminal/releases/download/et-v7.0.0/et_7.0.0.orig.tar.gz
-          test "$(stat -c%s "$et_root/et_7.0.0.orig.tar.gz")" -eq 29021963
-          printf '%s  %s\n' '3065d282c552bc40b8f0d455e1cae2089847c9c4f7f9b4ca07b89f7c653af98e' "$et_root/et_7.0.0.orig.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$et_root/et_7.0.0.orig.tar.gz" --directory "$et_root" --no-same-owner --no-same-permissions
-          cmake -S "$et_root/MisterTea-EternalTerminal-7656a32" -B "$et_root/build" -DCMAKE_BUILD_TYPE=Release -DDISABLE_VCPKG=ON -DDISABLE_TELEMETRY=ON -DBUILD_TESTING=OFF
-          cmake --build "$et_root/build" --parallel 4 --target etserver etterminal
-          test "$("$et_root/build/etserver" --version)" = 'et version 7.0.0'
-          printf '%s\n' "ET_SERVER_BIN=$et_root/build/etserver" "ET_TERMINAL_BIN=$et_root/build/etterminal" >> "$GITHUB_ENV"
+        run: sh .github/scripts/build-official-et.sh
       - name: Build the newest pinned official tmux 3.8 outside the checkout
         timeout-minutes: 10
         # Release asset digest: https://api.github.com/repos/tmux/tmux/releases/tags/3.8
@@ -1279,40 +1869,20 @@ jobs:
           path: ${{ runner.temp }}/lazysh-runtime-fixtures
           key: lazysh-speech-fixtures-921e4cf8-be07e048-59dfb9a4-1495e91b
       - name: Download and verify pinned public speech model fixtures
-        # Whisper weights: Hugging Face LFS digests of ggml-tiny.en.bin and ggml-tiny.bin at the pinned revision.
-        # Parakeet digest and size: packages/parakeet-runtime/src/bundle.rs.
+        # The pins live in .github/scripts/speech-fixtures.sh, which the owned Android voice run shares.
         env:
           LAZYSH_RUNTIME_FIXTURES: ${{ runner.temp }}/lazysh-runtime-fixtures
         run: |
-          mkdir -p "$LAZYSH_RUNTIME_FIXTURES"
-          fixture() {
-            target="$LAZYSH_RUNTIME_FIXTURES/$1"
-            if ! printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict --status 2>/dev/null; then
-              rm -f "$target"
-              curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 900 --max-filesize "$4" "$2" -o "$target" || {
-                code=$?
-                # curl 63: the publisher serves more bytes than the pin.
-                [ "$code" != 63 ] || echo "::error::$1: $2 is larger than its pinned $4 bytes; the publisher replaced it, so update the pin"
-                exit "$code"
-              }
-            fi
-            if [ "$(stat -c%s "$target")" != "$4" ] || ! printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict --status; then
-              echo "::error::$1: $2 no longer matches its pinned $4 bytes and SHA-256 $3; the publisher replaced it, so update the pin"
-              exit 1
-            fi
-          }
-          fixture ggml-tiny.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin 921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f 77704715
-          fixture ggml-tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 77691713
-          fixture jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e 352078
-          fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 487211443
+          sh .github/scripts/speech-fixtures.sh "$LAZYSH_RUNTIME_FIXTURES" ggml-tiny.en.bin ggml-tiny.bin jfk.wav parakeet-v3-int8.tar.bz2
           printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_MULTILINGUAL_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
-      - name: Exercise local sessions, files and Git review through the host context
+      - name: Exercise local sessions, files, Git review, attachments and previews through the host context
         if: ${{ !cancelled() }}
         run: |
           # Verify the complete inventory so a renamed or missing case cannot silently pass.
           actual=$(cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib host::tests::local:: -- --list | grep ': test$' | LC_ALL=C sort)
           printf '%s\n' \
             'host::tests::local::a_file_that_shrinks_during_a_local_download_fails_and_leaves_nothing: test' \
+            'host::tests::local::a_filesystem_that_ignores_chmod_never_receives_a_private_attachment: test' \
             'host::tests::local::cancelling_a_local_download_stops_it_and_removes_the_partial_copy: test' \
             'host::tests::local::local_downloads_refuse_directories_unconfirmed_links_and_unconfirmed_large_files: test' \
             'host::tests::local::local_downloads_stage_exact_bytes_report_progress_and_never_run_or_overwrite: test' \
@@ -1320,8 +1890,16 @@ jobs:
             'host::tests::local::local_exec_is_cancelled_by_closing_the_session: test' \
             'host::tests::local::local_exec_over_its_deadline_times_out_and_reaps_the_child: test' \
             'host::tests::local::local_files_list_and_read_with_remote_bounds: test' \
+            'host::tests::local::local_previews_proxy_http_report_discovery_and_stop_with_the_session: test' \
             'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' \
-            'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' | diff -u - <(printf '%s\n' "$actual")
+            'host::tests::local::local_run_status_returns_a_failing_exit_as_data_where_run_refuses_it: test' \
+            'host::tests::local::local_uploads_create_private_distinct_files_and_never_replace_one: test' \
+            'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' \
+            'host::tests::local::wsl::a_distribution_reports_files_and_repository_only_when_git_starts_inside_it: test' \
+            'host::tests::local::wsl::a_link_resolves_to_a_path_of_the_distribution_and_never_outside_it: test' \
+            'host::tests::local::wsl::every_command_runs_through_wsl_exe_from_the_home_directory_with_its_environment: test' \
+            'host::tests::local::wsl::files_and_a_repository_diff_are_read_inside_the_distribution: test' \
+            'host::tests::local::wsl::only_this_distributions_paths_are_read_and_a_drive_path_is_translated_by_wslpath: test' | diff -u - <(printf '%s\n' "$actual")
           bunx moon run client-native:test-local
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
@@ -1334,6 +1912,13 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --list --ignored | grep -c ': test$' | grep -Fx 6
           bun run test:openssh-connections
+      # Sign-in callback tunnels over real direct-tcpip channels to a fake OAuth server on an owned sshd.
+      - name: Exercise sign-in tunnels, their request guard and teardown over real OpenSSH
+        if: ${{ !cancelled() }}
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::auth_tunnel_fixture::openssh_auth_tunnel_ -- --list --ignored | grep -c ': test$' | grep -Fx 4
+          bun run test:openssh-auth-tunnel
       # Owned loopback sshd stopped and restarted under a live session with a tmux pane.
       - name: Exercise lost-connection detection, refused retries and tmux reattach over real OpenSSH
         if: ${{ !cancelled() }}
@@ -1346,9 +1931,26 @@ jobs:
         # Exact Herdr pane focus runs the current-source companion.
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
+          # The companion's `herdr-events` stream against an owned real Herdr: a renamed case must not pass with zero tests.
+          cargo test --locked -p lazysh-agent --test herdr_events -- --list --ignored | grep -c ': test$' | grep -Fx 1
+          cargo test --locked -p lazysh-agent --test herdr_events -- --ignored
           # A renamed case must not turn the local attach cases into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored local::attach_tests::runtime::real_ | grep -c ': test$' | grep -Fx 4
+          # A renamed case must not turn the local-session cases into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ | grep -c ': test$' | grep -Fx 2
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
+      # Pinned tmux (apt 3.4), Zellij 0.45.1 and the same-run stock Herdr drive a browser against lazysh's real terminal pane.
+      - *playwright-version
+      - *playwright-browsers
+      - *playwright-chromium
+      - name: Exercise tmux, Zellij and Herdr copies reaching the device clipboard through OSC 52 consent
+        # The installs above have no status function, so an earlier failure skips them; without its browser this step would only add a misleading failure.
+        if: ${{ !cancelled() && steps.playwright-chromium.outcome == 'success' }}
+        run: |
+          # With CI set a missing binary fails these cases instead of skipping them; a renamed case must not turn the step into a zero-test pass.
+          test -x "$LAZYSH_TEST_ZELLIJ" && test -x "$LAZYSH_TEST_HERDR"
+          bun run --cwd apps/client test:e2e:multiplexers --list | grep -Fx 'Total: 6 tests in 2 files'
+          bunx moon run client:test-e2e-multiplexers
       - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:
@@ -1359,6 +1961,13 @@ jobs:
         shell: bash
         env:
           CASE_NAME: ssh::tmux_jump_fixture::real_ssh_user_installed_herdr_discovers_and_attaches_exact_default
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: *exact-ignored-case
+      - name: Exercise a managed Herdr, with a failing system Herdr in its place, over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one
           LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
         run: *exact-ignored-case
       - name: Report tmux 3.4, Zellij 0.45.1 and stock Herdr versions as supported through product discovery over owned OpenSSH
@@ -1431,7 +2040,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.android_auxiliary == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The F-Droid, QR and local Whisper runs took about 18 minutes before Whisper joined them; its download, import and inference add under ten.
+    timeout-minutes: 40
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: auxiliary
@@ -1768,6 +2378,23 @@ jobs:
             printf 'device=unavailable\n' >> "$diagnostic_dir/status.txt"
           fi
           exit 0
+      # The composition proof of concept (#1311) builds and runs its own host app, so it needs only the generated project and the simulator.
+      - name: Run native surface composition proof of concept
+        id: ios-surface-poc
+        timeout-minutes: 15
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' && steps.ios-simulator.outcome == 'success' }}
+        env:
+          TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS: ${{ runner.temp }}/lazysh-surface-poc.jsonl
+        run: |
+          : > "$TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS"
+          xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
+          bun run test:ios-surface-poc
+      - name: Print surface composition records
+        if: ${{ !cancelled() && steps.ios-surface-poc.outcome != 'skipped' }}
+        run: |
+          printf '### iOS surface composition proof of concept\n\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/lazysh-surface-poc.jsonl"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify tests preserve the prebuilt iOS host binary
         timeout-minutes: 1
         if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
@@ -1780,6 +2407,8 @@ jobs:
           path: |
             apps/client/src-tauri/gen/apple/workspace-ui.xcresult
             apps/client/src-tauri/gen/apple/mosh-app.xcresult
+            apps/client/src-tauri/gen/apple/surface-poc-ui.xcresult
+            ${{ runner.temp }}/lazysh-surface-poc.jsonl
             ${{ runner.temp }}/lazysh-ios-signing
             ${{ runner.temp }}/lazysh-ios-workspace-metadata
           if-no-files-found: warn

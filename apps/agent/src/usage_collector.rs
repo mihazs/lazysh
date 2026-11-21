@@ -14,6 +14,9 @@ use std::{path::Path, process::ExitCode};
 use timer::Backend;
 
 const LOCK: &str = "usage-collector.lock";
+/// Held for the whole of an `enable` or `disable`, so the two never interleave their timer and policy writes.
+const LIFECYCLE_LOCK: &str = "usage-collector-lifecycle.lock";
+const LIFECYCLE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// The timer ticks every five minutes and a run starts a moment after its tick, so a minute of slack keeps a
 /// five-minute interval from becoming ten.
 const SLACK: Duration = Duration::minutes(1);
@@ -159,6 +162,22 @@ pub fn run(command: Command) -> ExitCode {
     }
 }
 
+/// Waits for the lifecycle lock: a change that is already running finishes first, and this one then sees its result.
+fn lifecycle(directory: &Path) -> std::result::Result<private_json::Lock, timer::Failure> {
+    let busy = timer::Failure::Refused("Another change to the collector is still running");
+    let started = std::time::Instant::now();
+    loop {
+        match private_json::lock(directory, LIFECYCLE_LOCK) {
+            Ok(Some(lock)) => return Ok(lock),
+            Ok(None) if started.elapsed() < LIFECYCLE_WAIT => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => return Err(busy),
+            Err(_) => return Err(timer::Failure::Refused("The collector state is unavailable")),
+        }
+    }
+}
+
 fn execute(command: Command) -> std::result::Result<Value, Failure> {
     let directory = crate::state_directory()?;
     let now = Utc::now();
@@ -169,19 +188,31 @@ fn execute(command: Command) -> std::result::Result<Value, Failure> {
         }
         Command::Enable { interval_minutes } => {
             let (backend, exe) = (Backend::host(), timer::executable()?);
-            timer::install(backend, &exe)?;
+            let (mut held, mut was_enabled) = (None, false);
+            timer::install(backend, &exe, &mut || {
+                held = Some(lifecycle(&directory)?);
+                was_enabled = usage_collection::read(&directory)
+                    .map_err(|_| timer::Failure::Refused("The collector policy is unreadable"))?
+                    .collector_enabled;
+                Ok(())
+            })?;
             let enabled = usage_collection::update(&directory, None, |policy| {
                 policy.collector_enabled = true;
                 policy.collector_interval_minutes =
                     interval_minutes.unwrap_or(policy.collector_interval_minutes);
             });
             if let Err(error) = enabled {
-                let _ = timer::remove(backend);
+                // A collector that was already on keeps its timer; only a first enable is taken back out.
+                if !was_enabled {
+                    let _ = timer::remove(backend);
+                }
                 return Err(error.into());
             }
+            drop(held);
             Ok(status(&directory, now, 0)?)
         }
         Command::Disable => {
+            let _held = lifecycle(&directory)?;
             if usage_collection::read(&directory)?.collector_enabled {
                 usage_collection::update(&directory, None, |policy| {
                     policy.collector_enabled = false;

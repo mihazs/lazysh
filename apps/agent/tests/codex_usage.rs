@@ -35,6 +35,7 @@ fn codex_records_actual_last_context_and_windows_without_cumulative_or_account_c
     assert_eq!(result["samples"][0]["inputTokens"], 120);
     assert_eq!(result["recordedContext"]["usedTokens"], 132);
     assert_eq!(result["recordedContext"]["limitTokens"], 1000);
+    assert_eq!(result["recordedContext"]["remainingTokens"], 868);
     assert_eq!(result["recordedContext"]["freshness"], "stale");
     assert_eq!(result["providerWindows"].as_array().unwrap().len(), 2);
     assert_eq!(result["providerWindows"][0]["usedPercent"], 12.5);
@@ -49,6 +50,32 @@ fn codex_records_actual_last_context_and_windows_without_cumulative_or_account_c
     }
     assert_eq!(fs::read(&path).unwrap(), before);
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn remaining_context_is_unknown_without_a_window_or_when_the_response_exceeds_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rollout.jsonl");
+    let mut no_window = info();
+    no_window
+        .as_object_mut()
+        .unwrap()
+        .remove("model_context_window");
+    let mut too_big = info();
+    too_big["model_context_window"] = json!(100);
+    let mut exact = info();
+    exact["model_context_window"] = json!(132);
+    for (record, remaining) in [
+        (no_window, Value::Null),
+        (too_big, Value::Null),
+        (exact, json!(0)),
+    ] {
+        records(&path, &[event(record, Value::Null)]);
+        assert_eq!(
+            read(&path, 0)["recordedContext"]["remainingTokens"],
+            remaining
+        );
+    }
 }
 
 #[test]

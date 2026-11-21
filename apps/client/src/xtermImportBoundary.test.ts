@@ -43,8 +43,8 @@ function privateCoreUsers() {
   });
 }
 
-/** Standalone Node scripts that compare xterm.js with a candidate (#1323). They run outside the app, so no app code can depend on them; remove them with the baseline in #1343. */
-const standaloneBenchmarks = new Set(['bench/wasmVt.mjs']);
+/** Standalone Node scripts and tests that compare xterm.js with a candidate (#1323, #1303). They run outside the app, so no app code can depend on them; remove them with the baseline in #1343. */
+const standaloneBenchmarks = new Set(['bench/wasmVt.mjs', 'bench/glyphPairs.ts', 'bench/vtBench.mjs', 'bench/wasmStartup.mjs', 'bench/programWorkloads.test.ts']);
 
 /** The xterm backend: its adapter, option mapping and the seams that patch xterm internals. */
 const isBackend = (file: string) => file.startsWith('src/xterm/') || /^src\/xterm(?:TerminalAdapter|Options)(?:\.test)?\.ts$/.test(file);

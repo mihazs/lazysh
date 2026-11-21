@@ -7,6 +7,10 @@ mod files;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod json;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod kimi_toml;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod readiness;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod record;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod render;
@@ -29,9 +33,27 @@ pub enum AgentProfile {
     Cline,
     Copilot,
     Amp,
+    /// Kimi Code 2.4 `config.toml`; the legacy Kimi CLI 1.52 stays manual.
+    #[serde(rename = "kimi-code")]
+    KimiCode,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
+    /// The name the agent's lifecycle events carry in the companion store.
+    fn store_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Droid => "Droid",
+            Self::Gemini => "Gemini CLI",
+            Self::Cursor => "Cursor CLI",
+            Self::Opencode => "OpenCode",
+            Self::Cline => "Cline CLI",
+            Self::Copilot => "GitHub Copilot CLI",
+            Self::Amp => "Amp",
+            Self::KimiCode => crate::kimi_code::AGENT,
+        }
+    }
     fn agent(self) -> record::Agent {
         match self {
             Self::Claude => record::Agent::Claude,
@@ -43,6 +65,7 @@ impl AgentProfile {
             Self::Cline => record::Agent::Cline,
             Self::Copilot => record::Agent::Copilot,
             Self::Amp => record::Agent::Amp,
+            Self::KimiCode => record::Agent::KimiCode,
         }
     }
 }
@@ -59,7 +82,7 @@ pub enum Command {
     /// Discover known installed executables and profile directories without reading configuration.
     Discover {
         /// Explicitly opt into newer managed-provider metadata; default v1 stays compatible.
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=3))]
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=4))]
         schema_version: u8,
     },
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
@@ -98,7 +121,12 @@ pub fn run(command: Command) -> Result<Value> {
 fn preview(agent: AgentProfile) -> Result<Value> {
     let source = std::env::current_exe()?;
     let agent = agent.agent();
-    let (asset, dialect) = if agent == record::Agent::Copilot {
+    let (asset, dialect) = if agent == record::Agent::KimiCode {
+        let entries = render::entries(agent, &source).map_err(Error::Installation)?;
+        let text =
+            kimi_toml::suffix(&entries).map_err(|_| Error::Installation("HooksInvalidTemplate"))?;
+        (Value::String(text), "kimi-code-toml-suffix")
+    } else if agent == record::Agent::Copilot {
         let text = render::owned_file(agent, &source).map_err(Error::Installation)?;
         (
             serde_json::from_str(&text).map_err(|_| Error::Installation("HooksInvalidTemplate"))?,
@@ -158,6 +186,10 @@ fn preview(agent: AgentProfile) -> Result<Value> {
             crate::hooks::opencode_plugin()["content"].clone(),
             "bun-javascript",
         ),
+        AgentProfile::KimiCode => (
+            crate::hooks::kimi_code_config()["content"].clone(),
+            "kimi-code-toml-suffix",
+        ),
     };
     Ok(
         json!({"schemaVersion":1,"agent":agent,"asset":asset,"dialect":dialect,"binaryBinding":"unboundTemplate","managedSetupSupported":false,"reporting":"notChecked","trust":"notChecked"}),
@@ -190,7 +222,9 @@ fn manage(command: Command) -> Result<Value> {
     }
     let inspected = match files::inspect(selected, &source) {
         Err(Error::Installation(
-            reason @ ("HooksAclUnsupported" | "HooksDroidStandaloneRequired"),
+            reason @ ("HooksAclUnsupported"
+            | "HooksDroidStandaloneRequired"
+            | "HooksKimiConfigRequired"),
         )) => {
             return Ok(
                 json!({"schemaVersion":1,"supported":false,"reason":reason,"reporting":"notChecked","trust":"notChecked"}),
@@ -200,20 +234,20 @@ fn manage(command: Command) -> Result<Value> {
     };
     if inspected.observation == Some(state::Observation::Conflict) {
         return Ok(
-            json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":"conflict","installPlan":null,"removePlan":null,"reporting":"notChecked","trust":"notChecked"}),
+            json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":"conflict","installPlan":null,"removePlan":null,"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
         );
     }
     let remove = inspected.plan(files::Action::Remove)?;
     let install = match inspected.plan(files::Action::Install) {
         Err(Error::Installation("HooksAmpShadow")) => {
             return Ok(
-                json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":null,"removePlan":remove.digest()?,"binary":remove.binary,"reason":"HooksAmpShadow","reporting":"notChecked","trust":"notChecked"}),
+                json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":null,"removePlan":remove.digest()?,"binary":remove.binary,"reason":"HooksAmpShadow","reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
             );
         }
         other => other?,
     };
     Ok(
-        json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked"}),
+        json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
     )
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

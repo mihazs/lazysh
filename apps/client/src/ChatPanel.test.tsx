@@ -255,6 +255,7 @@ it.each(["claude","codex"])("replaces the visible %s branch on conversation refr
   expect(invoke).toHaveBeenLastCalledWith("agent_transcript", {
     sessionId: "ssh1",
     agent,
+    ...(agent === "codex" ? {allowLargeHistory: true} : {}),
     path: "/host/session.jsonl",
     view: "conversation",
     offset: 0,

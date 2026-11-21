@@ -381,7 +381,7 @@ impl EntryStartup {
                     *child.bindings.herdr.lock().map_err(|_| entry_failed())? =
                         Some(crate::herdr_guard::start(
                             startup,
-                            child.handle.clone(),
+                            crate::herdr_guard::Route::Ssh(child.handle.clone()),
                             child.cancel.subscribe(),
                         ));
                 }
@@ -502,7 +502,10 @@ pub(crate) async fn bootstrap_entry(
                 EntryBinding::Herdr {
                     name: entry.name.clone(),
                 },
-                crate::herdr_guard::attach_receipt(&entry.name),
+                crate::herdr_guard::attach_receipt(
+                    crate::herdr_backend::captured(&session.handle),
+                    &entry.name,
+                )?,
             )
         }
         _ => {
@@ -510,7 +513,7 @@ pub(crate) async fn bootstrap_entry(
             let raw = entry.command()?;
             let command = crate::tmux_jump::receipt_command(
                 &if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Herdr) {
-                    crate::herdr_path::with_path(&raw)
+                    crate::herdr_backend::captured(&session.handle).wrap(&raw, true)?
                 } else {
                     raw
                 },

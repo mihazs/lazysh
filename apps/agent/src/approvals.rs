@@ -1,4 +1,7 @@
-use crate::{Error, Result, Store, MAX_INPUT};
+use crate::{
+    notification_policy::{self, Admission, Environment, Reason},
+    Error, Result, Store, MAX_INPUT,
+};
 use chrono::{SecondsFormat, Utc};
 use clap::ValueEnum;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
@@ -29,18 +32,39 @@ const MODES: [&str; 5] = ["default", "auto", "acceptEdits", "dontAsk", "plan"];
 pub enum ApprovalAgent {
     Claude,
     Codex,
+    Copilot,
 }
 impl ApprovalAgent {
     fn name(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Copilot => "copilot",
         }
     }
     fn lifecycle(self) -> crate::Agent {
         match self {
             Self::Claude => crate::Agent::Claude,
             Self::Codex => crate::Agent::Codex,
+            Self::Copilot => crate::Agent::Copilot,
+        }
+    }
+    /// Copilot's native hook payload is camelCase and names its event in `hookName`; Claude's and Codex's are
+    /// snake_case with `hook_event_name`.
+    fn keys(self) -> HookKeys {
+        match self {
+            Self::Copilot => HookKeys {
+                event: ("hookName", "permissionRequest"),
+                session: "sessionId",
+                tool: "toolName",
+                input: "toolInput",
+            },
+            _ => HookKeys {
+                event: ("hook_event_name", "PermissionRequest"),
+                session: "session_id",
+                tool: "tool_name",
+                input: "tool_input",
+            },
         }
     }
     /// A stored name; a row written before `agent` existed is Claude's.
@@ -50,6 +74,12 @@ impl ApprovalAgent {
             .copied()
             .find(|agent| agent.name() == name.unwrap_or("claude"))
     }
+}
+struct HookKeys {
+    event: (&'static str, &'static str),
+    session: &'static str,
+    tool: &'static str,
+    input: &'static str,
 }
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Decision {
@@ -272,14 +302,15 @@ fn hook_request(
         return Err(Error::InvalidArgument);
     }
     let payload = crate::read_bounded_json(input, MAX_INPUT)?;
-    if payload.get("hook_event_name").and_then(Value::as_str) != Some("PermissionRequest") {
+    let keys = agent.keys();
+    if payload.get(keys.event.0).and_then(Value::as_str) != Some(keys.event.1) {
         return Err(Error::InvalidEvent);
     }
-    let session_id = string(&payload, "session_id", 256)?;
+    let session_id = string(&payload, keys.session, 256)?;
     let project = string(&payload, "cwd", 4096)?;
-    let tool_name = string(&payload, "tool_name", 256)?;
+    let tool_name = string(&payload, keys.tool, 256)?;
     let tool_input = payload
-        .get("tool_input")
+        .get(keys.input)
         .filter(|value| value.is_object())
         .ok_or(Error::InvalidEvent)?
         .clone();
@@ -290,7 +321,7 @@ fn hook_request(
     {
         return Err(Error::InvalidEvent);
     }
-    // Only Claude suggests permission updates; Codex refuses a decision that carries one.
+    // Only Claude suggests permission updates; Codex refuses a decision that carries one and Copilot takes none.
     let options = payload
         .get("permission_suggestions")
         .and_then(Value::as_array)
@@ -304,12 +335,10 @@ fn hook_request(
         })
         .unwrap_or_default();
     let pane_id = pane.map(str::to_owned);
-    if pane_id.as_ref().is_some_and(|pane| {
-        !pane.starts_with('%')
-            || pane.len() < 2
-            || pane.len() > 32
-            || !pane[1..].bytes().all(|c| c.is_ascii_digit())
-    }) {
+    if pane_id
+        .as_deref()
+        .is_some_and(|pane| !lazysh_common::valid_pane_identity(pane))
+    {
         return Err(Error::InvalidEvent);
     }
     let now = Utc::now();
@@ -348,15 +377,49 @@ impl Drop for Pending {
     }
 }
 
-/// The hook's answer, or `None` when it gives no decision: Codex then asks in its own terminal prompt.
+/// The board report for a session held by this hook. Copilot's lifecycle adapter ignores `permissionRequest` on
+/// purpose (it fires before Copilot's own rules, so it proves no prompt), but this hook does hold the tool call until
+/// someone answers or the deadline passes, so the session really is waiting.
+fn waiting_event(request: &Request, agent: ApprovalAgent) -> Result<Option<crate::Event>> {
+    // The board names the panes its lifecycle hooks name (tmux, Zellij), so a Herdr pane stays out of its rows.
+    let board_pane = request
+        .pane_id
+        .as_deref()
+        .filter(|pane| !pane.starts_with("herdr:"));
+    if agent != ApprovalAgent::Copilot {
+        let payload = json!({"session_id":request.session_id,"cwd":request.project,"hook_event_name":"PermissionRequest","tool_name":request.tool_name});
+        return crate::normalize(&payload, agent.lifecycle(), board_pane);
+    }
+    Ok(Some(crate::Event {
+        session_id: request.session_id.clone(),
+        agent: "GitHub Copilot CLI".into(),
+        project: request.project.clone(),
+        state: crate::SessionState::NeedsAttention,
+        summary: request.tool_name.clone(),
+        pane_id: board_pane.map(str::to_owned),
+        pane_server: None,
+        waiting: Some(crate::Waiting::for_tool(Some(&request.tool_name))),
+    }))
+}
+
+/// Waits for the user's decision on one permission request, or `None` when the hook gives no decision: Codex and Copilot
+/// then ask in their own terminal prompt. When the notification policy says another agent started this one, its prompt
+/// is not the user's: the event is recorded without a relay notification, no approval is taken and nothing is returned,
+/// so the agent decides on its own.
 pub fn request(
     directory: &Path,
     input: impl Read,
     agent: ApprovalAgent,
     pane: Option<&str>,
     timeout: u16,
+    environment: &dyn Environment,
 ) -> Result<Option<Value>> {
     let request = hook_request(input, agent, pane, timeout)?;
+    let admission = notification_policy::admission(directory, agent.lifecycle(), environment);
+    if admission == Admission::Skip(Reason::NestedAgent) {
+        record(directory, &request, agent, pane, admission)?;
+        return Ok(None);
+    }
     let mut store = ApprovalStore::open(directory)?;
     store.clean()?;
     let lease = lease_options(true).open(store.lease_path(&request.id))?;
@@ -407,11 +470,7 @@ pub fn request(
         ],
     )?;
     transaction.commit()?;
-    let payload = json!({"session_id":request.session_id,"cwd":request.project,"hook_event_name":"PermissionRequest","tool_name":request.tool_name});
-    if let Some(event) = crate::normalize(&payload, agent.lifecycle(), request.pane_id.as_deref())?
-    {
-        Store::open(directory)?.ingest(&event, Utc::now())?;
-    }
+    record(directory, &request, agent, pane, admission)?;
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout));
     let answer = loop {
         if Instant::now() >= deadline {
@@ -449,13 +508,36 @@ pub fn request(
             }
         }
         Some((_, _, Some(message))) => json!({"behavior":"deny","message":message}),
-        // Codex runs its terminal prompt only after the hook returns, so an expired request must not hide it behind a denial.
-        None if agent == ApprovalAgent::Codex => return Ok(None),
+        // Codex and Copilot run their terminal prompt only after the hook returns, so an expired request must not hide
+        // it behind a denial.
+        None if agent != ApprovalAgent::Claude => return Ok(None),
         _ => json!({"behavior":"deny","message":"Permission denied or expired in lazysh."}),
     };
-    Ok(Some(
-        json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}}),
-    ))
+    // Copilot reads the decision at the top level of the output; Claude Code and Codex nest it.
+    Ok(Some(if agent == ApprovalAgent::Copilot {
+        decision
+    } else {
+        json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}})
+    }))
+}
+fn record(
+    directory: &Path,
+    request: &Request,
+    agent: ApprovalAgent,
+    pane: Option<&str>,
+    admission: Admission,
+) -> Result<()> {
+    if let Some(mut event) = waiting_event(request, agent)? {
+        // The pane is the environment's own, so is its server; ingesting none would clear the label an earlier report recorded.
+        event.pane_server = crate::pane_server().filter(|_| event.pane_id.as_deref() == pane);
+        Store::open(directory)?.ingest_with_reported_history(
+            Some(&event),
+            None,
+            Utc::now(),
+            admission,
+        )?;
+    }
+    Ok(())
 }
 
 pub fn list(directory: &Path, limit: u8) -> Result<Value> {
@@ -523,6 +605,9 @@ pub fn resolve(
         return Err(Error::InvalidArgument);
     }
     crate::text(session_id, 256)?;
+    if pane_id.is_some_and(|pane| !lazysh_common::valid_pane_identity(pane)) {
+        return Err(Error::InvalidArgument);
+    }
     // An option belongs to an allow and a message to a deny; neither is ever both.
     let allow = matches!(answer.decision, Decision::Allow);
     if (answer.option.is_some() && !allow) || (answer.message.is_some() && allow) {
@@ -565,12 +650,17 @@ pub fn resolve(
 }
 
 pub fn config(agent: ApprovalAgent) -> Value {
-    // Codex holds its terminal prompt until the hook returns, so it waits less than Claude (which shows both at once).
-    let seconds = if agent == ApprovalAgent::Codex {
-        120
-    } else {
+    // Codex and Copilot hold their terminal prompt until the hook returns, so they wait less than Claude (which shows
+    // both at once).
+    let seconds = if agent == ApprovalAgent::Claude {
         300
+    } else {
+        120
     };
+    if agent == ApprovalAgent::Copilot {
+        // Shell-free, like `copilot-config`; the lowercase key is the event name Copilot sends `hookName` for.
+        return json!({"version":1,"hooks":{"permissionRequest":[{"type":"command","exec":"lazysh-agent","args":["approval-request","--agent","copilot","--timeout-seconds",seconds.to_string()],"timeoutSec":seconds + 10}]}});
+    }
     let command = format!(
         "lazysh-agent approval-request --agent {} --timeout-seconds {seconds}",
         agent.name()

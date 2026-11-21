@@ -32,6 +32,23 @@ pub fn conversation_window(
     conversation_options(path, agent, limit, inline_images, window)
 }
 
+pub fn conversation_window_large(
+    path: &Path,
+    agent: TranscriptAgent,
+    limit: u8,
+    inline_images: bool,
+    window: &Window,
+    allow_large: bool,
+) -> Result<TranscriptPage> {
+    if allow_large && matches!(agent, TranscriptAgent::Codex) {
+        if !(1..=100).contains(&limit) {
+            return Err(Error::InvalidArgument);
+        }
+        return super::codex_conversation::conversation_large(path, limit, inline_images, window);
+    }
+    conversation_window(path, agent, limit, inline_images, window)
+}
+
 fn conversation_options(
     path: &Path,
     agent: TranscriptAgent,

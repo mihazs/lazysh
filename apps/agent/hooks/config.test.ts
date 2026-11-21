@@ -10,11 +10,12 @@ expect(isAbsolute(binary)).toBe(true);
 expect(lstatSync(binary).isFile()).toBe(true);
 expect(lstatSync(binary).isSymbolicLink()).toBe(false);
 
-test('actual CLI prints distinct Gemini, Droid, Kimi and Copilot formats without changing profiles', () => {
+test('actual CLI prints distinct Gemini, Grok, Droid, Kimi and Copilot formats without changing profiles', () => {
   const directory = mkdtempSync(join(tmpdir(), 'lazysh-hook-config-'));
   try {
     for (const [agent, events] of [
       ['gemini', ['BeforeAgent', 'BeforeTool', 'AfterTool', 'Notification', 'AfterAgent', 'SessionEnd']],
+      ['grok', ['UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'Stop', 'StopFailure', 'StopCancelled', 'SessionEnd']],
       ['droid', ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd']],
       ['kimi', ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SessionEnd']],
       ['copilot', ['UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionEnd', 'notification']],

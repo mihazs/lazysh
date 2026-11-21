@@ -48,6 +48,58 @@ fn android_command(id: &str, action: &str) -> Result<String> {
         quote(id)
     ))
 }
+fn display_size(width: u32, height: u32, message: &'static str) -> Result<()> {
+    if (1..=8192).contains(&width) && (1..=8192).contains(&height) {
+        Ok(())
+    } else {
+        Err(SshError::new("invalid_input", message))
+    }
+}
+/// The `tap`/`swipe` subcommand and flags for a point inside the display the coordinates were mapped from.
+fn gesture_arguments(
+    action: &DeviceAction,
+    width: u32,
+    height: u32,
+) -> Option<(&'static str, String)> {
+    let (subcommand, flags) = match *action {
+        DeviceAction::Tap { x, y } if x < width && y < height => {
+            ("tap", format!("--x {x} --y {y}"))
+        }
+        DeviceAction::Swipe {
+            x,
+            y,
+            to_x,
+            to_y,
+            duration_ms,
+        } if x < width
+            && y < height
+            && to_x < width
+            && to_y < height
+            && (1..=10000).contains(&duration_ms) =>
+        {
+            (
+                "swipe",
+                format!("--x {x} --y {y} --to-x {to_x} --to-y {to_y} --duration-ms {duration_ms}"),
+            )
+        }
+        _ => return None,
+    };
+    Some((
+        subcommand,
+        format!("{flags} --width {width} --height {height}"),
+    ))
+}
+fn android_gesture_command(
+    id: &str,
+    width: u32,
+    height: u32,
+    action: &DeviceAction,
+) -> Result<String> {
+    display_size(width, height, "Invalid Android display size")?;
+    let (subcommand, arguments) = gesture_arguments(action, width, height)
+        .ok_or_else(|| SshError::new("invalid_input", "Unsupported Android video action"))?;
+    android_command(id, &format!("{subcommand} {arguments}"))
+}
 async fn remote_json(
     state: &AppState,
     access: &AccessLease,
@@ -75,6 +127,76 @@ pub async fn android_device_probe(
             &access,
             &session_id,
             android_command(&id, "probe"),
+        ))
+        .await
+}
+#[tauri::command]
+pub async fn android_ui_tree(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+) -> Protected<serde_json::Value> {
+    access
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            android_command(&id, "ui tree"),
+        ))
+        .await
+}
+/// The identity of a node as `android_ui_tree` listed it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiNode {
+    resource_id: String,
+    text: String,
+    content_description: String,
+    occurrence: u32,
+}
+fn ui_action_command(id: &str, node: &UiNode, kind: &str) -> Result<String> {
+    // The host shortens texts to 256 characters; nothing longer is a node it listed.
+    let field = |value: &str| {
+        if value.chars().count() > 256 || value.contains('\0') {
+            Err(SshError::new("invalid_input", "Invalid accessibility node"))
+        } else {
+            Ok(quote(value))
+        }
+    };
+    if !matches!(kind, "click" | "long-click") || node.occurrence > 5000 {
+        return Err(SshError::new(
+            "invalid_input",
+            "Invalid accessibility action",
+        ));
+    }
+    android_command(
+        id,
+        &format!(
+            "ui act --kind {kind} --resource-id={} --text={} --content-desc={} --occurrence {}",
+            field(&node.resource_id)?,
+            field(&node.text)?,
+            field(&node.content_description)?,
+            node.occurrence
+        ),
+    )
+}
+/// Tap or long-press the one node with this identity; the host re-reads the screen first.
+#[tauri::command]
+pub async fn android_ui_action(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+    node: UiNode,
+    kind: String,
+) -> Protected<serde_json::Value> {
+    access
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            ui_action_command(&id, &node, &kind),
         ))
         .await
 }
@@ -107,25 +229,48 @@ pub async fn ios_device_action(
     height: u32,
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
-    access.run(async {
-    let (subcommand,arguments)=match action {
-        DeviceAction::Tap{x,y} if x<width && y<height => ("tap",format!("--x {x} --y {y} --width {width} --height {height}")),
-        DeviceAction::Swipe{x,y,to_x,to_y,duration_ms} if x<width && y<height && to_x<width && to_y<height && (1..=10000).contains(&duration_ms)=>("swipe",format!("--x {x} --y {y} --to-x {to_x} --to-y {to_y} --duration-ms {duration_ms} --width {width} --height {height}")),
-        DeviceAction::Key{key} if matches!(key.as_str(),"home"|"power"|"volume-up"|"volume-down")=>("button",format!("--key {key}")),
-        _=>return Err(SshError::new("invalid_input","Unsupported iOS companion action")),
-    };
-    if !(1..=8192).contains(&width) || !(1..=8192).contains(&height) {
-        return Err(SshError::new(
-            "invalid_input",
-            "Invalid iOS point dimensions",
-        ));
-    }
-    let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
-    let session = state.session(&session_id).await?;
+    access
+        .run(async {
+            let (subcommand, arguments) = match &action {
+                DeviceAction::Key { key }
+                    if matches!(key.as_str(), "home" | "power" | "volume-up" | "volume-down") =>
+                {
+                    ("button", format!("--key {key}"))
+                }
+                _ => gesture_arguments(&action, width, height).ok_or_else(|| {
+                    SshError::new("invalid_input", "Unsupported iOS companion action")
+                })?,
+            };
+            display_size(width, height, "Invalid iOS point dimensions")?;
+            let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
+            let session = state.session(&session_id).await?;
             access.check()?;
-    Ok(serde_json::from_str(&exec_for_access(&session, command, &access).await?)?)
-
-    }).await
+            Ok(serde_json::from_str(
+                &exec_for_access(&session, command, &access).await?,
+            )?)
+        })
+        .await
+}
+/// Touch an Android device while its video is shown. The host refuses the gesture when the display
+/// no longer has the `width` x `height` the pointer was mapped from (rotation or resize).
+#[tauri::command]
+pub async fn android_device_action(
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+    width: u32,
+    height: u32,
+    action: DeviceAction,
+) -> Protected<serde_json::Value> {
+    access
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            android_gesture_command(&id, width, height, &action),
+        ))
+        .await
 }
 #[tauri::command]
 pub async fn list_devices(
@@ -274,5 +419,57 @@ mod tests {
         )
         .is_err());
         assert!(action_command("ios;cmd", "id", DeviceAction::Boot).is_err());
+    }
+    #[test]
+    fn accessibility_actions_carry_the_listed_identity_as_literal_arguments() {
+        let node = UiNode {
+            resource_id: "app:id/ok".into(),
+            text: "It's $(cmd)\n--x".into(),
+            content_description: String::new(),
+            occurrence: 2,
+        };
+        assert_eq!(
+            ui_action_command("emulator-5554", &node, "long-click").unwrap(),
+            "lazysh-agent devices android --id='emulator-5554' ui act --kind long-click --resource-id='app:id/ok' --text='It'\\''s $(cmd)\n--x' --content-desc='' --occurrence 2"
+        );
+        assert!(ui_action_command("emulator-5554", &node, "click; reboot").is_err());
+        let long = UiNode {
+            text: "x".repeat(257),
+            ..node
+        };
+        assert!(ui_action_command("emulator-5554", &long, "click").is_err());
+    }
+    #[test]
+    fn android_video_gestures_carry_the_mapped_display_size_and_stay_inside_it() {
+        let tap = DeviceAction::Tap { x: 540, y: 960 };
+        assert_eq!(
+            android_gesture_command("emulator-5554", 1080, 1920, &tap).unwrap(),
+            "lazysh-agent devices android --id='emulator-5554' tap --x 540 --y 960 --width 1080 --height 1920"
+        );
+        let swipe = DeviceAction::Swipe {
+            x: 1,
+            y: 2,
+            to_x: 3,
+            to_y: 4,
+            duration_ms: 250,
+        };
+        assert!(
+            android_gesture_command("id'$(cmd)", 1080, 1920, &swipe)
+                .unwrap()
+                .contains("--id='id'\\''$(cmd)' swipe --x 1 --y 2 --to-x 3 --to-y 4 --duration-ms 250 --width 1080")
+        );
+        for rejected in [
+            (DeviceAction::Tap { x: 1080, y: 0 }, 1080, 1920),
+            (DeviceAction::Tap { x: 0, y: 1920 }, 1080, 1920),
+            (DeviceAction::Tap { x: 0, y: 0 }, 0, 1920),
+            (DeviceAction::Tap { x: 0, y: 0 }, 1080, 8193),
+            (DeviceAction::Key { key: "home".into() }, 1080, 1920),
+            (DeviceAction::Boot, 1080, 1920),
+        ] {
+            assert!(
+                android_gesture_command("emulator-5554", rejected.1, rejected.2, &rejected.0)
+                    .is_err()
+            );
+        }
     }
 }

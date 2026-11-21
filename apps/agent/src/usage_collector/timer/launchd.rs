@@ -1,6 +1,7 @@
 //! macOS: a launchd agent of the user's login session.
 use super::{
-    ours, place, remove_ours, render, render::LAUNCHD_LABEL, succeeds, undo, Failure, State,
+    ours, place, remove_ours, render, render::LAUNCHD_LABEL, replaced, succeeds, undo, Failure,
+    State,
 };
 use std::path::PathBuf;
 
@@ -20,18 +21,30 @@ fn launchctl(args: &[&str]) -> bool {
     succeeds("launchctl", args)
 }
 
-pub fn install(exe: &str) -> Result<(), Failure> {
+pub fn install(exe: &str, before_write: &mut dyn FnMut() -> Result<(), Failure>) -> Result<(), Failure> {
     // Without a login session of the GUI domain (an SSH-only account) there is nowhere to load an agent.
     if !launchctl(&["print", &domain()]) {
         return Err(Failure::Unsupported);
     }
+    before_write()?;
     let path = path().ok_or(Failure::Refused("No home directory"))?;
+    // A job loaded under this label without our plist belongs to somebody else: stopping it would replace it.
+    if ours(&path)?.is_none() && launchctl(&["print", &target()]) {
+        return Err(Failure::Refused(
+            "A launchd job that lazysh did not load has this label",
+        ));
+    }
     let placed = place(&path, &render::launchd_plist(exe))?;
+    let earlier = replaced(&placed);
     launchctl(&["bootout", &target()]);
     if launchctl(&["bootstrap", &domain(), &path.to_string_lossy()]) {
         return Ok(());
     }
     undo(placed);
+    if earlier {
+        // The earlier job was unloaded above; load the restored plist again.
+        launchctl(&["bootstrap", &domain(), &path.to_string_lossy()]);
+    }
     Err(Failure::Refused("launchctl refused the agent"))
 }
 

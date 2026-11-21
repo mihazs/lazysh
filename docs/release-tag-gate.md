@@ -69,15 +69,18 @@ container build path, not a claim of Vagrant `--server` execution or hermeticity
 
 ## Job graph and runner queue
 
-A release takes two runner-queue entries on its critical path and eleven runner slots
-(previously five entries and fourteen slots). Each GitHub-hosted job waits in the
+A release takes three runner-queue entries on its critical path and eleven runner slots
+(previously five entries and fourteen slots; the desktop builds were the second entry
+until they began bundling the verified companion). Each GitHub-hosted job waits in the
 account-wide queue, so stages that run one after another add queue time.
 
 1. `source-build` starts with admission and recipe preparation, which were a
    separate `candidate` job. Each later step requires `enabled == 'true'` from that
-   admission. The platform builds in `release-artifacts.yml` start in the same queue
-   entry. They bind the exact trusted main event SHA, hold contents-read tokens and
-   produce private same-run artifacts only.
+   admission. The companion and Android builds in `release-artifacts.yml` start in the same
+   queue entry. They bind the exact trusted main event SHA, hold contents-read tokens and
+   produce private same-run artifacts only. The desktop builds start when the companion
+   job has finished, because each package bundles the companion built and verified for its
+   platform there ([bundled companion](release-artifacts.md#bundled-companion)).
 2. `reserve` runs beside them, takes no part in the critical path and starts the
    candidate's branch reservation (see
    [Ref writes and workflow files](#ref-writes-and-workflow-files)).
@@ -112,7 +115,8 @@ rather than build completion order. Existing
 releases are never overwritten or automatically resumed after uncertain outcomes.
 Every release includes the current native acceptance status from
 [install-and-update.md](install-and-update.md#current-native-acceptance-status);
-initial notes additionally include the root Unreleased changes. Missing status
+the notes group the version's changelog entries as New, Improved, Fixed, Documentation
+and Under the hood, and initial notes additionally include the root Unreleased changes. Missing status
 blocks note generation. Passing build gates does not claim full native parity.
 See [release-artifacts.md](release-artifacts.md) for signing and activation limits.
 

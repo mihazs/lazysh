@@ -6,8 +6,9 @@ import {connectHost} from './fixtures/connectHost';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from '../src/test/opencodeRecorded';
+import {copilotRecords,droidRecords,kimiRecords} from '../src/test/recordsOnlyRecorded';
 
-type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
+type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean;transcriptSessionId?:string}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[];gone:boolean};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -78,9 +79,16 @@ async function open(page:Page) {
       if(command==='upload_file'){fixture.uploads.push(String(args.path));return {path:`/tmp/lazysh-fixture/${String(args.path)}`};}
       // An OpenCode pane keeps its session in one database: the host lists it, and the report names no transcript file.
       const opencode=(window as unknown as {opencodeFixture?:{session:string;database:string;discovery:unknown;page:unknown}}).opencodeFixture;
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??'codex-thread',agent:opencode?'OpenCode':(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
+      // A records-only adapter's pane: the host lists the adapter's records, which name the reported session, and reads them as records.
+      const recordsOnly=(window as unknown as {recordsFixture?:{agent:string;adapter:string;session:string;path:string;discovery:unknown;page:unknown}}).recordsFixture;
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??recordsOnly?.session??'codex-thread',agent:opencode?'OpenCode':recordsOnly?.agent??(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_transcripts' && opencode && args.agent==='opencode')return opencode.discovery;
-      if(command==='agent_reported_history' && !opencode)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
+      if(command==='agent_transcripts' && recordsOnly && args.agent===recordsOnly.adapter)return recordsOnly.discovery;
+      if(command==='agent_transcript' && recordsOnly){
+        if(args.path!==recordsOnly.path || args.agent!==recordsOnly.adapter || args.view!==undefined)throw new Error('Unexpected records read');
+        fixture.polls++;return recordsOnly.page;
+      }
+      if(command==='agent_reported_history' && !opencode && !recordsOnly)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript' && opencode){
         if(args.path!==opencode.database || args.agent!=='opencode' || args.view!=='conversation' || args.transcriptSessionId!==opencode.session)throw new Error('Unexpected OpenCode transcript');
         fixture.polls++;return opencode.page;
@@ -102,11 +110,13 @@ async function open(page:Page) {
       if(command==='agent_watch_start'){
         if(fixture.watchMode==='off')throw new Error('The channel could not open');
         const events=args.events as {onmessage:(event:unknown)=>void};fixture.watch=events;
-        const target=args.target as {inlineImages?:boolean};fixture.watchTargets.push(target);
+        const target=args.target as {inlineImages?:boolean;transcriptSessionId?:string};fixture.watchTargets.push(target);
         setTimeout(()=>{
           if(fixture.watchMode==='old')return events.onmessage({type:'unavailable',reason:'companion_required'});
-          fixture.emit({type:'hello',protocol:1,agent:'codex'});
-          fixture.emit({type:'snapshot',gen:1,seq:1,entries:messages(target.inlineImages===true).map(message=>({id:(message as {id:string}).id,rev:1,message}))});
+          // An OpenCode stream carries the messages of its database session.
+          const shown=opencode?(opencode.page as {messages:unknown[]}).messages:messages(target.inlineImages===true);
+          fixture.emit({type:'hello',protocol:1,agent:opencode?'opencode':'codex'});
+          fixture.emit({type:'snapshot',gen:1,seq:1,entries:shown.map(message=>({id:(message as {id:string}).id,rev:1,message}))});
         });
         return 'watch-1';
       }
@@ -331,6 +341,15 @@ async function claudeHere(page:Page,patch:{state?:string;transcript?:object;as?:
   },patch);
 }
 
+/** Taps Blue on the open question card: a large target that answers once, and a card that stays inside the screen. */
+async function answerBlue(page:Page,card:Locator) {
+  const blue=card.getByRole('button',{name:'Blue',exact:true});
+  await expect(blue).toBeEnabled();
+  expect((await blue.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await blue.click();
+  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+}
 test('answers the open Claude question with the digit of the chosen option and the pane keeps showing the terminal',async({page})=>{
   await open(page);
   await claudeHere(page,{state:'needs_attention',transcript:{activity:'waiting',messages:[
@@ -340,14 +359,9 @@ test('answers the open Claude question with the digit of the chosen option and t
   const agent=agentView(page);
   const card=agent.getByRole('region',{name:'Question',exact:true});
   await expect(card).toContainText('Pick a color',{timeout:8000});
-  const blue=card.getByRole('button',{name:'Blue',exact:true});
-  await expect(blue).toBeEnabled();
-  expect((await blue.boundingBox())!.height).toBeGreaterThanOrEqual(36);
-  await blue.click();
-  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  await answerBlue(page,card);
   const fixture=await page.evaluate(()=>window.agentView.inputs);
   expect(fixture.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({input:{kind:'select',option:2,of:2}})]);
-  const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
 test('a Gemini CLI pane binds its conversation and sends a prompt through the confirmed tmux input',async({page})=>{
@@ -363,6 +377,32 @@ test('a Gemini CLI pane binds its conversation and sends a prompt through the co
   if(page.viewportSize()!.width<600)await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
   else await draft.press('Enter');
   await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send')).toEqual([expect.objectContaining({input:{kind:'send',text:'Summarise the plan'},source:expect.objectContaining({agent:'gemini',view:'conversation'})})]);
+});
+
+test('a Grok Build pane binds its session log, keeps Terminal and Agent switchable and sends a prompt through the confirmed tmux input',async({page})=>{
+  await open(page);
+  await claudeHere(page,{as:{name:'Grok Build',agent:'grok-acp',session:'grok-thread'}});
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible({timeout:8000});
+  await expect(agent.getByText('Grok Build',{exact:false}).first()).toBeVisible();
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('Summarise the plan');
+  // Terminal and Agent switch without losing the conversation or the unsent draft.
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(draft).toHaveValue('Summarise the plan');
+  // On a phone Enter adds a line; the Send button sends.
+  if(page.viewportSize()!.width<600)await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  else await draft.press('Enter');
+  await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send')).toEqual([expect.objectContaining({input:{kind:'send',text:'Summarise the plan'},source:expect.objectContaining({agent:'grok-acp',view:'conversation'})})]);
+  // The terminal under the Agent view is the same one: its scrollback is there and the view wrote no byte of its own.
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  expect(await terminalText(page)).toContain('work scrollback 40');
+  expect((await fixture(page)).stdin).toEqual([]);
+  // Nothing else reached the terminal: no key, no dialog answer, only the one confirmed send after its binding.
+  expect((await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input && (input as {input:{kind:string}}).input.kind!=='send')).toEqual([]);
 });
 
 /** A Claude Code agent in the pane, with the Agent view shown. */
@@ -398,22 +438,27 @@ async function showDialog(page:Page,highlighted:number|undefined) {
     draw(highlighted===undefined?['  Permissions','  Esc to cancel']:dialog(at));
   },highlighted);
 }
-test('answers a list dialog open on the terminal with the keys a person presses, after reading the highlight back',async({page})=>{
-  await open(page);await asClaude(page);
-  const agent=await showAgent(page);
-  await showDialog(page,3);
+/** The /model picker card open at Haiku: large targets that fit the screen. Returns the card and the Sonnet option to tap. */
+async function modelCard(page:Page,agent:Locator,timeout=10000) {
   const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
-  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:8000});
+  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout});
   await expect(dialog.getByRole('button',{name:/^Haiku/})).toHaveAttribute('aria-current','true');
   const sonnet=dialog.getByRole('button',{name:/^Sonnet/});
   await expect(sonnet).toBeEnabled();
   expect((await sonnet.boundingBox())!.height).toBeGreaterThanOrEqual(36);
   const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  return {dialog,sonnet};
+}
+test('answers a list dialog open on the terminal with the keys a person presses, after reading the highlight back',async({page})=>{
+  await open(page);await asClaude(page);
+  const agent=await showAgent(page);
+  await showDialog(page,3);
+  const {dialog,sonnet}=await modelCard(page,agent);
   const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
   await sonnet.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
   const sent=(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
-  expect(sent).toEqual([{kind:'pick',rows:-1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect(sent).toEqual([{kind:'pick',rows:-1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
   // The terminal is untouched by the view switch and shows what the keys did.
   await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
   expect(await terminalText(page)).toContain('Set model');
@@ -449,7 +494,7 @@ test('answers a Codex approval prompt open on the terminal with the keys a perso
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
   await decline.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('picks an option of the open dialog with its digit on a desktop keyboard',async({page},testInfo)=>{
@@ -462,7 +507,7 @@ test('picks an option of the open dialog with its digit on a desktop keyboard',a
   const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
   await page.keyboard.press('2');
   await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('says the agent waits in the terminal for a dialog it cannot read exactly, offers the terminal and sends no key',async({page})=>{
@@ -503,7 +548,7 @@ test('answers a question Codex asks with the keys a person presses and offers no
   await sqlite.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
   const sent=(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
-  expect(sent).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect(sent).toEqual([{kind:'pick',rows:1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 /** A tmux session whose Claude conversation lists one running background shell. */
@@ -559,7 +604,7 @@ test('Switch model in the options asks a Claude pane for its model list once and
   await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:8000});
   await dialog.getByRole('button',{name:/^Sonnet/}).click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(1).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(1).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{
@@ -665,9 +710,40 @@ const richConversation=[
   {id:'t1',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'gh pr list'},{type:'tool_use',name:'Monitor',text:'watch'}]},
   {id:'a1',role:'assistant',blocks:[{type:'text',text:'v0.158.0 is published.'}],usage:{inputTokens:2,outputTokens:114,cacheReadTokens:153532,cacheWriteTokens:472}},
 ];
+/** The followed Claude Code agent of pane `w2:p1` waits for the user: its hook report says so, it has one permission request and the conversation ends on a question. */
+function herdrClaudeWaits() {
+  const base=window.nativeFixtureInvoke!,session='00000002-0000-4000-8000-000000000000';
+  window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[],gone:false};
+  window.nativeFixtureInvoke=async(command,args)=>{
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:session,agent:'Claude Code',project:'/home/owner/dev/project-2',state:'needs_attention',updatedAt:new Date().toISOString(),summary:'Answer requested',paneId:null,eventCount:3}]};
+    // A Herdr pane has no tmux pane id: the hook names the session only.
+    if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:session,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
+    if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
+    if(command==='agent_herdr_conversation')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,activity:'waiting',messages:[
+      {id:'p',role:'user',blocks:[{type:'text',text:'Ask me a question'}]},
+      {id:'a',role:'assistant',blocks:[{type:'tool_use',id:'q1',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions:[{question:'Pick a color',header:'Color',multiple:false,options:[{label:'Red'},{label:'Blue'}]}]}}]}]};
+    return base(command,args);
+  };
+}
+
+/** The followed Claude Code agent of pane `w2:p1` has its /model picker open on the pane's screen (drawn narrow, as a phone's pane is); Herdr's own agent input moves the highlight and closes it. */
+function herdrModelDialog() {
+  const base=window.nativeFixtureInvoke!,rule='─'.repeat(32),names=['Default (recommended)','Opus','Sonnet','Haiku'];
+  let at=3,open=true;
+  const rows=()=>open?[rule,'  Select model','  Pick the model.','',...names.map((name,index)=>`${index===at?'  ❯ ':'    '}${index+1}. ${name}`),'','  Enter to confirm · Esc to cancel']:['> /model','Set model','$ '];
+  window.nativeFixtureInvoke=async(command,args)=>{
+    if(command==='herdr_agent_screen')return rows();
+    if(command==='herdr_agent_input'){
+      const input=args.input as {kind:string;rows?:number;enter?:boolean};
+      if(input.kind==='pick'){if(input.enter)open=false;else at+=input.rows as number;}
+    }
+    return base(command,args);
+  };
+}
+
 /** Stock Herdr host: six live agents (one per workspace `w0`..`w5`), fifty ended hook reports without pane identity, and a companion that may predate conversation reading.
  * `focus` is the focused pane (`w2:p1`); the page can move it later through `herdrFixture.focus`. `agents` limits how many agents run. */
-async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean}={}) {
+async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean;waits?:boolean;dialog?:boolean}={}) {
   await installBaseHost(page);
   await page.addInitScript(({companion,rich,richConversation,start})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'herdr',name:'owned'}}]));
@@ -698,6 +774,7 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       if(command==='herdr_chat'){if((args.action as {kind:string}).kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
       if(command==='herdr_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
       if(command==='agent_herdr_conversation'){
         const target=args.target as {agentSessionId:string};record.conversations.push(target.agentSessionId);
@@ -717,6 +794,8 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
   },{companion,rich,richConversation,start});
+  if(start.waits)await page.addInitScript(herdrClaudeWaits);
+  if(start.dialog)await page.addInitScript(herdrModelDialog);
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
@@ -740,7 +819,7 @@ test('stock Herdr: the Agent view lists the live agents, and selecting one opens
   expect([...new Set((await herdrFixture(page)).conversations)]).toEqual(['00000005-0000-4000-8000-000000000000']);
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
-  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'}]);
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'},{type:'focusPane',target:'w5:p1'}]); // the pick focuses the pane, then Enter session does
 });
 
 test('stock Herdr: the composer sends through Herdr\'s own agent input, and a refused send shows one notice that keeps the draft',async({page})=>{
@@ -766,6 +845,47 @@ test('stock Herdr: the composer sends through Herdr\'s own agent input, and a re
   expect((await herdrFixture(page)).inputs).toHaveLength(1);
 });
 
+test('stock Herdr: a permission request of the followed Claude Code agent is answered through the hook, with no key',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
+  const agent=agentView(page);
+  const dock=agent.getByRole('region',{name:'Pending approvals',exact:true});
+  await expect(dock).toContainText('git push',{timeout:8000});
+  const deny=dock.getByRole('button',{name:'Deny request',exact:true});
+  await expect(deny).toBeEnabled();
+  expect((await deny.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await deny.click();
+  await expect(dock).toHaveCount(0);
+  expect(await decided(page)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'00000002-0000-4000-8000-000000000000',paneId:null,decision:'deny'})]);
+  expect((await herdrFixture(page)).inputs).toEqual([]);
+});
+
+test('stock Herdr: the open question of the followed Claude Code agent is answered with its digit through Herdr\'s own agent input',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
+  const card=agentView(page).getByRole('region',{name:'Question',exact:true});
+  await expect(card).toContainText('Pick a color',{timeout:8000});
+  await answerBlue(page,card);
+  expect((await herdrFixture(page)).inputs).toEqual([{target:{herdrSession:'owned',pane:'w2:p1',terminal:'term-2',agent:'claude',agentSessionId:'00000002-0000-4000-8000-000000000000'},input:{kind:'select',option:2,of:2}}]);
+});
+
+test('stock Herdr: a typed answer picks the free-text row and goes to the pane as one literal line',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',waits:true});
+  const card=agentView(page).getByRole('region',{name:'Question',exact:true});
+  await card.getByLabel('Or type your own answer').fill('Green');
+  const send=card.getByRole('button',{name:'Send typed answer',exact:true});
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  expect((await herdrFixture(page)).inputs.map(item=>(item as {input:unknown}).input)).toEqual([{kind:'select',option:3,of:3},{kind:'type',text:'Green'}]);
+});
+
+test('stock Herdr: a list dialog open on the followed agent\'s pane is answered with the arrows and Enter a person presses, after reading the highlight back',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1',dialog:true});
+  const {dialog,sonnet}=await modelCard(page,agentView(page));
+  await sonnet.click();
+  await expect(dialog).toHaveCount(0,{timeout:10000});
+  expect((await herdrFixture(page)).inputs.map(item=>(item as {input:unknown}).input)).toEqual([{kind:'pick',rows:-1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
+});
+
 test('stock Herdr with an old companion: the Agent view says to update it and still enters the pane',async({page})=>{
   await openHerdr(page,false);
   const agent=agentView(page);
@@ -775,7 +895,7 @@ test('stock Herdr with an old companion: the Agent view says to update it and st
   await expect(agent.getByRole('button',{name:'Host companion installation',exact:true})).toBeVisible();
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
-  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w0:p1'}]);
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w0:p1'},{type:'focusPane',target:'w0:p1'}]); // the pick focuses the pane, then Enter session does
 });
 
 test('a selected conversation keeps its chrome to one compact row and shows harness records as events, not raw tags',async({page},testInfo)=>{
@@ -1057,17 +1177,56 @@ test('OpenCode: the pane\'s session is read from its database, and the prompt go
   await expect(agent.getByRole('button',{name:/mode/i})).toHaveCount(0);
 });
 
-test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
-  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Kimi CLI';});
+test('OpenCode live: the stream is opened for the pane\'s database session and a reply grows over it without polling',async({page})=>{
+  await page.addInitScript(fixture=>{(window as unknown as {opencodeFixture:unknown}).opencodeFixture=fixture;},{session:opencodeSession,database:opencodeDatabase,discovery:opencodeDiscovery,page:opencodePage});
   await open(page);
+  await page.evaluate(()=>{window.agentView.watchMode='stream';});
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   const agent=agentView(page);
-  await expect(agent.locator('header')).toContainText('Kimi CLI');
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  expect((await fixture(page)).watchTargets).toEqual([{kind:'path',agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession}]);
+  await expect(agent.getByText('ok',{exact:true})).toBeVisible();
+  const polls=(await fixture(page)).polls;
+  const reply=opencodePage.messages[1];
+  await page.evaluate(([entry])=>window.agentView.emit({type:'delta',gen:1,seq:2,upserts:[{id:entry.id,rev:2,message:{...entry,blocks:[{type:'text',text:'ok, and more'}]}}],drops:[]}),[reply] as const);
+  await expect(agent.getByText('ok, and more',{exact:true})).toBeVisible();
+  expect((await fixture(page)).polls).toBe(polls);
+});
+/** A view that only names or reads: Show terminal, no composer, nothing typed into the terminal, and Show terminal goes back to it. */
+async function expectShowTerminalOnly(page:Page,agent:Locator) {
   await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
-  await expect(agent.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveCount(0);
+  await expect(agent.getByRole('textbox')).toHaveCount(0);
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);
   await agent.getByRole('button',{name:'Show terminal',exact:true}).click();
   await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
+}
+for(const records of [copilotRecords,kimiRecords,droidRecords]) {
+  test(`${records.agent}: the records of the pane's session show read-only under the partial label, with the state, Show terminal and no composer`,async({page})=>{
+    await page.addInitScript(fixture=>{(window as unknown as {recordsFixture:unknown}).recordsFixture=fixture;},records);
+    await open(page);
+    await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+    const agent=agentView(page);
+    await expect(agent.locator('header')).toContainText(records.agent);
+    await expect(agent.locator('header')).toContainText('Working');
+    const turn=agent.getByRole('region',{name:'Turn'});
+    // The prompt and the final answer; the lines the agent wrote between tool calls fold into the turn's activity.
+    const lines=(records.page.messages as {blocks:{type:string;text?:string}[]}[]).flatMap(message=>message.blocks).filter(block=>block.type==='text').map(block=>block.text!);
+    for(const line of [lines[0],lines.at(-1)!])await expect(turn.getByText(line,{exact:true})).toBeVisible();
+    await expect(agent.getByText(`Partial: these are the records ${records.agent} wrote for this pane`,{exact:false})).toBeVisible();
+    await expect(agent.getByRole('button',{name:'Send to the agent',exact:true})).toHaveCount(0);
+    await expectInViewport(page,agent.getByText(`Partial: these are the records ${records.agent} wrote for this pane`,{exact:false}));
+    await expectShowTerminalOnly(page,agent);
+  });
+}
+
+test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
+  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Amp';});
+  await open(page);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.locator('header')).toContainText('Amp');
+  await expect(agent.getByText('This view shows only the last reported state of Amp. Its conversation stays in the terminal.',{exact:true})).toBeVisible();
+  await expectShowTerminalOnly(page,agent);
 });
 
 test('Enter sends from a hardware keyboard and stays a line break on a touch keyboard; Stop reaches the terminal once',async({page},testInfo)=>{
@@ -1291,8 +1450,8 @@ test('shows model, plan mode and context left in one header row without taking c
 async function openZellij(page:Page,testInfo:{project:{name:string}}) {
   await installBaseHost(page);
   await page.addInitScript(()=>{
-    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown};
-    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0};
+    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown;state:string;screen:string[];onKeys?:(input:Record<string,unknown>)=>void};
+    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0,state:'working',screen:[]};
     const path='/home/owner/.claude/projects/work/a.jsonl';
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
@@ -1300,8 +1459,10 @@ async function openZellij(page:Page,testInfo:{project:{name:string}}) {
       if(command==='multiplexer_sessions')return [{name:'work'}];
       if(command==='attach_multiplexer')return {sessionId:'display-work'};
       if(command==='tmux_chat'||command==='herdr_chat'){record.tmuxCalls++;throw new Error('Zellij never uses a tmux or Herdr input');}
-      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
+      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});record.onKeys?.(args.input as Record<string,unknown>);return;}
+      // The viewport of the agent's own pane, as the host reads it.
+      if(command==='zellij_agent_screen')return record.screen;
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:record.state,updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
         {sessionId:'other-thread',agent:'Codex',project:'/other',state:'done',updatedAt:new Date().toISOString(),summary:'Done',paneId:'zellij:another:1',eventCount:2}]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',path,reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
       if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
@@ -1341,6 +1502,25 @@ test('Zellij: the Agent view follows the agent of the attached session and sends
   await expect(field).toHaveValue('Next step');
   await expectInViewport(page,notice);
   expect((await zellijFixture(page)).tmuxCalls).toBe(0);expect((await zellijFixture(page)).inputs).toHaveLength(2);
+});
+
+test('Zellij: a list dialog open in the agent pane is read from that pane and answered with the keys a person presses, sent to the pane the report names',async({page},testInfo)=>{
+  await openZellij(page,testInfo);
+  // The agent stopped and its pane shows the /model list, drawn narrow: Zellij's own screen, the one the terminal shows, is not what the card reads.
+  await page.evaluate(()=>{
+    const record=(window as unknown as {zellijFixture:{state:string;screen:string[];onKeys?:(input:Record<string,unknown>)=>void}}).zellijFixture;
+    const rule='─'.repeat(32),names=['Default (recommended)','Opus','Sonnet','Haiku'];
+    const dialog=(at:number)=>[rule,'  Select model','  Pick the model.','',...names.map((name,index)=>`${index===at?'  ❯ ':'    '}${index+1}. ${name}`),'','  Enter to confirm · Esc to cancel'];
+    let at=3;
+    record.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)record.screen=['> /model','Set model','$ '];else{at+=input.rows as number;record.screen=dialog(at);}};
+    record.screen=dialog(at);record.state='done';
+  });
+  const {dialog,sonnet}=await modelCard(page,agentView(page),20000);
+  await sonnet.click();
+  await expect(dialog).toHaveCount(0,{timeout:10000});
+  const target={zellijSession:'work',pane:7,agent:'claude'};
+  expect((await zellijFixture(page)).inputs).toEqual([{target,input:{kind:'pick',rows:-1,enter:false,seen:expect.any(Array)}},{target,input:{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}}]);
+  expect((await zellijFixture(page)).tmuxCalls).toBe(0);
 });
 
 test('live: an older page loads above the reader while a live append arrives, and the line being read does not move',async({page})=>{

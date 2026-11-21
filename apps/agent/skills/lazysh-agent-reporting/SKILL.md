@@ -31,7 +31,7 @@ change profiles because the intended one is unavailable. Installed configuration
 is not proof that hooks are trusted, enabled, loaded or reporting.
 
 Native print-only paths also include `claude-config`, `codex-config`,
-`opencode-plugin`, `gemini-config`, `cursor-config`, `droid-config`, `kimi-config`,
+`opencode-plugin`, `gemini-config`, `grok-config`, `cursor-config`, `droid-config`, `kimi-config`,
 `copilot-config`, `amp-plugin` and `cline-plugin`. Review the printed fragment or
 asset and use the selected provider's ordinary setup without overwriting foreign
 entries. Cline uses an awaited runtime plugin for **root runs only**. Managed

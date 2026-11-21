@@ -19,6 +19,7 @@ export const slashCommands: Record<Agent, readonly SlashCommand[]> = {
   ],
   // No command is offered that nothing here could verify; a prompt that starts with / is sent as typed.
   opencode: [],
+  'grok-acp': [],
   gemini: [
     {name: 'about'}, {name: 'clear'}, {name: 'compress'}, {name: 'copy'}, {name: 'help'}, {name: 'init'}, {name: 'mcp'}, {name: 'plan'},
     {name: 'stats'}, {name: 'tools'}, {name: 'auth', picker: true}, {name: 'memory', picker: true}, {name: 'model', picker: true},
@@ -41,8 +42,8 @@ export const slashText = (command: SlashCommand) => `/${command.name} `;
 /** The first character that switches the prompt box into another mode in the agent's own UI. */
 export type PromptMode = 'bash' | 'memory';
 export function promptMode(agent: Agent, draft: string): PromptMode | undefined {
-  // Nothing here has checked what a leading ! or # means in OpenCode's prompt, so it is not named as a mode.
-  if (agent === 'opencode') return;
+  // Nothing here has checked what a leading ! or # means in OpenCode's or Grok Build's prompt, so it is not named as a mode.
+  if (agent === 'opencode' || agent === 'grok-acp') return;
   if (draft.startsWith('!')) return 'bash';
   if (agent === 'claude' && draft.startsWith('#')) return 'memory';
 }

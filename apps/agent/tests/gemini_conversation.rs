@@ -121,6 +121,29 @@ fn a_recorded_session_replays_replacements_patches_and_rewinds_like_the_cli() {
 }
 
 #[test]
+fn a_message_id_dropped_by_a_rewind_or_a_removal_is_a_new_message_when_it_comes_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = session(
+        directory.path(),
+        &[
+            metadata(),
+            user("u1", "Question"),
+            model("g1", "Old answer", json!({})),
+            user("u2", "Follow-up"),
+            model("g2", "Rewound answer", json!({})),
+            json!({"$rewindTo":"u2"}),
+            model("g2", "New answer", json!({})),
+            json!({"$patch":{"removeIds":["g1"]}}),
+            model("g1", "Answer again", json!({})),
+        ],
+    );
+    assert_eq!(
+        texts(&read(&path)),
+        ["Question", "New answer", "Answer again"]
+    );
+}
+
+#[test]
 fn a_failed_call_is_an_error_result_and_a_running_one_has_none_yet() {
     let directory = tempfile::tempdir().unwrap();
     let mut failed = call(

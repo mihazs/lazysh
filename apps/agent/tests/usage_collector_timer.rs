@@ -410,3 +410,77 @@ fn run_reads_the_quota_for_real_once_per_interval_and_records_it() {
         status["observedAt"].as_str().unwrap() >= status["samples"]["newest"].as_str().unwrap()
     );
 }
+
+#[test]
+fn failed_reenable_keeps_existing_timer_when_policy_is_busy() {
+    let timer = Timer::new("systemd");
+    assert!(timer.collector(&["enable"]).status.success());
+    let policy_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(timer.state.join("usage-collection.lock"))
+        .unwrap();
+    policy_lock.try_lock().unwrap();
+    let failed = timer.collector(&["enable"]);
+    assert!(!failed.status.success());
+    assert!(timer
+        .units()
+        .join("lazysh-usage-collector.service")
+        .exists());
+    assert!(timer.units().join("lazysh-usage-collector.timer").exists());
+    assert_eq!(timer.policy()["collectorEnabled"], true);
+}
+
+#[test]
+fn concurrent_enable_and_disable_do_not_leave_enabled_without_timer() {
+    let timer = Timer::new("systemd");
+    assert!(timer.collector(&["enable"]).status.success());
+    timer.script("systemctl", "case \"$*\" in *\"enable --now\"*) touch \"$FAKE_LOG.wait\"; n=0; while [ ! -e \"$FAKE_LOG.go\" ] && [ \"$n\" -lt 500 ]; do sleep 0.01; n=$((n+1)); done;; esac\n");
+    std::thread::scope(|scope| {
+        let enable = scope.spawn(|| timer.collector(&["enable"]));
+        let waiting = timer.log.with_extension("wait");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !waiting.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(waiting.exists(), "owned fake did not reach the barrier");
+        assert!(timer.collector(&["disable"]).status.success());
+        fs::write(timer.log.with_extension("go"), b"").unwrap();
+        let _ = enable.join().unwrap();
+    });
+    if timer.policy()["collectorEnabled"] == true {
+        assert!(timer.units().join("lazysh-usage-collector.timer").exists());
+    }
+}
+
+#[test]
+fn failed_launchd_reenable_loads_the_restored_job_again() {
+    let timer = Timer::new("launchd");
+    // The first bootstrap after the setup one fails, as a launchd that refuses the new plist does; later ones work.
+    timer.script("launchctl", "case \"$1\" in\n print) case \"$2\" in */app.lazysh.usage-collector) [ -f \"$FAKE_TASK\" ] || exit 1;; esac;;\n bootout) rm -f \"$FAKE_TASK\";;\n bootstrap) if [ -f \"$FAKE_TASK.armed\" ] && [ ! -f \"$FAKE_TASK.failed\" ]; then touch \"$FAKE_TASK.failed\"; exit 1; fi; touch \"$FAKE_TASK\";;\n esac\n");
+    assert!(timer.collector(&["enable"]).status.success());
+    let before = fs::read_to_string(timer.plist()).unwrap();
+    fs::write(timer.task.with_extension("armed"), b"").unwrap();
+    let failed = timer.collector(&["enable"]);
+    assert_eq!(exit(&failed), 42);
+    assert_eq!(fs::read_to_string(timer.plist()).unwrap(), before);
+    assert!(
+        timer.task.exists(),
+        "the previously loaded owned job was left unloaded"
+    );
+    assert_eq!(timer.policy()["collectorEnabled"], true);
+}
+
+#[test]
+fn enable_does_not_replace_an_unowned_loaded_launchd_job_without_a_plist() {
+    let timer = Timer::new("launchd");
+    fs::write(&timer.task, "foreign").unwrap();
+    timer.script("launchctl", "case \"$1\" in\n print) case \"$2\" in */app.lazysh.usage-collector) [ -f \"$FAKE_TASK\" ] || exit 1; cat \"$FAKE_TASK\";; esac;;\n bootout) rm -f \"$FAKE_TASK\";;\n bootstrap) printf owned > \"$FAKE_TASK\";;\n esac\n");
+    let result = timer.collector(&["enable"]);
+    assert!(
+        !result.status.success(),
+        "foreign loaded job must be refused"
+    );
+    assert_eq!(fs::read_to_string(&timer.task).unwrap(), "foreign");
+    assert!(!timer.plist().exists());
+}

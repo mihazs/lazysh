@@ -16,7 +16,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:_GLIBCXX_USE_CXX11_ABI=${lazysh_ort_glibcxx_abi}>)
 endif()
 if(MSVC)
-  add_compile_options(/utf-8)
+  # /EHsc lets the compiler assume that an extern "C" function, such as every sherpa-onnx C API entry the bridge
+  # calls, never throws: it could then drop the bridge's catch blocks and destructors around those calls. /EHs
+  # keeps C++ exceptions synchronous without that assumption, which the boundary tests below depend on.
+  string(REGEX REPLACE "[/-]EHsc?" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  add_compile_options(/utf-8 "$<$<COMPILE_LANGUAGE:CXX>:/EHs>")
 endif()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(SHERPA_ONNX_ENABLE_C_API ON CACHE BOOL "" FORCE)
@@ -93,19 +97,20 @@ endif()
 target_include_directories(lazysh-parakeet-native PRIVATE "${upstream}")
 target_link_libraries(lazysh-parakeet-native PRIVATE sherpa-onnx-c-api nlohmann_json::nlohmann_json)
 
-# ORT's pinned Linux archive embeds an older protobuf than the system Mosh
-# dependency. Hidden exports do not stop static Mosh relocations binding ORT's
+# ORT's pinned Linux and Android archives embed an older protobuf than the Mosh
+# dependency (the system library on Linux, a pinned static copy on Android).
+# Hidden exports do not stop static Mosh relocations binding ORT's
 # incompatible ExtensionSet, RTTI or vtables at the final client link. Local
 # COMDAT signatures also participate in deduplication: retaining an old D5
 # signature can discard Mosh's destructor while ORT defines only renamed D1/D2.
 # Inventory all symbols, not only externally visible definitions/references.
 function(lazysh_private_ort input output_variable)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$")
     set(${output_variable} "${input}" PARENT_SCOPE)
     return()
   endif()
   if(NOT CMAKE_NM OR NOT CMAKE_OBJCOPY)
-    message(FATAL_ERROR "The Linux ORT boundary requires target nm and objcopy")
+    message(FATAL_ERROR "The Linux and Android ORT boundary requires target nm and objcopy")
   endif()
   execute_process(COMMAND "${CMAKE_NM}" --format=posix "${input}"
     RESULT_VARIABLE nm_result OUTPUT_VARIABLE symbols ERROR_VARIABLE nm_error)
@@ -124,7 +129,7 @@ function(lazysh_private_ort input output_variable)
   list(SORT protobuf_symbols)
   list(LENGTH protobuf_symbols symbol_count)
   if(symbol_count EQUAL 0)
-    message(FATAL_ERROR "Pinned Linux ORT has no expected protobuf namespace; refusing an unchecked ABI boundary")
+    message(FATAL_ERROR "Pinned ORT has no expected protobuf namespace; refusing an unchecked ABI boundary")
   endif()
   set(mapping "")
   foreach(symbol IN LISTS protobuf_symbols)

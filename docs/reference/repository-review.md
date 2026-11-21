@@ -10,4 +10,6 @@
 
 Repository review is read-only. It does not stage changes, run external diff/text conversion helpers, check out revisions or write fetched content to the device. Paths are passed as quoted literal pathspecs, and historical revisions use full Git object identifiers.
 
+`lazysh-agent review` enforces the Git output, entry and diff-line bounds above, with a 30 second deadline for each Git command.
+
 For setup and usage, see [repository-review](../repository-review.md). Return to the [documentation map](../README.md).

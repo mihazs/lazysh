@@ -8,17 +8,61 @@ import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
 import {commandLine,moonTask} from './support/moon';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
-import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
+import {reportOwnedSshPromptFailure,receiverProbeErrors,stopOwnedTree} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
 import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,IME_TRANSACTION_WIRE,IME_CHAT_WIRE,imeExpectedWire,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+
+test('Chat IME hit diagnostic uses bounded geometry and fixed categories without DOM text', async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const expression=source.match(/\(\(\)=>\{const area=\$area,rect=area\.getBoundingClientRect\(\)[\s\S]*?viewport:\[innerWidth,innerHeight\]\.map\(bounded\)\}\};\}\)\(\)/)?.[0];
+  expect(expression).toBeDefined();
+  const area={getBoundingClientRect:()=>({left:-20000,top:581,width:363,height:80}),contains:()=>false};
+  const run=new Function('target','document','innerWidth','innerHeight',`return ${expression!.replace('$area','target')}`);
+  const hit=(category:string)=>({contains:()=>category==='ancestor',closest:(selector:string)=>
+    category==='dialog'&&selector==='.dialog-backdrop'||category==='sidebar'&&selector==='.sidebar, .sidebar-scrim'||
+    category==='gesture-handle'&&selector==='.gesture-handle'||category==='bottom-menu'&&selector==='.bottom-menu, .bottom-menu-scrim'||
+    category==='chat'&&selector==='.chat-panel'||category==='terminal'&&selector==='.terminal-canvas'||
+    category==='session'&&selector==='.session-body',get textContent(){throw Error('private text read');}});
+  for(const category of ['ancestor','dialog','sidebar','chat','gesture-handle','bottom-menu','terminal','session','other']) {
+    const result=run(area,{elementFromPoint:()=>hit(category)},412,660);
+    expect(result.ok).toBe(false);expect(result.diagnostic).toEqual({hit:category,rect:[-10000,581,363,80],viewport:[412,660]});
+  }
+  expect(run(area,{elementFromPoint:()=>area},412,660).ok).toBe(true);
+  expect(run(area,{elementFromPoint:()=>null},412,660).diagnostic.hit).toBe('none');
+});
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
   const error=await owned.finish('synthetic failure',1000).catch(error=>error as Error);
   expect((error as Error).message).toBe('Owned fixture failed: synthetic failure; exit=31');
   expect(await owned.startupDiagnostic()).toEqual({state:'early-exit',exitCode:31});
+});
+
+test.skipIf(process.platform!=='linux')('owned tree identity failure reports only pre-stop exit category',async()=>{
+  const owned=new OwnedProcess('sleep',['60']);
+  const live=owned.liveIdentity.bind(owned);let reads=0;
+  const probe=spyOn(owned,'liveIdentity').mockImplementation(async()=>++reads===2?undefined:live());
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await expect(stopOwnedTree(owned,'Herdr',true)).rejects.toThrow('Owned Herdr root identity lost');
+    expect(warning).toHaveBeenCalledWith('Owned tree pre-stop {"label":"Herdr","cleanSupervisorExit":true,"exit":"unobserved"}');
+    expect(owned.child.exitCode!==null || owned.child.signalCode!==null).toBe(true);
+  } finally {probe.mockRestore();warning.mockRestore();await owned.stop();}
+});
+
+test.skipIf(process.platform!=='linux').each(['clean','nonzero','signaled'] as const)('owned exited root reports %s without process data',async exit=>{
+  const owned=exit==='signaled'?new OwnedProcess('sleep',['60']):
+    new OwnedProcess(process.execPath,['-e',`process.exit(${exit==='clean'?0:31})`,'private-fixture-secret']);
+  if(exit==='signaled')process.kill(owned.child.pid!,'SIGKILL');
+  await owned.done;
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await expect(stopOwnedTree(owned,'Herdr',true)).rejects.toThrow('Owned Herdr root identity unavailable');
+    expect(warning).toHaveBeenCalledWith('Owned tree pre-stop '+JSON.stringify({label:'Herdr',cleanSupervisorExit:true,exit}));
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('private-fixture-secret');
+  } finally {warning.mockRestore();}
 });
 
 test.skipIf(process.platform!=='linux').each(['missing','denied'] as const)('owned startup distinguishes %s launcher without exposing paths or arguments',async failure=>{
@@ -101,6 +145,33 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
     warning.mockRestore();await child.stop();
   }
 },5000);
+
+test('teardown deadline captures only bounded state at the deadline without changing the failure',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
+  const originalDone=child.done;
+  await originalDone;
+  Object.defineProperty(child,'done',{value:new Promise<number>(()=>{}),configurable:true});
+  const lines:string[]=[];
+  const warning=spyOn(console,'error').mockImplementation(value=>{lines.push(String(value));});
+  try {
+    await expect(child.stop()).rejects.toThrow('Owned fixture process teardown deadline');
+    expect(lines).toHaveLength(1);
+    const observation=JSON.parse(lines[0].slice('Owned teardown deadline observation '.length));
+    expect(observation.scope).toBe('at-deadline');
+    expect(observation.leaderExitObserved).toBe(true);
+    expect(observation.closeObserved).toBe(true);
+    expect(Object.keys(observation).sort()).toEqual(['closeObserved','leaderExitObserved','scope','streams']);
+    for(const stream of Object.values(observation.streams) as Array<Record<string,unknown>>) {
+      expect(Object.keys(stream).sort()).toEqual(['closed','destroyed']);
+      for(const value of Object.values(stream))expect([true,false,null]).toContain(value);
+    }
+    warning.mockImplementation(()=>{throw new Error('diagnostic failed');});
+    await expect(child.stop()).rejects.toThrow('Owned fixture process teardown deadline');
+  } finally {
+    warning.mockRestore();Object.defineProperty(child,'done',{value:originalDone});
+    await child.stop();
+  }
+},8000);
 
 test('teardown reporter whitelists closed fields and cannot throw over a primary failure',async()=>{
   const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
@@ -1013,11 +1084,13 @@ test('passive native tap evidence retains only bounded trusted/target flags and 
   const observe=new Function('window',`${source};return ownedNativeTapObservation;`)(window)(target);
   listeners.get('pointerdown')!({isTrusted:true,target,clientX:51,clientY:22,message:'private-data',preventDefault(){throw new Error('Must remain passive');}});
   listeners.get('pointerup')!({isTrusted:false,target:{value:'other-private-value'},clientX:Infinity,clientY:NaN});
+  listeners.get('pointercancel')!({isTrusted:true,target,clientX:51,clientY:22});
   for(let count=0;count<4;count++)listeners.get('click')!({isTrusted:true,target,clientX:51,clientY:22});
   const sample=observe.read();
   expect(sample.before).toMatchObject({enabled:true,connected:true,focused:false});
   expect(sample.down).toEqual({count:1,overflow:false,trusted:true,target:true,point:[51,22]});
   expect(sample.up).toEqual({count:1,overflow:false,trusted:false,target:false,point:[null,null]});
+  expect(sample.cancel).toEqual({count:1,overflow:false,trusted:true,target:true,point:[51,22]});
   expect(sample.click.count).toBe(2);expect(sample.click.overflow).toBe(true);
   expect(JSON.stringify(sample)).not.toContain('private');
   expect(observe.close()).toBe(true);expect(listeners.size).toBe(0);expect(observe.close()).toBe(true);
@@ -1569,7 +1642,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const end=source.indexOf('  } finally {\n    await moshWitness?.stop();',start);
   expect(start>0 && end>start).toBe(true);
   const body=source.slice(start+'  } catch(error) {'.length,end);
-  const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','deniedNotification','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','reportInstrumentationFailures','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
+  const names=['herdr','tmux','zellij','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','deniedNotification','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','reportInstrumentationFailures','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=imeExpectedWire(nonce);
@@ -1645,7 +1718,7 @@ test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits, a d
   expect(()=>verifyImeReceiverBytes(undefined as never,'private-invalid')).toThrow('Owned IME nonce invalid');
   // Escape is a key, not text: the line a shell holds after these bytes is what the user typed, once and in order.
   let visible='';for(const byte of Buffer.from(IME_TRANSACTION_WIRE))visible=byte===127?visible.slice(0,-1):byte===27?visible:visible+String.fromCharCode(byte);
-  expect(visible).toBe('thetheowned swipe tanweb ');
+  expect(visible).toBe('thetheowned swipe tanweb ls. ');
 });
 
 test('packaged SSH IME case uses ordinary native routing, a separate report, and no harness navigation',async()=>{

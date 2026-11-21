@@ -4,7 +4,7 @@ import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import TmuxJumpPanel from '../TmuxJumpPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
-import {tmuxJumpSnapshot as snapshot} from '../test/tmuxJumpData';
+import {tmuxJumpSnapshot as snapshot,tmuxJumpPaneSnapshot as paneSnapshot} from '../test/tmuxJumpData';
 import {t,uiI18n,formatNumber} from './core';
 
 vi.mock('@tauri-apps/api/core',()=>({invoke:vi.fn(),isTauri:()=>true}));
@@ -70,4 +70,25 @@ it('retranslates only the unavailable prefix while key-shaped native diagnostics
   render(<TmuxJumpPanel sessionId="failed-display" onClose={vi.fn()} onJump={vi.fn()}/>);
   const alert=await screen.findByRole('alert');
   await cycle(()=>{expect(screen.getByRole('alert')).toBe(alert);expect(alert.textContent).toBe(`${t('jumpUnavailable')} ${raw}`);expect(alert.textContent).toContain(raw);});
+});
+
+it('retranslates the pane, zoom and current captions while a raw title, number and agent name stay as the host wrote them',async()=>{
+  const title='jumpPane <raw> {{name}}';
+  const [agent,build]=paneSnapshot.sessions[0].windows;
+  const shown={...build.panes![0],index:1000,title};
+  const result={...paneSnapshot,current:{sessionId:'$1',windowId:'@5',paneId:'%8'},sessions:[{...paneSnapshot.sessions[0],windows:[agent,{...build,panes:[shown,build.panes![1]]}]}]};
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'
+    ?{schemaVersion:1,sessions:[{sessionId:'s',agent:'Codex',project:'/work',state:'working',updatedAt:'2026-11-15T12:00:00.000Z',summary:'Working',paneId:'%8',eventCount:1}]}:result);
+  render(<TmuxJumpPanel sessionId="locale-display" onClose={vi.fn()} onJump={vi.fn()}/>);
+  const current=await screen.findByRole('button',{current:'location'});
+  await screen.findByText(/Codex/);
+  await cycle(()=>{
+    expect(screen.getByRole('button',{current:'location'})).toBe(current);
+    expect(current.textContent).toBe(`${t('jumpPane')} ${formatNumber(1000)}: ${title} · Codex · ${t('jumpZoomed')} · ${t('jumpCurrent')}`);
+    expect(screen.getByRole('button',{name:`${t('jumpPane')} ${formatNumber(1)}: tail`})).toBeTruthy();
+  });
+  await uiI18n.changeLanguage('pt-BR');
+  expect(current.textContent).toBe(`Painel ${formatNumber(1000)}: ${title} · Codex · Ampliado · Atual`);
+  await uiI18n.changeLanguage('es');
+  expect(current.textContent).toBe(`Panel ${formatNumber(1000)}: ${title} · Codex · Ampliado · Actual`);
 });

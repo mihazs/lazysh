@@ -54,3 +54,11 @@ it('refuses a workflow tree that is not what the companion sends', () => {
   expect(bad({totals: {agents: -1, tokens: 0, toolCalls: 0}})).toThrow();
   expect(bad({phases: [{title: 'x', state: 'weird'}]})).toThrow();
 });
+
+// A run that is still going has a journal but no summary file yet, and the companion before the fix sent that as `name: null`.
+it('opens a workflow with no name, whether the companion omits it or sends null, and still refuses a name that is not text', () => {
+  const unnamed = {...raw, workflow: {...raw.workflow, name: undefined}};
+  expect(parseWork([unnamed])).toHaveLength(1);
+  expect(parseWork([{...raw, workflow: {...raw.workflow, name: null}}])).toHaveLength(1);
+  expect(() => parseWork([{...raw, workflow: {...raw.workflow, name: 7}}])).toThrow();
+});

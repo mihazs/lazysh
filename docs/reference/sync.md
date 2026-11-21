@@ -31,6 +31,8 @@ The maintained age 0.11.5 line provides the required standard format and current
 
 Cargo tests cover wrong keys, tampering, truncation, excessive KDF headers, category separation, secret-free previews, local revision conflicts, pin preservation, additive upload merging and a real loopback HTTP fixture for GET/PUT conditional writes, redirects and body limits. The loopback substitution exists only in test code; production endpoint validation always requires HTTPS.
 
-Not yet verified: a real WebDAV provider, Android/iOS secure-store enrollment and recovery-key display, cross-device mobile lifecycle, or an operational lost-device revocation exercise.
+An Android case (`mobile-e2e/specs/regression/sync/1540-encrypted-sync-webdav.e2e.ts`, [Android testing](../android-testing.md#encrypted-sync-against-an-owned-webdav-server-1540)) drives the real Sync panel in the packaged debug app against an owned HTTPS WebDAV server with its own CA: enrollment, the recovery key shown again from the native credential store after a restart, no request before the explicit upload, the credentials category left off, settings stored as age ciphertext, and a reset install that enrolls with the recovery key, previews and applies the host list. Its trust of the owned CA exists only in the `sync-tls-acceptance` emulator build; published builds keep the web PKI roots.
+
+Not yet verified: a real WebDAV provider, physical Android and iOS secure-store enrollment and recovery-key display, mobile upload of saved credentials, cross-device mobile lifecycle beyond a data reset, or an operational lost-device revocation exercise.
 
 For setup and usage, see [sync](../sync.md). Return to the [documentation map](../README.md).

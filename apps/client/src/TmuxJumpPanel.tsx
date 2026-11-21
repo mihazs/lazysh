@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { api as nativeApi, type TmuxJumpSnapshot } from './bridge';
-import { captureAccess, useProtectedApi } from './access';
+import { bindProtectedInvoke, captureAccess, useProtectedApi } from './access';
+import { parseSnapshot, type AgentSession } from './AgentPanel';
+import { paneAgent } from './agentPaneIdentity';
 import { errorMessage } from './SessionTools';
 import {t,useUi,formatNumber} from './i18n/core';
+import {readMuxLayout,writeMuxLayout,type MuxLayout} from './muxLayout';
 
 export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange }: {
   sessionId: string; onClose: () => void; onJump: (snapshot: TmuxJumpSnapshot) => void; onBusyChange?:(busy:boolean)=>void;
@@ -11,21 +14,23 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
   const api = useProtectedApi(nativeApi);
   const access = useRef(captureAccess()).current;
   const [snapshot, setSnapshot] = useState<TmuxJumpSnapshot | null>(null);
+  const [reports, setReports] = useState<AgentSession[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
-  const [layout, setLayout] = useState(() => {
-    try { const value = localStorage.getItem('lazysh.multiplexer.layout'); return ['list', 'accordion', 'grid'].includes(value ?? '') ? value! : 'list'; }
-    catch { return 'list'; }
-  });
+  const [layout, setLayout] = useState(readMuxLayout);
   const revision = useRef(0);
   const pending = useRef(false);
   const busyListener=useRef(onBusyChange);busyListener.current=onBusyChange;
   function refresh() {
     if(!access.current() || pending.current)return;
     const request=++revision.current;
-    setSnapshot(null);setBusy(true);setError('');pending.current=true;busyListener.current?.(true);
+    setSnapshot(null);setReports([]);setBusy(true);setError('');pending.current=true;busyListener.current?.(true);
     void api.tmuxJumpSnapshot(sessionId).then(value=>{
-      if(access.current() && revision.current===request)setSnapshot(value);
+      if(!access.current() || revision.current!==request)return;
+      setSnapshot(value);
+      // The agent a pane runs comes from the companion's reports; a host without them just shows the panes.
+      if(value.sessions.some(session=>session.windows.some(window=>window.panes?.length)))
+        void bindProtectedInvoke(access)('agent_snapshot',{sessionId}).then(rows=>{if(access.current() && revision.current===request)setReports(parseSnapshot(rows));}).catch(()=>{});
     }).catch(reason=>{
       if(access.current() && revision.current===request)setError(errorMessage(reason));
     }).finally(()=>{
@@ -38,15 +43,15 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
   },[sessionId]);
   useEffect(() => {
     if (!access.current()) return;
-    try { localStorage.setItem('lazysh.multiplexer.layout', layout); } catch { /* Layout works without persistence. */ }
+    writeMuxLayout(layout);
   }, [layout]);
-  async function jump(targetSessionId: string, windowId: string) {
+  async function jump(targetSessionId: string, windowId: string, paneId?: string) {
     if (!access.current() || pending.current || !snapshot) return;
-    if (snapshot.current.sessionId === targetSessionId && snapshot.current.windowId === windowId) { onClose(); return; }
+    if (snapshot.current.sessionId === targetSessionId && snapshot.current.windowId === windowId && (paneId === undefined || snapshot.current.paneId === paneId)) { onClose(); return; }
     pending.current = true; setBusy(true); setError('');busyListener.current?.(true);
     const request = revision.current;
     try {
-      const result = await api.tmuxJump(sessionId, snapshot.generation, targetSessionId, windowId);
+      const result = await api.tmuxJump(sessionId, snapshot.generation, targetSessionId, windowId, ...(paneId === undefined ? [] : [paneId]));
       if (access.current() && revision.current === request) { setSnapshot(result);onJump(result); onClose(); }
     } catch (reason) {
       if (access.current() && revision.current === request) {
@@ -58,7 +63,7 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
     }
   }
   return <section className="multiplexer-panel" aria-label={`tmux ${t('appJumpTo')}`}>
-    <div className="tool-bar"><label>{t('jumpLayout')}<select value={layout} onChange={event => { if (access.current()) setLayout(event.target.value); }}>
+    <div className="tool-bar"><label>{t('jumpLayout')}<select value={layout} onChange={event => { if (access.current()) setLayout(event.target.value as MuxLayout); }}>
       <option value="list">{t('preferencesList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option>
     </select></label><button className="subtle-button" disabled={busy} onClick={refresh}>{t('agentsRefresh')}</button></div>
     {busy && <p role="status">{t('appReadingTmuxDestinations')}</p>}
@@ -66,10 +71,19 @@ export default function TmuxJumpPanel({ sessionId, onClose, onJump, onBusyChange
     <div className={`mux-list mux-layout-${layout}`}>{snapshot?.sessions.map(session => <details key={`${layout}:${session.id}`} open={layout !== 'accordion' || session.id === snapshot.current.sessionId}>
       <summary>{session.name}</summary>
       {session.windows.map(window => {
-        const current = session.id === snapshot.current.sessionId && window.id === snapshot.current.windowId;
-        return <div className="mux-row" key={window.id}><button className="subtle-button" disabled={busy} aria-current={current ? 'location' : undefined} onClick={() => void jump(session.id, window.id)}>
+        const here = session.id === snapshot.current.sessionId && window.id === snapshot.current.windowId;
+        // The one current marker sits on the deepest row the tree shows: the pane when the snapshot lists it, else the window.
+        const shown = here ? window.panes?.find(pane => pane.id === snapshot.current.paneId) : undefined;
+        const current = here && !shown;
+        return <Fragment key={window.id}><div className="mux-row"><button className="subtle-button" disabled={busy} aria-current={current ? 'location' : undefined} onClick={() => void jump(session.id, window.id)}>
           {formatNumber(window.index)}: {window.name}{current ? ` · ${t('jumpCurrent')}` : ''}
-        </button></div>;
+        </button></div>
+        {window.panes?.map(pane => {
+          const agent = paneAgent(reports, pane.id);
+          return <div className="mux-row mux-pane-row" key={pane.id}><button className="subtle-button" disabled={busy} aria-current={pane === shown ? 'location' : undefined} onClick={() => void jump(session.id, window.id, pane.id)}>
+            {t('jumpPane')} {formatNumber(pane.index)}: {pane.title || pane.command || pane.id}{agent ? ` · ${agent}` : ''}{window.zoomed && pane.active ? ` · ${t('jumpZoomed')}` : ''}{pane === shown ? ` · ${t('jumpCurrent')}` : ''}
+          </button></div>;
+        })}</Fragment>;
       })}
     </details>)}</div>
     <p>{t('jumpHint')}</p>

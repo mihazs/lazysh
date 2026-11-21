@@ -174,10 +174,10 @@ describe("OSC52 clipboard requests", () => {
   expect(keepDevicePreferences(null, mine)).toBeNull();
  });
  it("defaults the edge gestures on at 40 dp, stores only changes and ignores malformed values", () => {
-  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode: "auto"});
+  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode: "auto", showLines: false});
   expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {leftMenu: true, zoneWidth: 40}}), "edgeGestures")).toBe(false);
   const saved = parsePreferences(JSON.parse(JSON.stringify({...defaults, edgeGestures: {leftMenu: false, zoneWidth: 64}})));
-  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 64, mode: "auto"});
+  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 64, mode: "auto", showLines: false});
   // The gesture style is stored only when it is not the automatic one, and an unknown value falls back to it.
   expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {mode: "auto"}}), "edgeGestures")).toBe(false);
   for (const mode of ["handles", "edges", "off"] as const) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {mode}})).mode).toBe(mode);
@@ -205,6 +205,20 @@ describe("OSC52 clipboard requests", () => {
   // A download from a device that has it on, or off, never changes this device's choice.
   expect(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: false, fontSize: 20}, mine))).toMatchObject({privateKeyboard: true, fontSize: 20});
   expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: true}, parsePreferences({...defaults}))), "privateKeyboard")).toBe(false);
+ });
+ it("keeps the terminal engine choice on this device: Auto stores nothing, Native or xterm.js are remembered, and none is synced", () => {
+  expect(Object.hasOwn(parsePreferences({...defaults}), "terminalEngine")).toBe(false);
+  for (const engine of ["native", "xterm"]) expect(parsePreferences(JSON.parse(JSON.stringify(parsePreferences({...defaults, terminalEngine: engine})))).terminalEngine).toBe(engine);
+  for (const junk of ["auto", "", "Native", "xterm.js", "webgl", true, 1, null, [], {}]) expect(Object.hasOwn(parsePreferences({...defaults, terminalEngine: junk}), "terminalEngine")).toBe(false);
+  const mine = parsePreferences({...defaults, terminalEngine: "native", fontSize: 18});
+  // Uploading leaves the choice out: the Rust sync schema refuses unknown fields, and another device may have no native surface.
+  const uploaded = syncablePreferences(mine);
+  expect(Object.hasOwn(uploaded, "terminalEngine")).toBe(false);
+  expect(uploaded.fontSize).toBe(18);
+  // A download from a device that chose another engine, or sent none, never changes this device's choice.
+  expect(parsePreferences(keepDevicePreferences({...defaults, terminalEngine: "xterm", fontSize: 20}, mine))).toMatchObject({terminalEngine: "native", fontSize: 20});
+  expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, mine)).terminalEngine).toBe("native");
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, terminalEngine: "native"}, parsePreferences({...defaults}))), "terminalEngine")).toBe(false);
  });
  it("remembers a forced tab strip on this device only; Auto stores nothing", () => {
   expect(Object.hasOwn(parsePreferences({...defaults}), "tabStrip")).toBe(false);

@@ -52,10 +52,30 @@ Shell quoting alone does not protect tmux arguments: tmux parses trailing semico
 ### In-session Jump To
 
 A tmux terminal attached through lazysh offers **Jump To** with its session/window
-tree and an exact **Current** marker. Choosing Current closes the panel without
-sending a command. List, accordion and grid share the existing saved layout
-preference. A successful switch remembers the destination's human session name;
-numeric IDs and navigation generations are never saved for reconnect.
+tree and an exact **Current** marker. Each window lists its panes, numbered like
+tmux numbers them, with the pane's title (blank while it still has tmux's default,
+the host name) or else its running command, the agent a companion report names in
+that pane (matched by `TMUX_PANE`, like the Agent view and the status bar; a
+session that ended names none) and **Zoomed** on the active pane of a zoomed window.
+Exactly one row carries the Current marker: the displayed pane, not also its window.
+Choosing Current closes the panel without sending a command. List, accordion and
+grid share the existing saved layout preference. A successful switch remembers the
+destination's human session name; numeric IDs and navigation generations are never
+saved for reconnect.
+
+Choosing a pane row moves the retained control client's display to that exact pane:
+one `switch-client` to `session:window.pane`, on the server the terminal is attached
+to, after a fresh read confirms the pane is still in that window. A pane that closed
+or moved since the list was read is refused with a message and leaves the display and
+the binding as they were; **Refresh** reads the tree again. Like `select-pane`, it
+brings the pane's window forward and, in a zoomed window, un-zooms it so the pane
+shows. Pane titles and commands are program-controlled: control characters show as
+`?` and each is cut to 64 columns before it reaches the client. The tree has one row
+per pane, so the 4096-row limit below counts panes: a host with more panes than that
+fails Jump To explicitly instead of listing a part of them. A binding that sends no
+`panes` keeps the window-only tree. An agent label is matched by pane id alone, so two
+tmux servers on one host that both run an agent in `%7` can show the same label; the
+companion's server label (#1146) is not used by this panel yet.
 
 Display labels are separate from exact restoration names. Only a native-validated,
 control-free name of at most 200 UTF-8 bytes is saved. Unsupported destinations
@@ -134,15 +154,23 @@ Herdr navigation remain separate acceptance work under issue #7.
 
 ## Herdr
 
-List running named servers, then attach or browse one. The Herdr tree preserves server/workspace/tab/pane identity and displays reported agent states. Create and rename workspaces/tabs, focus workspaces/tabs, split and zoom exact panes, and focus reported agents. Plain panes can be selected through the terminal; Herdr's `agent focus` command only accepts agent panes.
+List running named servers, then attach or browse one. The Herdr tree preserves server/workspace/tab/pane identity and displays reported agent states. Create and rename workspaces/tabs, focus workspaces/tabs, split and zoom exact panes, and focus reported agents. Each pane row also shows the pane's label (its `pane rename` name) and has **Rename** (`pane rename`), four **Move divider** arrows (`pane resize --direction left|right|up|down`, five percentage points of the split per press; Herdr clamps it to what the layout allows) and **Close** (`pane close`); each workspace has **Close Herdr workspace** (`workspace close`). Closing asks first, in a confirmation that names the pane (id, label and directory) or the workspace and says that its programs stop (closing a tab's last pane closes the tab), and sends one command by exact id only when confirmed; Cancel sends nothing. A primary workspace that still has linked worktree workspaces is refused by Herdr (`workspace_group_close_required`); lazysh never adds `--group`, shows "close those first" in the selected language and keeps the confirmation open. A pane label of exactly `--clear` is refused because Herdr reads it as "remove the label". On a Herdr version outside 0.9.3 to 0.9.5 the panel stays navigation-only, so none of these controls appear. Plain panes can be selected through the terminal; Herdr's `agent focus` command only accepts agent panes.
 
-The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. Incompatible response shapes fail explicitly. lazysh does not install Herdr, alter its configuration, or stop existing servers.
+The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. Incompatible response shapes fail explicitly. lazysh does not install the system Herdr, alter its configuration, or stop existing servers. The one exception is the optional managed Herdr, which only an explicit action installs or removes: see [Managed Herdr install and removal](herdr-managed-install.md).
+
+### Which Herdr a connection runs
+
+A connection runs one Herdr, chosen once: the host's own `herdr` (the default) or the optional managed derivative built from `packages/herdr-upstream` with the `lazysh-managed` feature (its own `lazysh-herdr` namespace, see [its provenance](../packages/herdr-upstream/PROVENANCE.md)). The choice is the closed name `system` or `managed`, never a path or a command: `herdr_backend_select` takes it for a connection, and an `attach_multiplexer` call or a Mosh entry can carry it as `backend` so that a restored entry names the Herdr it ran on.
+
+The first Herdr use on a connection captures the choice; a first use that names none captures the host's own Herdr. A later, different choice fails with `herdr_backend_captured` and is never re-resolved, and a reconnect is a new connection that chooses again. Everything on the connection then runs that Herdr: discovery, the session list, the tree and its actions, workspace creation, SSH and Mosh attachment, the guard's capability check and its RPCs, and the actor that owns the attached display. Exact pane focus runs the companion with the chosen Herdr first on `PATH`, so it reads that Herdr's sessions. A guarded attachment whose startup fails is closed and never retried as the other Herdr or as an ordinary attach. A local session always runs the host's own Herdr.
+
+The managed Herdr is the single file `~/.local/libexec/lazysh-herdr/herdr`. It must be an executable regular file that only you (or root) can replace, below directories that only you (or root) can change, and no part of the path may be a symbolic link: the same check as for the official installer's `~/.local/bin` fallback. If that fails, or the host is not a positively identified Linux or macOS host, the call fails, discovery reports Herdr as absent, and nothing falls back to the host's own Herdr. Nothing installs the managed file yet and the app offers no choice: the explicit install and remove (#1760) and the release asset (#1522) are later slices, so no release or platform support is claimed.
 
 Supported Herdr versions are **0.9.3 through 0.9.5**. CI builds stock and guarded Herdr 0.9.5 from the pinned source and runs the native and Android Herdr suites against them. lazysh uses only commands, exact IDs, snapshot fields and error codes that 0.9.3 and 0.9.5 share, so hosts still on 0.9.3 keep working. What changed in Herdr 0.9.4 and 0.9.5:
 
 - If a workspace, tab or pane was closed on the host after the tree loaded, Herdr answers `workspace_not_found`, `tab_not_found`, `pane_not_found` or `agent_not_found`. lazysh shows "The selected connection or destination changed" instead of Herdr's raw JSON. Exact pane navigation goes through the companion, which reports `pane_not_found` as `HerdrFocusMissing`; an older companion still shows its generic failure. Since 0.9.4, an out-of-range workspace number also returns `workspace_not_found` instead of crashing the server.
 - Since 0.9.4, closing the shell that started Herdr no longer stops the server on Linux and macOS. Stop a server with `herdr server stop` or SIGTERM, not SIGHUP. lazysh never stops servers, and its test fixtures use `server stop`, SIGTERM or SIGKILL.
-- Herdr 0.9.4 asks before closing a workspace's only pane from its own keys or menu (`ui.confirm_close`). lazysh has no close action, and CLI/API closes stay immediate.
+- Herdr 0.9.4 asks before closing a workspace's only pane from its own keys or menu (`ui.confirm_close`). lazysh asks for its own confirmation before every close it sends, and CLI/API closes stay immediate.
 - Herdr 0.9.5 reads Codex status from the screen again instead of turn hooks. lazysh shows whatever state Herdr reports.
 
 Agents initially reads the attached Herdr session when discovery lists that exact
@@ -151,6 +179,17 @@ that initial selection. If the attached session is absent, choose a server expli
 lazysh does not substitute another one. Plain terminals automatically select a sole
 running server and require a choice when several are available. Discovery reads one
 server per refresh and does not grant terminal input or approval authority.
+
+The **Spaces** tree marks the current workspace, tab and pane. Stock Herdr has no
+read for where one client is looking: its snapshot reports the server's shared
+focus, which another connection may have moved, so that is what the marker shows
+and why choosing a row says it changes focus for other connections. On the
+optional guarded Herdr host, the client attached through this terminal reports
+its own workspace, tab and pane through `lazysh.guard.observe`, and the marker
+shows that location instead, but only when the report names the server Spaces
+is reading. While a Chat turn holds the guard, the last reading stays; when the
+guard is unavailable the marker returns to the shared focus. Real acceptance on
+a phone and a guarded host with two clients is not part of this change.
 
 ### Create workspaces, worktrees and agents
 
@@ -182,7 +221,73 @@ one live agent row carries the conversation's session id in the exact pane and
 terminal the conversation was opened from; no focus is involved and no companion
 is needed. The message is confirmed by the conversation showing it, and a failure
 after the command started is never resent. A guarded host keeps using the guarded
-input.
+input. A dialog answer (an option's digit, arrows and Enter) goes through `herdr agent send-keys PANE KEY...` on either kind of host, after the same check of the pane's agent session, and the dialog itself is read with `herdr agent read PANE --source visible`; see [Herdr panes](agent-view.md#herdr-panes).
+
+Herdr **Spaces** has a **Jump To layout** control above the workspace tree with the
+same three layouts and the same remembered preference as tmux Jump To
+(`lazysh.multiplexer.layout`):
+
+- **List** (the default) shows every space open.
+- **Accordion** opens only the focused space. Any space can still be opened or
+  closed by hand until the layout changes.
+- **Grid** sets the spaces side by side as cards when the sidebar is wide enough for
+  two.
+
+The layout only changes how the tree is drawn: a space, tab or pane row always sends
+the same exact target, and searching opens every matching space in any layout.
+
+### Pane input on a stock Herdr, pinned to one server process
+
+`lazysh-agent herdr-pane-input --session NAME` is the host half of typing into a
+named pane of an unchanged stock Herdr (Linux hosts with kernel 6.5 or newer; on
+other hosts it reports `HerdrInputPlatformUnsupported` and nothing is sent). It
+speaks JSON lines on stdin and stdout and ends when stdin closes. The app does
+not use it yet, so no Chat or Agent view behaviour changes in this release; it is
+the verified transport that the explicit destination picker will build on (#655).
+
+Stock Herdr has no private guard to prove which server owns a socket, and its
+JSON connections last one request. The actor therefore pins the server process
+once: it connects, takes the peer's pidfd from that connection (`SO_PEERPIDFD`,
+never a pid number reopened later), checks the peer belongs to the same user, and
+keeps a read-only `events.subscribe` connection open. Each operation then opens its
+own connection and compares that connection's peer, by pidfd, pid and process start
+time, with the pinned process before a single request byte is written. Anything
+else retires the actor for good, with no rediscovery and no retry: a socket path
+now served by another server, a restarted server, the subscription ending, the
+server process exiting, a kernel without `SO_PEERPIDFD`, or a malformed request.
+
+Requests are `preflight` (read the pane's occupant: pane id, terminal id, agent,
+working directory, label, title), `send` (text plus Enter in one `pane.send_input`)
+and `escape`. Text is 1 to 4,096 bytes of UTF-8 without control characters other
+than newline and tab, the same bound as guarded Herdr input; Herdr itself wraps it
+in bracketed paste when the pane's program asked for that. Operation ids must
+strictly increase and are spent before anything is sent, so a repeated id cannot
+write twice. Outcomes are `occupant`, `delivered`, `refused` (Herdr or the actor
+said no before writing: stale id, invalid text, pane not found, the occupant changed,
+Herdr's own error reply), `retired` (the pinned server is gone; nothing was written)
+and `uncertain` (the request left and no intact acknowledgement came back; it is
+never resent). `retired` and `uncertain` end the actor, so the caller must confirm a
+destination again and keeps its draft.
+
+The destination is the selected pane's **current occupant**. Herdr's public API has
+no terminal-id or revision compare-and-swap, so the actor reads the pane right
+before writing and refuses when its terminal id is no longer the confirmed one, but
+a runtime replaced in the instant between that read and the write is the one window
+this cannot close. It does not focus, resize, attach or resume anything, so another
+client's focus cannot redirect the input and sending moves no client.
+
+What is verified: the CI `native-linux` job runs
+`herdr_pane_input_stock` against the same-run unchanged stock Herdr and owned PTY
+receivers: the selected receiver gets the exact bytes in legacy, bracketed-paste and
+Kitty keyboard modes (a 4,096-byte UTF-8 draft included, Escape as `ESC` or
+`CSI 27 u`) while the others stay empty, a focused other pane gets nothing, a pane
+closed after the preflight is refused, a socket path taken over by another live
+server and a restarted server are retired before any request byte, and a lost
+acknowledgement is `uncertain`. What is not: a server that hands its listener to a
+new process (`server.live_handoff`) is retired, because the pinned process exits;
+PID reuse, inherited listeners and PID namespaces were not induced; macOS and
+Windows hosts are unsupported; and the Android and desktop confirmation screens are
+not built yet.
 
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.
@@ -197,7 +302,9 @@ Herdr **Spaces** offers **New workspace** above the workspace tree, and a
   the sibling `<repo>-worktrees/<branch>` with `/` replaced by `-`. All three are
   editable. The new workspace is labelled with the branch name.
 
-Both dialogs ask **Start an agent in it?** and default to not starting one.
+Both dialogs ask **Start an agent in it?** and default to not starting one; the Agent
+view's empty state opens the worktree dialog with the answer already yes (**Start in a
+new worktree**).
 Choosing yes requires selecting an agent from the supported Herdr agent kinds
 whose executable `command -v` finds on the host; nothing is offered when none is
 found. Codex and Claude Code accept an optional single-line initial prompt as
@@ -244,7 +351,7 @@ Attached tmux and Herdr terminals also offer prefix shortcuts and numbered windo
 
 ## Zellij
 
-List running sessions or enter a name to create/attach one. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
+List running sessions or enter a name to create/attach one. The list names live sessions and exited ones (Zellij keeps a resurrectable layout, and attaching resurrects it); a host with Zellij and no session shows "No running zellij sessions." instead of an error, although Zellij itself exits with status 1 there. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
 
 The Zellij panel includes a tab 1–20 quick-access row alongside the existing manual
 tab-number form. These are explicit shortcuts, not a discovered tab list or a
@@ -259,7 +366,66 @@ without inheriting its documented multi-digit chord timing dependency. It does
 not establish current tabs, exact-client binding, automatic restoration, or physical
 device/runtime acceptance. Hiding/persisting this row remains separate work.
 
+### Panes and sessions
+
+On a Zellij the version gate calls supported (0.45.1), the Zellij panel also renames and closes the session and reads, renames, resizes and closes its panes. **Read Zellij panes** runs `zellij action list-panes --json --all` (`zellij_panes`) and lists each terminal pane with its number, running command, tab, size in columns and rows and title; plugin panes such as the bars are not listed. Every pane action addresses the pane by its number, never the focused one, through the typed `zellij_action`:
+
+| Action | Command |
+| --- | --- |
+| Rename pane | `zellij --session=<S> action rename-pane --pane-id terminal_<N> -- <name>` |
+| Move a divider | `zellij --session=<S> action resize increase <left\|right\|up\|down> --pane-id terminal_<N>`; Zellij resizes by a fixed step and has no cell count, so `amount` repeats the step (the panel sends one) |
+| Close pane | `zellij --session=<S> action close-pane --pane-id terminal_<N>` |
+| Rename session | `zellij --session=<S> action rename-session -- <name>` |
+| Close session | `zellij delete-session --force -- <S>` |
+
+Close asks first, in a confirmation that names the pane or the session and says that programs running in it will end, and sends one typed action only on **Confirm close**; Cancel sends nothing. A pane that went since the list was read is not guessed at: Zellij ignores its number. Names reach Zellij as one quoted word after `--`, so a name that starts with a dash or holds `'`, `$(…)` or `;` stays a name. After a pane action the list that is on screen is read again; after a session rename the session list and the open panel follow the new name, and after a close they drop the session. **Rename Zellij session** is not offered for the session this terminal is attached to, because the saved attachment (and a reconnect) would keep asking for the old name; rename it from a terminal that is not attached to it.
+
+Close session uses `delete-session --force`, not `kill-session`: `kill-session` stops a session but, once Zellij has serialized it (about a minute after it was created), keeps listing it as EXITED so it comes back in the session list and `attach` resurrects it. `delete-session --force` stops a running session and removes that record too.
+
+These actions show only where the capability record allows them: on a Zellij other than 0.45.1 the record lists `rename`, `close` and `resize` as missing, and the panel shows neither the pane list nor the session actions.
+
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
+
+## Launch an agent in a tmux window or a Zellij pane
+
+`multiplexer_launch_plan` and `multiplexer_launch` (the commands behind the launcher of
+[#1128](https://github.com/mihazs/lazysh/issues/1128)) generalise the Herdr creation plan above:
+the same agent table, the same `command -v` check and the same literal argv, started in the
+session a terminal is attached to. They take the connection's typed multiplexer entry (kind,
+session name and, for tmux, the server label), never a command string, and refuse an entry
+that asks to create the session. The renderer shows `multiplexer_launch_plan` first and runs
+`multiplexer_launch` only after the user confirmed it.
+
+```sh
+command -v -- <agent>                                                    # missing agent: nothing is created
+git -C <repository> worktree add -b <branch> -- <path> <base>            # worktree only
+tmux -u -L <server> new-window -d -P -F '#{pane_id}' -t =<session>: -n <label> -c <directory> -- <agent> [<prompt>]
+zellij --session=<session> run --cwd=<directory> --name=<label> -- <agent> [<prompt>]
+```
+
+The agent is the executable's own argv, `<agent> [<prompt>]`, so nothing is parsed by a shell:
+tmux and Zellij both `exec` it directly. A prompt may hold quotes, `$(…)`, backticks, tabs and
+line breaks and reaches the agent byte for byte. Only the codex and claude entries of the table take
+an initial prompt; the prompt cannot start with `-`, contain a backslash or other control
+characters, or exceed 2000 bytes. (Herdr's `agent start` still takes one line.) tmux parses an
+argument that ends in `;` as a command separator and expands formats in window names and
+directories, so those layers are escaped separately from the shell's (`\;`, `##`).
+The new pane's ID (tmux `%<n>`, Zellij `terminal_<n>`) is read back from the command's output and
+returned as `paneId`; a reply that is not exactly that ID is a failure, never trusted. tmux
+creates the window with `-d`, so the attached client stays where it is; Zellij focuses the new pane.
+
+A failure before the worktree exists is an error and creates nothing: a missing agent stops the
+plan at the `command -v` step, and a session that does not exist fails at the window or pane
+step. A later failure (the worktree was created and the window or pane was not) is returned with
+what already exists, which is kept: nothing is removed automatically.
+
+The agent runs in the multiplexer server's environment, not in the SSH command's: the
+`command -v` check looks in the SSH login shell's `PATH`, while tmux or Zellij starts the
+agent with the `PATH` the server itself was started with. An agent that only an interactive
+shell's startup file puts on `PATH` can pass the check and still not start. Creating the
+session, splitting an existing pane instead of opening a window, a Zellij tab, and rmux (which
+needs [#1140](https://github.com/mihazs/lazysh/issues/1140), tracked in [#1679](https://github.com/mihazs/lazysh/issues/1679)) are not part of this primitive yet,
+and no screen calls it yet.
 
 ## Tab strip
 
@@ -288,6 +454,19 @@ A long press on a tab with both actions opens a two-item menu (**Rename**, **Clo
 The **+** and **Rename** drop a small prompt over the terminal (it takes no layout space): a name, and for a new tab a directory (`.` is the shell's own start directory, as in the Spaces and tmux panels). The prompt is the one thing in the strip that opens the soft keyboard, on purpose, because the user is typing a name. A Herdr workspace or tab that has gone since the strip last read is refused, as a focus is, never renamed or closed by guess. A failed command is reported and keeps the prompt open. A half-typed name ends only with Escape, Cancel or Save, so a stray tap on the terminal does not lose it. The long press is 0.5 s without moving more than 10 px; the tap that ends it does not also select the chip.
 
 
+## Clipboard (OSC 52)
+
+Text copied inside a multiplexer reaches the device clipboard as an OSC 52 write. The terminal pane turns it into a **Remote clipboard request** that shows the text, and nothing touches the clipboard until you choose **Allow this copy**. Requests are write-only and bounded to 64 KiB, a read request (`?`) is ignored, and a request for the primary selection (`p`) is ignored. The clipboard letters `c` and `s`, or no letter, are accepted. The DCS-wrapped forms that tmux and GNU screen use for passthrough reach the same prompt. These rules belong to the pane, so they are the same for every multiplexer. What differs is whether the multiplexer sends the copy to your terminal at all:
+
+| Multiplexer | Option on the host | Notes |
+| --- | --- | --- |
+| tmux | `set -g set-clipboard on`, and `set -g allow-passthrough on` (tmux 3.3 or newer) for programs that send OSC 52 wrapped for passthrough | The default, `set-clipboard external`, already forwarded a copy-mode copy to an `xterm-256color` client in a local check with tmux 3.8, and `off` blocked it. It needs the client's `TERM` to advertise the clipboard. For another `TERM`, add `set -as terminal-features ',TERM:clipboard'`. `on` additionally accepts a program's plain OSC 52 into tmux's buffer. The browser cases set `set-clipboard on` and `allow-passthrough on` (plus an `Ms` override for terminfo entries without the clipboard capability). |
+| Zellij | None | With no `copy_command`, Zellij copies through OSC 52, and `copy_on_select true` (the default) copies when you release the mouse button. Leave `copy_clipboard` at `system`: `primary` sends the `p` selection, which lazysh ignores. A `copy_command` such as `wl-copy` sends the copy to a clipboard tool on the host instead. Programs in panes can write OSC 52; `dangerously_enable_paste_buffer_read` stays off and lazysh never answers a read request. |
+| Herdr | None over SSH | Herdr writes OSC 52 when `SSH_CONNECTION`, `SSH_TTY` or `VSCODE_IPC_HOOK_CLI` is set (sshd sets the first two), under WSL, and whenever no native clipboard tool (`wl-copy` under Wayland, `xclip` or `xsel` under X11) can take the copy. `[ui] copy_on_select = true` (the default) copies when you release the mouse button. A Herdr started locally on a desktop with a working native tool writes that desktop's clipboard and sends no OSC 52. |
+| rmux | Not available | rmux is not supported yet ([#1140](https://github.com/mihazs/lazysh/issues/1140)). |
+
+tmux copies with its keyboard copy mode (Copy mode, then search, select and Enter); Zellij and Herdr copy with a mouse selection. The browser cases in `apps/client/e2e/tmux-clipboard.spec.ts` and `apps/client/e2e/multiplexer-clipboard.spec.ts` start each real multiplexer with exactly the options in this table, show its client in the terminal pane and assert that the consent prompt shows the copied text, that the clipboard still holds the old text until **Allow this copy**, and that Allow writes the exact text. For each multiplexer one case copies a selection and another has a program in a pane write OSC 52. The Zellij and Herdr cases select with SGR mouse reports written to the client, not with a touch gesture, so they run in the `desktop` project only. The Windows client has no real-multiplexer job ([#1747](https://github.com/mihazs/lazysh/issues/1747)); its job runs the unit tests of the handler itself (`bun run --cwd apps/client test:osc52`).
+
 ## Supported versions and degraded capabilities
 
 The Sessions panel shows each multiplexer's version and a **Supported** or **Limited** badge. A Limited multiplexer keeps ordinary terminal access; the capabilities it lacks are not offered, and a notice names the version that adds them. One Rust table (`multiplexer.rs`, `tool`) maps the version to the badge; the frontend never decides from the version string.
@@ -295,7 +474,7 @@ The Sessions panel shows each multiplexer's version and a **Supported** or **Lim
 | Multiplexer | Version read from | Supported | Otherwise (Limited) | Notice | CI pins |
 | --- | --- | --- | --- | --- | --- |
 | tmux | `tmux -V` | 3.4 or newer (a patch letter is accepted, and `next-3.6` development builds count as 3.6) | No Jump To and no confirmed Chat input | "Jump To and Chat input need tmux 3.4 or newer." | 3.2a (distribution; the degraded case), 3.4 (source, sha256) and 3.8, the newest (source, sha256) |
-| Zellij | `zellij --version` | 0.45.1 only | No workspace tree, close, resize, agent launch or confirmed input | "The workspace tree, close, resize and agent launch need Zellij 0.45.1." | 0.45.1 (release asset, sha256) |
+| Zellij | `zellij --version` | 0.45.1 only | No workspace tree, rename, close, resize, agent launch or confirmed input | "The workspace tree, rename, close, resize and agent launch need Zellij 0.45.1." | 0.45.1 (release asset, sha256) |
 | Herdr | `herdr --version` | 0.9.3 to 0.9.5 | Navigation only: no create, launch, rename, confirmed input or restore | "Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5." | Stock and guarded 0.9.5 built from the pinned source; 0.9.3 runs locally |
 | rmux | `rmux capabilities --json` (not `-V`, which prints rmux branding) | Not available in a released client | Not available | Not available | Not available |
 
@@ -304,6 +483,19 @@ rmux ([Helvesec/rmux](https://github.com/Helvesec/rmux), a Rust reimplementation
 Herdr support is decided by the version string alone: the Herdr API `schema_version` is not checked yet ([#1159](https://github.com/mihazs/lazysh/issues/1159)). Restoring sessions after a host reboot is out of scope for every multiplexer.
 
 What each multiplexer does on each client platform, with the CI job and test that prove it, is in the [multiplexer capability checklist](reference/parity-matrix.md#multiplexer-capability-checklist). On Windows, the client's multiplexer code is exercised by unit tests only; no job runs a Windows client against a real multiplexer ([#1747](https://github.com/mihazs/lazysh/issues/1747)).
+
+## History
+
+The **Pane history** section of the Sessions panel (`MultiplexerHistory`) reads the scrollback of the pane you are viewing from the multiplexer on the host, not from the terminal's own buffer, so it survives a dropped connection, a reattach and a fresh client. It is shown for the attached tmux, Zellij or Herdr session unless discovery lists `history` as missing for that multiplexer's version. **Read history** (then **Refresh**) runs the one command `multiplexer_history` and shows the text read-only, with a line filter (**Search history**, case-insensitive) and **Copy these lines** for what is shown. Nothing is typed into the terminal.
+
+| Multiplexer | Host command | Pane | Bound |
+| --- | --- | --- | --- |
+| tmux | `capture-pane -p -J -S -20000 -t =<session>:` on the attached tmux server | The active pane of the session's current window; wrapped lines are joined | The newest 20,000 lines |
+| Zellij | `zellij --session=<session> action dump-screen --full` | The focused pane | Zellij's own `scroll_buffer_size` (default 10,000 lines); a dump over 8 MiB fails with `output_too_large` |
+| Herdr | `herdr --session <session> pane read <pane> --source recent-unwrapped --lines 1000`, where the pane is the focused one in a fresh `api snapshot` | The focused pane | Herdr serves at most the newest 1,000 lines of a pane and does not report that it cut, so a read that fills 1,000 lines is shown as cut |
+
+The view keeps at most the newest 20,000 lines and 2 MiB; when anything older was left out it says so. Control characters are removed from the text, and the blank rows of the screen below the cursor are trimmed. Zellij needs 0.45 or newer (`dump-screen --path`, stdout when omitted) and Herdr 0.9.3 to 0.9.5; other versions list `history` as missing and do not offer the section. The pane is resolved when you press **Read history**, so it follows the multiplexer's focus at that moment. History of a pane that is not the current one, a rmux pane and the OSC 52 checks of #1147 are separate slices.
+
 
 ## Native checks
 
@@ -314,6 +506,14 @@ bun run test:multiplexers
 ```
 
 The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run stock Herdr build and the checksum-verified official Zellij 0.45.1 release. The Zellij case waits for the attached client's first render before it probes `list-sessions`: Zellij 0.45.1's server panics when a probe disconnects before its first client has created the session, and each later action is observed until its tab or pane state appears, because Zellij applies CLI actions asynchronously.
+
+The OSC 52 copy cases ([Clipboard](#clipboard-osc-52)) run in Chromium against real clients. `native-linux-runtimes` runs them with Ubuntu's tmux, the checksum-verified Zellij 0.45.1 and the same-run stock Herdr. Locally:
+
+```sh
+LAZYSH_TEST_ZELLIJ=/path/to/zellij LAZYSH_TEST_HERDR=/path/to/herdr bun run --cwd apps/client test:e2e:multiplexers
+```
+
+Each case runs a private multiplexer server and client in a temporary directory, with every `HERDR_`, `ZELLIJ` and `TMUX` variable removed, so it never reaches a live session. A Zellij or Herdr case is skipped when its variable is unset (the `client` job installs only tmux) and tmux's is skipped without `tmux` and util-linux `script`, unless `CI` is set, where a missing binary fails.
 
 The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
 
@@ -342,7 +542,19 @@ the agent detection test run the generated command strings as `<shell> -c` under
 created. Fish is skipped with a message when absent; CI installs it in
 `native-linux-runtimes` and sets `LAZYSH_REQUIRE_FISH=1` so it cannot be skipped there.
 
-These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
+The launch cases (`herdr_create::tests::real_tmux_agent_window` and `real_zellij_agent_pane`)
+run the confirmed plans through the same `sh -c` command strings against a private tmux server
+and a private background Zellij session, with a stub `codex` on the server's `PATH` that records
+its directory and argv. They launch into a directory whose name holds `'`, `$(…)`, `#{…}` and a
+trailing `;` and into a new worktree with a hostile branch name, and assert that the pane exists
+in the directory (or worktree) `list-panes` reports, that the stub's argv is the prompt
+byte for byte (quotes, `$(…)`, a line break and a trailing `;`), that `git worktree list`
+shows the worktree, and that a missing agent or a missing session creates no pane, worktree or
+branch. Zellij runs against the pinned 0.45.1; the same case also passed on 0.46.0. An rmux case
+waits for rmux support (#1679, after #1140). The plan builders have platform-neutral unit tests that also
+run on macOS and Windows.
+
+These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom, and (Zellij) the pane list, a pane rename, a divider move read back as the pane's width, a pane close, a session rename and a session close. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 
 The client workspace handles saved tmux/Herdr attachment intents separately from these controls. Zellij restoration remains manual, matching the documented initial-attach boundary. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
 
@@ -383,6 +595,16 @@ path, not OS CLI delivery, actual GUI startup or physical biometric prompts.
 Those and mobile/device lifecycle acceptance remain separate. This ignored
 external-tool fixture executes when explicitly requested; ordinary native test
 runs compile it without executing it.
+
+The same fixture accepts the managed backend. `real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one`
+(`LAZYSH_TEST_HERDR_STOCK`) puts a Herdr at the managed path and leaves a failing decoy where the host's own Herdr
+would be. After the connection captures the managed Herdr it checks discovery, the session list, the tree, an action and an
+attachment, that a different second choice is refused and that the decoy never ran; then, on a host with no managed file,
+that Herdr reads as absent, every call fails and the decoy still never runs.
+`real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_executable` (`LAZYSH_TEST_HERDR`) does the same with a
+guarded build and checks the guard probe and the bound display. The Herdr at the managed path is a stock or guarded debug
+build, not a `lazysh-managed` release build, and Mosh startup was checked only through composed commands: namespace isolation next
+to a stock server and the exact release artifact are the acceptance of #1761.
 
 ### Fresh verified SSH restoration acceptance
 

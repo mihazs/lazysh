@@ -75,11 +75,17 @@ pub fn executable() -> Result<String, Failure> {
     Ok(path.strip_prefix(r"\\?\").unwrap_or(path).to_owned())
 }
 
-pub fn install(backend: Backend, exe: &str) -> Result<(), Failure> {
+/// Installs the timer. `before_write` runs once the account is known to be able to hold a timer and before
+/// anything is written, so a caller can take its lifecycle lock without creating state on an unsupported host.
+pub fn install(
+    backend: Backend,
+    exe: &str,
+    before_write: &mut dyn FnMut() -> Result<(), Failure>,
+) -> Result<(), Failure> {
     match backend {
-        Backend::Systemd => systemd::install(exe),
-        Backend::Launchd => launchd::install(exe),
-        Backend::Schtasks => schtasks::install(exe),
+        Backend::Systemd => systemd::install(exe, before_write),
+        Backend::Launchd => launchd::install(exe, before_write),
+        Backend::Schtasks => schtasks::install(exe, before_write),
     }
 }
 pub fn remove(backend: Backend) -> Result<(), Failure> {
@@ -150,6 +156,10 @@ fn place(path: &Path, text: &str) -> Result<Placed, Failure> {
         path: path.to_owned(),
         previous,
     })
+}
+/// Whether `placed` replaced a timer file of ours, that is, whether an earlier install exists to go back to.
+fn replaced(placed: &Placed) -> bool {
+    placed.previous.is_some()
 }
 fn undo(placed: Placed) {
     let _ = match placed.previous {

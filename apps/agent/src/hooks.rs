@@ -1,5 +1,5 @@
 //! Native lifecycle adapters observe status; they never answer approvals.
-use crate::{field, Event, Result, SessionState, Waiting};
+use crate::{field, Agent, Event, Result, SessionState, Waiting};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -41,6 +41,88 @@ pub fn gemini_config() -> Value {
         ],
         5000,
     )
+}
+
+pub fn grok_config() -> Value {
+    // No PreToolUse: it is the one event that can block a tool call, and the hook adds nothing PostToolUse does not.
+    command_config(
+        "grok",
+        &[
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "StopCancelled",
+            "SessionEnd",
+        ],
+        5,
+    )
+}
+
+/// Grok Build also runs the hooks of `~/.claude/settings.json`, so its report can arrive under `--agent claude`.
+/// Only Grok sends the camelCase `hookEventName`; such a report belongs to Grok Build, never to a Claude Code session.
+pub(crate) fn reporting_agent(agent: Agent, payload: &Value) -> Agent {
+    match agent {
+        Agent::Claude if payload.get("hookEventName").is_some_and(Value::is_string) => Agent::Grok,
+        other => other,
+    }
+}
+
+/// A Grok Build sub-agent's own events name its type; they are not the session of the pane.
+pub(crate) fn grok_subagent(payload: &Value) -> bool {
+    !matches!(payload.get("subagentType"), None | Some(Value::Null))
+        && payload["subagentType"].as_str() != Some("")
+}
+
+pub(crate) fn grok_event(payload: &Value, pane: Option<&str>) -> Result<Option<Event>> {
+    if grok_subagent(payload) {
+        return Ok(None);
+    }
+    let kind = payload
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let (state, summary, waiting) = match kind {
+        "UserPromptSubmit" => (SessionState::Working, "Working on your prompt", None),
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => (
+            SessionState::Working,
+            payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(kind),
+            None,
+        ),
+        "Stop" => (SessionState::Done, "Turn finished", None),
+        "StopCancelled" => (SessionState::Done, "Turn interrupted", None),
+        "StopFailure" => (SessionState::NeedsAttention, "Turn failed", None),
+        "SessionEnd" => (SessionState::Done, "Session ended", None),
+        // `idle_prompt` follows every finished turn, so only a permission prompt means the agent waits.
+        "Notification"
+            if payload.get("notificationType").and_then(Value::as_str)
+                == Some("permission_prompt") =>
+        {
+            (
+                SessionState::NeedsAttention,
+                "Permission requested",
+                Some(Waiting::Approval),
+            )
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(Event {
+        session_id: field(payload, "session_id", 256)
+            .or_else(|_| field(payload, "sessionId", 256))?,
+        agent: "Grok Build".into(),
+        project: field(payload, "cwd", 4096)?,
+        state,
+        summary: summary.into(),
+        pane_id: pane.map(str::to_owned),
+        pane_server: None,
+        waiting,
+    }))
 }
 
 pub fn droid_config() -> Value {
@@ -163,15 +245,35 @@ pub(crate) fn cursor_event(payload: &Value, pane: Option<&str>) -> Result<Option
         }
         _ => return Err(crate::Error::InvalidEvent),
     };
-    Ok(Some(Event {
-        session_id: field(payload, "conversation_id", 256)?,
-        agent: "Cursor CLI".into(),
+    Ok(Some(report(
+        field(payload, "conversation_id", 256)?,
+        "Cursor CLI",
+        project,
+        (state, summary),
+        pane,
+        None,
+    )))
+}
+
+/// A lifecycle report from the pane a hook runs in; the pane's server is attached later, where its environment is read.
+fn report(
+    session_id: String,
+    agent: &str,
+    project: String,
+    (state, summary): (SessionState, &str),
+    pane: Option<&str>,
+    waiting: Option<Waiting>,
+) -> Event {
+    Event {
+        session_id,
+        agent: agent.into(),
         project,
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
-        waiting: None,
-    }))
+        pane_server: None,
+        waiting,
+    }
 }
 
 pub(crate) fn amp_event(payload: &Value, pane: Option<&str>) -> Result<Option<Event>> {
@@ -185,16 +287,15 @@ pub(crate) fn amp_event(payload: &Value, pane: Option<&str>) -> Result<Option<Ev
         Some("error") => (SessionState::NeedsAttention, "Turn failed"),
         _ => return Ok(None),
     };
-    Ok(Some(Event {
-        session_id: field(payload, "threadId", 256)?,
-        agent: "Amp".into(),
-        project: field(payload, "directory", 4096)?,
-        state,
-        summary: summary.into(),
-        pane_id: pane.map(str::to_owned),
-        waiting: (state == SessionState::NeedsAttention && summary == "Permission requested")
+    Ok(Some(report(
+        field(payload, "threadId", 256)?,
+        "Amp",
+        field(payload, "directory", 4096)?,
+        (state, summary),
+        pane,
+        (state == SessionState::NeedsAttention && summary == "Permission requested")
             .then_some(Waiting::Approval),
-    }))
+    )))
 }
 
 pub fn cline_plugin() -> Value {
@@ -221,19 +322,18 @@ pub(crate) fn cline_event(payload: &Value, pane: Option<&str>) -> Result<Option<
         Some("failed") => (SessionState::NeedsAttention, "Turn failed"),
         _ => return Ok(None),
     };
-    Ok(Some(Event {
+    Ok(Some(report(
         // Validated identities exclude NUL, making this native pair unambiguous.
-        session_id: format!(
+        format!(
             "cline:{:x}",
             Sha256::digest(format!("cline-v1\0{agent}\0{conversation}").as_bytes())
         ),
-        agent: "Cline CLI".into(),
-        project: field(payload, "directory", 4096)?,
-        state,
-        summary: summary.into(),
-        pane_id: pane.map(str::to_owned),
-        waiting: None,
-    }))
+        "Cline CLI",
+        field(payload, "directory", 4096)?,
+        (state, summary),
+        pane,
+        None,
+    )))
 }
 
 // Additive health-only table; never insert an ambiguous Aider notification into sessions.
@@ -297,19 +397,18 @@ pub(crate) fn opencode_event(payload: &Value, pane: Option<&str>) -> Result<Opti
         }
         _ => return Ok(None),
     };
-    Ok(Some(Event {
-        session_id: field(&payload["properties"], "sessionID", 256)?,
-        agent: "OpenCode".into(),
-        project: field(payload, "directory", 4096)?,
-        state,
-        summary: summary.into(),
-        pane_id: pane.map(str::to_owned),
-        waiting: (state == SessionState::NeedsAttention).then_some(if kind == "question.asked" {
+    Ok(Some(report(
+        field(&payload["properties"], "sessionID", 256)?,
+        "OpenCode",
+        field(payload, "directory", 4096)?,
+        (state, summary),
+        pane,
+        (state == SessionState::NeedsAttention).then_some(if kind == "question.asked" {
             Waiting::Question
         } else if kind == "permission.asked" {
             Waiting::Approval
         } else {
             Waiting::Unknown
         }),
-    }))
+    )))
 }

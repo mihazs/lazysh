@@ -16,10 +16,14 @@ pub(crate) struct TlsFront {
     pub acceptor: TlsAcceptor,
 }
 pub(crate) async fn tls_front() -> TlsFront {
+    tls_front_for(vec!["localhost".into()]).await
+}
+/// A loopback TLS listener whose self-signed certificate names `names` (DNS names or IP literals).
+pub(crate) async fn tls_front_for(names: Vec<String>) -> TlsFront {
     let front = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = front.local_addr().unwrap();
     let origin = format!("https://localhost:{}", address.port());
-    let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let certificate = rcgen::generate_simple_self_signed(names).unwrap();
     let root = reqwest::Certificate::from_der(certificate.cert.der().as_ref()).unwrap();
     let config = ServerConfig::builder_with_provider(Arc::new(
         tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),

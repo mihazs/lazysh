@@ -110,7 +110,27 @@ drop unknown kinds on restore.
 
 Companion events carry a typed pane identity: tmux server label plus `TMUX_PANE`;
 rmux label plus `RMUX_PANE`; `ZELLIJ_SESSION_NAME` plus `ZELLIJ_PANE_ID`; the Herdr
-pane. A notification opens that exact pane.
+pane. A notification opens that exact pane. A terminal without a multiplexer that lazysh
+started reports `lazysh:<id>` from `LAZYSH_TERMINAL` instead ([Agent view](agent-view.md#terminals-lazysh-starts)).
+
+Shipped so far: the companion records `paneServer` (`tmux:<label>` or `rmux:<label>`, from the
+socket path in `TMUX` or `RMUX`) next to `paneId`, and the Agents panel's report details show
+it. A pane is rmux only when `RMUX_PANE` and `RMUX` equal `TMUX_PANE` and `TMUX`, so a tmux started
+inside an rmux pane stays tmux. Zellij and Herdr panes already carry their session in `paneId`.
+A `-S` socket has no label and records none. Using the label to focus the pane and to keep two
+servers' `%7` apart in the Agent view, tmux and rmux Jump To pane rows, and Herdr
+`events.subscribe` are still open.
+
+Shipped for the tap focus (#1690): a notification tap, an inbox row and **Open session** focus
+the pane of an event whose pane is `zellij:<session>:<pane>`, only when the terminal is
+attached to that Zellij session. `zellij action focus-pane-id` cannot do it: from the command
+line it moves the focus of the command's own client, not the attached terminal's (measured on
+0.46.0), so the app reads the pane's tab (`list-panes --json`), goes to it (`go-to-tab`) and
+steps `focus-next-pane` until `list-clients` reports the pane. A pane of another session, or of
+another multiplexer, is left alone rather than guessed, and a pane that has gone still opens
+the session. Still open in #1690: tmux and rmux on the server the event names (needs the
+`paneServer` field of #1146), the Agent view ignoring a report of another server, and the
+Herdr pane identity (needs #1571).
 
 ## Capability table: remote hosts
 
@@ -123,19 +143,19 @@ implemented without full evidence, *part* means partial.
 | --- | --- | --- | --- | --- |
 | Discovery | yes | impl → yes #1145 | yes | no → #1140 |
 | Attach, reattach | yes | yes | yes | no → #1140 |
-| Navigation, Jump To, current marker | yes; pane rows → #1146 | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
+| Navigation, Jump To, current marker | yes, with pane rows (#1691) | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
-| Create in a worktree | no → #1141 | no → #1141 | yes | no → #1141 |
-| Agent launch | no → #1141 | no → #1141 | yes | no → #1141 |
-| Rename | session, window; pane → #1144 | no → #1144 | workspace, tab; pane → #1144 | no → #1140, #1144 |
-| Close | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
+| Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
+| Agent launch | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
+| Rename | session, window; pane → #1144 | tab yes; session, pane impl → yes #1685 | workspace, tab, pane | no → #1140, #1144 |
+| Close | no → #1144 | tab yes; pane, session impl → yes #1685 | workspace, tab (#1573), pane | no → #1144 |
 | Split, zoom | yes | yes | yes | no → #1140 |
-| Resize | no → #1144 | no → #1144 | no → #1144 | no → #1144 |
-| History | prefix+[ only → #1147 | no → #1147 | no → #1147 | no → #1147 |
-| OSC 52 | user config, untested → #1147 | untested → #1147 | untested → #1147 | no → #1147 |
+| Resize | no → #1144 | impl → yes #1685 | yes | no → #1144 |
+| History | yes | yes | part: Herdr serves the newest 1000 lines | no → #1700, #1140 |
+| OSC 52 | impl; `set-clipboard` documented → yes #1699 | impl; default → yes #1699 | impl; default over SSH → yes #1699 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
-| Notification opens the pane | part → #1146 | no → #1146 | part → #1146 | no → #1146 |
+| Notification opens the pane | part → #1146 | part: the attached session's pane #1690 | part → #1146 | no → #1146 |
 | Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | no → #1140 (while the daemon lives) |
 | Version detection | yes | yes | version yes; API schema → #1159 | no → #1140 |
 

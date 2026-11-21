@@ -1,4 +1,8 @@
-import {createBackendRegistry, type BackendPreference, type SelectOptions} from './terminalBackendRegistry';
+import {getPreferences} from './preferences';
+import {nativeCapabilities} from './nativeTerminalAdapter';
+import {createNativeTerminalAdapter, probeNativeCore} from './tauriNativeCoreBridge';
+import type {TerminalBackendId} from './terminalAdapter';
+import {createBackendRegistry, type BackendPreference, type BackendRegistration, type SelectOptions} from './terminalBackendRegistry';
 import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
 const registry = createBackendRegistry();
@@ -9,7 +13,22 @@ registry.register({
   probe: () => ({ok: true}),
   create: createXtermTerminalAdapter,
 });
-// The native backend registers here once its platform gate passes (docs/architecture/terminal-migration-plan.md).
+
+/** Native is registered behind its probe and Auto never picks it: a platform's own default flip sets `autoEligible` (docs/architecture/terminal-migration-plan.md). */
+export function registerNativeBackend(backends: Pick<typeof registry, 'register'>, probe: BackendRegistration['probe'] = probeNativeCore) {
+  backends.register({
+    id: 'native',
+    capabilities: nativeCapabilities,
+    autoEligible: false,
+    probe,
+    // shortcut: the opening's events Channel and bind() are dropped, so no transport attaches to this core yet; the session start takes them when it is wired, and replaces this.
+    create: async () => (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: getPreferences().scrollback})).adapter,
+  });
+}
+registerNativeBackend(registry);
+
+/** What `createTerminalAdapter` can select, so a test can hold each registration to the adapter contract. */
+export const registeredBackends = () => registry.registrations();
 
 const OVERRIDE_KEY = 'lazysh.terminal.backend';
 
@@ -21,7 +40,16 @@ export function developerBackendOverride(): BackendPreference | undefined {
   } catch { return undefined; }
 }
 
+/** A session read with a screen reader needs a backend whose content that reader can reach. */
+export const screenReaderRequirements = (screenReader: boolean): NonNullable<SelectOptions['requires']> => screenReader ? ['accessibility'] : [];
+
+/** The engine Auto gives a new session on this device now. */
+export const defaultTerminalEngine = async (backends: Pick<typeof registry, 'select'> = registry) => (await backends.select({requires: screenReaderRequirements(getPreferences().screenReader)})).id;
+
+/** Why a new session cannot use `id` now, as the registry would record it (undefined: it can); Settings shows it beside the choice. */
+export const backendRefusal = (id: TerminalBackendId, screenReader: boolean) => registry.refusal(id, screenReaderRequirements(screenReader));
+
 /** The terminal of one new session, from the backend selection rules. */
-export function createTerminalAdapter(options: SelectOptions = {}) {
-  return registry.create({override: developerBackendOverride(), ...options});
+export function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {
+  return backends.create({override: developerBackendOverride(), ...options, requires: [...(options.requires ?? []), ...screenReaderRequirements(getPreferences().screenReader)]});
 }

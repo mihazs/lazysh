@@ -1,5 +1,328 @@
 # @lazysh/common
 
+## 1.95.6
+
+No changes in this release.
+
+## 1.95.5
+
+No changes in this release.
+
+## 1.95.4
+
+No changes in this release.
+
+## 1.95.3
+
+No changes in this release.
+
+## 1.95.2
+
+No changes in this release.
+
+## 1.95.1
+
+No changes in this release.
+
+## 1.95.0
+
+No changes in this release.
+
+## 1.94.0
+
+No changes in this release.
+
+## 1.93.9
+
+No changes in this release.
+
+## 1.93.8
+
+No changes in this release.
+
+## 1.93.7
+
+No changes in this release.
+
+## 1.93.6
+
+No changes in this release.
+
+## 1.93.5
+
+No changes in this release.
+
+## 1.93.4
+
+No changes in this release.
+
+## 1.93.3
+
+No changes in this release.
+
+## 1.93.2
+
+No changes in this release.
+
+## 1.93.1
+
+No changes in this release.
+
+## 1.93.0
+
+No changes in this release.
+
+## 1.92.3
+
+No changes in this release.
+
+## 1.92.2
+
+No changes in this release.
+
+## 1.92.1
+
+No changes in this release.
+
+## 1.92.0
+
+No changes in this release.
+
+## 1.91.4
+
+No changes in this release.
+
+## 1.91.3
+
+No changes in this release.
+
+## 1.91.2
+
+No changes in this release.
+
+## 1.91.1
+
+No changes in this release.
+
+## 1.91.0
+
+No changes in this release.
+
+## 1.90.0
+
+No changes in this release.
+
+## 1.89.1
+
+No changes in this release.
+
+## 1.89.0
+
+No changes in this release.
+
+## 1.88.0
+
+No changes in this release.
+
+## 1.87.1
+
+No changes in this release.
+
+## 1.87.0
+
+No changes in this release.
+
+## 1.86.0
+
+No changes in this release.
+
+## 1.85.1
+
+No changes in this release.
+
+## 1.85.0
+
+No changes in this release.
+
+## 1.84.0
+
+### Patch Changes
+
+- feat(voice): offer the Parakeet local dictation engine on Windows x86_64 ([#1825](https://github.com/mihazs/lazysh/pull/1825))
+
+  <details><summary>Details</summary>
+
+  Whisper stays the default; Parakeet needs an explicit model download, as on Linux, and its model files live in a private folder that only the current user, the administrators and the system can reach.
+
+  </details>
+- feat(agent): add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent review status` and `review diff` to the host companion: the Diff view's changed files and one file's patch from a terminal on the host, as plain text or one JSON line, read-only and under the app's size bounds, with its help in English, Brazilian Portuguese and Spanish. The app and the companion now build their Git review commands in one shared module; the app's behavior does not change.
+
+  </details>
+
+## 1.83.1
+
+No changes in this release.
+
+## 1.83.0
+
+No changes in this release.
+
+## 1.82.1
+
+No changes in this release.
+
+## 1.82.0
+
+No changes in this release.
+
+## 1.81.0
+
+No changes in this release.
+
+## 1.80.4
+
+No changes in this release.
+
+## 1.80.3
+
+No changes in this release.
+
+## 1.80.2
+
+No changes in this release.
+
+## 1.80.1
+
+No changes in this release.
+
+## 1.80.0
+
+No changes in this release.
+
+## 1.79.7
+
+No changes in this release.
+
+## 1.79.6
+
+No changes in this release.
+
+## 1.79.5
+
+No changes in this release.
+
+## 1.79.4
+
+No changes in this release.
+
+## 1.79.3
+
+No changes in this release.
+
+## 1.79.2
+
+No changes in this release.
+
+## 1.79.1
+
+No changes in this release.
+
+## 1.79.0
+
+No changes in this release.
+
+## 1.78.2
+
+No changes in this release.
+
+## 1.78.1
+
+No changes in this release.
+
+## 1.78.0
+
+No changes in this release.
+
+## 1.77.2
+
+No changes in this release.
+
+## 1.77.1
+
+No changes in this release.
+
+## 1.77.0
+
+No changes in this release.
+
+## 1.76.0
+
+No changes in this release.
+
+## 1.75.1
+
+No changes in this release.
+
+## 1.75.0
+
+No changes in this release.
+
+## 1.74.0
+
+No changes in this release.
+
+## 1.73.1
+
+No changes in this release.
+
+## 1.73.0
+
+No changes in this release.
+
+## 1.72.0
+
+No changes in this release.
+
+## 1.71.0
+
+No changes in this release.
+
+## 1.70.0
+
+No changes in this release.
+
+## 1.69.0
+
+No changes in this release.
+
+## 1.68.3
+
+No changes in this release.
+
+## 1.68.2
+
+No changes in this release.
+
+## 1.68.1
+
+No changes in this release.
+
+## 1.68.0
+
+No changes in this release.
+
+## 1.67.1
+
+No changes in this release.
+
+## 1.67.0
+
+No changes in this release.
+
 ## 1.66.1
 
 No changes in this release.

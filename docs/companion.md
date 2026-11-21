@@ -14,13 +14,17 @@ Follow [install and configure the companion](how-to/configure-companion.md). Ins
 
 On the host, `lazysh-agent update --check` reports whether a newer release is published for this platform and exits 10 when there is one (0 when up to date). `lazysh-agent update` installs it: the host downloads the release over its own network, checks size and SHA-256 against the verified release metadata, runs the new binary once in an empty environment to prove it answers its version and the hook protocol, and only then replaces the managed copy atomically. The replaced companion is kept, so `lazysh-agent update --rollback` restores it, and `--dry-run` rehearses everything but the replace. `lazysh-agent update --status` shows the installed and previous copy offline. Settings, hooks and event state are never touched, and nothing runs `sudo`. A terminal asks before it installs; scripts pass `--yes`. It works the same on Linux, macOS and Windows; on Windows the running `lazysh-agent.exe` is renamed aside rather than overwritten. Flags, exit codes, the JSON result and what is verified: [Companion update](reference/companion-update.md).
 
+### The companion updates itself when a newer app connects
+
+A lazysh app puts its own version in the environment variable `LAZYSH_APP_VERSION` of every command it runs on the host (the app side ships separately from the companion side, so an app from before that release does not); a companion that does not know the variable ignores it. A companion older than that app, with the policy `install` (the default), starts one background `lazysh-agent update --yes --version <the app's version>` and answers the request it was asked as usual. The target is exactly the app's version, so a downgrade, a prerelease or a release the app does not carry cannot happen. `snapshot` reports it in an `update` field, `{"state":"started|running|done|failed|skipped","from":"1.55.0","to":"1.56.0","reason":"..."}`, and the app shows a non-blocking row and checks the companion again when it is `done`. Before starting, it defers if a session reported `working` in the last ten minutes or session state cannot be read. A turn that starts after this check can overlap the update, and reports evicted by older companions cannot be recovered. Only one runs at a time however many apps connect, a failure is retried after an hour (doubling to a day), and a release that failed verification, self-test or restore is not tried again until a newer app connects. The policy is `off` (no change, no network), `notify` (no change) or `install`: [change it on the host or in the app](companion-settings.md#companion-updates).
+
 ## Claude Code
 
 The companion also packages optional [installable product skills](product-skills.md)
 for host setup and lifecycle reporting. Previewing or installing this guidance
 does not install the lifecycle hooks described below.
 
-Run `lazysh-agent claude-config` and merge the printed `hooks` entries into your Claude settings, preserving existing entries. This command only prints JSON. Run Claude in tmux to include its `TMUX_PANE` identity. The [official hook reference](https://code.claude.com/docs/en/hooks) defines the inputs this adapter handles. Lifecycle summaries include tool names but omit prompts, tool arguments, transcripts, and credentials. An informational notification does not imply a pending approval.
+Run `lazysh-agent claude-config` and merge the printed `hooks` entries into your Claude settings, preserving existing entries. This command only prints JSON. Run Claude in tmux to include its `TMUX_PANE` identity, and the tmux or rmux server it belongs to (`paneServer`, for example `tmux:work` for `tmux -L work`). The [official hook reference](https://code.claude.com/docs/en/hooks) defines the inputs this adapter handles. Lifecycle summaries include tool names but omit prompts, tool arguments, transcripts, and credentials. An informational notification does not imply a pending approval.
 
 ### Optional Claude reported-history shortcut
 
@@ -118,7 +122,7 @@ every 2 seconds as before and says "Live updates are unavailable" (never opened)
 "Connection lost. Showing the last update" (was live), and tries again after 1, 2, 5, 10 and
 then 30 seconds. A host companion that predates `transcript-watch` makes the view say that
 live updates need a newer companion and offer **Host companion installation**; it is asked
-again after a minute. A row at the end of the thread shows **Agent is working** or **Agent is
+again after a minute, or at once when that host's companion has just updated itself to this app's version. A row at the end of the thread shows **Agent is working** or **Agent is
 waiting for your answer** from the recorded turn state.
 
 The view keeps its chrome to one row: the agent kind and folder, its state, an
@@ -161,10 +165,23 @@ A report in the needs-attention state also says what the agent waits for: `waiti
 
 Within each state, the board groups reports by project on the connected host, most recently reported project first. **Archive** hides a report on this device only; **Archived N** lists archived reports with **Restore**. An archived report returns when its agent reports a newer event, and the archive forgets it once the companion ages the report out. Archives are stored per saved host on the device and are not synced or written to the host.
 
+#### Board of all connected hosts
+
+With two or more saved hosts connected, a **This host / All hosts** switch appears above the board. **This host** is the default and is the per-connection board described above. **All hosts** is opt-in: it reads `agent_snapshot` of every connected host and groups the reports by state, then host, then project, with the same search and status filters. Each host is read through its own connection, so a report, its access lease and its archive stay bound to that host; the merged view only renders what each connection returns.
+
+- **Poll budget.** While the board is shown, every connected host is read every five seconds, at most four reads at once and at most 32 hosts (the same budget as the [inbox](reference/inbox.md)); a note says how many hosts are left out. A host whose read is still running is not read again, and nothing is read while the board is hidden or the app is in the background. The host you are on is read by its own board as well, so it is read twice while **All hosts** is shown.
+- **One host, several sessions.** Two sessions of one saved host reach the same companion and count once. Two saved hosts that point at the same machine are two hosts: lazysh has no host identity to merge them on.
+- **A host that fails.** It shows its own error row (its name and the reason) and none of its rows; the other hosts stay. It recovers on the next read.
+- **Archive.** Archive and Restore keep their per-host keys and live on each host's own board. The merged board hides what that board archived, returns a report when its agent reports a newer event, and says how many archived reports it hides.
+- **Opening a report.** A row opens that host's connection, the way an inbox notification does: the Agent view for a needs-attention Claude Code or Codex report with a pane, the host's Agents list otherwise. The panel then shows that host's own board.
+
+Nothing changes on the host: no companion command, schema or on-disk format is added.
+
 ### Live conversation stream
 
 `lazysh-agent transcript-watch --agent claude|codex (--path FILE | --session-id UUID)
-[--limit 1..100] [--interval-ms 50..5000] [--protocol 1]` keeps one command channel open
+[--limit 1..100] [--interval-ms 50..5000] [--protocol 1]`, or `--agent opencode --path DATABASE
+--database-session ID`, keeps one command channel open
 and prints one JSON frame per line. `--path` reads a transcript file the way
 `transcript --view conversation` does; `--session-id` resolves a Claude Code or Codex
 session inside the agent's own data root the way `herdr-conversation` does, so no host
@@ -173,12 +190,24 @@ SIGINT or SIGTERM, or when its output breaks; it keeps no state on the host and 
 host setting beyond what the two readers above already check. Other agents have no stream
 and stay on paged reads.
 
+OpenCode keeps every session in one SQLite database, so its source is the database that
+`--path` names and the session `--database-session` picks, read the way `transcript --agent
+opencode --view conversation --session-id` reads it (read-only, bounded). The database runs in
+write-ahead-log mode: a committed row sits in `opencode.db-wal` until a checkpoint moves it into
+the file, and the file's length and modification time may not change for minutes. The check
+therefore also compares the length and modification time of the `-wal` file next to the database
+(a missing log counts as none), so a message OpenCode writes reaches the stream within one
+interval. `--database-session` takes no `--session-id` and no `--inline-images`, and the other
+two agents take none: a mismatch is a usage error. The frames are the ones above; a V1 database
+(which records its turn state) also streams `activity`.
+
 Every 250 ms (`--interval-ms`) it opens the file and compares identity, length and
 modification time. Only a change re-projects the conversation with the same bounded readers
 as the paged commands (the last `--limit` messages of the recorded branch, at most 512 KiB, a
 partial last line ignored until its newline arrives), so an idle conversation costs one
 `open` and `fstat` per interval. After a projection that took *t*, the next check waits at
 least 3*t*, which keeps a very large transcript below about a quarter of one core.
+Heartbeats are still sent during that wait; only a single projection that itself runs longer than 5 s delays one.
 
 | Frame | Fields | Meaning |
 | --- | --- | --- |
@@ -207,6 +236,37 @@ Codex records no queue, so Codex pages carry none.
 
 An older companion rejects the subcommand as a usage error (exit status 2), which a client
 treats as "update the host companion" and answers by polling `transcript` as before.
+
+### Herdr event stream
+
+`lazysh-agent herdr-events --session NAME [--protocol 1]` keeps one command channel open
+and prints one JSON frame per line while a Herdr view is shown, so a pane's status change
+reaches the app when it happens instead of at the next 5-second read of the tree. It finds
+the running session `NAME` the way `herdr-focus-pane` does (`herdr session list --json`,
+one exact match), reads `session.snapshot`, subscribes to Herdr's `events.subscribe` for
+the status of every pane and for the lifecycle events a view of the tree follows, and reads
+the snapshot again so a change between the two reads is a difference, not a gap. It ends when
+its standard input closes (an SSH channel going away) or its output breaks. It starts no
+server, sends no key, changes no Herdr state and writes nothing on the host.
+
+| Frame | Fields | Meaning |
+| --- | --- | --- |
+| `hello` | `protocol`, `session` | First line, sent once the subscription runs: everything that happens after it is reported. A client that does not know `protocol` stops. |
+| `status` | `paneId`, `workspaceId`, `status`, `agent`, `cwd` | A pane's agent status changed to `idle`, `working`, `blocked`, `done` or `unknown`. `agent` is the kind Herdr detects (`claude`, `codex`, ...) or `null`; `cwd` is the pane's directory or `null`. A repeated status sends nothing. |
+| `changed` | none | Something the tree shows changed (a workspace, tab or pane was created, closed, moved, renamed or focused): read the tree once. At most four a second. |
+| `heartbeat` | none | Sent after 5 s without another frame so a client can tell a quiet server from a dead channel. |
+| `end` | `reason` | `disconnected` (Herdr closed the subscription) or `busy` (more than 20 resubscriptions in 10 s). The exit status is 0. |
+| `unsupported` | `reason` | The only frame when this Herdr cannot stream: `events_subscribe` (it refuses `session.snapshot` or `events.subscribe`) or `too_many_panes` (more than 256 panes). The exit status is 0; the client keeps polling and asks again later. |
+
+A frame never carries a pane title, the command running in the pane, a label, a token or any
+screen text: it is built from the fields above only, so a title such as `rm -rf /` that
+Herdr reports never leaves the host. A new, closed or moved pane resubscribes (Herdr takes one
+subscription per pane); a pane that appeared while the stream was resubscribing is caught by
+the second snapshot. Pane and workspace ids are checked against Herdr's exact public id
+format. Only Herdr 0.9.5 has been run against it; a Herdr that does not know one of the requests answers
+with an error, which is `unsupported`. A companion that predates the subcommand rejects it as a usage
+error (exit status 2), which a client treats as "update the host companion" and answers by
+polling the tree as before.
 
 ## Other agents and scripts
 
@@ -329,15 +389,17 @@ Claude conversation responses can also include `work`: the sub-agents, backgroun
 - a notice's `<usage>` gives a finished sub-agent's `tokens` (`subagent_tokens`) and `durationMs`; a `Workflow` call never ends at its launch result, only at its notice;
 - a successful `TaskStop` result ends the task whose id it names as `stopped`.
 
-The companion never decides that an old launch is dead: a task with no recorded end stays `running` and carries `startedAt` and `timeoutMs`, and the client shows it as not confirmed once it is older than it could run. A turn that ended while `turn_duration.pendingBackgroundAgentCount` is above zero reads `working` in `activity`. OpenCode conversations report the sub-agents of their `task` tool calls as `kind` `agent` items: `title` is the call's `description`, `subtitle` its `subagent_type`, `taskId` the background task id (`metadata.backgroundTaskId`) or else the child session id, and the state comes from the call (`pending` and `running` are `running`, `completed` is `done`, `error` is `failed`). A background `task` (one that carries `backgroundTaskId` or `run_in_background`) completes at its launch and stays `running` until a `background_output` call for it reports `Status: completed` (or `error`, `failed`, `cancelled`) or a user message with the `[BACKGROUND TASK COMPLETED]` marker lists it under `**Completed:**`. OpenCode records no shell or monitor tasks, so it has no other kinds; the child session is not opened. Codex conversations report the sub-agents of `SubAgentActivity` items as `agent` items (`id` is the sub-agent's thread id): `started` launches one, `completed` or the `FINAL_ANSWER` `agent_message` the sub-agent sends its parent ends it (`last` is the first line of that answer), and `interacted` changes nothing. Other agents report no `work`. Items are capped at 100 and `events` at 50 lines. Test fixtures are synthetic: `apps/agent/tests/work_tasks.rs` and, for OpenCode, `apps/agent/tests/opencode_conversation.rs`.
+The companion never decides that an old launch is dead: a task with no recorded end stays `running` and carries `startedAt` and `timeoutMs`, and the client shows it as not confirmed once it is older than it could run. A turn that ended while `turn_duration.pendingBackgroundAgentCount` is above zero reads `working` in `activity`. OpenCode conversations report the sub-agents of their `task` tool calls as `kind` `agent` items: `title` is the call's `description`, `subtitle` its `subagent_type`, `taskId` the background task id (`metadata.backgroundTaskId`) or else the child session id, and the state comes from the call (`pending` and `running` are `running`, `completed` is `done`, `error` is `failed`). A background `task` (one that carries `backgroundTaskId` or `run_in_background`) completes at its launch and stays `running` until a `background_output` call for it reports `Status: completed` (or `error`, `failed`, `cancelled`) or a user message with the `[BACKGROUND TASK COMPLETED]` marker lists it under `**Completed:**`. OpenCode records no shell or monitor tasks, so it has no other kinds; the child session is not opened. Codex conversations report the sub-agents of `SubAgentActivity` items as `agent` items (`id` is the sub-agent's thread id): `started` launches one, `completed` or the `FINAL_ANSWER` `agent_message` the sub-agent sends its parent ends it (`last` is the first line of that answer), and `interacted` changes nothing. Gemini CLI reports `agent` and `shell` items from its own calls (see Gemini CLI conversations). Codex background terminals are not listed: a Codex `CommandExecution` item is written when the command ends and never while it runs (checked on 300 recorded sessions: every item is `unified_exec_startup` with status `completed` or `failed`), so a terminal still running leaves no record and nothing is guessed. Grok Build reports no `work`: no sub-agent or background-job record shape is verified. Items are capped at 100 and `events` at 50 lines. Test fixtures are synthetic: `apps/agent/tests/work_tasks.rs` and, for OpenCode, `apps/agent/tests/opencode_conversation.rs`.
 
 A `Workflow` call (a Claude Code dynamic workflow: a script that runs many sub-agents in phases) is an item of `kind` `workflow`: `title` is the `name` of the script's `export const meta`, `taskId` the task id and `runId` the `wf_…` id read from the launch result. Claude Code records the run outside the conversation, in `<session>/workflows/<runId>.json` (`workflowName`, `status`, `phases[{title}]`, `workflowProgress` with one `workflow_agent` per agent, `totalTokens`, `totalToolCalls`) and `<session>/subagents/workflows/<runId>/journal.jsonl` (`launched`, `started{agentId,label,phase}`, `result{agentId}`, `failed{agentId}`) next to one `agent-<id>.jsonl` per agent. From them the item carries `workflow: {name?, phases[{title,state}], agents[{agentId,label,state,phase?,tokens?,toolCalls?,durationMs?,last?,childPath?}], totals{agents,tokens,toolCalls}}`. An agent is `running` from its journal `started` until its `result` or `failed`; once the summary file records the workflow as finished (`completed`, `killed`, `failed`), an agent with no recorded end is `unknown`, and the item itself takes the workflow's end state (`done`, `stopped`, `failed`) when the conversation has not recorded one. A phase is `running` while one of its agents is, `failed`/`unknown` when one is, `pending` while it has no agents and `done` otherwise. Ids that are not plain identifiers are skipped, and the files are read with a size cap (4 MiB summary, 2 MiB journal) and at most 200 agents. This is Claude Code's own, not a public, format: unknown fields are ignored, and nothing is shown for a run whose files are absent or unreadable. Fixtures are synthetic (`apps/agent/tests/work_tasks.rs`); the shapes were checked against real runs.
 
-Claude conversation messages can also have `role` `event`: a harness record the view shows as one muted line, `{id, role:"event", blocks:[], event:{kind, text, detail?}, timestamp?}`. The kinds, with the record each comes from, are `goal` (`goal_status` with `sentinel`, text is the condition), `goalMet` (`goal_status` with `met`, detail is the reason), `planMode` (`plan_mode` of the main agent, `plan_mode_reentry`), `planModeExit`, `recap` (`system/away_summary`) and `hookFailed` (`hook_non_blocking_error`, text is the hook name, detail its stderr). Hook successes, skill and tool listings, environment wrappers, repeated unmet `goal_status` checks and a sub-agent's plan-mode reminders produce no message. Codex conversation pages carry `goal` and `goalMet` from `thread_goal_updated` (status `active` and `complete`; a repeat of the same objective and status is one line) and `compacted` from `compacted` records. Records view pages never carry event messages. Provenance: `apps/agent/tests/fixtures/claude-events.jsonl` (synthetic, in the recorded shapes) and `apps/agent/tests/claude_events.rs`.
+Claude conversation messages can also have `role` `event`: a harness record the view shows as one muted line, `{id, role:"event", blocks:[], event:{kind, text, detail?}, timestamp?}`. The kinds, with the record each comes from, are `goal` (`goal_status` with `sentinel`, text is the condition), `goalMet` (`goal_status` with `met`, detail is the reason), `planMode` (`plan_mode` of the main agent, `plan_mode_reentry`), `planModeExit`, `recap` (`system/away_summary`) and `hookFailed` (`hook_non_blocking_error`, text is the hook name, detail its stderr). Hook successes, skill and tool listings, environment wrappers, repeated unmet `goal_status` checks and a sub-agent's plan-mode reminders produce no message. Codex conversation pages carry `goal` and `goalMet` from `thread_goal_updated` (status `active` and `complete`; a repeat of the same objective and status is one line) and `compacted` from `compacted` records, and OpenCode pages carry `compacted` from a V1 `compaction` part (a user message holding only that part) or a V2 `compaction` message. OpenCode's step markers and `patch` parts (a list of file names) produce no message. Records view pages never carry event messages. Provenance: `apps/agent/tests/fixtures/claude-events.jsonl` (synthetic, in the recorded shapes) and `apps/agent/tests/claude_events.rs`.
 
 ### Reading the whole session
 
 `transcript --view conversation` and `herdr-conversation` read the newest `--limit` messages of the recorded branch by default. They also accept one of `--before MESSAGE_ID`, `--after MESSAGE_ID` or `--from-start` (mutually exclusive, and only with the conversation view), which cut the same branch at a message `id` instead: the messages just before or after it, or the first ones. A page is still at most `--limit` messages and 512 KiB, in order, oldest first. `truncated: true` says older messages exist before the page and `hasNewer: true` (absent when false) says newer ones exist after it, so a reader walks to either end by passing the first or last `id` it holds back in. An `id` that is not on the branch is an error, not a different page. The projection runs on every request, bounded by the same snapshot limits as before (16 MiB; up to 100,000 records for Claude, Codex and OpenCode rows, which used to stop at 10,000), so no cursor lives on the host. A Codex record may be as long as the file (Codex writes a whole command, its output or a compaction's replaced history as one line); a block's text longer than 256 KiB, or one that would take its message past the page budget, is cut at a character boundary with a note of how many bytes are left out, never refused. A conversation over the size or record bound fails with the class `TooLarge`, and the Agent view says it is too large to open there and leaves it to the terminal. It works for Claude Code (across compactions), Codex and OpenCode; the Agent view holds at most 400 messages at a time and reads the rest back on demand. A companion that predates these flags rejects them with an unexpected-argument error, and the Agent view then keeps what it has loaded and asks you to update the companion.
+
+For Codex, `--allow-large-history` on `transcript --view conversation`, `herdr-conversation`, or `transcript-watch` opts into a bounded index of the full recorded lineage. The index preserves turn order, rollbacks and normal before/after paging; its message index retains record locations and identifiers rather than conversation text, separately derives bounded session and work metadata, and verifies captured sources and each reread record. The bounds are 1 GiB of source files in total, 100,000 records, 16 sources, 16 MiB per record, 32 MiB of index metadata and 16 MiB of derived-state metadata. Exceeding a bound reports `TooLarge`. Each refresh may reread the captured sources. Without the flag the existing 16 MiB source limit remains; the app retries without the flag when it detects an older companion.
 
 ### Session facts
 
@@ -478,6 +540,8 @@ These formats use the normal byte-cursor record paging contract:
 | `qoder-ide` | `~/.qoder/projects` | `<project>/transcript/<session-id>.jsonl` |
 | `kimi` | `$KIMI_SHARE_DIR/sessions`, otherwise `~/.kimi/sessions` | `<workdir-key>/<session-id>/context.jsonl` |
 
+`discover` names the session (`sessionId`) for `copilot` (the `<session-id>` directory), `kimi` (the same) and `droid` (the UUID file name), the three whose path carries the id the agent's hooks report; the Agent view uses it to tie a hook-reported session to its records and shows them read-only. Other file-based adapters leave `sessionId` out, because nothing in their path names the session. This needs an updated companion; an older one lists the files without it and the Agent view then shows the last reported state only.
+
 Copilot support follows the official generated event schema associated with CLI `1.0.104-3`. It reads persisted user/assistant messages, completed thinking, executed tool calls and results. Ephemeral streaming deltas, subagent events carrying a parent tool-call identity, and hidden skill/inter-agent user-message sources are omitted. Tool requests embedded in assistant messages are not duplicated as additional executed tools. Only explicitly stored output-token counts are shown; the full usage event is ephemeral and is not guaranteed in the persisted log. Alternate configuration directories require an explicit discovery root.
 
 Qoder support is specifically the **IDE transcript format** published in its hook documentation: user/assistant messages, text, tool calls and tool results. Its record adapter does not establish Qoder CLI storage compatibility, native chat resumption, provider quotas, or safe approval targeting.
@@ -545,7 +609,8 @@ session file and replays it the way the CLI does: the file is an append-only log
 that message in place, `$patch` lines set tool results and edit, remove or reorder messages, `$rewindTo` drops a message and
 everything after it, and the metadata lines (`sessionId`, `$set`) show nothing. A legacy single-object `.json` session reads
 the same way. There is no Records view: `--view records` is refused. Only complete lines count, so a line still being written
-is ignored. Messages of type `info`, `warning` and `error` are not mapped.
+is ignored. Messages of type `info`, `warning` and `error` are not mapped: Gemini CLI writes an `info` message only for binary
+tool output (an image a tool returned), never for a compression, so there is no compression notice to show.
 
 `discover --agent gemini` lists `chats/session-*.jsonl` under `$GEMINI_CLI_HOME/.gemini/tmp/<project>/` (the user's home when
 the variable is unset). A sub-agent's own file, one folder deeper under the parent session id, is not listed and not read.
@@ -565,6 +630,10 @@ ordinary tool block:
 | `write_todos` (`todos[].description`, `status` of `pending`, `in_progress`, `completed`, `cancelled` or `blocked`) | plan card |
 | `invoke_agent` (`agent_name`, `prompt`) | `agent` work item; running until its call is `success`, `error` or `cancelled` |
 | `run_shell_command` with `is_background: true` | `shell` work item; it ends at no recorded event, so it stays `running` |
+
+The end of a background shell is not recorded under Gemini's default `backgroundCompletionBehavior` of `silent`; `inject` and
+`notify` put a `[Background command completed ...]` text into the next turn, in a shape that was never captured, so nothing
+reads an end from it (checked against the released 0.68.0 package and the current source, 2026-11-16).
 
 `activity` is `waiting` while a call awaits approval, `working` while a call runs or after the user's prompt or a finished
 call that the model has not answered, `stopped` after a cancelled call and `idle` after an answer. `session` carries the last
@@ -621,7 +690,30 @@ The modern disk envelope is `{timestamp, method, params: {sessionId, update}}`. 
 
 The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Unix-owner guards and modification-time ordering apply. Discovery does not read transcript contents, `.cwd`, session metadata or sidecars; it reports file path/size/time and the parent folder as an opaque display label. It never interprets a folder ID as a live agent session ID. Results are candidates, not parsed transcripts or proven live-terminal bindings. Select a result and explicitly open it to use the existing guarded record reader; malformed or replaced files are still validated on open. No new whole-file size ceiling is implied by metadata listing.
 
-`--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged. In the conversation view a `plan` update (`entries[{content,status,priority}]`, each update replacing the whole plan) is one `plan` call carrying the shared plan card, so the card and, once the Agent view follows a Grok session, the plan chip above the composer read it like a Claude Code `TodoWrite`; a plan with an entry whose `status` is not `pending`, `in_progress` or `completed` is refused, as it was before, so the conversation view fails and the Records view stays available. No sub-agent or background-job record shape of Grok Build is verified, so none is shown for it.
+`--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged. In the conversation view a `plan` update (`entries[{content,status,priority}]`, each update replacing the whole plan) is one `plan` call carrying the shared plan card, so the card and, once the Agent view follows a Grok session, the plan chip above the composer read it like a Claude Code `TodoWrite`; a plan with an entry whose `status` is not `pending`, `in_progress` or `completed` is refused, as it was before, so the conversation view fails and the Records view stays available. The sub-agents, background commands and monitors of the session fill `work` (see below) and an edit is the shared diff card; no
+other Grok record is mapped to a card.
+
+#### Grok Build work records
+
+In the conversation view the xAI records of four kinds make the `work` items the Agent view's background-work panel shows, and
+none of them adds a message: `subagent_spawned` (`subagent_id`, `description`, `subagent_type`, `child_session_id`) launches an
+`agent` item and the `subagent_finished` naming it (`status` `completed`, `failed` or `cancelled`, plus `error`, `output`,
+`tokens_used` and `duration_ms`) ends it as `done`, `failed` or `stopped`; `task_backgrounded` (`task_id`, `command`,
+`description` or, for a monitor, `monitor_description`) launches a `shell` or `monitor` item and the `task_completed` whose
+`task_snapshot.task_id` names it ends it (`explicitly_killed` is `stopped`, a non-zero `exit_code` or a `signal` is `failed`,
+the `session_restart` signal Grok writes for a task it lost is `unknown`, a snapshot with `completed` false ends nothing). The
+last line of the snapshot's `output`, or a sub-agent's `error` or first output line, is the item's `last`. A launch with no
+recorded end stays `running`; a record of one of these kinds with other field types, an end naming no launch and a rewound
+turn's records change nothing and never fail the conversation. `background_tasks` snapshots and `monitor_event` lines are
+accepted and show nothing, since the launch and end records carry what the panel shows.
+
+An edit is the shared diff card when its call is `kind: edit`, its last status is `completed` and its output is exactly one ACP
+`diff` part (`path`, `newText` and `oldText`, absent for a new file): the call is then an `edit` call whose input is
+`{file_path, old_string, new_string}`, which the client already draws as a diff card, and the diff is not repeated as output.
+Any other shape (a failed or unfinished edit, several diffs, another kind) stays an ordinary tool block with its recorded
+title, input and output. The records are the shapes the official writer serializes at the commit the Grok fixtures pin; no
+Grok CLI ran, so the shapes are not checked against a real session: `apps/agent/tests/grok_work.rs` and
+`tests/fixtures/grok-acp/work.jsonl`.
 
 #### Optional inline recorded images
 
@@ -870,7 +962,9 @@ raw Records, recorded-file Follow, CLI combinations and existing limits do not
 change; no whole-file buffer or platform-only receipt is added.
 
 
-This view scans the selected file from byte zero: at most 16 MiB, 10,000 complete nonempty records and 256 KiB per line. It retains only normalized message actions and selected normalized tool patches, with a cumulative 16 MiB reconstruction budget (also charged for subsequently abandoned actions). All tool IDs retain the existing 256-byte limit; final cards allow at most 1,000 blocks and assembled text at most 256 KiB. Output is the latest 1–100 messages within 512 KiB, using schema v1 `active_branch`, `hasMore:false` and truthful `truncated`. An incomplete final line is left unconsumed for a later refresh. Bounds fail explicitly rather than returning an incorrectly reconstructed suffix.
+This view scans the selected file from byte zero on every request: at most 16 MiB, 100,000 records and 256 KiB per line. Grok logs one record per streamed chunk, so the chunks of one message are joined as they are read and count as one record (a log of 50,000 chunk records is a few hundred messages); every other complete nonempty record counts once, including a tool update or a control record that a rewind later discards. It retains only normalized message actions and selected normalized tool patches, with a cumulative 16 MiB reconstruction budget: a message is charged once and each chunk joined to it adds its own blocks, and subsequently abandoned actions stay charged.
+
+The cost of a request grows with the file, about 13 ms per MB measured on the development host (an optimized build without link-time optimization, one thread). A synthetic log of 8,320 records (2.1 MB) took about 27 ms, one of 52,000 records (13.3 MB: 500 turns of 100 streamed chunks, a tool call and a turn end each) about 170 ms, and one of 62,400 records (15.9 MB, just under the file bound) about 200 ms; before the change a log of more than 10,000 records was refused. At the Agent view's poll of about two seconds that is at most a tenth of one core. A file past 16 MiB, or past 100,000 records, is still refused, and the Agent view shows the reader's error while the Records view stays available. All tool IDs retain the existing 256-byte limit; final cards allow at most 1,000 blocks and assembled text at most 256 KiB. Output is the latest 1–100 messages within 512 KiB, using schema v1 `active_branch`, `hasMore:false` and truthful `truncated`. An incomplete final line is left unconsumed for a later refresh. Bounds fail explicitly rather than returning an incorrectly reconstructed suffix.
 
 Adjacent chunks with the same explicit UUID `messageId` combine without losing text/thinking/media ordering; repeated nonadjacent keyed messages reject reconstruction. User blocks with the same explicit `promptIndex` combine. Identifier-free adjacent chunks combine only within an uninterrupted same-role run; this is a bounded display grouping, not proof of provider message identity. Tool/response/turn/control boundaries stop that grouping. Explicit `hideFromScrollback:true` user chunks still establish prompt boundaries but are not displayed.
 
@@ -881,6 +975,53 @@ Only contiguous explicit zero-based `promptIndex` boundaries prove a rewind targ
 Compaction references do not replace visible transcript history with a summary. Prompt indexes continue across these markers, so a proven display rewind can cross a compaction boundary. Exact compacted **model context** lives in separate checkpoint files and is not reconstructed. Those files and every media/terminal/plan URI remain unopened. Selecting a file does not establish which agent is running in the terminal, authorize a live reply or supply a live status.
 
 Evidence is official `xai-org/grok-build` commit `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` (`SOURCE_REV` `559751fdcec02d413e4c57c8832ab275e4f44980`), inspected 2026-10-25: the [disk envelope and fixtures](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L721), [actual JSONL writer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs#L634), and [xAI extension definitions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/extensions/notification.rs#L517). Its lockfile pins ACP 0.10.4 with schema 0.11.4. [Synthetic fixture provenance](../apps/agent/tests/fixtures/grok-acp/README.md) records checksums and type anchors. These source contracts do not prove equivalence to the previously inspected Grok 1.0.70 artifact or every installed release. No provider CLI, account data or real user transcript was executed/accessed. Full Grok conversation/runtime compatibility remains [issue #5](https://github.com/mihazs/lazysh/issues/5) work.
+
+#### Grok Build in the Agent view
+
+The Agent view follows the Grok Build session of a tmux pane when a hook of that session names the pane. Grok Build runs
+hooks from `~/.grok/hooks/*.json` (and, unless disabled, from `~/.claude/settings.json`) with the event as JSON on stdin; its
+input carries `session_id`, `cwd`, Claude's PascalCase `hook_event_name` and, once the file exists, `transcript_path`, the
+session's `updates.jsonl`. Print the fragment, review it and save it as `~/.grok/hooks/lazysh.json` (the companion never
+writes Grok's configuration; managed setup for Grok is [#1843](https://github.com/mihazs/lazysh/issues/1843)):
+
+```sh
+lazysh-agent grok-config --reported-history
+```
+
+The fragment runs `lazysh-agent ingest --agent grok --reported-history` on `UserPromptSubmit`, `PostToolUse`,
+`PostToolUseFailure`, `Notification`, `Stop`, `StopFailure`, `StopCancelled`, `SessionEnd` and, with the opt-in, `SessionStart`.
+`PreToolUse`, the one event that can deny a tool call, is deliberately not installed. Without `--reported-history` the same
+events report only the state, and the Agent view shows the agent by name with **Show terminal**. The reported-history
+database keeps the session id, the file path and the pane for seven days, as for Claude Code, and none of the prompt, the
+tool input or the tool result.
+
+What the companion accepts, so that the binding is evidence and not a guess:
+
+- The pane is `TMUX_PANE` (or Zellij's pane identity) of the process the hook ran in. Nothing is inferred from the newest file
+  of a folder or from the processes of the pane.
+- Any top-level event that names an absolute `transcript_path` reports it, because the file may not exist when `SessionStart`
+  fires. An event without one reports nothing; it does not mark the session ambiguous. Two different paths for one session
+  id still make it ambiguous until the retention ends, as for every agent.
+- An event that carries `subagentType` belongs to a sub-agent and is ignored, so a child never becomes a session of the pane.
+- States: a prompt or a tool event is **working**, `Stop` and `StopCancelled` are **done** ("Turn finished", "Turn
+  interrupted"), `StopFailure` is **needs attention** ("Turn failed"), `SessionEnd` is **done**, and only a
+  `permission_prompt` notification is **needs attention** waiting for an approval (`idle_prompt` follows every finished turn
+  and is ignored). The Agent view then says the agent waits for an approval in the terminal and holds the draft; it answers
+  no Grok Build dialog, offers no Stop key and no `@` or `/` suggestions, because no key profile was checked on a real Grok
+  Build.
+- Grok Build also runs the Claude Code hook file. Its input is the only one with the camelCase `hookEventName`, so an
+  `ingest --agent claude` call carrying it is reported as **Grok Build**, never as a Claude Code session whose transcript
+  would be read as Claude's.
+
+The Agent view reads the reported file with `--view conversation` and polls it about every two seconds: turns, thinking,
+tool calls with their output and status (the ACP tool title is the card's name, so every tool is an ordinary tool card) and
+the plan card. The log records no model, usage, sub-agent or background-job shape that was verified, so the header has no
+pills for it. The reconstruction limits above apply: a session past 10,000 records or 16 MiB shows the error and leaves the
+terminal ([#1844](https://github.com/mihazs/lazysh/issues/1844)). Verified against synthetic fixtures built from the pinned source (`apps/agent/tests/grok_hooks.rs` drives the real
+executable from a hook report to the conversation and the state) and the pinned hook event definitions
+(`xai-grok-hooks/src/event.rs` and `xai-grok-shell/src/session/compaction.rs`, `get_transcript_path`, same commit). No real
+Grok Build binary or account was available: the real-agent runtime case remains open on
+[#1842](https://github.com/mihazs/lazysh/issues/1842).
 
 Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx moon run agent:test-rust agent:test-hooks`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
 
@@ -918,6 +1059,8 @@ A bounded local baseline/WAL comparison uses the unchanged sixteen-process CLI c
 Each sixteen-writer contention case (`concurrent_hooks_preserve_every_event`, `simultaneous_initialization_and_ingest_preserve_every_event`, `concurrent_ingest_recovers_after_a_transient_database_lock` and `near_deadline_contention_counts_every_success_and_fails_explicitly`) times one burst against one otherwise idle store. Every commit holds the WAL write lock across one FULL flush, so a burst needs sixteen serialized flushes inside the three-second budget. Durable flushes on one volume slow each other, and on NTFS `FlushFileBuffers` also commits the shared volume log, so other cases in the same test process stretch every commit of a burst. In the release-tag Windows failure (run `42154258979`) the successful commits of one round were 0.04 to 1.5 seconds apart, while the same sixteen-writer probe run alone in that job committed in 2 to 8 ms. The cases, and `bootstrap_observation_tracks_real_store_per_thread` (two concurrent initializations under one bootstrap budget), take an exclusive test gate for the whole burst; every other companion run in the CLI test process, and the 120 in-process commits of `snapshot_caps_rows_and_uses_private_local_storage`, hold it shared. The gate is a lock in the test process plus a lock file in the shared temporary directory, so it also orders other test processes of the same user, such as another checkout's suite. Production storage, FULL durability and the three-second budget are unchanged.
 
 The gate alone did not stop the Windows owner step from failing. In release-tag run `42235738142` all four gated cases failed with SQLite code 5 while other owner cases ran beside them, right after the same step compiled every test dependency into a cold target directory: an initializer's WAL switch took 1.67 s and its schema commit 1.75 s, and the two-thread bootstrap case missed its three-second deadline. The uninstrumented initialization case passed in 0.68 s later in the same job. Cargo runs the four owner binaries one after another, so no second test binary was running; the slow flushes came from other I/O on the runner at that time. The Windows step therefore compiles the owners first, runs every other owner case in parallel, and then runs the five burst cases alone with one test thread.
+
+Issue [#2114](https://github.com/mihazs/lazysh/issues/2114) is the same family in the uninstrumented Windows step, which runs after the probe: with nothing else running, one of sixteen writers failed in its `ingest` stage with SQLite code 5 after waiting its three seconds, in release-tag run `44304249602` (two attempts) and in `44232262629`. Every worker had opened after 0.5 to 1.3 s (the one initializer; the other fifteen adopted its result under the shared bootstrap lock), and the successful ingests then finished 0.03 to 3.1 s after their open, about 190 ms apart on average. The second failed attempt passed its first two rounds and failed the third, so the slowdown began inside the step. The same step, binaries and compiles passed in the third attempt and in earlier runs, where the probe of sixteen commits finished in 0.2 to 0.3 s; in the failed attempts it took 5.4 s. The runner's flush latency varies about twentyfold from one moment to the next, and sixteen serialized FULL commits cannot fit three seconds once a commit takes more than about 190 ms. That is the documented capacity limit of one writer, not a lost wakeup, a second initializer or an early failure, so production storage, FULL durability and the three-second budget are unchanged. The burst gate now also checks that premise: after taking the exclusive gate (and at the start of each round of the initialization case), a burst times eight durable commits on the temporary volume and starts only once their median is at most 62 ms (a third of the budget's share per writer). It re-measures every 250 ms for at most two minutes and then fails explicitly, naming the measured latency, rather than racing a slowdown or passing vacuously. On Linux a slow-flush episode can be modelled with an `LD_PRELOAD` shim that delays every regular-file `fsync` behind one global queue for a few seconds; the initialization case then reproduces this exact failure signature without the wait.
 
 The ignored Linux case `contention_cases_keep_their_budget_beside_slow_shared_flushes` runs two copies of the whole CLI test binary at once, each with four test threads, beside a simulated slow volume: an `LD_PRELOAD` shim delays every `fsync` by 50 ms and queues it behind all other flushes from every thread and process. With only the in-process gate, `concurrent_ingest_recovers_after_a_transient_database_lock` and `simultaneous_initialization_and_ingest_preserve_every_event` fail in both copies; with the cross-process gate every case passes. The CI `agent` job runs it with:
 
@@ -1049,27 +1192,80 @@ remove the installed destination. Installation does not update PATH, hooks,
 settings, database contents or running agents.
 
 Windows inspect returns `supported: false` and
-`reason: "windowsInstallerUnsupported"`; install rejects before filesystem
-inspection or mutation. Windows binary downloads and normal CLI/storage checks
-remain supported. Busy-executable replacement and a Windows OpenSSH shell
-adapter remain tracked in issue #490; the complete in-app installer remains
-issue #476.
+`reason: "windowsInstallerUnsupported"`, plus the `destination`
+(`%LOCALAPPDATA%\lazysh\companion\lazysh-agent.exe`) and the `existing`
+executable (`{"state":"missing"}`, or `state: "present"` with its `sha256` and
+`bytes`, as on Linux and macOS) once the managed namespace is admitted (below).
+Install admits the namespace first, then answers `windowsInstallerUnsupported`;
+neither creates anything. Windows binary downloads and normal CLI/storage checks
+remain supported. The installer fixture and app slices of issue #490 and the
+complete in-app installer (issue #476) are still open, so Windows stays
+unsupported. The Windows OpenSSH probe and command adapter are described under
+[Windows OpenSSH hosts](#windows-openssh-hosts).
 
-Issue #490 starts with the check Windows installation will rely on, which is not
-used by any command yet: `lazysh_common::windows_acl` decides from an object's
-owner SID and DACL whether it is private to the current user. The owner must be
-that user, the administrators group or the system. A file or directory is
-admitted as **no foreign change** when no other account holds an allowed right
-that writes data, appends, writes attributes or extended attributes, deletes the
-object or a child, or changes its DACL or owner (an executable others may still
-read and run), and as **private** when no other account holds any allowed right.
-Deny entries and inherit-only entries are ignored, a NULL DACL is refused, and
-the system, administrators and `OWNER RIGHTS` entries never count as foreign.
-Reading a path first refuses symbolic links, junctions and every other reparse
-point. The decision is a pure function over the owner and the entries, tested on
-every platform; the Windows reader and the decisions on real files and `icacls`
-grants run in the hosted Windows desktop job. No Windows host was available to
-the author, so that job is the first execution of the reader.
+### Windows namespace admission
+
+`lazysh_common::windows_acl` decides from an object's owner SID and DACL whether
+it is private to the current user. The owner must be that user, the
+administrators group or the system. A file or directory is admitted as **no
+foreign change** when no other account holds an allowed right that writes data,
+appends, writes attributes or extended attributes, deletes the object or a child,
+or changes its DACL or owner (an executable others may still read and run), and
+as **private** when no other account holds any allowed right. A directory
+that only leads to private data, such as a drive root or a shared parent, is
+admitted as **no foreign replace**: others may read it and add entries beside the
+existing ones, but none may delete or rename it or its entries, or change its
+DACL or owner. `admit_chain` applies it to every directory from the volume root
+(which is not read: it cannot be replaced) down to a leaf, and the leaf's own
+requirement to the leaf; the Windows Parakeet model storage uses it (see
+[Parakeet dictation](voice-parakeet.md)). Deny entries and
+inherit-only entries are ignored, a NULL DACL is refused, and the system,
+administrators and `OWNER RIGHTS` entries never count as foreign. Reading a path
+first refuses symbolic links, junctions and every other reparse point. The
+decision is a pure function over the owner and the entries, tested on every
+platform; the Windows reader and the decisions on real files and `icacls` grants
+run in the hosted Windows desktop job.
+
+`lazysh-agent installation inspect`, `installation install` and `update` use it
+on the managed namespace before they report, run, create or replace anything:
+
+| Component, from the top | Admitted when |
+| --- | --- |
+| The local application data folder, `lazysh` and `companion` | each one that exists is a real directory (no link, junction or other reparse point) and is **no foreign change** |
+| `lazysh-agent.exe` | it exists as a regular file (no link or reparse point) and is **private** |
+
+A component that does not exist yet admits as absent, and nothing below it is
+read. A path that cannot be read is refused, never taken for absent. `update`
+refuses an unadmitted namespace with exit 27 (`unsafeInstallLocation`) and
+`installation` with `InstallUnsafeNamespace` (a directory) or `InstallUnsafeFile`
+(the executable), in each case before anything changes. `update --check` and
+`--status` run a managed `lazysh-agent.exe` for its version only when that file
+and its directory are **no foreign change**; otherwise its version is reported as
+unknown and `update` itself refuses.
+
+Not verified: the check and the later use are separate steps on paths, so an
+administrator or the current user itself can still change the namespace between
+them (another account cannot, which is what admission establishes); folders above
+the local application data folder are checked for reparse points only, not for
+owner or DACL; hard links to the executable, alternate data streams, integrity
+labels and the ACLs of the lock file and the kept previous copy are not
+inspected; the filesystem is required to be local but not NTFS. The decision on
+real owners, grants, junctions and non-regular executables runs natively with the
+prepared `lazysh-agent.exe` in the hosted Windows job of `companion-artifacts`
+(`apps/agent/tests/windows_admission.rs`); no developer machine with Windows was
+available to the author.
+
+## Windows OpenSSH hosts
+
+The app can run a `lazysh-agent.exe` that is on the `PATH` of a Windows host reached over OpenSSH (#1725, part of #490). The host's default shell is `cmd.exe`, Windows PowerShell or something else, and each unquotes differently, so the app never relies on it.
+
+**Identification.** The POSIX probe runs first, as before. Only when it exits non-zero (a Windows host has no `sh`; the shell's message is localized and is not matched) does the app run one more probe, `powershell.exe -NoProfile -NonInteractive -InputFormat None -EncodedCommand <base64 of the UTF-16LE script>`. A line made only of fixed words and base64 reaches the script unchanged through `cmd.exe`, PowerShell and POSIX quoting alike. The script prints a fixed marker, the architecture (`AMD64` or `ARM64`, read from `PROCESSOR_ARCHITEW6432` first so an emulated shell does not hide it), the user's SID and `%LOCALAPPDATA%` as base64 of UTF-8, so a profile path with non-ASCII characters survives the console code page. Any other answer (no marker, `x86`, a malformed SID, a relative or UNC path, a banner or extra lines) leaves the host unidentified. A positive or negative answer is remembered for the SSH connection, like the Unix one; a probe that failed or timed out is asked again. A host that answers the POSIX probe never sees the second one. Changed default: a host that exits non-zero for the POSIX probe and for this one (a restricted exec-only shell) now costs one more failing exec each time it is asked.
+
+**Commands.** Every `lazysh-agent ...` command the app builds (POSIX-quoted text, as for a Unix host) is turned into the same encoded form: one PowerShell script that finds the first `lazysh-agent` program on the `PATH` (PowerShell never runs one from the current directory, which `cmd.exe` would), calls it with each argument as a single-quoted literal and exits with its status. A missing companion exits 127 with `lazysh-agent: command not found` (a server whose default shell is Windows PowerShell, which runs `powershell.exe -Command <line>`, reports every non-zero status of the command as 1; the app treats any non-zero status as a failure and the required marker is printed with status 0 either way); a command the app asks for as *required* (`account-usage`, `transcript-watch`, the Herdr conversation) answers its marker instead where a POSIX host exits 2, 126 or 127, and drops the companion's stderr as the POSIX form does. Windows PowerShell 5.1 builds a native command's line itself, so an argument it cannot pass as written is refused with `companion_command` instead of guessed: an empty one, one with a double quote (also the typographic ones), one with a control character, and one that contains a blank and ends in a backslash. A command whose encoded line passes about 8,090 characters is refused as well, which keeps it inside the 8,191 characters `cmd.exe` accepts for the whole line with the server's own prefix; a path of about 2,600 characters still fits. Output is relayed by PowerShell, so every line ends with CR LF and the companion's stderr may be wrapped in PowerShell's error text; the app's readers ignore the carriage return.
+
+**What stays Unix-only.** The in-app installation and update (`installation` still reports `windowsInstallerUnsupported` and the app reports `companion_install_unsupported` for a Windows host), hook setup and the Herdr user-install lookup. The managed `%LOCALAPPDATA%\lazysh\companion\lazysh-agent.exe` is not looked for before the `PATH` yet: that needs the SID, DACL and reparse-point admission of the managed namespace (#1724) and is tracked as a follow-up slice of #1725.
+
+**What is verified.** The probe parser, the encoding, the argument rules and the length limit run on every platform (`companion::powershell`). The fixture SSH server answers the POSIX probe as `cmd.exe` does and the probe and commands as PowerShell would, which verifies the order, the single probe per connection and that no POSIX text is sent. The hosted Windows desktop job runs the probe and the adapter through real `cmd.exe /c` and `powershell.exe -Command`, with a stdin that stays open as an SSH exec channel's does, against the SID and local application data of the runner and the prepared `lazysh-agent.exe`: the version, an argument with spaces, quotes, shell syntax and non-ASCII text echoed by `reported-history`, the exit status 2 of an unknown command, the required marker and the missing companion. Not verified: a real OpenSSH server for Windows with either default shell (#1726), PowerShell 7 or another shell as the default, Windows on ARM and 32-bit hosts, and the output fidelity of very large or long-lived streams under a non-UTF-8 console code page.
 
 ## Listening ports for sign-in callbacks
 
@@ -1098,6 +1294,10 @@ One JSON object per line, `"schemaVersion": 1`; the app ignores fields it does n
 At most 256 entries are printed, sorted by port; when more exist the snapshot carries `"truncated": true`. Linux reads `/proc/net/tcp`, `/proc/net/tcp6` and `/proc/PID/fd`; macOS and other Unix systems parse `lsof -F`; Windows parses `Get-NetTCPConnection` through PowerShell. A host where that tool is missing or too slow fails with exit status 1 and a fixed `ListenersUnavailable` message.
 
 With `--watch` the command prints the snapshot, then one `{"event":"listen","listener":{...}}` or `"close"` line each time a listener appears or disappears (polled every `--interval-ms`, default 1000), and `{"event":"heartbeat"}` after 5 seconds without another line. It ends when its standard input closes. A companion that predates the command answers with exit status 2; the app then falls back to the `ss` or `lsof` discovery that Previews uses.
+
+## Review a repository from the host terminal
+
+`lazysh-agent review status DIRECTORY` and `lazysh-agent review diff DIRECTORY FILE` print the changed files of a Git repository and the patch of one file, as plain text or with `--json` as one line, read-only and under the app's review bounds. Details, output formats, exit classes and the languages of the help are in [Repository review](repository-review.md#review-from-the-hosts-terminal). The command is not part of what the app calls, so it needs no companion update to use the Diff view and no settings switch.
 
 ## Open host browser requests on your device (browser shim)
 
@@ -1179,7 +1379,13 @@ this connection has that agent and session ID, the pane shows that report's
 lifecycle state instead: Working, Needs attention (a permission request or
 attention notification) or Done. Workspace and tab summaries stay Herdr's own.
 Without that exact match the pane stays Unknown. Live states do not establish
-approval, input or transcript authority. Search the live Herdr section by agent, project or pane. Discovery stops
+approval, input or transcript authority. Live agents are grouped by status with a count on each group heading. The
+heading is a button that expands or collapses its group; Done starts collapsed so
+finished agents do not crowd out ongoing work, and every other group, including
+Unknown, starts expanded. Your choice for a group is kept while the list refreshes
+and while you move between sessions. Searching reveals every matching group and
+pauses the group buttons until the search is cleared.
+Search the live Herdr section by agent, project or pane. Discovery stops
 while the Agents view is hidden. Failed reads remove the previous live results;
 check the terminal when a status cannot be read.
 
@@ -1211,6 +1417,11 @@ this behavior and does not infer this client's selection from global snapshot
 focus fields. Navigation retires prior guarded Chat confirmation; sending input
 still requires a fresh, separately validated confirmation. Pane navigation is
 bounded and never falls back to terminal input or another pane after a failure.
+
+The companion's `herdr-pane-input` command is the separate transport for typing into
+one named pane of a stock Herdr, pinned to one server process
+([details](multiplexers.md#pane-input-on-a-stock-herdr-pinned-to-one-server-process)).
+The app does not call it yet, and navigation never does.
 
 ### Recorded Codex Conversation
 

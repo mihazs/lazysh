@@ -1,16 +1,19 @@
 import AttachmentPanel from './AttachmentPanel';
-import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import {ArrowDown,ArrowLeft,Info,MessageSquare,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import './AgentTokens.css';
+import './AgentRows.css';
+import './AgentChrome.css';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
 import {zellijPane} from './agentPaneIdentity';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseSnapshot,type ReportedHistorySource} from './AgentPanel';
-import {conversationSource,type ConversationAgent} from './agentConversationSource';
-import {formatNumber, t, useUi} from './i18n/core';
+import {conversationSource,isRecordsAgent,type ConversationAgent,type RecordsAgent} from './agentConversationSource';
+import {formatDate, formatNumber, t, useUi} from './i18n/core';
 import {formatCountdown,formatRelativeTime,useNow} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import {useDialogAnswerer, useTaskStopper} from './agentDialogAnswer';
 import {ChatActivity,ChatCard,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
@@ -115,7 +118,7 @@ export function parseTranscript(value: unknown): Page {
       typeof message.id !== "string" ||
       message.id.length > 4096 ||
       !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")
-        || (message.role === "event" && ["claude", "codex"].includes(page.agent) && page.view === "active_branch")) ||
+        || (message.role === "event" && ["claude", "codex", "opencode"].includes(page.agent) && page.view === "active_branch")) ||
       !Array.isArray(message.blocks) ||
       message.blocks.length > 1000
     )
@@ -200,6 +203,19 @@ export function groupTurns(messages: Message[]): Turn[] {
   return turns;
 }
 
+/** A turn's work as the runs to fold and, between them, what the agent said: a long autonomous turn stays a readable
+ * conversation instead of one "Ran 83 commands" row that only grows as earlier pages load. */
+export function foldWork(activity: Message[]): (Message | Message[])[] {
+  const parts: (Message | Message[])[] = [];
+  for (const message of activity) {
+    const said = message.role === 'assistant' && message.blocks.some(block => block.type === 'text' && !block.card && block.text?.trim())
+      && message.blocks.every(block => (block.type === 'text' && !block.card) || block.type === 'thinking');
+    const run = parts.at(-1);
+    if (said) parts.push(message); else if (Array.isArray(run)) run.push(message); else parts.push([message]);
+  }
+  return parts;
+}
+
 /** The timeline keeps the latest plan in one chip above the composer, so a plan block is not drawn in its turn. */
 const isPlanBlock = (block: Block) => block.card?.kind === 'plan';
 /** The timeline folds all thinking of a turn into one row, so a thinking block is not drawn in its message. */
@@ -227,10 +243,12 @@ const NO_HISTORY = {paging: false, older: false, newer: false};
 
 /** A conversation the Agent view found for its pane from hook reports. */
 export type BoundConversation = Readonly<{agent: ConversationAgent; path: string; /** OpenCode keeps every session in one database: the id picks the session. */transcriptSessionId?: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
+/** The records of a records-only adapter for the session a hook reported: read-only, never a conversation the view takes input for. */
+export type BoundRecords = Readonly<Omit<BoundConversation, 'agent'> & {agent: RecordsAgent}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation|BoundRecords;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -250,7 +268,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [atLatest, setAtLatest] = useState(true);
   const [agent, setAgent] = useState<string>(bound?.agent ?? "claude");
   const [path, setPath] = useState(bound?.path ?? initialReported?.path ?? "");
-  const [view, setView] = useState(bound ? "conversation" : "records");
+  // A records-only adapter has no conversation view: the Agent view shows its records.
+  const [view, setView] = useState(bound && !isRecordsAgent(bound.agent) ? "conversation" : "records");
   // A bound conversation (the Agent view) takes the caller's choice; the picker's own checkbox decides otherwise.
   const [pickedImages,setInlineImages]=useState(false);
   // A Herdr conversation is resolved from the agent's own data root, which has no named file to read previews from.
@@ -298,7 +317,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // The newest unanswered question is the dialog that may still be open: it stays out of the folded activity, and only it can be answered here.
   // The Agent view draws a call and its result as one card; a result whose call is not loaded keeps its own block.
   const toolResults = useMemo(() => timeline ? new Map(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_result' && block.id).map(block => [block.id!, block])) : new Map<string, Block>(), [timeline, messages]);
-  const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && !block.card).map(block => block.id!)), [messages]);
+  // A plan call is drawn as the pinned plan chip, so its result ("Todos have been modified") is not a row of its own either.
+  const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && (!block.card || block.card.kind === 'plan')).map(block => block.id!)), [messages]);
   // A message whose blocks are all results of loaded calls draws nothing of its own; the call's card carries its anchor so search and copy still find it.
   const resultAnchors = useMemo(() => new Map(messages.filter(message => timeline && message.blocks.length > 0 && message.blocks.every(block => block.type === 'tool_result' && block.id && toolCalls.has(block.id))).flatMap(message => message.blocks.map(block => [block.id!, message.id] as const))), [timeline, messages, toolCalls]);
   const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
@@ -353,9 +373,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const composing = useRef(false);
   const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
-  const conversation = ['claude','opencode','codex','gemini'].includes(opened?.agent??'') && opened?.view === 'conversation';
+  // Grok Build's conversation is a recorded display with no Follow of its own; the Agent view still follows it for the pane.
+  const conversation = (['claude','opencode','codex','gemini'].includes(opened?.agent??'') || (!!bound && opened?.agent==='grok-acp')) && opened?.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
-  const followable = conversation || recorded;
+  // Records of a records-only adapter have no stream: the Agent view reads on, from the cursor, every few seconds.
+  const recordsBound = !!bound && isRecordsAgent(bound.agent) && opened?.agent === bound.agent;
+  const followable = conversation || recorded || recordsBound;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
   const selectedPath=reportedMatches || path===bound?.path?path:path.trim();
   const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && selectedPath===opened.path && (!['hermes','opencode'].includes(agent) || transcriptSessionId===opened.transcriptSessionId) && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
@@ -405,20 +428,26 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const autoRead = useRef(() => {});
   autoRead.current = () => {void read(false,true);};
   // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
-  const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex'].includes(bound.agent)
-    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path,...(inlineImages?{inlineImages:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
+  // OpenCode's source is its database and the session in it, with no previews to ask for.
+  const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex','opencode'].includes(bound.agent) && (bound.agent!=='opencode' || (!!bound.transcriptSessionId && !bound.herdr))
+    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : {kind:'path',agent:bound.agent,path:bound.path,...(bound.agent==='opencode'?{transcriptSessionId:bound.transcriptSessionId}:inlineImages?{inlineImages:true}:{}),...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
   const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current() && !history.newer,sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
       // The window is away from the newest messages: they are read back by Jump to latest, not patched in.
       if(historyRef.current.newer)return;
       holdPosition();setError('');
-      if(historyRef.current.paging && op.kind==='replace')place({kind:'tail'},op.messages);
+      if(historyRef.current.paging && op.kind==='replace'){
+        const sameStart=messagesRef.current[0]?.id===op.messages[0]?.id;
+        place({kind:'tail'},op.messages,{older:op.truncated ?? historyRef.current.older,newer:false});
+        if(sameStart && op.truncated !== undefined)setHistory(previous=>({...previous,older:op.truncated!}));
+      }
       else{
         // The window keeps its newest messages; when live ones push the head out, the session no longer starts there.
         const merged=applyWatchOp(messagesRef.current,op,Infinity),dropped=merged.length>WINDOW_CAP;
         messagesRef.current=dropped?merged.slice(-WINDOW_CAP):merged;setMessages(messagesRef.current);
         if(dropped && !historyRef.current.older)setHistory(previous=>({...previous,older:true}));
       }
+      if(op.kind==='patch' && op.truncated === true && !historyRef.current.older)setHistory(previous=>({...previous,older:true}));
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
       if(op.kind==='replace')setWork(op.work);else if(op.work)setWork(op.work.value);
       if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
@@ -457,9 +486,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [updated,setUpdated] = useState(Date.now);
   useEffect(() => {
     if (!following || !canFollow || busy || !visible || !shown || watch.live || history.newer || !access.current()) return;
-    const timer = setTimeout(() => autoRead.current(),2000);
+    // Pages of a long session follow each other at once; once caught up, the host is asked again every few seconds.
+    const timer = setTimeout(() => autoRead.current(),recordsBound ? (more ? 0 : 5000) : 2000);
     return () => clearTimeout(timer);
-  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access]);
+  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access,recordsBound,more]);
   const lagging = !!watchTarget && following && (watch.state === 'delayed' || watch.state === 'stale');
   const now = useNow(1000, lagging);
   async function discover() {
@@ -545,9 +575,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (!currentRequest(current)) return;
       }
       const page = parseTranscript(
-        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : invoke("agent_transcript", {
+        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{}),...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : invoke("agent_transcript", {
           sessionId,
           ...source,
+          ...(source.agent==='codex' && source.view==='conversation'?{allowLargeHistory:true}:{}),
           offset: cursor,
           ...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {}),
           ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),
@@ -612,6 +643,17 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const readSlice = (slice: WindowRequest) => void read(false, false, false, slice);
   const loadOlder = () => {const first = messagesRef.current[0]; if (first) readSlice({kind: 'before', id: first.id});};
   const loadNewer = () => {const last = messagesRef.current.at(-1); if (last) readSlice({kind: 'after', id: last.id});};
+  // A newest page that folds into a few rows does not overflow the list, so no scroll ever asks for the page before it:
+  // earlier pages are read until the view is full. One attempt per first message, so a host that cannot page is asked once.
+  const filledFrom = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const list = messageList.current, first = messages[0]?.id;
+    if (!list || !first || busy || !history.older || history.newer || opened?.view !== 'conversation' || filledFrom.current === first) return;
+    if (!list.clientHeight || list.scrollHeight > list.clientHeight) return;
+    filledFrom.current = first;
+    if (atLatestRef.current) scrollTo.current = 'bottom';
+    loadOlder();
+  }, [messages,busy,history.older,history.newer,opened,shown,visible]);
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
   useEffect(() => {if (shown && bound && path===bound.path && !opened && !error) void read(true);}, [shown, bound, path, opened, error, completed]);
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
@@ -661,6 +703,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord",event:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);
+  // A tap shows or hides what a message offers: when it was sent and Copy message. It toggles an attribute on the element, so the timeline does not render again; a selection in progress is left alone.
+  const stamp = (event: MouseEvent<HTMLElement>) => { if (window.getSelection()?.isCollapsed !== false && !(event.target as Element).closest('a, button, summary, input, textarea, pre')) event.currentTarget.toggleAttribute('data-stamped'); };
   const renderMessage = (message: Message) => message.event ? (
     <article key={message.id} data-anchor={message.id} data-message-id={message.id} className="chat-message agent-event">
       {message.event.detail
@@ -668,8 +712,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         : <p>{eventLabel(message.event)}</p>}
     </article>
   ) : (timeline && message.blocks.every(block => isPlanBlock(block) || isThinking(block))) || (message.blocks.length > 0 && message.blocks.every(paired)) ? null : (
-    <article key={message.id} data-anchor={message.id} data-message-id={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
-      {timeline && messageMarkdown(message) && <CopyButton text={messageMarkdown(message)} label={t('agentCopyMessage')} />}
+    <article key={message.id} data-anchor={message.id} data-message-id={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined} onClick={timeline && (Number.isFinite(Date.parse(message.timestamp ?? '')) || !!messageMarkdown(message)) ? stamp : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
         {message.record.stepIndex !== undefined ? `${t("chatStep", {index:message.record.stepIndex})} · ` : ""}
@@ -701,6 +744,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           </details></Fragment>
         );
       })}
+      {timeline && messageMarkdown(message) && <CopyButton text={messageMarkdown(message)} label={t('agentCopyMessage')} />}
+      {timeline && Number.isFinite(Date.parse(message.timestamp ?? '')) && <time className="agent-stamp" dateTime={message.timestamp}>{t('chatMessageTime',{time:formatDate(Date.parse(message.timestamp!),{dateStyle:'medium',timeStyle:'short'})})}</time>}
       {message.usage && !timeline && (
         <small>
           {Object.entries(message.usage)
@@ -853,7 +898,6 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
         {t('chatRecordedStart')}
       </button>}
-      {bound && (!atLatest || history.newer) && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
       {followable && !bound && <div className="chat-follow-controls">
         <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
@@ -885,13 +929,20 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             // Only the last turn can still wait for its question.
             const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];
             const folded = turn.activity.filter(message => !pending.includes(message));
-            return <>{folded.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary({...turn, activity: folded})}</summary>{folded.map(renderMessage)}</details>}{pending.map(renderMessage)}</>;
+            // The turn's duration goes on its last folded run.
+            const parts = foldWork(folded), timed = parts.filter(Array.isArray).at(-1);
+            return <>{parts.map(part => Array.isArray(part) ? <details key={part[0].id} className="agent-turn-activity"><summary>{activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})}</summary>{part.map(renderMessage)}</details> : renderMessage(part))}{pending.map(renderMessage)}</>;
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
+        {timeline && opened && !busy && !error && messages.length === 0 && <div className="agent-empty"><MessageSquare size={32} aria-hidden="true"/><strong>{t('agentEmptyTitle')}</strong><p>{t('agentEmptyHint')}</p></div>}
         {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}
         {timeline && <AgentQueued queued={queued} />}
       </div>
+      {/* Over the end of the timeline, not in its flow: it appears and goes without moving a line. */}
+      {bound && (!atLatest || history.newer) && <div className="agent-jump"><div className="agent-jump-box">
+        <button type="button" className="agent-jump-latest" aria-label={t("chatJumpLatest")} title={t("chatJumpLatest")} onClick={jumpToLatest}><ArrowDown size={20} aria-hidden="true"/></button>
+      </div></div>}
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}

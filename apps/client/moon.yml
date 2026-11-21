@@ -3,7 +3,7 @@ layer: application
 stack: frontend
 dependsOn: [client-native]
 fileGroups:
-  webSources: ['src/**/*', 'public/**/*', 'index.html', 'vite.config.ts', 'tsconfig*.json']
+  webSources: ['src/**/*', 'build/**/*', 'public/**/*', 'index.html', 'vite.config.ts', 'tsconfig*.json']
 tasks:
   dev:
     command: bun run dev
@@ -37,6 +37,11 @@ tasks:
     type: test
     command: bun run test:e2e
     options: &local {cache: false}
+  # The tmux, Zellij and Herdr OSC 52 copy cases; native-linux-runtimes runs them with the pinned binaries.
+  test-e2e-multiplexers:
+    type: test
+    command: bun run test:e2e:multiplexers
+    options: *local
   test-install-browser:
     command: playwright install chromium
     options: *local
@@ -76,21 +81,36 @@ tasks:
     type: test
     command: bun run mobile-e2e
     deps: [~:setup-mobile-e2e]
-    options: {cache: false, runInCI: false}
+    options: {cache: false}
   build-native:
     type: build
     command: tauri build --no-bundle
     options: *local
   # tauri android/ios builds. Inline env prefixes became env + envOverride because moon
   # lets the process environment win over task env otherwise.
+  # The Google build links Parakeet's pinned ONNX Runtime (`parakeet-android`); the F-Droid variants below must not.
   build-android:
     type: build
-    command: tauri android build --target aarch64 --debug --apk --ci
+    command: tauri android build --target aarch64 --debug --apk --ci --features parakeet-android
     env: &androidBuildEnv {WHISPER_DONT_GENERATE_BINDINGS: '1', CMAKE_ANDROID_NDK: '${NDK_HOME}'}
     options: &envLocal {cache: false, envOverride: true}
+  # Owned emulator and Waydroid builds also carry the sync-tls-acceptance trust hook (sync.rs); no published artifact is built here.
   build-android-emulator:
     type: build
-    command: tauri android build --target x86_64 --debug --apk --ci
+    command: tauri android build --target x86_64 --debug --apk --ci --features sync-tls-acceptance,parakeet-android
+    env: *androidBuildEnv
+    options: *envLocal
+  # The debug APKs with the real terminal core (the optional native-terminal feature: libghostty-vt, built with Zig 0.16.0). The
+  # environment names the Zig, its caches and the admitted Ghostty archives (checks.yml native-android-terminal-core, #2145);
+  # aarch64 is compiled and linked only, the x86_64 one is what the emulator and Waydroid run.
+  build-android-terminal-core:
+    type: build
+    command: tauri android build --target aarch64 --debug --apk --ci --features native-terminal
+    env: *androidBuildEnv
+    options: *envLocal
+  build-android-emulator-terminal-core:
+    type: build
+    command: tauri android build --target x86_64 --debug --apk --ci --features native-terminal
     env: *androidBuildEnv
     options: *envLocal
   build-android-fdroid:
@@ -127,7 +147,7 @@ tasks:
   test-android:
     type: test
     script: |-
-      src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshSurvivesDeniedNotificationPermission,app.lazysh.client.NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDpadPanThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshDefaultHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshSurvivesBusyBackgroundThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview,app.lazysh.client.NativeWorkspaceTest#ownedTmuxThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedTmuxLostConnectionThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPasswordLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshEncryptedKeyLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshRotatedHostKeyRefusedThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshBastionRouteThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshAgentForwardingThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPreviewForwardsAndTearsDownThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshFilesAndRepositoryReviewThroughRealUi,app.lazysh.client.NativeBiometricVaultTest
+      src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshSurvivesDeniedNotificationPermission,app.lazysh.client.NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDpadPanThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshDefaultHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshSurvivesBusyBackgroundThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview,app.lazysh.client.NativeWorkspaceTest#ownedTmuxThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedTmuxLostConnectionThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedZellijThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPasswordLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshEncryptedKeyLoginThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshRotatedHostKeyRefusedThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshBastionRouteThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshAgentForwardingThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshPreviewForwardsAndTearsDownThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshFilesAndRepositoryReviewThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshClipboardAndLinksReachTheSystemThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView,app.lazysh.client.NativeWorkspaceTest#ownedSshAutoFallsBackToSshThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshForcedEternalTerminalThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshMoshCustomServerPathAndPortRangeThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshClientEnvironmentThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSshDevicePanelCapturesTheOwnedEmulatorThroughRealUi,app.lazysh.client.NativeBiometricVaultTest,app.lazysh.client.NativeTerminalCoreTest,app.lazysh.client.NativeWorkspaceTest#ownedTmuxRestoreBeforeForceStop,app.lazysh.client.NativeWorkspaceTest#ownedTmuxRestoreAfterForceStop,app.lazysh.client.NativeWorkspaceTest#ownedHerdrRestoreBeforeForceStop,app.lazysh.client.NativeWorkspaceTest#ownedHerdrRestoreAfterForceStop,app.lazysh.client.NativeWorkspaceTest#ownedSshTerminalSelectionCopyReachesTheSystemClipboardThroughRealUi
     deps: [~:test-android-theme-links]
     options: *local
   test-android-theme-links:
@@ -151,21 +171,48 @@ tasks:
   test-android-tmux:
     type: test
     command: bun test ../../tests/android-tmux.test.ts ../../tests/android-ssh-host.test.ts --test-name-pattern
-    args: ['^(owned namespaced tmux survives a real SSH detach and reattaches the original panes|owned tmux teardown detaches a running control-mode client through the server before retiring SSH|owned tmux teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly|actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes|actual Android app shows the lost-connection banner, retries a cut route, reattaches the same tmux pane and closes without reconnecting)$']
+    args: ['^(owned namespaced tmux survives a real SSH detach and reattaches the original panes|owned tmux teardown detaches a running control-mode client through the server before retiring SSH|owned tmux teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly|actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes|actual Android app shows the lost-connection banner, retries a cut route, reattaches the same tmux pane and closes without reconnecting|actual Android app restores the same tmux pane only on click after a force-stop and relaunch)$']
     env: {LAZYSH_ANDROID_UI_TMUX: '1'}
+    deps: [~:build-android-emulator]
+    options: *envLocal
+  test-android-zellij:
+    type: test
+    command: bun test ../../tests/android-zellij.test.ts ../../tests/android-ssh-host.test.ts --test-name-pattern
+    args: ['^(owned Zellij session follows a real attach, tab switches and detaches and is gone with its fixture|actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes)$']
+    env: {LAZYSH_ANDROID_UI_ZELLIJ: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal
   test-android-herdr-navigation:
     type: test
     command: bun test ../../tests/android-ssh-host.test.ts --test-name-pattern
-    args: ['^actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes$']
+    args: ['^(actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes|actual Android app restores the same stock Herdr display only on click after a force-stop and relaunch)$']
     env: {LAZYSH_ANDROID_UI_HERDR_NAVIGATION: '1'}
     deps: [~:build-android-emulator]
+    options: *envLocal
+  # The real core inside the packaged app against an owned OpenSSH (#2145): ANDROID_SERIAL names the emulator or the Waydroid guest.
+  test-android-terminal-core:
+    type: test
+    command: bun test ../../tests/android-terminal-core.test.ts
+    env: {LAZYSH_ANDROID_UI_TERMINAL_CORE: '1'}
+    deps: [~:build-android-emulator-terminal-core]
+    options: *envLocal
+  # The emulator job's run (checks.yml native-android-terminal-core): it builds both APKs itself, before the emulator boots.
+  test-android-terminal-core-ci:
+    type: test
+    command: bun test ../../tests/android-terminal-core.test.ts
+    env: {LAZYSH_ANDROID_UI_TERMINAL_CORE: '1'}
     options: *envLocal
   test-android-qr:
     type: test
     command: bun test ../../tests/android-qr.test.ts
     env: {LAZYSH_ANDROID_UI_QR: '1'}
+    deps: [~:build-android-emulator]
+    options: *envLocal
+  # Local Whisper on the emulator (#1604): the pinned tiny.en model and JFK sample staged by the owner, imported and transcribed through the bundled WebView.
+  test-android-voice:
+    type: test
+    command: bun test ../../tests/android-voice.test.ts
+    env: {LAZYSH_ANDROID_UI_VOICE: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal
   # Edge gestures against the real navigation overlays (#1380, #1435); needs a device whose overlays can be switched (Waydroid or an emulator image that has them).
@@ -193,4 +240,9 @@ tasks:
     type: test
     script: |-
       xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO
+    options: *macLocal
+  test-ios-surface-poc:
+    type: test
+    script: |-
+      xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshSurfacePocUITests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/surface-poc-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO
     options: *macLocal

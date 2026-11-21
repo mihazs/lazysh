@@ -2,7 +2,7 @@
 use super::*;
 use serde_json::json;
 
-async fn ready(servers: &NamedServers<'_>, marker: &str) {
+pub(super) async fn ready(servers: &NamedServers<'_>, marker: &str) {
     timeout(BOUND, async {
         while !servers
             .direct("chat-a", &["capture-pane", "-p", "-t", "%0"])
@@ -41,10 +41,7 @@ async fn real_tmux_multiline_modes_hooks_errors_and_lost_ack() {
 
 async fn probe(case: &str) {
     let f = Fixture::new().await;
-    let servers = NamedServers {
-        fixture: &f,
-        names: vec!["chat-a".into()],
-    };
+    let servers = NamedServers::chat_a(&f);
     let selected = f.dir.path().join("paste-selected");
     let other = f.dir.path().join("paste-other");
     let enabled = !matches!(case, "basic" | "plain" | "changed");

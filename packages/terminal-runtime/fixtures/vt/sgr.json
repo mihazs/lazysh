@@ -1,0 +1,486 @@
+[
+  {
+    "id": "sgr-16-colors",
+    "about": "ANSI foreground and background, bright variants and reset",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "\u001b[31mR\u001b[32mG\u001b[1;34mB\u001b[0m \u001b[41mr\u001b[102mg\u001b[0mn"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "RGB rgn",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 7,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "R",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "G",
+          "width": 1,
+          "fg": "p:2",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "B",
+          "width": 1,
+          "fg": "p:4",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 4,
+          "y": 0,
+          "text": "r",
+          "width": 1,
+          "fg": "default",
+          "bg": "p:1",
+          "flags": []
+        },
+        {
+          "x": 5,
+          "y": 0,
+          "text": "g",
+          "width": 1,
+          "fg": "default",
+          "bg": "p:10",
+          "flags": []
+        },
+        {
+          "x": 6,
+          "y": 0,
+          "text": "n",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "sgr-256-colors",
+    "about": "38;5 and 48;5 palette colours",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "\u001b[38;5;196mA\u001b[48;5;21mB\u001b[38;5;232;48;5;255mC\u001b[0m"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "ABC",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "A",
+          "width": 1,
+          "fg": "p:196",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "B",
+          "width": 1,
+          "fg": "p:196",
+          "bg": "p:21",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "C",
+          "width": 1,
+          "fg": "p:232",
+          "bg": "p:255",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "sgr-truecolor",
+    "about": "38;2 and 48;2 RGB, semicolon and colon forms",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "\u001b[38;2;255;128;0mO\u001b[48;2;0;64;128mB\u001b[0m\u001b[38:2::10:20:30mC\u001b[0m"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "OBC",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "O",
+          "width": 1,
+          "fg": "rgb:ff8000",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "B",
+          "width": 1,
+          "fg": "rgb:ff8000",
+          "bg": "rgb:004080",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "C",
+          "width": 1,
+          "fg": "rgb:0a141e",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "sgr-attributes",
+    "about": "bold italic underline inverse faint strikethrough invisible blink and their resets",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "\u001b[1mb\u001b[22m\u001b[3mi\u001b[23m\u001b[4mu\u001b[24m\u001b[7mv\u001b[27m\u001b[2mf\u001b[22m\u001b[9ms\u001b[29m\u001b[8mx\u001b[28m\u001b[5mk\u001b[25mn"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        7,
+        0
+      ],
+      [
+        8,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "biuvfsxkn",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 9,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "b",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "i",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "italic"
+          ]
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "u",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "underline"
+          ]
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "v",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "inverse"
+          ]
+        },
+        {
+          "x": 4,
+          "y": 0,
+          "text": "f",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "faint"
+          ]
+        },
+        {
+          "x": 5,
+          "y": 0,
+          "text": "s",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "strikethrough"
+          ]
+        },
+        {
+          "x": 6,
+          "y": 0,
+          "text": "x",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "invisible"
+          ]
+        },
+        {
+          "x": 7,
+          "y": 0,
+          "text": "k",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "blink"
+          ]
+        },
+        {
+          "x": 8,
+          "y": 0,
+          "text": "n",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "sgr-reset-and-default-colors",
+    "about": "39 and 49 restore default colours without touching attributes",
+    "cols": 20,
+    "rows": 3,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "\u001b[1;31;42ma\u001b[39mb\u001b[49mc\u001b[0md"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "abcd",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 4,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": "a",
+          "width": 1,
+          "fg": "p:1",
+          "bg": "p:2",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "text": "b",
+          "width": 1,
+          "fg": "default",
+          "bg": "p:2",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "text": "c",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "bold"
+          ]
+        },
+        {
+          "x": 3,
+          "y": 0,
+          "text": "d",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ]
+    }
+  }
+]

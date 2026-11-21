@@ -16,6 +16,10 @@ use std::{
     ptr::{null, null_mut},
 };
 
+#[cfg(windows)]
+#[path = "windows_acl.rs"]
+mod windows_acl;
+
 pub const THIS: &str = env!("CARGO_PKG_VERSION");
 pub const BINARY: &[u8] = b"companion bytes";
 pub const NAME: &str = if cfg!(windows) {
@@ -122,8 +126,11 @@ pub fn mode(path: &Path, mode: u32) {
 }
 impl Fixture {
     pub fn new(releases: &[Release]) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        windows_acl::private_to_current_user(root.path());
         Self {
-            root: tempfile::tempdir().unwrap(),
+            root,
             server: Server::start(releases.to_vec()),
         }
     }

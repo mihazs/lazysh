@@ -143,6 +143,101 @@ and [NSIS command-line documentation](https://nsis.sourceforge.io/Docs/Chapter3.
 `/D=` and `_?=` are final raw arguments, including paths containing spaces;
 acceptance uses no Windows security-policy or CRC override.
 
+## Measured release size
+
+Release size is a gate for [#20](https://github.com/mihazs/lazysh/issues/20), measured
+from the bytes each published release lists in its `release.json` (the same bytes the
+release job verified against `SHA256SUMS`). Sizes below are MiB of the public package
+files, read from the GitHub release assets on 2026-11-14.
+
+|Package|v0.23.0|v1.4.1|v1.30.1|v1.62.0|Ceiling|Growth v1.4.1 to v1.62.0|
+|---|---:|---:|---:|---:|---:|---:|
+|Android FOSS APK (arm64)|29.3|29.8|30.2|30.8|47|+3.4%|
+|Android Google APK (arm64)|29.5|30.0|30.7|31.3|78|+4.2%|
+|Linux AppImage (x64)|91.8|94.4|94.6|95.0|143|+0.7%|
+|Linux deb (x64)|18.4|21.2|21.5|21.9|33|+3.2%|
+|Windows installer (x64)|5.2|7.1|7.3|7.6|12|+6.8%|
+|Linux x64 companion|n/a|10.6|11.0|11.5|18|+8.5%|
+|Linux arm64 companion|n/a|8.7|9.0|9.5|15|+8.6%|
+|macOS x64 companion|n/a|9.6|10.0|10.5|16|+9.1%|
+|macOS arm64 companion|n/a|8.1|8.4|8.8|14|+8.4%|
+|Windows x64 companion|n/a|9.3|9.5|10.0|16|+8.5%|
+
+Reading it: since v1.4.1 every package grew by under 10%. Before that, two one-time
+steps happened between v0.23.0 and v1.4.1: the Windows installer grew 37% and the five
+companion binaries grew 60% to 140% (Linux x64 6.4 to 10.6 MiB, Windows 3.8 to 9.3 MiB
+between v1.2.0 and v1.4.1). The v1.4.1 column is the first release after that step, not
+a baseline of any kind.
+
+Each package has a ceiling in `packageBudgetsMiB` in `.changeset/release-artifacts.ts`:
+1.5 times its v1.62.0 size, rounded up to a whole MiB. Staging and aggregation both
+reject a package above its ceiling (`oversized package`, `malformed package receipt`),
+so a release cannot publish a stray debug build or an unstripped binary that doubles a
+package. A real dependency or asset that needs more room raises its ceiling in the same
+change, with a new measurement in this table. The ceilings are guard rails against
+accidents, not a statement of the size users should expect.
+
+The Android Google APK is the one ceiling raised since: the Parakeet runtime (ONNX
+Runtime and sherpa-onnx, linked into the Google flavor only by
+[#1819](https://github.com/mihazs/lazysh/pull/1819)) grew the release arm64 APK built
+for that change to 54,082,206 bytes (51.6 MiB; `liblazysh_lib.so` went from 20,962,712
+to 42,219,808 bytes), so its ceiling is 1.5 times that, 78 MiB
+([#2212](https://github.com/mihazs/lazysh/issues/2212)). The model is downloaded on
+demand and is not in the APK. That figure is the pull request's build, not a published
+asset: remeasure it from the first release that ships the runtime. The FOSS APK does
+not link the runtime and keeps 47 MiB.
+
+Not measured here, and not claimed: installed size on a device or desktop, download size
+over a store or delta update, per-ABI Android splits (the published APKs are arm64
+only), and macOS or iOS packages (not published; they keep the 2 GiB bound until a first
+published build gives them a measurement). Remeasure a release with
+`gh release download vX.Y.Z -p release.json` and read `platforms[].files[].bytes`.
+
+## Bundled companion
+
+Each desktop package carries the `lazysh-agent` of its own platform beside the app,
+so a fresh install has a local companion (the local arm resolves it first). The
+desktop job does not build it: it downloads the `release-<companion target>`
+artifact the same run's `companion` job built, verified and receipted, and
+`bun .changeset/release-bundle.ts stage` binds that receipt to this build's commit and
+version, requires exactly the receipt's file at its SHA256, and copies it to
+`apps/client/src-tauri/binaries/lazysh-agent-<host triple>` (ignored by Git). The Tauri build then reads
+`src-tauri/tauri.bundled-agent.conf.json`, whose `bundle.externalBin` entry packages that
+file; it is passed with `--config` on release builds only, because Tauri refuses to compile a
+crate whose configured sidecar is missing and every ordinary `cargo build`, `cargo test`
+and `tauri dev` would then need a staged binary.
+
+| Package | Companion | Where it lands |
+| --- | --- | --- |
+| `linux-x64` deb | `linux-agent-x64` (static musl) | `/usr/bin/lazysh-agent` |
+| `linux-x64` AppImage | `linux-agent-x64` | `usr/bin/lazysh-agent` of the image |
+| `windows-x64` NSIS installer | `windows-agent-x64` | `lazysh-agent.exe` beside `lazysh.exe` |
+| `macos-arm64` / `macos-x64` app, dmg | `macos-agent-arm64` / `macos-agent-x64` | `Contents/MacOS/lazysh-agent` |
+
+`.changeset/release-platform.ts` then unpacks each package it built and fails the release
+when the companion is missing, is not executable or differs from the published one: `dpkg-deb
+--extract` for the deb, `--appimage-extract` for the AppImage (no FUSE needed), and the
+installed directory during the Windows installer acceptance, which compares length and
+SHA256 after the install and again after the same-version repair. The deb and the
+installer carry the published bytes exactly. linuxdeploy adds a `RUNPATH` to every
+executable in the AppImage's `usr/bin`, so that copy is compared section by section:
+every loaded ELF section except `.dynamic` and `.dynstr` must match the published
+executable, and a different set of sections or any other changed byte fails. The check
+reads the version through the receipt (a companion of another commit or version is refused
+before the build starts), not by running the unpacked file. The macOS branch compares the
+app's and the dmg's copy with both code signatures removed, because the bundler signs the
+whole app; no workflow builds macOS packages yet (they are deferred), and that branch has
+not run on Apple hardware.
+
+The measured sizes above predate the bundled companion. Until a release measures the
+bundling packages, their ceilings are the 1.5 times ceiling plus the bundled companion's own
+ceiling (deb 33 + 18, AppImage 143 + 18, Windows installer 12 + 16 MiB), the most the
+companion can add if the package did not compress it. The next release's measurement
+replaces them.
+
+Because the desktop builds wait for the companion artifacts, a release's critical path
+has three runner-queue entries (companion, desktop, publication) instead of two.
+
 ## Runner layout
 
 The release uses as few hosted runners as its acceptance checks allow:
@@ -183,6 +278,19 @@ longer uses `Swatinem/rust-cache`, which also restores `target/`. Pull request a
 main candidates still do. The F-Droid source build runs inside the pinned official
 buildserver container with its own downloads and gets no injected cache. Release
 jobs have no other sha256-pinned tool downloads to cache.
+
+Release Android builds still fetch Gradle dependencies from the network, and a Maven
+registry throttle or a lookup that comes back "not found" fails them minutes in. The F-Droid
+source build (`fdroid build`) and the Android job's `tauri android build` run through
+`.github/scripts/retry-gradle-resolution.sh`, which runs the build up to five times (1, 3, 6
+and then 10 minutes apart) when Gradle reports a failed download: a 429 or 5xx, a dropped
+connection, a truncated POM, or `Could not find|resolve group:artifact`. It names the attempt
+and the reason in the log. A compile, test, lint or dependency-verification failure is returned
+at once. The script adds no cache and no `--refresh-dependencies`, so each retry downloads and
+verifies exactly like the first run. `buildSrc/settings.gradle.kts` also lets the `kotlin-dsl`
+classpath fall back to Maven Central when the plugin portal reports it missing; Gradle moves to
+the next repository only on "not found", never on a 429 or 5xx, and the F-Droid scanner rejects
+any repository other than the standard ones, so no mirror is added.
 
 Linux/Windows/macOS architecture coverage and signing status must be listed
 per file. Android ARM64 is the existing production target; emulator x86_64 debug

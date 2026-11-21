@@ -65,8 +65,8 @@ fn message(id: &str, event: Value, timestamp: &Value) -> Value {
     message
 }
 
-/// Codex `compacted` record: the conversation was summarized.
-pub(super) fn codex_compacted(id: &str, timestamp: &Value) -> Value {
+/// The conversation was summarized: a Codex `compacted` record or an OpenCode `compaction` part.
+pub(super) fn compacted(id: &str, timestamp: &Value) -> Value {
     message(id, json!({"kind":"compacted","text":""}), timestamp)
 }
 

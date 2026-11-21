@@ -9,6 +9,7 @@ import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogScreens';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
+import {copilotRecords,droidRecords,kimiRecords} from './test/recordsOnlyRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -26,6 +27,17 @@ function host(agent:string,rows:unknown[],history:'available'|'missing'|('availa
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
     if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return (Array.isArray(history)?history.length>1?history.shift():history[0]:history)==='available'?{schemaVersion:1,sessionId:id,status:'available',path:`/home/owner/${agent} 世界.jsonl`,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'}:{schemaVersion:1,sessionId:id,status:'missing'};}
     if(command==='agent_transcript')return page(agent,pages.length>1?pages.shift()!:pages[0]);
+    throw new Error(`Unexpected ${command}`);
+  });
+}
+/** A pane whose agent's records the host finds by session id (OpenCode's database, a records-only adapter's files) and reads as the pages given, the last one repeated. */
+function discoveryHost(rows:unknown[],discovered:unknown,pages:unknown[]) {
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='tmux_chat')return tmuxChatReply(command,args);
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
+    if(command==='agent_transcripts')return discovered;
+    if(command==='agent_transcript')return pages.length>1?pages.shift():pages[0];
+    if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
     throw new Error(`Unexpected ${command}`);
   });
 }
@@ -49,7 +61,7 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
     expect(sessions.getAttribute('aria-expanded')).toBe('false');fireEvent.click(sessions);
     expect(screen.getByRole('region',{name:'Last-reported agent sessions'})).toBeTruthy();fireEvent.click(options().querySelector('button')!);
     // Claude Code previews of attached images are on by default; Codex waits for the switch.
-    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0,...(agent==='claude'?{inlineImages:true}:{})}]);
+    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0,...(agent==='claude'?{inlineImages:true}:{allowLargeHistory:true})}]);
     const turns=screen.getAllByRole('region',{name:'Turn'});
     expect(turns).toHaveLength(1);
     // Prompt and answer are bubbles named by role, without the recorded reader's role headings or follow controls.
@@ -220,6 +232,78 @@ it('labels a detected agent without a reported conversation as partial and never
   expect(calls('agent_transcript')).toEqual([]);
 });
 
+// An agent the view has no reader for: turning on reported history cannot help, so the label says it shows state only.
+// Pi has no hooks, Cursor CLI and Amp keep records the report cannot be tied to (no session id in the path): none is claimed.
+it.each(['Pi','Cursor CLI','Amp'])('labels %s, a records-only adapter whose records are not tied to the report, as state only with Show terminal and no composer',async agent=>{
+  host('codex',[row(agent,'%3','needs_attention')],'missing',[[]]);
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(`This view shows only the last reported state of ${agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+  expect(screen.queryByText(/Turn on reported history/)).toBeNull();
+  expect(screen.getByTitle('Last reported: Waiting for you')).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+  expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  expect(calls('agent_transcript')).toEqual([]);expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcripts')).toEqual([]);
+});
+
+describe.each([copilotRecords,kimiRecords,droidRecords])('$agent pane (records-only)',records=>{
+  const reported=(id=records.session)=>({...row(records.agent,'%3','needs_attention'),sessionId:id});
+  const mount=async(rows:unknown[],discovered:unknown=records.discovery,pages:unknown[]=[records.page])=>{discoveryHost(rows,discovered,pages);await mountTmux();};
+  const texts=(page:{messages:{blocks:{type:string;text?:string}[]}[]})=>page.messages.flatMap(message=>message.blocks).filter(block=>block.type==='text').map(block=>block.text!);
+
+  it('shows the records of the reported session read-only under the partial label, with Show terminal and no composer',async()=>{
+    await mount([reported()]);
+    expect(screen.getByText(`Partial: these are the records ${records.agent} wrote for this pane, read-only, so they can lag behind the terminal and leave out what it does not record. Answer in the terminal.`)).toBeTruthy();
+    // The turn the adapter's records hold, and the state the hook reported, which the records do not carry.
+    const turn=screen.getByRole('region',{name:'Turn'});
+    for(const text of texts(records.page as never))expect(within(turn).getByText(text)).toBeTruthy();
+    expect(screen.getByTitle('Last reported: Waiting for you')).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Send to the agent'})).toBeNull();
+    // Records are found by the session id the discovery names, never through reported history, and are read as records of this adapter, not as a conversation.
+    expect(calls('agent_transcripts')[0]).toEqual({sessionId:'ssh',agent:records.adapter});
+    expect(calls('agent_reported_history')).toEqual([]);
+    expect(calls('agent_transcript')[0]).toEqual({sessionId:'ssh',agent:records.adapter,path:records.path,offset:0});
+    expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+  });
+
+  it('reads on from the cursor while the records grow, and writes nothing to the terminal',async()=>{
+    const page=records.page as {nextOffset:number;messages:unknown[]};
+    const added={id:'later',role:'assistant',blocks:[{type:'text',text:'A line written after the first read'}]};
+    await mount([reported()],records.discovery,[page,{...page,nextOffset:page.nextOffset+10,messages:[added]}]);
+    expect(screen.queryByText('A line written after the first read')).toBeNull();
+    await advance(5000);
+    expect(screen.getByText('A line written after the first read')).toBeTruthy();
+    expect(calls('agent_transcript').map(args=>(args as {offset:number}).offset)).toEqual([0,page.nextOffset]);
+    expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
+  });
+
+  it('keeps the state-only label when the records do not name the reported session',async()=>{
+    await mount([reported('another-session')]);
+    expect(screen.getByText(`This view shows only the last reported state of ${records.agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+    expect(calls('agent_transcript')).toEqual([]);
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  });
+
+  it('shows none of two records that claim the same session',async()=>{
+    const discovery=records.discovery as {sessions:{path:string}[]};
+    await mount([reported()],{...discovery,sessions:[...discovery.sessions,{...discovery.sessions[0],path:`${discovery.sessions[0].path}.copy`}]});
+    expect(screen.getByText(`This view shows only the last reported state of ${records.agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+    expect(calls('agent_transcript')).toEqual([]);
+  });
+
+  it('falls back to the state-only label when the records can no longer be read',async()=>{
+    await mount([reported()]);
+    expect(screen.getByText(texts(records.page as never)[0])).toBeTruthy();
+    discoveryHost([reported()],{...(records.discovery as object),sessions:[]},[records.page]);
+    await advance(5000);
+    expect(screen.getByText(`This view shows only the last reported state of ${records.agent}. Its conversation stays in the terminal.`)).toBeTruthy();
+    expect(screen.queryByText(texts(records.page as never)[0])).toBeNull();
+  });
+});
+
 it('keeps a detected tmux agent visible when its history lookup fails',async()=>{
   host('codex',[row('Codex','%3')],'missing',[[]]);
   const fallback=vi.mocked(invoke).getMockImplementation()!;
@@ -287,7 +371,7 @@ it('opens the conversation of the focused Herdr pane by itself through the reval
   expect(screen.queryByText(/not verified as belonging|association with this pane is unverified/)).toBeNull();
   expect(within(options()).getByText(/^Herdr links this conversation to the focused pane of this terminal: Work · Code\./)).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
-  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
+  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one',allowLargeHistory:true}}]);
   expect(calls('agent_transcript')).toEqual([]);
   // The guarded terminal is the pane Herdr links the conversation to, so no destination step is shown and nothing is sent until Send.
   const guarded=()=>calls('herdr_chat').map(args=>(args as {action:{kind:string}}).action.kind);
@@ -501,6 +585,7 @@ function server(state:{focus:string;agents?:string[]}) {
     if(command==='multiplexer_sessions')return [{name:'owned'}];
     if(command==='herdr_tree')return {...herdrNavigationTree,panes:[place('w2E:p1','/work/one'),place('w2E:p2','/work/two'),place('w2E:p3','/work/shell')].filter(pane=>pane.pane_id!=='w2E:p3' || true),agents};
     if(command==='agent_herdr_conversation'){const target=(args as {target:{agent:'claude'|'codex';agentSessionId:string}}).target;return page(target.agent,turn('Prompt',`Answer of ${target.agentSessionId}`));}
+    if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
     throw new Error(`Unexpected ${command}`);
   });
 }
@@ -534,6 +619,22 @@ it('lets the user look at another agent and come back to the pane\'s own, keepin
   expect(screen.queryByRole('region',{name:'Live Herdr agents'})).toBeNull();
   expect(screen.getByText('Answer of session-one')).toBeTruthy();
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
+});
+
+it('focuses the pane of an agent chosen in the Agent view so its composer shows',async()=>{
+  const state={focus:'w2E:p3'};server(state);
+  const base=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
+    if(command==='herdr_action'){state.focus=(args as {action:{target:string}}).action.target;return {};}
+    return base(command,args,options);
+  });
+  render(view());await advance(0);
+  expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  fireEvent.click(within(screen.getByText('/work/two').closest('article')!).getByRole('button',{name:/Open conversation/}));await advance(0);await advance(0);
+  expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusPane',target:'w2E:p2'}}]);
+  expect(screen.getByText('Answer of session-two')).toBeTruthy();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
+  expect(screen.queryByText('Not this pane')).toBeNull();
 });
 
 it('drops a hand-picked conversation when focus moves to another pane',async()=>{
@@ -815,17 +916,7 @@ describe('session info sheet',()=>{
 describe('OpenCode pane',()=>{
   // The companion's own output for a real OpenCode session; the hook report names the same session id.
   const opencodeRow=(session=opencodeSession)=>({...row('OpenCode','%3'),sessionId:session});
-  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery,page:unknown=opencodePage)=>{
-    vi.mocked(invoke).mockImplementation(async(command,args)=>{
-      if(command==='tmux_chat')return tmuxChatReply(command,args);
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
-      if(command==='agent_transcripts')return discovered;
-      if(command==='agent_transcript')return page;
-      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
-      throw new Error(`Unexpected ${command}`);
-    });
-    await mountTmux();
-  };
+  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery,page:unknown=opencodePage)=>{discoveryHost(rows,discovered,[page]);await mountTmux();};
 
   it('binds from the hook report of this pane through its database and reads the session',async()=>{
     await mount([opencodeRow()]);
@@ -1104,7 +1195,8 @@ describe('a list dialog open on the terminal',()=>{
     await advance(0);await advance(0);await advance(400);
     return screenOf;
   }
-  const keys=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:object}}).action).filter(action=>action.kind==='input').map(action=>action.input);
+  // Without the rows a pick names (`seen`), which the Dock tests check.
+  const keys=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:object}}).action).filter(action=>action.kind==='input').map(({input})=>{const {seen,...key}=input as {seen?:unknown};return key;});
   const dialog=()=>screen.getByRole('region',{name:'Dialog in the terminal'});
   it('answers the /model picker with the keys a person would press, through the pane the report names, once',async()=>{
     await open(modelScreen(5));
@@ -1364,5 +1456,93 @@ describe('round trips before the first message',()=>{
     expect(names().filter(command=>command!=='agent_watch_start'&&command!=='agent_approvals').sort()).toEqual(['agent_reported_history','agent_snapshot','tmux_chat']);
     await release();
     expect(names()).toContain('agent_transcript');
+  });
+});
+
+describe('starting an agent from the empty state',()=>{
+  /** Adds the host commands the launcher dialogs read to whatever the test already mocked. */
+  const answering=(extra:Record<string,(args:unknown)=>unknown>)=>{
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command in extra?extra[command](args):base(command,args,options));
+  };
+  const typing=(element:HTMLElement,value:string)=>fireEvent.change(element,{target:{value}});
+
+  it('offers a new worktree of the focused workspace with the agent already chosen, reviews the commands, then focuses what it created',async()=>{
+    const state={focus:'w2E:p3',agents:[] as string[]};server(state);
+    const worktree='/work/one-worktrees/work';
+    answering({
+      herdr_repository:()=>({root:'/work/one',main:'/work/one',head:'main',detached:false,worktrees:['/work/one']}),
+      herdr_agent_kinds:()=>[{kind:'codex',label:'Codex',executable:'codex',prompt:true}],
+      herdr_workspace_plan:()=>({steps:[{stage:'worktree',argv:['git'],command:`git -C '/work/one' worktree add -b 'work' '${worktree}' 'main'`}]}),
+      herdr_workspace_create:()=>({workspaceId:'wNEW',worktree}),
+      herdr_action:()=>({}),
+    });
+    render(view({herdrLaunch:true}));await advance(0);
+    fireEvent.click(screen.getByRole('button',{name:'Start in a new worktree'}));await advance(0);
+    const dialog=screen.getByRole('dialog',{name:'New worktree from Work'});
+    expect(calls('herdr_repository')).toEqual([{sessionId:'ssh',directory:'/work/one'}]);
+    expect((within(dialog).getByRole('radio',{name:'Yes, start an agent'}) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('Agent'),{target:{value:'codex'}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await advance(0);
+    expect(calls('herdr_workspace_plan')).toEqual([{name:'owned',request:{target:{type:'worktree',repository:'/work/one',branch:'work',base:'main',path:worktree},agent:{kind:'codex',name:expect.stringMatching(/^codex-[0-9a-f]{8}$/)}}}]);
+    expect(calls('herdr_workspace_create')).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));await advance(0);
+    expect(calls('herdr_workspace_create')).toHaveLength(1);
+    expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusWorkspace',target:'wNEW'}}]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers no worktree when the session has no launcher or no workspace reported a directory',async()=>{
+    const state={focus:'w2E:p3',agents:[] as string[]};server(state);
+    const rendered=render(view());await advance(0);
+    expect(screen.getByRole('button',{name:'Start in a folder'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Start in a new worktree'})).toBeNull();
+    answering({herdr_tree:()=>({...herdrNavigationTree,agents:[],panes:herdrNavigationTree.panes.map(pane=>({...pane,cwd:null,focused:true}))})});
+    rendered.rerender(view({herdrLaunch:true}));await advance(3000);
+    expect(screen.getByRole('button',{name:'Start an agent'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Start in a new worktree'})).toBeNull();
+  });
+
+  describe('in a terminal without a launcher',()=>{
+    const staged=vi.fn(),shown=vi.fn();
+    beforeEach(()=>{staged.mockReset();shown.mockReset();window.addEventListener('lazysh-prompt-draft',staged);});
+    afterEach(()=>window.removeEventListener('lazysh-prompt-draft',staged));
+    const mountEmpty=async(extra:Record<string,(args:unknown)=>unknown>={})=>{
+      host('codex',[],'missing',[[]]);answering(extra);
+      render(<AgentView sessionId="ssh" shown tmux onShowTerminal={shown}/>);await advance(0);
+      fireEvent.click(screen.getByRole('button',{name:'Start in a folder'}));
+      return screen.getByRole('dialog',{name:'Start in a folder'});
+    };
+    const folder=(dialog:HTMLElement)=>within(dialog).getByLabelText('Herdr project directory');
+
+    it('shows the exact command for the chosen agent and folder, and only stages it in the terminal composer',async()=>{
+      const dialog=await mountEmpty();
+      fireEvent.click(within(dialog).getByRole('radio',{name:'Codex'}));
+      typing(folder(dialog),"/work/it's $(here)");
+      fireEvent.click(within(dialog).getByRole('button',{name:'Review command'}));
+      expect(within(dialog).getByText("cd '/work/it'\\''s $(here)' && codex")).toBeTruthy();
+      expect(staged).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole('button',{name:'Stage in the terminal'}));
+      expect(staged).toHaveBeenCalledTimes(1);
+      expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:"cd '/work/it'\\''s $(here)' && codex"});
+      expect(shown).toHaveBeenCalledTimes(1);expect(screen.queryByRole('dialog')).toBeNull();
+      expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+    });
+
+    it('refuses a folder that is not an absolute path before showing anything to stage',async()=>{
+      const dialog=await mountEmpty();
+      typing(folder(dialog),'../elsewhere');
+      fireEvent.click(within(dialog).getByRole('button',{name:'Review command'}));
+      expect(within(dialog).getByRole('alert').textContent).toMatch(/absolute path/);
+      expect(within(dialog).queryByRole('button',{name:'Stage in the terminal'})).toBeNull();expect(staged).not.toHaveBeenCalled();
+    });
+
+    it('browses the host for the folder',async()=>{
+      const dialog=await mountEmpty({list_directory:args=>(args as {path:string}).path==='/'?[{name:'work',isDir:true},{name:'.cache',isDir:true},{name:'notes.txt',isDir:false}]:[]});
+      fireEvent.click(within(dialog).getByRole('button',{name:'Browse host folders'}));await advance(0);
+      expect(calls('list_directory')).toEqual([{sessionId:'ssh',path:'/'}]);
+      const folders=within(within(dialog).getByRole('region',{name:'Browse host folders'})).getAllByRole('button').map(button=>button.textContent);
+      expect(folders).toContain('work');expect(folders).not.toContain('.cache');expect(folders).not.toContain('notes.txt');
+      fireEvent.click(within(dialog).getByRole('button',{name:'work'}));await advance(0);
+      expect(folder(dialog)).toHaveProperty('value','/work');
+    });
   });
 });

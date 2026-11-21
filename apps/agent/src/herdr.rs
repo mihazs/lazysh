@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     process::Command,
+    sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -46,26 +47,65 @@ fn pipe_name(path: &str) -> Option<String> {
         .all(|part| !matches!(part, "" | "." | ".."))
         .then(|| format!("{PIPE_PREFIX}{name}"))
 }
-fn socket_path(bytes: &[u8], name: &str, endpoint: fn(&str) -> Option<String>) -> Result<String> {
+/// The one running session `matches` selects from `herdr session list --json`; none, a stopped one or two are refused.
+fn running_session(bytes: &[u8], matches: impl Fn(&Session) -> bool) -> Result<Session> {
     let sessions: Sessions = serde_json::from_slice(bytes).map_err(|_| invalid())?;
     if sessions.sessions.len() > 1000 {
         return Err(invalid());
     }
-    let mut matching = sessions
-        .sessions
-        .into_iter()
-        .filter(|session| session.name == name);
+    let mut matching = sessions.sessions.into_iter().filter(matches);
     let session = matching
         .next()
         .filter(|session| session.running)
         .ok_or_else(invalid)?;
-    if matching.next().is_some()
-        || session.socket_path.len() > 4096
-        || session.socket_path.chars().any(char::is_control)
-    {
+    if matching.next().is_some() {
+        return Err(invalid());
+    }
+    Ok(session)
+}
+fn socket_path(bytes: &[u8], name: &str, endpoint: fn(&str) -> Option<String>) -> Result<String> {
+    let session = running_session(bytes, |session| session.name == name)?;
+    if session.socket_path.len() > 4096 || session.socket_path.chars().any(char::is_control) {
         return Err(invalid());
     }
     endpoint(&session.socket_path).ok_or_else(invalid)
+}
+/// The name of the one running session whose API socket is `socket`: the server a pane's `HERDR_SOCKET_PATH` names.
+#[cfg(any(unix, test))]
+fn session_name(bytes: &[u8], socket: &str) -> Result<String> {
+    let session = running_session(bytes, |session| session.socket_path == socket)?;
+    if !lazysh_common::valid_herdr_session(&session.name) {
+        return Err(invalid());
+    }
+    Ok(session.name)
+}
+fn session_list(cancelled: Arc<AtomicBool>) -> Result<Vec<u8>> {
+    let mut command = Command::new("herdr");
+    command.args(["session", "list", "--json"]);
+    crate::devices::bounded_command(command, MAX_OUTPUT, cancelled, BUDGET)
+}
+/// The exact Herdr pane this process runs in, `herdr:<session>:<pane id>`, from the pane's own `HERDR_*` environment and the
+/// one running session whose socket it names. Anything missing, malformed, stopped or ambiguous names no pane.
+pub fn pane_identity() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let var = |name| std::env::var(name).ok();
+        let (pane, socket) = (var("HERDR_PANE_ID")?, var("HERDR_SOCKET_PATH")?);
+        if var("HERDR_ENV").as_deref() != Some("1")
+            || !lazysh_common::valid_herdr_id(&pane, Some('p'))
+        {
+            return None;
+        }
+        let bytes = session_list(Default::default()).ok()?;
+        Some(format!(
+            "herdr:{}:{pane}",
+            session_name(&bytes, &socket).ok()?
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 fn response(bytes: &[u8], pane: &str) -> Result<Value> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
@@ -133,25 +173,28 @@ async fn focus(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), pane: &str) -
         }
     }
 }
-pub fn focus_pane(name: &str, pane: &str) -> Result<Value> {
-    if name.is_empty()
-        || name.len() > 200
-        || name.chars().any(char::is_control)
-        || !lazysh_common::valid_herdr_id(pane, Some('p'))
-    {
-        return Err(invalid());
-    }
-    let started = Instant::now();
-    let cancelled = crate::devices::cancellation_signal()?;
-    let mut command = Command::new("herdr");
-    command.args(["session", "list", "--json"]);
-    let bytes = crate::devices::bounded_command(command, MAX_OUTPUT, cancelled.clone(), BUDGET)?;
+/// A server name the companion will look up; the same bound as the app's.
+pub(crate) fn valid_session(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 200 && !name.chars().any(char::is_control)
+}
+/// The endpoint (Unix socket path or Windows pipe name) of the one running Herdr server called
+/// `name`, from Herdr's own session list.
+pub(crate) fn running_endpoint(name: &str, cancelled: Arc<AtomicBool>) -> Result<String> {
+    let bytes = session_list(cancelled)?;
     let endpoint: fn(&str) -> Option<String> = if cfg!(windows) {
         pipe_name
     } else {
         unix_socket
     };
-    let path = socket_path(&bytes, name, endpoint)?;
+    socket_path(&bytes, name, endpoint)
+}
+pub fn focus_pane(name: &str, pane: &str) -> Result<Value> {
+    if !valid_session(name) || !lazysh_common::valid_herdr_id(pane, Some('p')) {
+        return Err(invalid());
+    }
+    let started = Instant::now();
+    let cancelled = crate::devices::cancellation_signal()?;
+    let path = running_endpoint(name, cancelled.clone())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -210,6 +253,26 @@ mod tests {
                 unix_socket
             )
             .is_err());
+        }
+    }
+    #[test]
+    fn a_pane_socket_names_exactly_one_running_session() {
+        let sessions = |entries: &[(&str, bool, &str)]| {
+            serde_json::to_vec(&json!({"sessions": entries.iter().map(|(name, running, socket)| json!({"name":name,"running":running,"socket_path":socket})).collect::<Vec<_>>()})).unwrap()
+        };
+        let one = sessions(&[("default", true, "/a.sock"), ("work", true, "/b.sock")]);
+        assert_eq!(session_name(&one, "/b.sock").unwrap(), "work");
+        for (bytes, socket) in [
+            (one.clone(), "/c.sock"),
+            (sessions(&[("work", false, "/b.sock")]), "/b.sock"),
+            (
+                sessions(&[("work", true, "/b.sock"), ("other", true, "/b.sock")]),
+                "/b.sock",
+            ),
+            (sessions(&[("bad:name", true, "/b.sock")]), "/b.sock"),
+            (b"{}".to_vec(), "/b.sock"),
+        ] {
+            assert!(session_name(&bytes, socket).is_err());
         }
     }
     fn owned_endpoint(path: &str) -> Result<String> {

@@ -31,11 +31,16 @@ fn listener_holder() {
     };
     // libtest has already printed "test listener_holder ... " on this line, so start a new one.
     println!(
-        "\nHOLDER {} {} {} {}",
+        "\nHOLDER {} {} {} {} {}",
         loopback.local_addr().unwrap().port(),
         wildcard.local_addr().unwrap().port(),
         port(&v6),
-        port(&other)
+        port(&other),
+        other.as_ref().map_or("none".to_owned(), |l| l
+            .local_addr()
+            .unwrap()
+            .ip()
+            .to_string())
     );
     std::io::stdout().flush().unwrap();
     // The parent closes our stdin when it has read what it needs.
@@ -61,6 +66,7 @@ struct Holder {
     wildcard: u16,
     v6: u16,
     other: u16,
+    other_address: String,
 }
 impl Holder {
     fn start() -> Self {
@@ -84,6 +90,7 @@ impl Holder {
         let ports: Vec<u16> = line
             .split_whitespace()
             .skip(1)
+            .take(4)
             .map(|p| p.parse().unwrap())
             .collect();
         Self {
@@ -93,6 +100,7 @@ impl Holder {
             wildcard: ports[1],
             v6: ports[2],
             other: ports[3],
+            other_address: line.split_whitespace().nth(5).unwrap().to_owned(),
             child,
         }
     }
@@ -167,7 +175,10 @@ fn reports_loopback_and_wildcard_listeners_of_another_process_and_nothing_else()
         if port == 0 {
             continue; // this host has no IPv6 loopback
         }
-        let found = entries(&value, port);
+        let found: Vec<_> = entries(&value, port)
+            .into_iter()
+            .filter(|entry| entry["address"] == address && entry["family"] == family)
+            .collect();
         assert_eq!(found.len(), 1, "port {port}: {found:?}");
         let found = found[0];
         assert_eq!(
@@ -190,20 +201,26 @@ fn reports_loopback_and_wildcard_listeners_of_another_process_and_nothing_else()
     }
     if holder.other != 0 {
         assert!(
-            entries(&value, holder.other).is_empty(),
+            entries(&value, holder.other)
+                .iter()
+                .all(|entry| entry["address"] != holder.other_address),
             "a listener on a specific interface address is not listed"
         );
     }
     #[cfg(target_os = "linux")]
     {
-        let started_at = entries(&value, holder.loopback)[0]["startedAt"]
+        let own = entries(&value, holder.loopback)
+            .into_iter()
+            .find(|entry| {
+                entry["address"] == "127.0.0.1" && entry["family"] == "tcp4" && entry["pid"] == pid
+            })
+            .unwrap();
+        let started_at = own["startedAt"]
             .as_str()
             .unwrap()
             .parse::<chrono::DateTime<chrono::Utc>>()
             .unwrap();
-        let age = entries(&value, holder.loopback)[0]["ageSeconds"]
-            .as_u64()
-            .unwrap();
+        let age = own["ageSeconds"].as_u64().unwrap();
         assert!(age <= 120, "the holder had run {age} s");
         let age = chrono::DateTime::<chrono::Utc>::from(started)
             .signed_duration_since(started_at)
@@ -231,13 +248,15 @@ fn port_filter_keeps_only_those_ports_and_the_cap_is_256() {
         .map(|e| e["port"].as_u64().unwrap())
         .collect();
     ports.sort_unstable();
-    assert_eq!(
-        ports
-            .iter()
-            .filter(|p| **p == u64::from(holder.loopback))
-            .count(),
-        1
-    );
+    let own_loopback: Vec<_> = entries(&value, holder.loopback)
+        .into_iter()
+        .filter(|entry| {
+            entry["family"] == "tcp4"
+                && entry["address"] == "127.0.0.1"
+                && entry["pid"] == holder.child.id()
+        })
+        .collect();
+    assert_eq!(own_loopback.len(), 1, "{own_loopback:?}");
     assert!(ports
         .iter()
         .all(|p| *p == u64::from(holder.loopback) || *p == u64::from(holder.wildcard)));
@@ -249,6 +268,30 @@ fn port_filter_keeps_only_those_ports_and_the_cap_is_256() {
     assert_eq!(capped["listeners"].as_array().unwrap().len(), 256);
     assert_eq!(capped["truncated"], true);
     drop(many);
+}
+
+#[test]
+fn port_filter_keeps_both_loopback_families_on_the_same_port() {
+    let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = v4.local_addr().unwrap().port();
+    let Ok(_v6) = TcpListener::bind((Ipv6Addr::LOCALHOST, port)) else {
+        return; // IPv6 loopback or cross-family port sharing is unavailable on this host.
+    };
+    let value = snapshot(&["--port", &port.to_string()]);
+    let found = entries(&value, port);
+    for (family, address) in [("tcp4", "127.0.0.1"), ("tcp6", "::1")] {
+        assert_eq!(
+            found
+                .iter()
+                .filter(|entry| entry["family"] == family
+                    && entry["address"] == address
+                    && entry["pid"] == std::process::id())
+                .count(),
+            1,
+            "{family} {address}: {found:?}"
+        );
+    }
+    assert_eq!(found.len(), value["listeners"].as_array().unwrap().len());
 }
 
 #[test]

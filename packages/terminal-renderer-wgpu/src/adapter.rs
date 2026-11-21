@@ -8,6 +8,12 @@
 //! beats it" and a software rasterizer cannot; CI and tests allow them to exercise the real path.
 
 use lazysh_terminal_runtime::RenderError;
+use std::ffi::c_void;
+use std::ptr::NonNull;
+use wgpu::rwh::{
+    DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle, RawWindowHandle,
+    WaylandDisplayHandle, WaylandWindowHandle,
+};
 use wgpu::{Backend, Backends, DeviceType};
 
 /// What a renderer may run on.
@@ -101,23 +107,92 @@ pub fn ranked(policy: &Policy, adapters: &[AdapterInfo]) -> Vec<usize> {
     accepted.into_iter().map(|(_, i)| i).collect()
 }
 
+/// A platform window to present on, as the raw handles of `raw-window-handle` 0.6 (`wgpu::rwh`): an
+/// `ANativeWindow`, a `CAMetalLayer`'s view, an `HWND`, a Wayland or X11 surface. The renderer only
+/// hands them to wgpu, which creates the swapchain; nothing here is platform code.
+#[derive(Debug, Clone, Copy)]
+pub struct Window {
+    display: RawDisplayHandle,
+    window: RawWindowHandle,
+}
+
+// SAFETY: the handles are ids and pointers this crate never dereferences; `Window::new`'s caller
+// promises they may be used from the thread that drives the renderer.
+unsafe impl Send for Window {}
+unsafe impl Sync for Window {}
+
+impl Window {
+    /// # Safety
+    ///
+    /// Both handles must be valid, usable from the thread that drives the renderer, and stay valid
+    /// until every renderer created on them was destroyed or dropped: a host destroys the renderer
+    /// before it lets the platform take the surface back.
+    pub unsafe fn new(display: RawDisplayHandle, window: RawWindowHandle) -> Self {
+        Self { display, window }
+    }
+
+    /// A `wl_surface` on the connection of `display` (a `wl_display`).
+    ///
+    /// # Safety
+    ///
+    /// The same as [`Window::new`]: both pointers are live Wayland objects of one connection.
+    pub unsafe fn wayland(display: NonNull<c_void>, surface: NonNull<c_void>) -> Self {
+        Self {
+            display: RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display)),
+            window: RawWindowHandle::Wayland(WaylandWindowHandle::new(surface)),
+        }
+    }
+}
+
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        // SAFETY: `Window::new`'s caller keeps the display alive.
+        Ok(unsafe { DisplayHandle::borrow_raw(self.display) })
+    }
+}
+
 /// An adapter with a device, in the order the policy ranks them. Creating the device is part of
 /// the check: an adapter that lists but cannot create a device is skipped, not fatal.
 pub(crate) struct Selected {
     pub info: AdapterInfo,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// The window's surface and the configuration to present with, for a target with a window.
+    pub screen: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
 }
 
-pub(crate) fn select(policy: &Policy) -> Result<Selected, RenderError> {
+/// With a `window`, only an adapter that can present on it is chosen, at `size` device pixels.
+pub(crate) fn select(
+    policy: &Policy,
+    window: Option<Window>,
+    size: (u32, u32),
+) -> Result<Selected, RenderError> {
     let backends = policy.mask();
     if backends.is_empty() {
         return Err(RenderError::Unsupported("the policy allows no backend"));
     }
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    let mut descriptor = wgpu::InstanceDescriptor {
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
+    };
+    if let Some(window) = window {
+        // OpenGL ES picks its display when the instance is made.
+        descriptor = descriptor.with_display_handle(Box::new(window));
+    }
+    let instance = wgpu::Instance::new(descriptor);
+    let surface = window
+        .map(|w| {
+            // SAFETY: `Window::new`'s caller keeps both handles valid for as long as the renderer,
+            // which owns this surface, lives.
+            unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(w.display),
+                    raw_window_handle: w.window,
+                })
+            }
+        })
+        .transpose()
+        .map_err(|_| RenderError::Unsupported("no backend of the policy can draw on the window"))?;
     let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let infos: Vec<_> = adapters
         .iter()
@@ -125,6 +200,13 @@ pub(crate) fn select(policy: &Policy) -> Result<Selected, RenderError> {
         .collect();
     for i in ranked(policy, &infos) {
         let adapter = adapters[i].clone();
+        let config = match &surface {
+            Some(surface) => match present_config(surface, &adapter, size) {
+                Some(config) => Some(config),
+                None => continue,
+            },
+            None => None,
+        };
         // Every pipeline the renderer needs runs on the downlevel baseline (OpenGL ES 3.0), at the
         // largest texture size this adapter offers.
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
@@ -137,12 +219,49 @@ pub(crate) fn select(policy: &Policy) -> Result<Selected, RenderError> {
                 info: infos[i].clone(),
                 device,
                 queue,
+                screen: surface.zip(config),
             });
         }
     }
-    Err(RenderError::Unsupported(
-        "no adapter the policy accepts could create a device",
-    ))
+    Err(RenderError::Unsupported(refusal(policy, &infos)))
+}
+
+/// Why the policy ends up with no adapter. A machine whose only adapters are CPU rasterizers the
+/// policy refuses is named apart: that is a device without a GPU, not a broken driver.
+pub fn refusal(policy: &Policy, adapters: &[AdapterInfo]) -> &'static str {
+    let software_only = ranked(policy, adapters).is_empty()
+        && adapters.iter().any(|info| {
+            info.device_type == DeviceType::Cpu && policy.backends.contains(&info.backend)
+        });
+    if software_only {
+        "no hardware GPU, only a software rasterizer"
+    } else {
+        "no adapter the policy accepts could create a device"
+    }
+}
+
+/// The check before a native terminal is offered (#1336): the adapter a renderer of this policy
+/// would run on, with its device created and dropped again, or why there is none.
+pub fn probe(policy: &Policy) -> Result<AdapterInfo, RenderError> {
+    select(policy, None, (1, 1)).map(|selected| selected.info)
+}
+
+/// How to present on `surface` with `adapter` (vsync, opaque); `None` when the adapter cannot.
+/// The target holds the theme's colours as they are, so the swapchain must not encode them again:
+/// a format without sRGB encoding is taken when the surface offers one.
+// shortcut: a surface that offers only sRGB formats shows colours brighter than the theme's;
+// upgrade to a non-sRGB view format when a platform reports such a surface.
+fn present_config(
+    surface: &wgpu::Surface<'_>,
+    adapter: &wgpu::Adapter,
+    (width, height): (u32, u32),
+) -> Option<wgpu::SurfaceConfiguration> {
+    let mut config = surface.get_default_config(adapter, width, height)?;
+    let formats = surface.get_capabilities(adapter).formats;
+    if let Some(&plain) = formats.iter().find(|format| !format.is_srgb()) {
+        config.format = plain;
+    }
+    Some(config)
 }
 
 #[cfg(test)]
@@ -214,23 +333,26 @@ mod tests {
 
     #[test]
     fn software_adapters_are_refused_unless_allowed_and_then_come_last() {
-        let all = [
-            adapter(Backend::Vulkan, DeviceType::Cpu),
-            adapter(Backend::Vulkan, DeviceType::IntegratedGpu),
-        ];
         let strict = Policy::for_platform();
+        // The platform's own first backend: Vulkan is not on the Apple policy, which lists Metal alone.
+        let backend = strict.backends[0];
+        let all = [
+            adapter(backend, DeviceType::Cpu),
+            adapter(backend, DeviceType::IntegratedGpu),
+        ];
         let mut lenient = strict.clone();
         lenient.allow_software = true;
-        let only_cpu = [adapter(Backend::Vulkan, DeviceType::Cpu)];
+        let only_cpu = [adapter(backend, DeviceType::Cpu)];
         assert!(!ranked(&strict, &only_cpu).contains(&0));
         assert_eq!(ranked(&lenient, &only_cpu), [0]);
-        if strict.backends.contains(&Backend::Vulkan) {
-            assert_eq!(picks(&strict, &all), ["Vulkan IntegratedGpu"]);
-            assert_eq!(
-                picks(&lenient, &all),
-                ["Vulkan IntegratedGpu", "Vulkan Cpu"]
-            );
-        }
+        assert_eq!(picks(&strict, &all), [format!("{backend:?} IntegratedGpu")]);
+        assert_eq!(
+            picks(&lenient, &all),
+            [
+                format!("{backend:?} IntegratedGpu"),
+                format!("{backend:?} Cpu")
+            ]
+        );
     }
 
     #[test]
@@ -247,13 +369,49 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_with_only_a_refused_software_rasterizer_is_told_it_has_no_hardware_gpu() {
+        let strict = Policy {
+            backends: vec![Backend::Vulkan],
+            allow_software: false,
+        };
+        let cpu = adapter(Backend::Vulkan, DeviceType::Cpu);
+        let gpu = adapter(Backend::Vulkan, DeviceType::IntegratedGpu);
+        assert!(refusal(&strict, std::slice::from_ref(&cpu)).contains("no hardware GPU"));
+        // A GPU that failed to create a device, no adapter at all, a rasterizer of a backend the
+        // policy does not list and an allowed rasterizer that failed are not "no hardware GPU".
+        let other = [adapter(Backend::Gl, DeviceType::Cpu)];
+        for (policy, adapters) in [
+            (&strict, &[cpu.clone(), gpu][..]),
+            (&strict, &[][..]),
+            (&strict, &other[..]),
+            (&strict.clone().with_software(), std::slice::from_ref(&cpu)),
+        ] {
+            assert!(refusal(policy, adapters).contains("could create a device"));
+        }
+    }
+
+    /// On this machine's real adapters: the CI runner has only Mesa's CPU rasterizers, a desktop a GPU.
+    #[test]
+    fn the_probe_refuses_a_machine_without_a_hardware_gpu_and_names_the_adapter_of_one_with() {
+        let strict = Policy::for_platform();
+        match probe(&strict.clone().with_software()) {
+            Ok(info) if info.device_type == DeviceType::Cpu => assert!(matches!(
+                probe(&strict),
+                Err(RenderError::Unsupported(why)) if why.contains("no hardware GPU")
+            )),
+            Ok(info) => assert_eq!(probe(&strict), Ok(info)),
+            Err(_) => assert!(probe(&strict).is_err()),
+        }
+    }
+
+    #[test]
     fn a_policy_without_backends_is_unsupported_not_a_panic() {
         let none = Policy {
             backends: Vec::new(),
             allow_software: true,
         };
         assert!(matches!(
-            select(&none),
+            select(&none, None, (1, 1)),
             Err(RenderError::Unsupported(why)) if why.contains("no backend")
         ));
     }

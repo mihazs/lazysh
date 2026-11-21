@@ -3,13 +3,14 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 const install=vi.hoisted(()=>vi.fn());
 const fromDevice=vi.hoisted(()=>vi.fn());
-vi.mock('./bridge',()=>({api:{installCompanion:install,installCompanionFromDevice:fromDevice}}));
-import CompanionInstallPanel,{companionInstallStage,companionInstallProgress,companionInstallFailure,parseCompanionInstall} from './CompanionInstallPanel';
+const check=vi.hoisted(()=>vi.fn());
+vi.mock('./bridge',()=>({api:{installCompanion:install,installCompanionFromDevice:fromDevice,checkCompanionUpdate:check}}));
+import CompanionInstallPanel,{companionInstallStage,companionInstallProgress,companionInstallFailure,parseCompanionInstall,parseCompanionCheck} from './CompanionInstallPanel';
 import {applyAccessStatus} from './access';
 import {uiI18n} from './i18n/core';
 const result={schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh-agent',cleanup:'complete'};
 let generation=0;
-beforeEach(async()=>{install.mockReset();fromDevice.mockReset();await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++generation),nonce:'a'.repeat(64)});});
+beforeEach(async()=>{install.mockReset();fromDevice.mockReset();check.mockReset();await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++generation),nonce:'a'.repeat(64)});});
 afterEach(()=>cleanup());
 
 it('accepts only finite progress and complete installation results',()=>{
@@ -271,4 +272,62 @@ it.each([['pt-BR','Instalar por este dispositivo'],['es','Instalar desde este di
   render(<CompanionInstallPanel sessionId={`locale-${language}`} onInstalled={vi.fn()}/>);
   fireEvent.click(screen.getByRole('button',{name:'Instalar companion'}));await act(async()=>{});
   expect(screen.getByRole('button',{name:label})).toBeTruthy();
+});
+
+const checked={schemaVersion:1,via:'update',installed:'1.54.1',previous:'1.50.0',latest:'1.55.0',state:'available'};
+it('accepts only a complete check made of versions and a closed state',()=>{
+  expect(parseCompanionCheck(checked)).toEqual(checked);
+  expect(parseCompanionCheck({...checked,via:'bootstrap',installed:null,previous:null,state:'notInstalled'}).installed).toBeNull();
+  for(const patch of [{schemaVersion:2},{via:'script'},{state:'maybe'},{latest:'1.55'},{latest:null},{installed:'1.54.1-dev'},{previous:'/private'},{installed:undefined},{extra:'/private/host'}])
+    expect(()=>parseCompanionCheck({...checked,...patch})).toThrow('Invalid companion installation response.');
+  expect(()=>parseCompanionCheck(null)).toThrow('Invalid companion installation response.');
+});
+it.each([
+  ['available','Host companion 1.54.1 can be updated to 1.55.0.'],
+  ['upToDate','Host companion 1.54.1 is up to date.'],
+  ['newer','Host companion 1.54.1 is newer than the latest release, 1.55.0.'],
+])('checks for updates without installing and says when the host is %s',async(state,message)=>{
+  check.mockResolvedValue({...checked,state});
+  render(<CompanionInstallPanel sessionId="checking" ready onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));
+  expect(screen.getByRole('button',{name:'Checking…'})).toHaveProperty('disabled',true);
+  await act(async()=>{});
+  expect(screen.getByText(message)).toBeTruthy();expect(check).toHaveBeenCalledWith('checking');
+  expect(install).not.toHaveBeenCalled();expect(fromDevice).not.toHaveBeenCalled();
+});
+it('names a host without a companion and offers no rollback when none is kept',async()=>{
+  check.mockResolvedValue({...checked,via:'bootstrap',installed:null,previous:null,state:'notInstalled'});
+  render(<CompanionInstallPanel sessionId="empty-host" onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
+  expect(screen.getByText('No host companion is installed. 1.55.0 is available.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:/Roll back/})).toBeNull();
+});
+it('keeps actions exclusive while an operation runs, retires a check with its source and surfaces check failures',async()=>{
+  let finish!:(value:unknown)=>void;check.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  const view=render(<CompanionInstallPanel sessionId="first" ready onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));
+  expect(screen.getByRole('button',{name:'Update companion'})).toHaveProperty('disabled',true);
+  view.rerender(<CompanionInstallPanel sessionId="second" ready onInstalled={vi.fn()}/>);
+  await act(async()=>{finish(checked);});
+  expect(screen.queryByText(/can be updated/)).toBeNull();
+  check.mockRejectedValue({kind:'companion_release_unavailable',message:'private'});
+  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
+  expect(screen.getByRole('alert').textContent).toBe('The current release has no compatible companion available.');
+  check.mockResolvedValue({...checked,latest:'x'});
+  fireEvent.click(screen.getByRole('button',{name:'Check for updates'}));await act(async()=>{});
+  expect(screen.getByRole('alert').textContent).toBe('Invalid companion installation response.');
+});
+it.each([['pt-BR','Verificar atualizações'],['es','Buscar actualizaciones']])('shows the check action in %s',async(language,label)=>{
+  await uiI18n.changeLanguage(language);check.mockResolvedValue(checked);
+  render(<CompanionInstallPanel sessionId={`check-${language}`} onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:label}));await act(async()=>{});
+  expect(check).toHaveBeenCalledOnce();
+});
+it.each([['en','Nothing is installed until you press the button.'],['pt-BR','Nada é instalado até você usar o botão.'],['es','No se instala nada hasta que uses el botón.']])('explains the destination before any action and installs nothing on its own in %s',async(language,sentence)=>{
+  await uiI18n.changeLanguage(language);
+  render(<CompanionInstallPanel sessionId={`explain-${language}`} onInstalled={vi.fn()}/>);
+  const note=document.querySelector('details.companion-install > p.agent-note')!.textContent!;
+  expect(note).toContain('lazysh/companion/lazysh-agent');
+  expect(note).toContain(sentence);
+  expect(install).not.toHaveBeenCalled();expect(fromDevice).not.toHaveBeenCalled();
 });

@@ -1,5 +1,8 @@
 //! Linux: a `systemd --user` service and timer in the user's configuration directory.
-use super::{ours, place, remove_ours, render, render::NAME, succeeds, tool, undo, Failure, State};
+use super::{
+    ours, place, remove_ours, render, render::NAME, replaced, succeeds, tool, undo, Failure,
+    State,
+};
 use std::path::PathBuf;
 
 fn files() -> Option<(PathBuf, PathBuf)> {
@@ -24,10 +27,11 @@ fn reachable() -> bool {
     systemctl(&["show-environment"])
 }
 
-pub fn install(exe: &str) -> Result<(), Failure> {
+pub fn install(exe: &str, before_write: &mut dyn FnMut() -> Result<(), Failure>) -> Result<(), Failure> {
     if !reachable() {
         return Err(Failure::Unsupported);
     }
+    before_write()?;
     if !render::systemd_path_ok(exe) {
         return Err(Failure::Refused(
             "The executable path cannot be written to a systemd unit",
@@ -45,10 +49,17 @@ pub fn install(exe: &str) -> Result<(), Failure> {
     if systemctl(&["daemon-reload"]) && systemctl(&["enable", "--now", &timer_unit()]) {
         return Ok(());
     }
+    // An earlier install is put back and started again; only a first install is taken out of the manager.
+    let earlier = replaced(&service) && replaced(&timer);
     undo(timer);
     undo(service);
-    systemctl(&["disable", &timer_unit()]);
-    systemctl(&["daemon-reload"]);
+    if earlier {
+        systemctl(&["daemon-reload"]);
+        systemctl(&["enable", "--now", &timer_unit()]);
+    } else {
+        systemctl(&["disable", &timer_unit()]);
+        systemctl(&["daemon-reload"]);
+    }
     Err(Failure::Refused("systemctl refused the timer"))
 }
 

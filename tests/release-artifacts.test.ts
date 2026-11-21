@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, symlink, truncate, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
+import { aggregatePackages, artifactName, artifactTargets, packageBudgetsMiB, releaseTargets, digestFile, stagePackages,
   validateReceipt, releaseNotes, publishedTagVersions, type ArtifactTarget } from '../.changeset/release-artifacts';
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
@@ -88,6 +88,44 @@ test('linked, empty and missing native outputs cannot be staged', () => fixture(
   await expect(digestFile(source)).rejects.toThrow('missing, linked or oversized');
   await mkdir(join(root, 'directory'));
   await expect(digestFile(join(root, 'directory'))).rejects.toThrow('missing, linked or oversized');
+}));
+
+// Bytes of every asset published with v1.62.0 (docs/release-artifacts.md, "Measured release size").
+const measuredV162 = [['linux-x64', 'deb', 22_969_294], ['linux-x64', 'AppImage', 99_629_560], ['windows-x64', 'exe', 7_968_622],
+  ['android-google-arm64', 'apk', 32_819_374], ['android-foss-arm64', 'apk', 32_333_758],
+  ['linux-agent-x64', 'bin', 12_067_504], ['linux-agent-arm64', 'bin', 9_917_088], ['macos-agent-x64', 'bin', 11_035_248],
+  ['macos-agent-arm64', 'bin', 9_222_720], ['windows-agent-x64', 'exe', 10_532_352]] as const;
+function receiptWith(target: ArtifactTarget, extension: string, bytes: number) {
+  const files = artifactTargets[target].map(each => ({ name: artifactName(identity, target, each),
+    bytes: each === extension ? bytes : 1, sha256: 'b'.repeat(64) }));
+  const signing = target.startsWith('macos-') ? 'ad-hoc' : target.startsWith('android-') ? 'signed' : 'unsigned';
+  return { ...identity, schema: 1, target, signing, files };
+}
+test('the size budgets admit the measured public release and refuse a package past its ceiling', () => {
+  for (const [target, extension, bytes] of measuredV162) validateReceipt(receiptWith(target, extension, bytes), identity);
+  for (const [target, byExtension] of Object.entries(packageBudgetsMiB) as [ArtifactTarget, Record<string, number>][])
+    for (const [extension, mebibytes] of Object.entries(byExtension)) {
+      const ceiling = mebibytes * 1024 * 1024;
+      validateReceipt(receiptWith(target, extension, ceiling), identity);
+      expect(() => validateReceipt(receiptWith(target, extension, ceiling + 1), identity)).toThrow('malformed package receipt');
+    }
+});
+test('an oversized native package is refused at staging and no receipt is written', () => fixture(async root => {
+  const source = join(root, 'windows.exe');
+  await Bun.write(source, 'x');
+  await truncate(source, packageBudgetsMiB['windows-x64']!.exe * 1024 * 1024 + 1);
+  const directory = join(root, 'incoming');
+  await expect(stagePackages(identity, 'windows-x64', 'unsigned', [source], directory)).rejects.toThrow('oversized');
+  expect(await Bun.file(join(directory, 'receipt.json')).exists()).toBe(false);
+}));
+// #2212: bytes of the release arm64 Google APK measured in #1819, which links ONNX Runtime and sherpa-onnx into that flavor only.
+test('the Google APK with the Parakeet runtime stages, and a FOSS APK of that size is still refused', () => fixture(async root => {
+  const source = join(root, 'app-universal-release.apk');
+  await Bun.write(source, 'x');
+  await truncate(source, 54_082_206);
+  const receipt = await stagePackages(identity, 'android-google-arm64', 'signed', [source], join(root, 'google'));
+  expect(receipt.files[0].bytes).toBe(54_082_206);
+  await expect(stagePackages(identity, 'android-foss-arm64', 'signed', [source], join(root, 'foss'))).rejects.toThrow('oversized');
 }));
 
 test('Java signing properties preserve separators, whitespace, controls and surrogate pairs', () => {
@@ -188,8 +226,9 @@ test('notes carry the changes of prepared versions that were never published sin
   await mkdir(join(root, 'apps/client'), { recursive: true });
   await mkdir(join(root, 'docs'));
   await Bun.write(join(root, 'docs/install-and-update.md'), '# Install\n\n## Current native acceptance status\n\nNative gaps.\n');
-  await Bun.write(join(root, 'apps/client/CHANGELOG.md'), '# Client\n\n## 1.21.0\n\nToolbar pages.\n\n## 1.20.1\n\nSkipped patch.\n\n'
-    + '## 1.20.0\n\nSkipped minor.\n\n## 1.19.0\n\nPublished earlier.\n\n## 1.18.0\n\nOlder release.\n');
+  await Bun.write(join(root, 'apps/client/CHANGELOG.md'), '# Client\n\n## 1.21.0\n\n### Minor Changes\n\n- 1111111: Toolbar pages.\n\n'
+    + '## 1.20.1\n\n### Patch Changes\n\n- 2222222: Fix a skipped patch.\n\n## 1.20.0\n\n### Minor Changes\n\n- 3333333: Skipped minor.\n\n'
+    + '## 1.19.0\n\n- 4444444: Published earlier.\n\n## 1.18.0\n\n- 5555555: Older release.\n');
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe', env: { ...process.env,
       GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -201,14 +240,14 @@ test('notes carry the changes of prepared versions that were never published sin
   for (const tag of ['v1.18.0', 'v1.19.0', 'v1.21.0', 'not-a-version', 'v2.0.0-rc.1']) git('tag', tag);
   expect(publishedTagVersions(root).sort()).toEqual(['1.18.0', '1.19.0', '1.21.0']);
   const notes = await releaseNotes(root, '1.21.0', false, publishedTagVersions(root));
-  const order = ['Toolbar pages.', 'Also included from 1.20.1', 'Skipped patch.', 'Also included from 1.20.0', 'Skipped minor.', 'Native gaps.']
-    .map(text => notes.indexOf(text));
+  const order = ['Includes the unpublished versions 1.20.0 and 1.20.1.', '## New', 'Toolbar pages', 'Skipped minor', '## Fixed', 'Fix a skipped patch',
+    'Native gaps.'].map(text => notes.indexOf(text));
   expect(order.every(index => index >= 0)).toBe(true);
   expect(order).toEqual([...order].sort((a, b) => a - b));
   for (const text of ['Published earlier.', 'Older release.']) expect(notes).not.toContain(text);
   // A release directly after a published version, or without any tags, keeps only its own section.
-  expect(await releaseNotes(root, '1.21.0', false, ['1.20.1'])).not.toContain('Also included');
-  expect(await releaseNotes(root, '1.21.0')).not.toContain('Also included');
+  expect(await releaseNotes(root, '1.21.0', false, ['1.20.1'])).not.toContain('Includes the unpublished');
+  expect(await releaseNotes(root, '1.21.0')).not.toContain('Includes the unpublished');
 }));
 
 test('publication uploads a complete digest-acknowledged draft before making it public', () => fixture(async root => {

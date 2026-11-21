@@ -434,6 +434,8 @@ fn a_dynamic_workflow_becomes_a_progress_tree_from_its_journal_and_summary_file(
         )
     );
     let tree = &first["workflow"];
+    // Without the summary file there is no name to give: the field is absent, never a null the app would refuse.
+    assert!(tree.get("name").is_none());
     let states: Vec<_> = tree["agents"]
         .as_array()
         .unwrap()

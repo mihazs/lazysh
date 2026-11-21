@@ -13,6 +13,7 @@ import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
 import {setShowTopBar, useShowTopBar} from "./sideMenuMode";
 import GestureTestPage from "./GestureTestPage";
+import TerminalEngineChoice from "./TerminalEngineChoice";
 import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, gestureModes, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { providerName, usageProviders, type UsageBarMode } from "./usageAgentProvider";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
@@ -34,7 +35,8 @@ const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):
 const usageItemLabels={follow:"preferencesUsageFollow",fixed:"preferencesUsageFixed",hidden:"preferencesUsageHidden"} as const satisfies Record<UsageBarMode,UiKey>;
 
 /** `pages` adds host-owned entries (connections, security, other surfaces) into the shared sections. */
-export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[]}={}) {
+/** `terminalEngine` is the engine line of the session on screen (which engine and why), when there is one. */
+export default function PreferencesPanel({pages=[],footer,usageAccounts=[],terminalEngine}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[];terminalEngine?:string}={}) {
   useUi();
   const preferences = usePreferences();
   const topBar = useShowTopBar();
@@ -108,6 +110,7 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
 
 </>},
 {id:"terminal",section:"terminal",title:t("preferencesCategoryTerminal"),value:`${t(cursorLabels[preferences.cursorStyle])} · ${t("settingsHistoryLinesValue",{value:formatNumber(preferences.scrollback)})}`,content:<>
+    {terminalEngine && <p className="terminal-engine-line" role="note">{t("terminalEngineOfSession",{engine:terminalEngine})}</p>}
 
     <h3 className="settings-group-title">{t("settingsGroupCursorAndHistory")}</h3>
     <fieldset className="cursor-picker"><legend>{t("preferencesCursor")}</legend><div>{(["bar", "block", "underline"] as const).map(value => <label key={value}><input type="radio" name="cursor-style" value={value} checked={preferences.cursorStyle === value} onChange={() => update({cursorStyle: value})} /><span>{t(cursorLabels[value])}</span></label>)}</div></fieldset>
@@ -118,6 +121,8 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
     <label><input type="checkbox" checked={preferences.screenReader} onChange={e => update({screenReader: e.target.checked})} />{t("preferencesScreenReaderAnnouncements")}</label>
     <label><input type="checkbox" checked={preferences.pinchZoom} onChange={e => update({pinchZoom: e.target.checked})} />{t("preferencesPinchWithTwoFingersToResizeTerminalText")}</label>
     <label><input type="checkbox" checked={preferences.autoHideToolbar} onChange={e => update({autoHideToolbar: e.target.checked})} />{t("preferencesAutoHideToolbarInDesktopPointerLayouts")}</label>
+    <h3 className="settings-group-title">{t("settingsGroupTerminalEngine")}</h3>
+    <TerminalEngineChoice engine={preferences.terminalEngine} screenReader={preferences.screenReader} update={update} />
 
 </>},
 {id:"input",section:"input",title:t("preferencesCategoryInput"),content:<>
@@ -143,6 +148,8 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
       <p>{t("edgeGesturesHint")}</p>
       <label>{t("gestureModeLabel")}<select value={edgeGestureSettings(preferences).mode} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), mode: e.target.value as typeof gestureModes[number]}})}>{gestureModes.map(mode => <option key={mode} value={mode}>{t(({auto: "gestureModeAuto", handles: "gestureModeHandles", edges: "gestureModeEdges", off: "gestureModeOff"} as const)[mode])}</option>)}</select></label>
       <p>{t("gestureModeHint")}</p>
+      <label><input type="checkbox" checked={edgeGestureSettings(preferences).showLines} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), showLines: e.target.checked}})} />{t("gestureShowLines")}</label>
+      <p>{t("gestureShowLinesHint")}</p>
       {edgeGestureIds.map(id => <label key={id}><input type="checkbox" checked={edgeGestureSettings(preferences)[id]} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), [id]: e.target.checked}})} />{t(({leftMenu: "edgeGestureLeftMenu", bottomMenu: "edgeGestureBottomMenu", viewSwitch: "edgeGestureViewSwitch"} as const)[id])}</label>)}
       <label>{t("edgeGestureZoneWidth", {value: formatNumber(edgeGestureSettings(preferences).zoneWidth)})}<input type="range" min={edgeGestureZone.min} max={edgeGestureZone.max} step={edgeGestureZone.step} value={edgeGestureSettings(preferences).zoneWidth} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), zoneWidth: Number(e.target.value)}})} /></label>
       <label><input type="checkbox" checked={preferences.dismissKeyboardOnOverscroll} onChange={e=>update({dismissKeyboardOnOverscroll:e.target.checked})} />{t("preferencesDismissKeyboardOnOverscroll")}</label>

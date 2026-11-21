@@ -11,10 +11,10 @@ use std::collections::HashMap;
 const MAX_TASKS: usize = 100;
 const MAX_TEXT: usize = 200;
 
-fn clip(text: &str) -> String {
+pub(super) fn clip(text: &str) -> String {
     text.chars().take(MAX_TEXT).collect()
 }
-fn string(value: &Value) -> Option<String> {
+pub(super) fn string(value: &Value) -> Option<String> {
     value
         .as_str()
         .map(str::trim)

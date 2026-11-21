@@ -6,9 +6,13 @@ mod apple_status;
 mod approvals;
 mod attachment_upload;
 mod auth_browser;
+mod auth_hints;
+mod auth_listeners;
+mod auth_tunnel;
 mod bindings;
 mod clipboard;
 mod companion;
+mod companion_notifications;
 mod companion_settings;
 mod desktop_launch;
 mod devices;
@@ -17,11 +21,13 @@ mod et;
 mod file_transfer;
 mod forward_agent;
 mod herdr;
+mod herdr_backend;
 mod herdr_create;
 mod herdr_guard;
 mod herdr_path;
 mod herdr_stock_input;
 mod host;
+mod host_browser;
 mod host_clipboard;
 mod identities;
 mod keep_awake;
@@ -29,6 +35,12 @@ mod links;
 mod local;
 mod mosh;
 mod multiplexer;
+mod multiplexer_history;
+#[cfg(desktop)]
+mod native_program;
+#[cfg(native_terminal_core)]
+mod native_renderer;
+mod native_terminal_surface;
 mod notifications;
 mod previews;
 mod private_keyboard;
@@ -65,6 +77,25 @@ pub fn account_usage_worker() -> Option<std::process::ExitCode> {
     None
 }
 
+/// A window created from its config cannot ask for page clipboard access, and WebKitGTK then refuses
+/// `navigator.clipboard.readText()`, which the toolbar Paste button uses. `tauri.linux.conf.json` leaves
+/// the window uncreated (`"create": false`); it is built here from the same config with that access.
+/// A build with the native terminal makes the window and its web view transparent, so a surface below the
+/// page shows through where the page paints nothing (#1331); the page paints everywhere else, as before.
+#[cfg(target_os = "linux")]
+fn build_unspawned_windows(app: &tauri::App) -> tauri::Result<()> {
+    let config = app.config();
+    for window in config.app.windows.iter().filter(|window| !window.create) {
+        tauri::WebviewWindowBuilder::from_config(app.handle(), window)?
+            .enable_clipboard_access()
+            .transparent(cfg!(native_terminal_core))
+            .build()?;
+    }
+    #[cfg(native_terminal_core)]
+    native_terminal_surface::linux::record_display();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(desktop)]
@@ -91,6 +122,7 @@ pub fn run() {
         .plugin(auth_browser::init())
         .plugin(app_icons::init())
         .plugin(edge_gestures::init())
+        .plugin(native_terminal_surface::init())
         .plugin(private_keyboard::init())
         .plugin(file_transfer::init())
         .plugin(soft_keyboard::init())
@@ -108,7 +140,9 @@ pub fn run() {
         .manage(theme_links::ThemeLinks::default())
         .manage(theme_qr::QrState::default())
         .manage(previews::PreviewState::default())
+        .manage(auth_tunnel::AuthTunnelState::default())
         .manage(devices::DeviceStreams::default())
+        .manage(host_browser::HostBrowsers::default())
         .manage(transcript_watch::TranscriptWatches::default())
         .manage(share::ShareState::default())
         .manage(voice::cloud::CloudState::default())
@@ -118,6 +152,10 @@ pub fn run() {
         .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
+            #[cfg(target_os = "linux")]
+            build_unspawned_windows(app)?;
+            #[cfg(feature = "sync-tls-acceptance")]
+            sync::install_acceptance_root(app)?;
             let mut state = ssh::AppState::new(app.path().app_config_dir()?)?;
             state.background = app
                 .state::<session_background::Controller>()
@@ -173,7 +211,21 @@ pub fn run() {
                 terminal_core::terminal_core_open,
                 terminal_core::terminal_core_input,
                 terminal_core::terminal_core_text,
+                terminal_core::terminal_core_snapshot,
+                terminal_core::terminal_core_scroll,
+                terminal_core::terminal_core_resize,
+                terminal_core::terminal_core_set_active,
+                terminal_core::terminal_core_theme,
+                terminal_core::terminal_core_selection_text,
+                terminal_core::terminal_core_search,
+                terminal_core::terminal_core_word_at,
+                terminal_core::terminal_core_line_at,
+                terminal_core::terminal_core_buffer_range,
+                terminal_core::terminal_core_copy_screen,
+                terminal_core::terminal_core_select,
                 terminal_core::terminal_core_close,
+                terminal_core::terminal_core_available,
+                terminal_core::native_terminal_probe,
                 local::local_disconnect,
                 apple_status::apple_status_capability,
                 apple_status::apple_status_configure,
@@ -211,10 +263,19 @@ pub fn run() {
                 devices::device_action,
                 devices::ios_device_probe,
                 devices::android_device_probe,
+                devices::android_ui_tree,
+                devices::android_ui_action,
+                devices::android_device_action,
                 devices::ios_device_action,
                 devices::stream::device_stream_start,
                 devices::stream::device_stream_next,
                 devices::stream::device_stream_stop,
+                host_browser::host_browser_start,
+                host_browser::host_browser_next,
+                host_browser::host_browser_ack,
+                host_browser::host_browser_pause,
+                host_browser::host_browser_resume,
+                host_browser::host_browser_stop,
                 sync::sync_status,
                 sync::sync_configure,
                 sync::sync_recovery_key,
@@ -228,6 +289,9 @@ pub fn run() {
                 notifications::notification_test,
                 edge_gestures::edge_gesture_exclusion,
                 edge_gestures::edge_gesture_insets,
+                native_terminal_surface::native_terminal_surface_place,
+                native_terminal_surface::native_terminal_surface_remove,
+                native_terminal_surface::native_terminal_surface_state,
                 session_background::open_notification_settings,
                 session_background::request_notification_permission,
                 voice::voice_models,
@@ -266,12 +330,16 @@ pub fn run() {
                 repository::repository_image,
                 repository::repository_diff,
                 multiplexer::multiplexer_tree,
+                multiplexer_history::multiplexer_history,
                 tmux_jump::tmux_jump_snapshot,
                 tmux_jump::tmux_jump,
                 tmux_jump::chat::tmux_chat,
+                herdr_backend::herdr_backend_select,
                 herdr_guard::herdr_chat,
                 herdr_stock_input::herdr_agent_input,
+                herdr_stock_input::herdr_agent_screen,
                 zellij_input::zellij_agent_input,
+                zellij_input::zellij_agent_screen,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,
                 transcript_watch::agent_watch_start,
@@ -279,10 +347,13 @@ pub fn run() {
                 herdr::herdr_action,
                 herdr_create::herdr_workspace_plan,
                 herdr_create::herdr_workspace_create,
+                herdr_create::multiplexer_launch_plan,
+                herdr_create::multiplexer_launch,
                 herdr_create::herdr_agent_kinds,
                 herdr_create::herdr_repository,
                 zellij::zellij_action,
                 zellij::zellij_tabs,
+                zellij::zellij_panes,
                 multiplexer::multiplexer_sessions,
                 multiplexer::tmux_action,
                 ssh::attach_multiplexer,
@@ -290,6 +361,10 @@ pub fn run() {
                 previews::stop_preview,
                 previews::list_previews,
                 previews::discover_preview_ports,
+                auth_listeners::check_auth_listener,
+                auth_tunnel::start_auth_tunnel,
+                auth_tunnel::stop_auth_tunnel,
+                auth_tunnel::list_auth_tunnels,
                 ssh::list_hosts,
                 ssh::save_host,
                 ssh::delete_host,
@@ -321,10 +396,17 @@ pub fn run() {
                 ssh::agent_reported_history,
                 companion::install_companion,
                 companion::install_companion_from_device,
+                companion::check_companion_update,
+                companion::install_managed_herdr,
+                companion::remove_managed_herdr,
                 companion::hooks::companion_hooks,
                 companion::hooks::companion_hook_discovery,
                 companion_settings::get_companion_settings,
                 companion_settings::update_companion_settings,
+                companion_settings::get_host_browser_settings,
+                companion_settings::update_host_browser_settings,
+                companion_notifications::get_notification_policy,
+                companion_notifications::update_notification_policy,
                 ssh::agent_transcript,
                 ssh::agent_usage,
                 ssh::agent_transcripts,

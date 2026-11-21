@@ -20,7 +20,8 @@ fn foreign(xml: &str) -> bool {
 }
 const FOREIGN: Failure = Failure::Refused("A task that lazysh did not create has this name");
 
-pub fn install(exe: &str) -> Result<(), Failure> {
+pub fn install(exe: &str, before_write: &mut dyn FnMut() -> Result<(), Failure>) -> Result<(), Failure> {
+    before_write()?;
     if registered().is_some_and(|xml| foreign(&xml)) {
         return Err(FOREIGN);
     }

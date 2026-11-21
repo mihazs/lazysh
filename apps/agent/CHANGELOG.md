@@ -1,5 +1,663 @@
 # @lazysh/agent
 
+## 1.95.6
+
+No changes in this release.
+
+## 1.95.5
+
+No changes in this release.
+
+## 1.95.4
+
+No changes in this release.
+
+## 1.95.3
+
+No changes in this release.
+
+## 1.95.2
+
+No changes in this release.
+
+## 1.95.1
+
+No changes in this release.
+
+## 1.95.0
+
+No changes in this release.
+
+## 1.94.0
+
+No changes in this release.
+
+## 1.93.9
+
+No changes in this release.
+
+## 1.93.8
+
+No changes in this release.
+
+## 1.93.7
+
+No changes in this release.
+
+## 1.93.6
+
+No changes in this release.
+
+## 1.93.5
+
+No changes in this release.
+
+## 1.93.4
+
+No changes in this release.
+
+## 1.93.3
+
+No changes in this release.
+
+## 1.93.2
+
+No changes in this release.
+
+## 1.93.1
+
+No changes in this release.
+
+## 1.93.0
+
+### Minor Changes
+
+- feat(agents): map Grok Build sub-agent, background job and edit records to the work cards ([#1986](https://github.com/mihazs/lazysh/pull/1986))
+
+  <details><summary>Details</summary>
+
+  Read the sub-agents, background commands and monitors of a Grok Build session into the Agent view's background-work panel, and show a Grok Build edit as the shared diff card (#1847, follow-up of #1285). In the conversation view, `subagent_spawned` and `subagent_finished` become a sub-agent row and `task_backgrounded` and `task_completed` a command or monitor row, each with its recorded end; a launch with no end stays running, and a record of another shape changes nothing. A completed `edit` call whose output is exactly one ACP `diff` becomes an `edit` call carrying that diff, and any other shape stays an ordinary tool block. The shapes come from the official writer source the Grok fixtures pin, not from a live session. No defaults change.
+
+  </details>
+- feat(browser): stream the host's Firefox through WebDriver BiDi in the relay ([#1996](https://github.com/mihazs/lazysh/pull/1996))
+
+  <details><summary>Details</summary>
+
+  Teach the host browser relay (`lazysh-agent host-browser serve`) to stream Firefox 159 or newer over WebDriver BiDi: a private profile, `--no-remote`, a random loopback port used only by the relay (the exact `Host` Firefox requires and no `Origin`), polled and pipelined JPEG screenshots that skip repeats, the page's title and address as text, a closed allow-list for every BiDi command, and a session that is always ended and, when Firefox already holds one, replaced by a Firefox the relay starts. A headless Firefox started this way writes no download, and its profile blocks permission prompts and turns off telemetry and update checks. The command is hidden and the app has no viewer yet; input, tabs, navigation and the adaptive frame rate for Firefox follow the matching Chrome slices.
+
+  </details>
+
+### Patch Changes
+
+- fix(agent): start the Android video preview on an idle screen of a guest that prints a warning line ([#1987](https://github.com/mihazs/lazysh/pull/1987))
+
+  <details><summary>Details</summary>
+
+  Fix the Android video preview never starting on an idle screen of a guest that prints a warning line before its screenshot, such as Waydroid: the screenshots that stand in for a video frame read the PNG without skipping that line, so each was dropped as an invalid image and the stream ended in `DeviceTimeout`. They now read it the way **Capture screen** does.
+
+  </details>
+
+## 1.92.3
+
+No changes in this release.
+
+## 1.92.2
+
+No changes in this release.
+
+## 1.92.1
+
+No changes in this release.
+
+## 1.92.0
+
+No changes in this release.
+
+## 1.91.4
+
+### Patch Changes
+
+- fix(agent): keep the transcript-watch heartbeat on time while the stream waits after a slow projection. ([#2248](https://github.com/mihazs/lazysh/pull/2248))
+
+  <details><summary>Details</summary>
+
+  After re-reading a very large transcript the stream waits three times as long as the read took before it checks the file again, and it sent no heartbeat during that wait. A read of a few seconds therefore left the channel silent for longer than the documented 5 seconds, and a longer one could reach the 20 seconds after which the app treats the stream as dead. Heartbeats are now sent every 5 seconds during the wait.
+
+  </details>
+
+## 1.91.3
+
+No changes in this release.
+
+## 1.91.2
+
+No changes in this release.
+
+## 1.91.1
+
+No changes in this release.
+
+## 1.91.0
+
+### Minor Changes
+
+- feat(hooks): set up agent hooks on macOS hosts from the app ([#1949](https://github.com/mihazs/lazysh/pull/1949))
+
+  <details><summary>Details</summary>
+
+  The host companion now writes managed hook configuration on macOS, with ACL, link and replacement-race checks, instead of reporting managed setup unsupported. No defaults change.
+
+  </details>
+- feat(hooks): install, update and remove Kimi Code 2.4 approval hooks from Agent hook setup ([#1947](https://github.com/mihazs/lazysh/pull/1947))
+
+  <details><summary>Details</summary>
+
+  **Agent hook setup** lists Kimi Code (`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and installs three `[[hooks]]` entries (`PermissionRequest`, `PermissionResult`, `SessionEnd`, five seconds) as an owned block at the very end of the profile's existing `config.toml`. Every earlier byte, including comments, secrets, CRLF line endings, foreign hooks and the file mode, is kept; a UTF-8 BOM is refused unchanged because Kimi Code 2.4.1 rejects it. The result is validated as TOML before it is written, a missing `config.toml` is refused instead of created, and update or remove act only on that exact end-of-file block (an edit after it, a moved block or an inline `hooks` setting is a conflict, never a rewrite). It needs the updated host companion: the app asks for discovery schema 4 first and falls back to 3 and 2 for older companions, which keep Kimi manual, as do the legacy Kimi CLI 1.52 profile and custom config paths. No default changes. A one-off run of the official Kimi Code 2.4.1 `kimi doctor` accepted the result; macOS, Windows and a real authenticated Kimi session were not exercised.
+
+  </details>
+- feat(hooks): report whether the host received an agent's events in `lazysh-agent hooks status` ([#1945](https://github.com/mihazs/lazysh/pull/1945))
+
+  <details><summary>Details</summary>
+
+  Add an additive `readiness` object to `lazysh-agent hooks status`: whether this host's companion store holds a lifecycle event of the selected agent and when the latest one arrived (read-only, never creating the store), with provider reload, provider trust, pane binding and remote delivery reported as `notChecked`. `reporting` and `trust` are unchanged.
+
+  </details>
+- feat: Update the host companion by itself when a newer lazysh app connects ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+
+  <details><summary>Details</summary>
+
+  A companion that is older than the app that talks to it (the app says which version it is in `LAZYSH_APP_VERSION`, set on every command it runs), under the new `lazysh-agent auto-update` policy `install` (the default), starts one detached `lazysh-agent update --yes --version <the app's version>` in the background and replies to the request as usual, with an `update` field in `snapshot`. It never downgrades, defers when a recent active turn is reported or session state cannot be read, runs one update at a time and backs off after a failure. `lazysh-agent auto-update status` and `set --expected-revision R --policy off|notify|install` show and change the policy.
+
+  </details>
+
+### Patch Changes
+
+- change: Refuse a companion release response when its version differs from the requested update version ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+
+## 1.90.0
+
+No changes in this release.
+
+## 1.89.1
+
+No changes in this release.
+
+## 1.89.0
+
+### Minor Changes
+
+- feat(companion): stream a Herdr server's agent-status changes with `lazysh-agent herdr-events` ([#1873](https://github.com/mihazs/lazysh/pull/1873))
+
+  <details><summary>Details</summary>
+
+  `lazysh-agent herdr-events --session NAME` is a long-lived stream of a Herdr server's agent-status changes over `events.subscribe` (frames `hello`, `status`, `changed`, `heartbeat`, `end` and `unsupported`). A frame names the pane, workspace, agent kind and directory and never a title, command or screen text; a Herdr that cannot stream is reported as `unsupported`. It ends when its input closes and starts nothing on the host. Nothing in the app reads it yet and no defaults change; an update of the host companion is needed to have the command.
+
+  </details>
+
+## 1.88.0
+
+### Minor Changes
+
+- feat(companion): admit the managed Windows companion namespace by owner, DACL and reparse point ([#1901](https://github.com/mihazs/lazysh/pull/1901))
+
+  <details><summary>Details</summary>
+
+  Admit the managed Windows companion namespace by owner, DACL and reparse point before `lazysh-agent update` and `installation` use it (#1724, part of #490). `%LOCALAPPDATA%\lazysh\companion` and `lazysh-agent.exe` are checked from the local application data folder down: a link, junction or other reparse point, a directory another account can change, an executable another account owns or can access, and an executable that is no regular file exit 27 (`unsafeInstallLocation`) from `update`, and fail `installation inspect` and `install` with `InstallUnsafeNamespace` or `InstallUnsafeFile`, before anything is created, run or replaced. On Windows, `installation inspect` now also reports the `destination` and the `existing` executable; Windows installation stays unsupported. Changed default: a Windows host whose managed namespace another account can change, which `update` used to accept, now exits 27 and has to be corrected by the user.
+
+  </details>
+
+### Patch Changes
+
+- fix(ios): send taps, swipes and button presses to an iOS Simulator through idb ([#1912](https://github.com/mihazs/lazysh/pull/1912))
+
+  <details><summary>Details</summary>
+
+  idb 1.7.8 rejects a top-level `tap`, `swipe` or `button` (`invalid choice`) because they are `idb ui` subcommands, so no input ever reached a Simulator (#1731, part of #19). The optional idb controls now run `idb ui tap`, `idb ui swipe` and `idb ui button`.
+
+  A real run on a hosted macOS runner (Xcode 26.6, an iOS 26.5 Simulator, idb 1.7.8) verified the companion identity in screen points, a continuous video preview, a tap at a point read from the Simulator's own accessibility frame, an edge swipe, Home and the hardware buttons, and shutdown and boot by UUID. The new non-required `ios-idb-acceptance` workflow repeats that run; the versions and limits are in [the device acceptance record](docs/reference/devices-acceptance.md#ios-simulator-idb-acceptance).
+
+  `simctl shutdown` can outlast the companion's ten-second command limit (7 to 66 seconds, tracked in #1911), and `idb ui describe-all` fails on the home screen, so no iOS accessibility tree is added. Needs the updated host companion on the Mac. No defaults change.
+
+  </details>
+
+## 1.87.1
+
+No changes in this release.
+
+## 1.87.0
+
+No changes in this release.
+
+## 1.86.0
+
+### Minor Changes
+
+- feat(agents): show a Copilot CLI, Kimi CLI or Droid session's records in the Agent view, labelled as partial ([#1846](https://github.com/mihazs/lazysh/pull/1846))
+
+  <details><summary>Details</summary>
+
+  A GitHub Copilot CLI, Kimi CLI or Droid pane that reports a session now shows that session's records in the Agent view: read-only, under a partial label, with the hook state in the header and Show terminal. The companion's `discover` names `sessionId` for these three adapters (additive). Agents the view cannot read (Pi, OMP, Hermes, Cursor, Amp, Grok Build) now say that the view shows only their last reported state instead of pointing at a setting that cannot fix it. No defaults change. Refs #1658, #1125.
+
+  </details>
+- feat(agents): follow a Grok Build session in the Agent view ([#1845](https://github.com/mihazs/lazysh/pull/1845))
+
+  <details><summary>Details</summary>
+
+  With the updated host companion, print the opted-in hook fragment (`lazysh-agent grok-config --reported-history`), review it and save it as `~/.grok/hooks/lazysh.json`: a Grok Build hook then reports the session id, the pane it ran in and the path of its session log (`updates.jsonl`), and the Agent view of that tmux pane shows the conversation (turns, thinking, tool calls with their output and status, the plan card) and the state (working, done, failed, waiting for an approval), polling the log about every two seconds, with the guarded send. The Claude Code hooks reach Grok Build too (it runs `~/.claude/settings.json`), so a report that carries Grok's own input is now shown as **Grok Build**, not as a Claude Code session. Nothing is guessed from processes or from the newest file of a folder: a report without a log path binds nothing, a sub-agent's events are ignored, and two different paths for one session stay unusable. Questions and approvals stay in the terminal; the view says so and holds the draft, and it offers Grok Build no Stop key and no `@` or `/` suggestions because no key was checked on a real Grok Build. The same terminal notice now also appears when Gemini CLI or OpenCode waits for an approval or a plan decision, which the view cannot answer. A session past 10,000 log records or 16 MiB shows the reader's error and leaves the terminal. Verified with synthetic fixtures built from the pinned official source and the real executable on Linux; no Grok Build binary or account was available, so a run against a real agent is still open on #1842. No defaults change.
+
+  </details>
+
+## 1.85.1
+
+No changes in this release.
+
+## 1.85.0
+
+No changes in this release.
+
+## 1.84.0
+
+### Minor Changes
+
+- feat(agent): add `lazysh-agent review status` and `review diff` to the host companion ([#1803](https://github.com/mihazs/lazysh/pull/1803))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent review status` and `review diff` to the host companion: the Diff view's changed files and one file's patch from a terminal on the host, as plain text or one JSON line, read-only and under the app's size bounds, with its help in English, Brazilian Portuguese and Spanish. The app and the companion now build their Git review commands in one shared module; the app's behavior does not change.
+
+  </details>
+- feat(notifications): add opt-in switches that keep nested-agent and unlocked-desktop events off the relay ([#1820](https://github.com/mihazs/lazysh/pull/1820))
+
+  <details><summary>Details</summary>
+
+  `lazysh-agent settings notifications show|update` keeps events of an agent that another agent started, and events raised while the host's desktop is unlocked, out of the relay notification queue. Both switches default to off and live in their own `notification-policy.json`, so an older companion keeps reading `settings.json`. A nested agent's Claude permission request takes no approval while the first switch is on. Unlocked-desktop detection is Linux only; macOS and Windows always notify.
+
+  </details>
+
+## 1.83.1
+
+No changes in this release.
+
+## 1.83.0
+
+### Minor Changes
+
+- feat: Add `lazysh-agent herdr-pane-input --session NAME`, the host half of typing into one named pane of an… ([#1784](https://github.com/mihazs/lazysh/pull/1784))
+
+  <details><summary>Details</summary>
+
+  Add `lazysh-agent herdr-pane-input --session NAME`, the host half of typing into one named pane of an unchanged stock Herdr: JSON lines on stdin and stdout that pin the Herdr server process and refuse any other server at the same socket path.
+
+  </details>
+
+## 1.82.1
+
+No changes in this release.
+
+## 1.82.0
+
+### Minor Changes
+
+- feat(devices): touch an Android device on its video preview ([#1773](https://github.com/mihazs/lazysh/pull/1773))
+
+  <details><summary>Details</summary>
+
+  With **Enable device input** ticked, a tap or swipe on the video is mapped to the display's pixel size that **Verify Android video tools** reports and sent with that size to the host companion (`lazysh-agent devices android tap` and `swipe`). The companion reads the display size again and refuses the gesture with `DeviceDimensionsChanged` when it changed (a rotation or resize) or the point is outside it, so a gesture never lands on the wrong point; the refusal also stops the video. A 180-degree rotation that keeps the size is not detected. Needs the updated host companion; an older one keeps the video view-only. A real Waydroid Android 13 guest accepted and refused gestures as described; the published CI emulator has not run the new case yet. Changed default: the Android video preview is no longer always view-only.
+
+  </details>
+
+## 1.81.0
+
+### Minor Changes
+
+- feat(devices): inspect and act on an Android device's screen elements from the device controls ([#1774](https://github.com/mihazs/lazysh/pull/1774))
+
+  <details><summary>Details</summary>
+
+  Issue #19. **Inspect screen elements** lists what Android's accessibility service reports on the foreground screen (label, class, resource id, bounds and actionable flags, at most 300), and **Tap** and **Long press** act on one element: the host companion (`lazysh-agent devices android ui tree` and `ui act`) re-reads the screen, finds the one enabled element with that identity and touches the centre of its bounds, or fails without touching anything when none matches. The buttons need **Enable device input**. No scrolling, text entry or iOS accessibility yet. Needs the updated host companion. No defaults change.
+
+  </details>
+
+## 1.80.4
+
+No changes in this release.
+
+## 1.80.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.80.3
+  - @lazysh/common@1.80.3
+  - @lazysh/companion-release@1.80.3
+  - @lazysh/notification-client@1.80.3
+
+## 1.80.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.80.2
+  - @lazysh/common@1.80.2
+  - @lazysh/companion-release@1.80.2
+  - @lazysh/notification-client@1.80.2
+
+## 1.80.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.80.1
+  - @lazysh/common@1.80.1
+  - @lazysh/companion-release@1.80.1
+  - @lazysh/notification-client@1.80.1
+
+## 1.80.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.80.0
+  - @lazysh/common@1.80.0
+  - @lazysh/companion-release@1.80.0
+  - @lazysh/notification-client@1.80.0
+
+## 1.79.7
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.7
+  - @lazysh/common@1.79.7
+  - @lazysh/companion-release@1.79.7
+  - @lazysh/notification-client@1.79.7
+
+## 1.79.6
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.6
+  - @lazysh/common@1.79.6
+  - @lazysh/companion-release@1.79.6
+  - @lazysh/notification-client@1.79.6
+
+## 1.79.5
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.5
+  - @lazysh/common@1.79.5
+  - @lazysh/companion-release@1.79.5
+  - @lazysh/notification-client@1.79.5
+
+## 1.79.4
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.4
+  - @lazysh/common@1.79.4
+  - @lazysh/companion-release@1.79.4
+  - @lazysh/notification-client@1.79.4
+
+## 1.79.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.3
+  - @lazysh/common@1.79.3
+  - @lazysh/companion-release@1.79.3
+  - @lazysh/notification-client@1.79.3
+
+## 1.79.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.2
+  - @lazysh/common@1.79.2
+  - @lazysh/companion-release@1.79.2
+  - @lazysh/notification-client@1.79.2
+
+## 1.79.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.79.1
+  - @lazysh/common@1.79.1
+  - @lazysh/companion-release@1.79.1
+  - @lazysh/notification-client@1.79.1
+
+## 1.79.0
+
+### Minor Changes
+
+- 20cc3da: Record which tmux or rmux server a hook's pane belongs to. A pane id such as `%7` is unique only inside one server, so a report from `tmux -L work` and one from the default server could carry the same id; the companion now adds `paneServer` (`tmux:work`, `rmux:default`) read from the `TMUX` or `RMUX` socket path, the Agents panel's report details show it, and a socket given with `-S` records none. The field is optional in the snapshot, so an older companion or client works unchanged.
+
+### Patch Changes
+
+- 6bf377a: Stop the sixteen-writer storage burst cases from failing the Windows release build on a runner whose disk flushes are momentarily slow (#2114, same family as #36): each burst now waits for the temporary volume to commit fast enough for sixteen serialized durable writes, or fails explicitly after two minutes. Companion storage, `synchronous=FULL` durability and the three-second wait budget are unchanged, so nothing changes for users.
+- @lazysh/account-usage@1.79.0
+  - @lazysh/common@1.79.0
+  - @lazysh/companion-release@1.79.0
+  - @lazysh/notification-client@1.79.0
+
+## 1.78.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.78.2
+  - @lazysh/common@1.78.2
+  - @lazysh/companion-release@1.78.2
+  - @lazysh/notification-client@1.78.2
+
+## 1.78.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.78.1
+  - @lazysh/common@1.78.1
+  - @lazysh/companion-release@1.78.1
+  - @lazysh/notification-client@1.78.1
+
+## 1.78.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.78.0
+  - @lazysh/common@1.78.0
+  - @lazysh/companion-release@1.78.0
+  - @lazysh/notification-client@1.78.0
+
+## 1.77.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.77.2
+  - @lazysh/common@1.77.2
+  - @lazysh/companion-release@1.77.2
+  - @lazysh/notification-client@1.77.2
+
+## 1.77.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.77.1
+  - @lazysh/common@1.77.1
+  - @lazysh/companion-release@1.77.1
+  - @lazysh/notification-client@1.77.1
+
+## 1.77.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.77.0
+  - @lazysh/common@1.77.0
+  - @lazysh/companion-release@1.77.0
+  - @lazysh/notification-client@1.77.0
+
+## 1.76.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.76.0
+  - @lazysh/common@1.76.0
+  - @lazysh/companion-release@1.76.0
+  - @lazysh/notification-client@1.76.0
+
+## 1.75.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.75.1
+  - @lazysh/common@1.75.1
+  - @lazysh/companion-release@1.75.1
+  - @lazysh/notification-client@1.75.1
+
+## 1.75.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.75.0
+  - @lazysh/common@1.75.0
+  - @lazysh/companion-release@1.75.0
+  - @lazysh/notification-client@1.75.0
+
+## 1.74.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.74.0
+  - @lazysh/common@1.74.0
+  - @lazysh/companion-release@1.74.0
+  - @lazysh/notification-client@1.74.0
+
+## 1.73.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.73.1
+  - @lazysh/common@1.73.1
+  - @lazysh/companion-release@1.73.1
+  - @lazysh/notification-client@1.73.1
+
+## 1.73.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.73.0
+  - @lazysh/common@1.73.0
+  - @lazysh/companion-release@1.73.0
+  - @lazysh/notification-client@1.73.0
+
+## 1.72.0
+
+### Minor Changes
+
+- 2320cc2: Bind a remote approval to the exact Zellij or Herdr pane its hook runs in: the request carries `zellij:<session>:<pane>` or `herdr:<session>:<pane id>` in its hash and decision, and any other pane, session or multiplexer is refused.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.72.0
+  - @lazysh/common@1.72.0
+  - @lazysh/companion-release@1.72.0
+  - @lazysh/notification-client@1.72.0
+
+## 1.71.0
+
+### Minor Changes
+
+- cdb8721: Show an OpenCode compaction as an event line in the Agent view.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.71.0
+  - @lazysh/common@1.71.0
+  - @lazysh/companion-release@1.71.0
+  - @lazysh/notification-client@1.71.0
+
+## 1.70.0
+
+### Minor Changes
+
+- d64fc31: Stream an OpenCode session into the Agent view instead of polling it. `lazysh-agent transcript-watch` now takes `--agent opencode --path DATABASE --database-session ID` and watches the database together with its write-ahead log, where OpenCode's newest rows sit until a checkpoint, so a reply that grows or a tool result that lands reaches the view within a second. The view opens the same live channel for an OpenCode pane as for Claude Code and Codex, and falls back to polling when the host companion is older.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.70.0
+  - @lazysh/common@1.70.0
+  - @lazysh/companion-release@1.70.0
+  - @lazysh/notification-client@1.70.0
+
+## 1.69.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.69.0
+  - @lazysh/common@1.69.0
+  - @lazysh/companion-release@1.69.0
+  - @lazysh/notification-client@1.69.0
+
+## 1.68.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.68.3
+  - @lazysh/common@1.68.3
+  - @lazysh/companion-release@1.68.3
+  - @lazysh/notification-client@1.68.3
+
+## 1.68.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.68.2
+  - @lazysh/common@1.68.2
+  - @lazysh/companion-release@1.68.2
+  - @lazysh/notification-client@1.68.2
+
+## 1.68.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.68.1
+  - @lazysh/common@1.68.1
+  - @lazysh/companion-release@1.68.1
+  - @lazysh/notification-client@1.68.1
+
+## 1.68.0
+
+### Minor Changes
+
+- 8881a6b: Open and page through larger Codex conversations using a bounded full-history index.
+
+### Patch Changes
+
+- 8881a6b: Open a conversation whose workflow has no summary file instead of refusing the page.
+- @lazysh/account-usage@1.68.0
+  - @lazysh/common@1.68.0
+  - @lazysh/companion-release@1.68.0
+  - @lazysh/notification-client@1.68.0
+
+## 1.67.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.67.1
+  - @lazysh/common@1.67.1
+  - @lazysh/companion-release@1.67.1
+  - @lazysh/notification-client@1.67.1
+
+## 1.67.0
+
+### Minor Changes
+
+- be619f7: Report the identity of a terminal lazysh starts: a hook that runs with `LAZYSH_TERMINAL` set to 32 lowercase hexadecimal characters records `lazysh:<id>` as its pane identity when neither `TMUX_PANE` nor Zellij's variables are set, so a later release can tie the Agent view of a terminal with no multiplexer to the agent that terminal started. A value of another shape is ignored and the hook still succeeds. Nothing exports the variable yet, so reports do not change.
+- 0b93d52: Answer Copilot CLI's permission prompts remotely through Copilot's own `permissionRequest` hook decision. `lazysh-agent approval-request` and `approval-config` take `--agent copilot`; the request is the same immutable, hash-bound record as Claude Code's and Codex's, listed with `"agent":"copilot"`, and an allow or a deny with a message goes back at the top level of the hook's stdout, never as keys. Copilot runs this hook before its own rules, so every shell command and file edit that needs a permission check waits for you (including ones Copilot would run without asking), and an allow skips Copilot's deny rules. A request nobody answers gives no decision, so Copilot shows its own prompt in the terminal.
+
+### Patch Changes
+
+- ca8d976: Read long Grok Build sessions in the conversation view: the chunks of a streamed message are joined as they are read and count as one record, so a session of 50,000 chunk records opens instead of being refused at 10,000.
+- 9bd5593: Record that Kimi Code 2.4.1 has no hook that can carry an Allow (hooks that print an allow on `PermissionRequest` and `PreToolUse` leave the prompt waiting; `PreToolUse` can only block), so a Kimi prompt stays in the terminal, with two new scenarios in the repeatable qualification run. No behavior change.
+- fb610c5: Read long Gemini CLI sessions quickly and prove that a Gemini conversation pages with `--before`, `--after` and `--from-start` from its first message to its last.
+- @lazysh/account-usage@1.67.0
+  - @lazysh/common@1.67.0
+  - @lazysh/companion-release@1.67.0
+  - @lazysh/notification-client@1.67.0
+
 ## 1.66.1
 
 ### Patch Changes

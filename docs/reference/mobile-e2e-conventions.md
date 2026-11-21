@@ -35,6 +35,7 @@ apps/client/mobile-e2e/
     contexts.ts             NATIVE_APP <-> app WebView switch
     gestures.ts             W3C pointer actions, edge swipes
     hosts.ts                owned SSH, Herdr and tmux endpoints from tests/support
+    webdav.ts               owned HTTPS WebDAV server with its own CA, for the encrypted-sync case (a spec starts it)
     artifacts.ts            failure screenshots, page source, logcat tail
   data/                     static, deterministic inputs (no secrets, no keys)
   reports/                  generated; git-ignored (junit/, artifacts/, wdio-appium.log)
@@ -179,7 +180,7 @@ the device layer only if no lower layer can.
 | Retries | `specFileRetries: 1` when `CI` is set, Mocha `retries: 0`; a spec file that passes only on its retry is listed in the job summary |
 | Sharding | `wdio run --shard x/y` (`LAZYSH_E2E_SHARD`), a matrix of jobs (one emulator each), wired for `1/1` and widened when wall time passes 25 minutes |
 | Artifacts | `reports/junit/` and `reports/artifacts/` upload on every run |
-| Gating | report-only first; required after 20 consecutive concluded green runs on `main` (a maintainer sets the ruleset); procedure in [Android instrumentation](../android-testing.md#promotion-to-a-required-check) |
+| Gating | report-only first; required after 20 consecutive concluded green runs on `main` (a maintainer adds it to the [required list](../../CONTRIBUTING.md#required-checks)); procedure in [Android instrumentation](../android-testing.md#promotion-to-a-required-check) |
 
 ## Sources
 

@@ -1,0 +1,105 @@
+name: ios-idb-acceptance
+
+# Real-host gate for the optional idb iOS Simulator preview and controls (issue #1731, part of #19).
+# A hosted macOS runner is the macOS host with Xcode that the checks.yml iOS job already relies on:
+# it boots a fresh Simulator, runs Meta's idb companion on a private Unix socket and drives the
+# production adapter through the ignored Cargo case named below. It is not a required check and
+# is not part of checks.yml or main-verdict.yml: idb is a third-party tool, so its releases must
+# not turn unrelated pull requests or main red. Documentation: docs/reference/devices-acceptance.md.
+on:
+  pull_request:
+    paths: &adapter-paths
+      - apps/agent/src/devices.rs
+      - apps/agent/src/devices/**
+      - .github/workflows/ios-idb-acceptance.yml
+  push:
+    branches: [main]
+    paths: *adapter-paths
+  # Weekly, to notice a new Xcode image or runner OS before the adapter's next change does.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  simulator:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      # meta/homebrew-fb commit that renders idb 1.7.8. Bump it together with the versions in the docs.
+      IDB_TAP_REVISION: f2c725e984cfaa8e2c648be069f3d63925776c83
+      IDB_CASE: devices::idb::tests::owned_simulator_idb_preview_touch_and_lifecycle
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the case before touching the Simulator
+        run: |
+          # A renamed case must not turn the run below into a zero-test pass, and a
+          # multi-minute build must not leave CoreSimulatorService idle before the first call.
+          cargo test --locked -p lazysh-agent --lib --no-run
+          cargo test --locked -p lazysh-agent --lib "$IDB_CASE" -- --list --ignored --exact | grep -Fx "$IDB_CASE: test"
+      - name: Install the pinned idb and record the versions under test
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          brew tap meta/fb
+          tap="$(brew --repo meta/fb)"
+          git -C "$tap" fetch --quiet --depth 1 origin "$IDB_TAP_REVISION"
+          git -C "$tap" checkout --quiet "$IDB_TAP_REVISION"
+          brew trust meta/fb
+          brew install meta/fb/idb
+          {
+            echo '### Toolchain under test'
+            echo '```'
+            sw_vers
+            xcodebuild -version
+            xcrun simctl list runtimes available | grep -i '^iOS '
+            brew list --versions idb idb-cli idb-companion
+            idb_companion --version
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Boot an owned Simulator and start its companion on a private socket
+        run: |
+          udid="$(xcrun simctl create lazysh-idb-acceptance com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)"
+          echo "LAZYSH_TEST_IOS_UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          # The adapter accepts only an owner-private socket in an owner-private real directory.
+          dir="$RUNNER_TEMP/lazysh-idb"
+          (umask 077; mkdir "$dir")
+          echo "LAZYSH_TEST_IDB_SOCKET=$dir/idb.sock" >> "$GITHUB_ENV"
+          (umask 077; nohup idb_companion --udid "$udid" --grpc-domain-sock "$dir/idb.sock" > "$dir/companion.log" 2>&1 & echo $! > "$dir/companion.pid")
+          for _ in $(seq 1 60); do
+            test -S "$dir/idb.sock" && exit 0
+            sleep 1
+          done
+          echo 'The companion did not create its socket' >&2
+          tail -n 20 "$dir/companion.log"
+          exit 1
+      - name: Exercise the preview, touch calibration and lifecycle on the owned Simulator
+        run: |
+          cargo test --locked -p lazysh-agent --lib "$IDB_CASE" -- --ignored --exact --nocapture
+      - name: Retain the companion log of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-idb-companion-log
+          path: ${{ runner.temp }}/lazysh-idb/companion.log
+          if-no-files-found: warn
+      - name: Stop the companion and remove the Simulator
+        if: always()
+        run: |
+          if test -s "$RUNNER_TEMP/lazysh-idb/companion.pid"; then kill "$(cat "$RUNNER_TEMP/lazysh-idb/companion.pid")" || true; fi
+          if test -n "${LAZYSH_TEST_IOS_UDID:-}"; then
+            xcrun simctl shutdown "$LAZYSH_TEST_IOS_UDID" || true
+            xcrun simctl delete "$LAZYSH_TEST_IOS_UDID" || true
+          fi

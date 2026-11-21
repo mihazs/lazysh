@@ -64,6 +64,7 @@ fn walk(path: &Path, create: bool) -> io::Result<()> {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound && !create => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                #[cfg_attr(not(unix), allow(unused_mut))]
                 let mut builder = fs::DirBuilder::new();
                 #[cfg(unix)]
                 {
@@ -113,7 +114,7 @@ pub fn is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        return metadata.file_attributes() & 0x400 != 0; // FILE_ATTRIBUTE_REPARSE_POINT
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
     }
     #[cfg(not(windows))]
     false

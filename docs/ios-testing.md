@@ -80,3 +80,15 @@ Standalone-runner compilation and the real WKWebView accessibility queries still
 require macOS CI acceptance; Linux configuration checks do not establish either.
 These tests cover local workspace persistence, not device signing, SSH sessions,
 push delivery, or physical biometric hardware.
+
+## Surface composition proof of concept
+
+`bun run test:ios-surface-poc` runs `LazyshSurfacePocUITests` in the same job and on the same isolated simulator.
+It does not use the installed app: it builds and launches `LazyshSurfacePoc`, a standalone UIKit host in
+`src-tauri/apple/SurfacePocHost` that stacks an `MTKView` below a transparent `WKWebView` the way wry builds the
+app's view, and reads the composited pixels. What it measures, the results and the decision are in
+[iOS native surface composition proof of concept](architecture/ios-surface-composition-poc.md). Run it after
+`bun run build:ios` and the simulator steps above, with
+`TEST_RUNNER_LAZYSH_SURFACE_POC_RESULTS=/tmp/surface-poc.jsonl` (an existing file) to keep one JSON record per
+test; the result bundle is `apps/client/src-tauri/gen/apple/surface-poc-ui.xcresult`. The host is not part of the
+app and nothing in the app, its capabilities or its Rust side refers to it.

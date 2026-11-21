@@ -1,14 +1,18 @@
 //! One host context for host tools: an SSH session or this desktop device.
 //! The remote arm calls the existing SSH code unchanged; the local arm runs argv
 //! directly (never a shell string) and reads files with `std::fs`.
+#[cfg(desktop)]
+use crate::local::{Located, Wsl};
 use crate::{
     app_lock::AccessLease,
     local::LocalState,
-    ssh::{self, AppState, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
+    ssh::{self, AppState, Destination, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
 };
 use serde::Serialize;
+#[cfg(desktop)]
+use std::path::{Path, PathBuf};
 use std::{pin::Pin, sync::Arc, time::Duration};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 pub(crate) enum Host {
     Remote(Arc<ssh::Session>),
@@ -21,13 +25,21 @@ pub(crate) enum Host {
 pub(crate) struct Cmd {
     env: &'static [(&'static str, &'static str)],
     argv: Vec<String>,
+    /// Runs Herdr: it may live in the user install directory off the PATH.
+    herdr: bool,
 }
 impl Cmd {
     pub(crate) fn new(env: &'static [(&'static str, &'static str)], argv: &[&str]) -> Self {
         Self {
             env,
             argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+            herdr: false,
         }
+    }
+    /// Marks a Herdr command: its owner-checked user install is searched after the PATH.
+    pub(crate) fn herdr(mut self) -> Self {
+        self.herdr = true;
+        self
     }
     pub(crate) fn arg(mut self, arg: &str) -> Self {
         self.argv.push(arg.to_owned());
@@ -96,6 +108,11 @@ impl Source {
     }
 }
 
+/// A connection to a TCP port on the host's loopback.
+pub(crate) trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
+pub(crate) type Stream = Box<dyn Duplex>;
+
 impl Host {
     /// Resolves a session id; `local:` ids need an adopted, live local terminal.
     pub(crate) async fn resolve(
@@ -106,10 +123,11 @@ impl Host {
     ) -> Result<Self> {
         if id.starts_with("local:") {
             #[cfg(desktop)]
-            return crate::local::usage_session(local, id, lease)
-                .map(|cancel| {
+            return crate::local::host_session(local, id, lease)
+                .map(|(cancel, wsl)| {
                     Self::Local(LocalHost {
                         cancel,
+                        wsl,
                         #[cfg(test)]
                         env: local.test_env(),
                     })
@@ -127,7 +145,8 @@ impl Host {
         Ok(Self::Remote(state.session(id).await?))
     }
     /// Resolves a session for a tool that names `dir`; local Windows sessions refuse
-    /// UNC and device paths here, before Git could open an SMB share with them.
+    /// UNC and device paths here, before Git could open an SMB share with them, and a WSL
+    /// session takes Linux paths only, as `git -C` runs inside the distribution.
     pub(crate) async fn resolve_dir(
         state: &AppState,
         local: &LocalState,
@@ -137,8 +156,8 @@ impl Host {
     ) -> Result<Self> {
         let host = Self::resolve(state, local, id, lease).await?;
         #[cfg(desktop)]
-        if matches!(host, Self::Local(_)) {
-            local_fs::resolve(dir)?;
+        if let Self::Local(local) = &host {
+            local.check_dir(dir)?;
         }
         #[cfg(not(desktop))]
         let _ = dir;
@@ -147,6 +166,23 @@ impl Host {
     /// A one-shot command with the default 30 s deadline and 1 MiB output bound.
     pub(crate) async fn run(&self, lease: &AccessLease, cmd: &Cmd) -> Result<String> {
         self.exec(lease, cmd, OP_TIMEOUT, FILE_LIMIT as usize).await
+    }
+    /// `run` for a command whose exit status the caller interprets: a non-zero exit is data here.
+    pub(crate) async fn run_status(
+        &self,
+        lease: &AccessLease,
+        cmd: &Cmd,
+    ) -> Result<ssh::ExecOutput> {
+        match self {
+            Self::Remote(session) => {
+                ssh::exec_for_access_status(session, cmd.render(), lease).await
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                host.exec_status(lease, cmd, OP_TIMEOUT, FILE_LIMIT as usize)
+                    .await
+            }
+        }
     }
     pub(crate) async fn exec(
         &self,
@@ -157,7 +193,12 @@ impl Host {
     ) -> Result<String> {
         match self {
             Self::Remote(session) => {
-                ssh::exec_bounded(session, cmd.render(), lease, deadline, limit, None).await
+                let line = if cmd.herdr {
+                    crate::herdr_backend::resolve(session, lease, &cmd.render()).await?
+                } else {
+                    cmd.render()
+                };
+                ssh::exec_bounded(session, line, lease, deadline, limit, None).await
             }
             #[cfg(desktop)]
             Self::Local(host) => ssh::command_text(host.exec(lease, cmd, deadline, limit).await?),
@@ -178,6 +219,11 @@ impl Host {
         match self {
             Self::Remote(session) => crate::companion::exec(session, line, lease).await,
             // Boxed: the local arm's buffers would otherwise grow every remote caller's future.
+            #[cfg(desktop)]
+            Self::Local(host) if host.wsl.is_some() => Err(SshError::new(
+                "remote_command_failed",
+                "lazysh-agent does not run inside a WSL target yet",
+            )),
             #[cfg(desktop)]
             Self::Local(host) => {
                 Box::pin(async {
@@ -221,7 +267,10 @@ impl Host {
         match self {
             Self::Remote(session) => ssh::sftp_list_dir(session, lease, path).await,
             #[cfg(desktop)]
-            Self::Local(host) => host.blocking(lease, move || local_fs::list(&path)).await,
+            Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
+                host.blocking(lease, move || local_fs::list(&path)).await
+            }
         }
     }
     /// The login home directory: SFTP's canonical form of its starting directory over
@@ -230,7 +279,16 @@ impl Host {
         match self {
             Self::Remote(session) => ssh::sftp_home(session, lease).await,
             #[cfg(desktop)]
-            Self::Local(host) => host.blocking(lease, local_fs::home).await,
+            Self::Local(host) => match &host.wsl {
+                // `--cd ~` starts in the distribution user's home.
+                Some(_) => {
+                    let output = host
+                        .exec(lease, &Cmd::new(&[], &["pwd", "-P"]), OP_TIMEOUT, 4096 + 1)
+                        .await?;
+                    ssh::absolute_home(String::from_utf8_lossy(&output).trim_end().to_owned())
+                }
+                None => host.blocking(lease, local_fs::home).await,
+            },
         }
     }
     /// What `path` is, without reading it; a dangling link is an error.
@@ -258,7 +316,11 @@ impl Host {
             .await
             .map_err(|_| SshError::new("timeout", "Reading file information timed out"))?,
             #[cfg(desktop)]
-            Self::Local(host) => host.blocking(lease, move || local_fs::stat(&path)).await,
+            Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
+                let stat = host.blocking(lease, move || local_fs::stat(&path)).await?;
+                host.logical(stat)
+            }
         }
     }
     /// Opens a regular file for streaming. A symbolic link is followed only when `follow_link`.
@@ -289,6 +351,7 @@ impl Host {
             .map_err(|_| SshError::new("timeout", "Opening the file timed out"))?,
             #[cfg(desktop)]
             Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
                 let (file, size) = host
                     .blocking(lease, move || local_fs::open_regular(&path, follow_link))
                     .await?;
@@ -304,10 +367,13 @@ impl Host {
         match self {
             Self::Remote(session) => ssh::sftp_read_text(session, lease, path).await,
             #[cfg(desktop)]
-            Self::Local(host) => ssh::preview_text(
-                host.blocking(lease, move || local_fs::read(&path, FILE_LIMIT))
-                    .await?,
-            ),
+            Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
+                ssh::preview_text(
+                    host.blocking(lease, move || local_fs::read(&path, FILE_LIMIT))
+                        .await?,
+                )
+            }
         }
     }
     /// At most `limit + 1` bytes of a regular file; symbolic links are refused.
@@ -333,8 +399,81 @@ impl Host {
             .map_err(|_| SshError::new("timeout", "Reading file timed out"))?,
             #[cfg(desktop)]
             Self::Local(host) => {
+                let path = host.locate(lease, &path).await?;
                 host.blocking(lease, move || local_fs::read(&path, limit))
                     .await
+            }
+        }
+    }
+    /// Uploads and previews act on this Windows device, so a WSL session refuses them: they would
+    /// write to or reach a port of Windows while the terminal runs in the distribution.
+    pub(crate) fn refuse_in_wsl(&self, what: &str) -> Result<()> {
+        match self {
+            #[cfg(desktop)]
+            Self::Local(host) if host.wsl.is_some() => Err(SshError::new(
+                "remote_command_failed",
+                format!("{what} does not run inside a WSL target yet"),
+            )),
+            _ => Ok(()),
+        }
+    }
+    /// Turns true when the session ends.
+    pub(crate) fn closed(&self) -> tokio::sync::watch::Receiver<bool> {
+        match self {
+            Self::Remote(session) => session.cancel.subscribe(),
+            #[cfg(desktop)]
+            Self::Local(host) => host.cancel.clone(),
+        }
+    }
+    /// Creates a new file and never replaces one: at an explicit path, or as a private,
+    /// uniquely named file in the host's temporary directory.
+    pub(crate) async fn create_new(
+        &self,
+        lease: &AccessLease,
+        destination: Destination,
+        data: Vec<u8>,
+        work: &crate::attachment_upload::Work,
+    ) -> Result<crate::attachment_upload::Uploaded> {
+        self.refuse_in_wsl("Attachments")?;
+        match self {
+            Self::Remote(session) => {
+                ssh::transfer_file(session, lease, destination, data, work).await
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => host
+                .blocking(lease, move || local_fs::create_new(destination, &data))
+                .await
+                .map(|path| crate::attachment_upload::Uploaded { path }),
+        }
+    }
+    /// A TCP connection to `address:port` on the host's loopback: a direct-tcpip channel
+    /// over SSH, a plain connection from this device for a local session.
+    pub(crate) async fn connect_tcp(
+        &self,
+        lease: &AccessLease,
+        address: &str,
+        port: u16,
+        deadline: tokio::time::Instant,
+    ) -> Result<Stream> {
+        self.refuse_in_wsl("Previews")?;
+        match self {
+            Self::Remote(session) => {
+                crate::previews::remote_stream(&session.handle, lease, address, port, deadline)
+                    .await
+                    .map(|stream| Box::new(stream) as Stream)
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                ssh::until_closed(lease, host.cancel.clone(), async {
+                    let connecting = tokio::net::TcpStream::connect((address, port));
+                    let stream = tokio::time::timeout_at(deadline, connecting)
+                        .await
+                        .map_err(|_| {
+                            SshError::new("timeout", "Connecting to the port timed out")
+                        })??;
+                    Ok(Box::new(stream) as Stream)
+                })
+                .await
             }
         }
     }
@@ -364,6 +503,8 @@ fn not_regular() -> SshError {
 #[cfg(desktop)]
 pub(crate) struct LocalHost {
     cancel: tokio::sync::watch::Receiver<bool>,
+    /// The distribution a WSL session runs its commands and reads its files in.
+    wsl: Option<Wsl>,
     #[cfg(test)]
     env: Vec<(String, String)>,
 }
@@ -401,7 +542,31 @@ impl LocalHost {
         deadline: Duration,
         limit: usize,
     ) -> Result<Vec<u8>> {
+        let output = self.exec_status(lease, cmd, deadline, limit).await?;
+        ssh::check_exit(output.status, &output.stderr)?;
+        Ok(output.stdout)
+    }
+    async fn exec_status(
+        &self,
+        lease: &AccessLease,
+        cmd: &Cmd,
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<ssh::ExecOutput> {
         use std::process::Stdio;
+        let wrapped;
+        let cmd = match &self.wsl {
+            Some(wsl) => {
+                wrapped = Cmd {
+                    env: &[],
+                    argv: wsl.argv(cmd.env, &cmd.argv),
+                    // The Windows user's Herdr install directory is not on the distribution's PATH.
+                    herdr: false,
+                };
+                &wrapped
+            }
+            None => cmd,
+        };
         let (program, args) = cmd
             .argv
             .split_first()
@@ -430,6 +595,11 @@ impl LocalHost {
                     error
                 }
             })?;
+        let path = if cmd.herdr {
+            with_herdr_install(path.cloned(), crate::local::home_dir())
+        } else {
+            path.cloned()
+        };
         if let Some(path) = path {
             command.env("PATH", path);
         }
@@ -479,8 +649,11 @@ impl LocalHost {
                     ssh::check_output_budget(bytes.len() + error.len(), limit)?;
                 }
                 let status = child.wait().await?;
-                ssh::check_exit(status.code().map(|code| code as u32), &error)?;
-                Ok(bytes)
+                Ok(ssh::ExecOutput {
+                    status: status.code().map(|code| code as u32),
+                    stdout: bytes,
+                    stderr: error,
+                })
             })
             .await
             .map_err(|_| SshError::new("timeout", "Local command timed out"))?
@@ -491,6 +664,44 @@ impl LocalHost {
             let _ = child.kill().await;
         }
         result
+    }
+    /// The native path `path` names: a local path, or one read through the WSL share, where a
+    /// Windows drive path first becomes its Linux path with `wslpath`.
+    async fn locate(&self, lease: &AccessLease, path: &str) -> Result<PathBuf> {
+        let Some(wsl) = &self.wsl else {
+            return local_fs::resolve(path);
+        };
+        let linux = match wsl.locate(path)? {
+            Located::Linux(linux) => linux,
+            Located::Drive(drive) => {
+                let cmd = Cmd::new(&[], &["wslpath", "-u", "-a", &drive]);
+                wsl.translated(&self.exec(lease, &cmd, OP_TIMEOUT, 4096 + 1).await?)?
+            }
+        };
+        Ok(wsl.fs_path(&linux))
+    }
+    /// Refuses a directory a tool could not start in: before Git sees it.
+    fn check_dir(&self, dir: &str) -> Result<()> {
+        match &self.wsl {
+            None => local_fs::resolve(dir).map(drop),
+            Some(wsl) => match wsl.locate(dir)? {
+                Located::Linux(_) => Ok(()),
+                Located::Drive(_) => Err(SshError::new(
+                    "invalid_path",
+                    "Enter an absolute path such as /home/user",
+                )),
+            },
+        }
+    }
+    /// A link's target as a path of the session: a Linux path in a distribution, and an error
+    /// when the link leaves it.
+    fn logical(&self, mut stat: FileStat) -> Result<FileStat> {
+        if let (Some(wsl), Some(link)) = (&self.wsl, &stat.link) {
+            stat.link = Some(wsl.linux_path(Path::new(link)).ok_or_else(|| {
+                SshError::new("invalid_path", "The link points outside this WSL target")
+            })?);
+        }
+        Ok(stat)
     }
     async fn blocking<T: Send + 'static>(
         &self,
@@ -565,25 +776,57 @@ pub(crate) async fn local_command(program: &str) -> tokio::process::Command {
     }
     command
 }
-/// Whether `program` resolves on the PATH local commands receive.
 #[cfg(desktop)]
-pub(crate) async fn local_program(program: &str) -> bool {
-    let path = match login_path().await {
-        Some(path) => path.clone(),
-        None => std::env::var_os("PATH").unwrap_or_default(),
-    };
+fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
     let name = if cfg!(windows) {
         format!("{program}.exe")
     } else {
         program.to_owned()
     };
-    std::env::split_paths(&path).any(|directory| directory.join(&name).is_file())
+    std::env::split_paths(path).any(|directory| directory.join(&name).is_file())
+}
+/// The PATH Herdr runs with: a Herdr on the PATH always wins; otherwise its owner-checked
+/// user install directory is appended, as the remote `with_path` wrapper does.
+#[cfg(desktop)]
+fn with_herdr_install(
+    path: Option<std::ffi::OsString>,
+    home: Option<std::path::PathBuf>,
+) -> Option<std::ffi::OsString> {
+    let current = path
+        .clone()
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    if on_path(&current, "herdr") {
+        return path;
+    }
+    let Some(install) = home.and_then(|home| crate::herdr_path::local_install_dir(&home)) else {
+        return path;
+    };
+    let mut directories = std::env::split_paths(&current).collect::<Vec<_>>();
+    directories.push(install);
+    std::env::join_paths(directories).ok().or(path)
+}
+/// Whether `program` resolves on the PATH local commands receive.
+#[cfg(desktop)]
+pub(crate) async fn local_program(program: &str) -> bool {
+    let path = login_path().await.cloned();
+    let path = if program == "herdr" {
+        with_herdr_install(path, crate::local::home_dir())
+    } else {
+        path
+    };
+    on_path(
+        &path
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default(),
+        program,
+    )
 }
 
 #[cfg(desktop)]
 mod local_fs {
     use super::*;
-    use std::{fs, io::Read, path::PathBuf};
+    use std::{fs, io::Read};
 
     /// Absolute drive or POSIX paths; relative paths resolve under the home directory.
     pub(super) fn resolve(path: &str) -> Result<PathBuf> {
@@ -595,7 +838,7 @@ mod local_fs {
                 .ok_or_else(|| SshError::new("invalid_path", "The home directory is unavailable"))?
                 .join(path)
         };
-        // UNC and device namespaces stay closed; WSL paths arrive with their own target.
+        // UNC and device namespaces stay closed; a WSL target reads its own share through `Wsl`.
         #[cfg(windows)]
         if !matches!(path.components().next(), Some(std::path::Component::Prefix(prefix))
             if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
@@ -613,10 +856,10 @@ mod local_fs {
             .ok_or_else(|| SshError::new("home_unavailable", "The home directory is unavailable"))
             .and_then(ssh::absolute_home)
     }
-    pub(super) fn list(path: &str) -> Result<Vec<FileEntry>> {
+    pub(super) fn list(path: &Path) -> Result<Vec<FileEntry>> {
         let mut entries = Vec::new();
         let mut name_bytes = 0usize;
-        for entry in fs::read_dir(resolve(path)?)? {
+        for entry in fs::read_dir(path)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             name_bytes += name.len();
@@ -631,13 +874,12 @@ mod local_fs {
         ssh::sort_entries(&mut entries);
         Ok(entries)
     }
-    pub(super) fn stat(path: &str) -> Result<FileStat> {
-        let path = resolve(path)?;
-        let own = fs::symlink_metadata(&path)?;
+    pub(super) fn stat(path: &Path) -> Result<FileStat> {
+        let own = fs::symlink_metadata(path)?;
         let (metadata, link) = if own.file_type().is_symlink() {
-            let resolved = fs::canonicalize(&path)?;
+            let resolved = fs::canonicalize(path)?;
             (
-                fs::metadata(&path)?,
+                fs::metadata(path)?,
                 Some(resolved.to_string_lossy().into_owned()),
             )
         } else {
@@ -653,9 +895,8 @@ mod local_fs {
         Ok(FileStat::new(kind, Some(metadata.len()), link))
     }
     /// A regular file and its size; a symbolic link is refused unless `follow_link`.
-    pub(super) fn open_regular(path: &str, follow_link: bool) -> Result<(fs::File, u64)> {
-        let path = resolve(path)?;
-        let metadata = fs::symlink_metadata(&path)?;
+    pub(super) fn open_regular(path: &Path, follow_link: bool) -> Result<(fs::File, u64)> {
+        let metadata = fs::symlink_metadata(path)?;
         if metadata.file_type().is_symlink() {
             if !follow_link {
                 return Err(unconfirmed_link());
@@ -676,14 +917,125 @@ mod local_fs {
             &mut options,
             if follow_link { 0 } else { 0x0020_0000 }, // FILE_FLAG_OPEN_REPARSE_POINT
         );
-        let file = options.open(&path)?;
+        let file = options.open(path)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() {
             return Err(not_regular());
         }
         Ok((file, metadata.len()))
     }
-    pub(super) fn read(path: &str, limit: u64) -> Result<Vec<u8>> {
+    /// A new file that never replaces one. Temporary files are owner-only in the shared
+    /// temporary directory; the path comes back with `/` separators, as uploads report it.
+    pub(super) fn create_new(destination: Destination, data: &[u8]) -> Result<String> {
+        use std::io::Write;
+        if data.len() > ssh::UPLOAD_LIMIT {
+            return Err(SshError::new(
+                "file_too_large",
+                "Upload is limited to 10 MiB",
+            ));
+        }
+        let (path, private) = match destination {
+            Destination::Path(path) => {
+                ssh::bounded(&path)?;
+                (resolve(&path)?, false)
+            }
+            Destination::Temporary(name) => (
+                temporary_directory().join(ssh::temporary_name(&name)?),
+                true,
+            ),
+        };
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        let mut file = options.open(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                SshError::new(
+                    "file_exists",
+                    "A file already exists there; uploads never replace files",
+                )
+            } else {
+                error.into()
+            }
+        })?;
+        let path = path
+            .into_os_string()
+            .into_string()
+            .map_err(|_| SshError::new("invalid_path", "The file path is not valid UTF-8"))?;
+        // Confirm privacy before any byte reaches a directory other accounts can list.
+        if private {
+            if let Err(error) = keep_private(&file) {
+                drop(file);
+                // Nothing was written yet: remove the empty file this upload created exclusively.
+                return Err(match fs::remove_file(&path) {
+                    Ok(()) => error,
+                    Err(_) => SshError::new(
+                        "upload_not_private",
+                        format!(
+                            "{}. An empty new file may remain at {path}.",
+                            error.message()
+                        ),
+                    ),
+                });
+            }
+        }
+        file.write_all(data).map_err(|error| {
+            SshError::new(
+                "upload_failed",
+                format!("{error}. A partial new file may remain at {path}."),
+            )
+        })?;
+        Ok(if cfg!(windows) {
+            path.replace('\\', "/")
+        } else {
+            path
+        })
+    }
+    fn temporary_directory() -> PathBuf {
+        // `/tmp` as on every remote host; Windows uses the per-user %TEMP%.
+        #[cfg(unix)]
+        if std::path::Path::new("/tmp").is_dir() {
+            return PathBuf::from("/tmp");
+        }
+        std::env::temp_dir()
+    }
+    /// Restricts a new file to its owner and verifies it. Windows relies on the per-user %TEMP% ACL.
+    #[cfg(unix)]
+    pub(super) fn keep_private(file: &fs::File) -> Result<()> {
+        keep_private_with(file, |file| {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+        })
+    }
+    /// `restrict` is how the file is made owner-only; a filesystem that ignores it fails the check.
+    #[cfg(unix)]
+    pub(super) fn keep_private_with(
+        file: &fs::File,
+        restrict: impl FnOnce(&fs::File),
+    ) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let exposed = || {
+            file.metadata()
+                .map_or(true, |metadata| metadata.permissions().mode() & 0o077 != 0)
+        };
+        if exposed() {
+            restrict(file);
+        }
+        if exposed() {
+            return Err(SshError::new(
+                "upload_not_private",
+                "This device could not make the temporary attachment private",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    pub(super) fn keep_private(_: &fs::File) -> Result<()> {
+        Ok(())
+    }
+    pub(super) fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
         // Previews have always reported a link as "not a regular file".
         let (file, _) = open_regular(path, false).map_err(|error| {
             if error.kind() == "symlink_unconfirmed" {
@@ -700,4 +1052,4 @@ mod local_fs {
 
 #[cfg(all(test, desktop))]
 #[path = "host_tests.rs"]
-mod tests;
+pub(crate) mod tests;

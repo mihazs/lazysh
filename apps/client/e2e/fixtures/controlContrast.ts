@@ -1,9 +1,9 @@
 /**
  * Rendered text contrast for the controls and copy inside `element`.
- * With `isolate`, compositing stops at `element` and the worst of an opaque black and
+ * `selector` replaces the default set of text elements. With `isolate`, compositing stops at `element` and the worst of an opaque black and
  * white underlay is reported, which bounds whatever a translucent glass surface floats over.
  */
-export function controlContrast(element: Element, options: {isolate?: boolean} = {}) {
+export function controlContrast(element: Element, options: {isolate?: boolean; selector?: string} = {}) {
   const context = document.createElement('canvas').getContext('2d')!;
   function rgba(color: string) {
     context.clearRect(0, 0, 1, 1);
@@ -19,7 +19,7 @@ export function controlContrast(element: Element, options: {isolate?: boolean} =
     const alpha=front[3]+back[3]*(1-front[3]);
     return [...front.slice(0,3).map((channel,index)=>alpha ? (channel*front[3]+back[index]*back[3]*(1-front[3]))/alpha : 0),alpha];
   }
-  return Array.from(element.querySelectorAll('h2, p, label, input:not([type=checkbox]), select, button')).filter(child => child.checkVisibility() && getComputedStyle(child).opacity === '1').map(child => {
+  return Array.from(element.querySelectorAll(options.selector ?? 'h2, p, label, input:not([type=checkbox]), select, button')).filter(child => child.checkVisibility() && getComputedStyle(child).opacity === '1').map(child => {
     let background = [0,0,0,0],foreground=rgba(getComputedStyle(child).color);
     // Each ancestor paints behind its child, then applies opacity to that group.
     for (let node: Element | null = child; node; node = node.parentElement) {

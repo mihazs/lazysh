@@ -274,21 +274,31 @@ async fn chunk_order_size_quota_expiry_and_incomplete_finish_are_enforced() {
     assert!(state.uploads.lock().await.is_empty());
 }
 
+async fn upload(
+    fixture: &Fixture,
+    state: &ShareState,
+    name: &str,
+    mime: &str,
+    data: &[u8],
+) -> Created {
+    let id = insert(
+        &mut *state.uploads.lock().await,
+        fixture.enrollment(),
+        name.into(),
+        mime.into(),
+        data.len(),
+        3600,
+    )
+    .unwrap();
+    chunk(&mut *state.uploads.lock().await, &id, 0, data).unwrap();
+    finish(state, id, fixture.client.clone()).await.unwrap()
+}
+
 #[tokio::test]
 async fn actual_https_upload_history_and_delete_work_without_exposing_management_token() {
     let fixture = Fixture::new(None).await;
     let state = ShareState::default();
-    let id = insert(
-        &mut *state.uploads.lock().await,
-        fixture.enrollment(),
-        "hello🌲.txt".into(),
-        "text/plain".into(),
-        5,
-        3600,
-    )
-    .unwrap();
-    chunk(&mut *state.uploads.lock().await, &id, 0, b"hello").unwrap();
-    let result = finish(&state, id, fixture.client.clone()).await.unwrap();
+    let result = upload(&fixture, &state, "hello🌲.txt", "text/plain", b"hello").await;
     assert_eq!(result.share.name, "hello🌲.txt");
     assert_eq!(result.share.size, 5);
     assert!(!serde_json::to_string(&result).unwrap().contains(TOKEN));
@@ -311,6 +321,33 @@ async fn actual_https_upload_history_and_delete_work_without_exposing_management
             .shares
             .is_empty()
     );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn real_service_returns_the_uploaded_image_for_a_thumbnail_until_it_is_deleted() {
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(RgbImage::from_pixel(40, 20, Rgb([20, 80, 140])))
+        .write_to(&mut encoded, ImageFormat::Png)
+        .unwrap();
+    let image = encoded.into_inner();
+    let fixture = Fixture::new(None).await;
+    let state = ShareState::default();
+    let created = upload(&fixture, &state, "swatch.png", "image/png", &image).await;
+    let enrollment = fixture.enrollment();
+    let fetch = || thumbnail_bytes(fixture.client.clone(), &enrollment, &created.share.id);
+    let downloaded = fetch().await.unwrap();
+    assert_eq!(downloaded, image);
+    let preview = thumbnail(&downloaded).unwrap();
+    assert_eq!(
+        (preview.mime, preview.width, preview.height),
+        ("image/png", 40, 20)
+    );
+    delete(fixture.client.clone(), &enrollment, &created.share.id)
+        .await
+        .unwrap();
+    assert!(fetch().await.unwrap_err().contains("expired, was deleted"));
     fixture.stop().await;
 }
 

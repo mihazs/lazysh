@@ -1,5 +1,5 @@
 //! Real local sessions: `test:local` selects these through the `local::` path segment.
-mod local {
+pub(crate) mod local {
     use crate::{
         app_lock::{AccessLease, AccessState, Guarded, GuardedError},
         host::{Cmd, Host},
@@ -17,7 +17,7 @@ mod local {
 
     type Answer<T> = std::result::Result<Guarded<T>, GuardedError<SshError>>;
     // Boxed before awaiting: the command futures are too large for a test thread's stack in debug.
-    fn ok<T>(answer: impl Future<Output = Answer<T>>) -> impl Future<Output = T> {
+    pub(crate) fn ok<T>(answer: impl Future<Output = Answer<T>>) -> impl Future<Output = T> {
         let answer = Box::pin(answer);
         async move {
             match answer.await {
@@ -35,7 +35,7 @@ mod local {
             }
         }
     }
-    fn lease() -> AccessLease {
+    pub(crate) fn lease() -> AccessLease {
         AccessState::disabled().lease(None).unwrap()
     }
     async fn app(directory: &Path) -> (App<MockRuntime>, String) {
@@ -44,6 +44,54 @@ mod local {
         app.manage(LocalState::default());
         let id = adopted_test_session(&app.state::<LocalState>(), lease()).await;
         (app, id)
+    }
+    /// A temporary home for real tmux, Zellij and Herdr state. Host-tool commands of a session
+    /// from [`Isolated::session`] and the test's own [`Isolated::command`]s see only this
+    /// directory, never the user's multiplexers or their configuration.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) struct Isolated(tempfile::TempDir);
+    #[cfg_attr(not(unix), allow(dead_code))]
+    impl Isolated {
+        pub(crate) fn new() -> Self {
+            Self(tempfile::tempdir().unwrap())
+        }
+        pub(crate) fn path(&self) -> &Path {
+            self.0.path()
+        }
+        fn variables(&self) -> Vec<(String, String)> {
+            [
+                "HOME",
+                "TMUX_TMPDIR",
+                "XDG_RUNTIME_DIR",
+                "XDG_CACHE_HOME",
+                "XDG_CONFIG_HOME",
+            ]
+            .map(|name| (name.to_owned(), path(self.path())))
+            .into_iter()
+            .chain([("TERM".to_owned(), "xterm-256color".to_owned())])
+            .collect()
+        }
+        /// An adopted local session, with its application state beside the isolated home.
+        pub(crate) async fn session(&self) -> (App<MockRuntime>, String) {
+            let (app, id) = app(self.path()).await;
+            app.state::<LocalState>().set_test_env(self.variables());
+            (app, id)
+        }
+        /// A program started as the session's host tools start one, for setup and teardown.
+        pub(crate) fn command(&self, program: &str) -> Command {
+            let mut command = Command::new(program);
+            command.envs(self.variables());
+            for name in [
+                "TMUX",
+                "ZELLIJ",
+                "ZELLIJ_SESSION_NAME",
+                "HERDR_SOCKET_PATH",
+                "HERDR_SESSION",
+            ] {
+                command.env_remove(name);
+            }
+            command
+        }
     }
     /// A live local session resolved through the host context.
     async fn resolved() -> (tempfile::TempDir, App<MockRuntime>, String, Host) {
@@ -603,6 +651,23 @@ mod local {
         assert_eq!(result.unwrap_err().kind(), "disconnected");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_run_status_returns_a_failing_exit_as_data_where_run_refuses_it() {
+        let (_temp, _app, _id, host) = resolved().await;
+        let access = lease();
+        let command = Cmd::new(&[], &["sh", "-c", "echo out; echo problem >&2; exit 3"]);
+        let output = host.run_status(&access, &command).await.unwrap();
+        assert_eq!(output.status, Some(3));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"problem\n");
+        let refused = host.run(&access, &command).await.unwrap_err();
+        assert_eq!(
+            (refused.kind(), refused.message()),
+            ("remote_command_failed", "problem")
+        );
+    }
+
     #[tokio::test]
     async fn local_exec_is_cancelled_by_closing_the_session() {
         let (_temp, app, id, host) = resolved().await;
@@ -692,5 +757,595 @@ mod local {
             .await
             .unwrap();
         assert!(version.starts_with("git version"), "{version}");
+    }
+
+    /// Removes what a test created outside its temporary directory, even when it fails.
+    struct Remove(Vec<String>);
+    impl Drop for Remove {
+        fn drop(&mut self) {
+            for file in &self.0 {
+                let _ = fs::remove_file(file);
+            }
+        }
+    }
+    async fn upload(
+        app: &App<MockRuntime>,
+        id: &str,
+        name: &str,
+        data: &[u8],
+        temporary: bool,
+    ) -> Answer<crate::attachment_upload::Uploaded> {
+        let reserved = ok(crate::attachment_upload::upload_reserve(
+            lease(),
+            app.state(),
+            app.state(),
+            id.into(),
+            data.len(),
+        ))
+        .await;
+        crate::attachment_upload::upload_file(
+            lease(),
+            app.state(),
+            app.state(),
+            id.into(),
+            reserved.upload_id,
+            name.into(),
+            data.to_vec(),
+            Some(temporary),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn local_uploads_create_private_distinct_files_and_never_replace_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let (app, id) = app(temp.path()).await;
+        let first = ok(upload(&app, &id, "shot.png", b"one", true)).await.path;
+        let second = ok(upload(&app, &id, "shot.png", b"two", true)).await.path;
+        let _remove = Remove(vec![first.clone(), second.clone()]);
+        assert_ne!(first, second);
+        let shared = if cfg!(unix) {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        for (created, content) in [(&first, b"one"), (&second, b"two")] {
+            let created = Path::new(created);
+            assert_eq!(created.parent().unwrap(), shared);
+            let name = created.file_name().unwrap().to_str().unwrap();
+            assert!(
+                name.starts_with("lazysh-") && name.ends_with("-shot.png"),
+                "{name}"
+            );
+            assert_eq!(fs::read(created).unwrap(), content);
+            #[cfg(unix)]
+            assert_eq!(
+                std::os::unix::fs::PermissionsExt::mode(
+                    &fs::metadata(created).unwrap().permissions()
+                ) & 0o777,
+                0o600
+            );
+        }
+        // An explicit path is created once and never replaced.
+        let explicit = temp.path().join("explicit.txt");
+        let uploaded = ok(upload(&app, &id, &path(&explicit), b"keep", false))
+            .await
+            .path;
+        assert_eq!(Path::new(&uploaded), explicit);
+        assert_eq!(
+            kind(upload(&app, &id, &path(&explicit), b"replace", false)).await,
+            "file_exists"
+        );
+        assert_eq!(fs::read(&explicit).unwrap(), b"keep");
+        // A dangling link is a name in use: it is neither followed nor replaced.
+        #[cfg(unix)]
+        {
+            let missing = temp.path().join("missing.txt");
+            let link = temp.path().join("link.txt");
+            std::os::unix::fs::symlink(&missing, &link).unwrap();
+            assert_eq!(
+                kind(upload(&app, &id, &path(&link), b"x", false)).await,
+                "file_exists"
+            );
+            assert!(!missing.exists());
+        }
+        // Names are one file name, and a closed session takes no more uploads.
+        assert_eq!(
+            kind(upload(&app, &id, "folder/shot.png", b"x", true)).await,
+            "invalid_path"
+        );
+        local_disconnect(app.state(), id.clone()).unwrap();
+        assert_eq!(
+            kind(crate::attachment_upload::upload_reserve(
+                lease(),
+                app.state(),
+                app.state(),
+                id,
+                1
+            ))
+            .await,
+            "disconnected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_filesystem_that_ignores_chmod_never_receives_a_private_attachment() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let temp = tempfile::tempdir().unwrap();
+        let create = |name: &str| {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o666)
+                .open(temp.path().join(name))
+                .unwrap();
+            file.set_permissions(fs::Permissions::from_mode(0o644))
+                .unwrap();
+            file
+        };
+        let exposed = create("exposed");
+        let refused = crate::host::local_fs::keep_private_with(&exposed, |_| {});
+        assert_eq!(refused.unwrap_err().kind(), "upload_not_private");
+        let repaired = create("repaired");
+        crate::host::local_fs::keep_private(&repaired).unwrap();
+        assert_eq!(
+            repaired.metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    /// An HTTP server on this device's loopback that answers every request with `local`.
+    async fn http_listener(address: &str) -> Option<u16> {
+        let server = tokio::net::TcpListener::bind((address, 0)).await.ok()?;
+        let port = server.local_addr().ok()?.port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut socket, _)) = server.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nlocal",
+                        )
+                        .await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        Some(port)
+    }
+    async fn get(port: u16) -> std::io::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        socket
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await?;
+        let mut answer = String::new();
+        socket.read_to_string(&mut answer).await?;
+        Ok(answer)
+    }
+    async fn refuses(port: u16) -> bool {
+        for _ in 0..50 {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err()
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn local_previews_proxy_http_report_discovery_and_stop_with_the_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let (app, id) = app(temp.path()).await;
+        app.manage(crate::previews::PreviewState::default());
+        let port = http_listener("127.0.0.1").await.unwrap();
+        // Hosts without IPv6 loopback skip the second family.
+        let v6 = http_listener("::1").await;
+        let wanted: Vec<u16> = [Some(port), v6].into_iter().flatten().collect();
+        let listeners = ok(crate::previews::discover_preview_ports(
+            lease(),
+            app.state(),
+            app.state(),
+            id.clone(),
+            Some(wanted.clone()),
+            Some(true),
+        ))
+        .await;
+        let found = serde_json::to_value(listeners).unwrap();
+        let found = found.as_array().unwrap();
+        assert_eq!(found.len(), wanted.len(), "{found:?}");
+        for row in found {
+            assert_eq!(row["http"], true, "{row}");
+        }
+        assert!(found
+            .iter()
+            .any(|row| row["port"] == port && row["address"] == "127.0.0.1"));
+        if let Some(v6) = v6 {
+            assert!(found
+                .iter()
+                .any(|row| row["port"] == v6 && row["address"] == "[::1]"));
+        }
+        // A preview is a fresh loopback port in front of the dev server, which keeps its own.
+        let start = || {
+            crate::previews::start_preview(
+                lease(),
+                app.state(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                port,
+                None,
+                None,
+            )
+        };
+        let first = serde_json::to_value(ok(start()).await).unwrap();
+        let second = serde_json::to_value(ok(start()).await).unwrap();
+        let proxied = |preview: &serde_json::Value| preview["localPort"].as_u64().unwrap() as u16;
+        assert_ne!(proxied(&first), port);
+        assert_ne!(proxied(&first), proxied(&second));
+        assert!(get(proxied(&first)).await.unwrap().ends_with("local"));
+        assert!(get(port).await.unwrap().ends_with("local"));
+        let listed = ok(crate::previews::list_previews(
+            lease(),
+            app.state(),
+            app.state(),
+            app.state(),
+            id.clone(),
+        ))
+        .await;
+        assert_eq!(listed.len(), 2);
+        crate::previews::stop_preview(
+            app.state(),
+            id.clone(),
+            first["id"].as_str().unwrap().into(),
+        )
+        .await
+        .unwrap();
+        assert!(refuses(proxied(&first)).await);
+        assert!(get(proxied(&second)).await.unwrap().ends_with("local"));
+        // Closing the session stops the proxy that is left.
+        local_disconnect(app.state(), id).unwrap();
+        assert!(refuses(proxied(&second)).await);
+        assert!(get(port).await.unwrap().ends_with("local"));
+    }
+
+    /// A WSL session on a machine without WSL: `wsl.exe` is a script that checks the argument
+    /// shape, runs the command from the home directory and answers `wslpath`, and the share root
+    /// is `/`, so every Linux path of the "distribution" is a path of this machine.
+    #[cfg(unix)]
+    mod wsl {
+        use super::*;
+        use crate::local::Wsl;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn script(path: &Path, text: &str) -> PathBuf {
+            fs::write(path, text).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_owned()
+        }
+        /// Written once: executing a script that another test is still writing fails with
+        /// "text file busy". A session passes `WSL_LOG` and `WSL_DRIVE` in its environment.
+        fn fake_wsl() -> PathBuf {
+            static SCRIPT: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
+                std::sync::OnceLock::new();
+            SCRIPT
+                .get_or_init(|| {
+                    let dir = tempfile::tempdir().unwrap();
+                    let path = script(
+                        &dir.path().join("wsl.exe"),
+                        r#"#!/bin/sh
+{ for argument in "$@"; do printf '%s\n' "$argument"; done; echo --; } >> "${WSL_LOG:-/dev/null}"
+[ "$1 $2 $3 $4 $5" = '-d Ubuntu --cd ~ -e' ] || { echo "unexpected wsl.exe arguments: $*" >&2; exit 2; }
+shift 5
+cd "$HOME" || exit 3
+if [ "$1" = wslpath ]; then
+  [ "$2 $3" = '-u -a' ] || exit 4
+  printf '%s%s\n' "$WSL_DRIVE" "$(printf '%s' "$4" | cut -c3- | tr '\\' '/')"
+  exit 0
+fi
+exec "$@"
+"#,
+                    );
+                    (dir, path)
+                })
+                .1
+                .clone()
+        }
+        fn log(dir: &Path) -> String {
+            fs::read_to_string(dir.join("wsl.log")).unwrap_or_default()
+        }
+        /// The environment the fake `wsl.exe` of a session in `dir` reads.
+        fn environment(dir: &Path) -> Vec<(String, String)> {
+            vec![
+                ("WSL_LOG".into(), path(&dir.join("wsl.log"))),
+                ("WSL_DRIVE".into(), path(&dir.join("c"))),
+            ]
+        }
+        async fn session(root: &str) -> (tempfile::TempDir, App<MockRuntime>, String) {
+            let temp = tempfile::tempdir().unwrap();
+            let wsl = Wsl::with_root(fake_wsl(), "Ubuntu", PathBuf::from(root));
+            let (app, id) = app(temp.path()).await;
+            app.state::<LocalState>().bind_wsl(&id, wsl);
+            app.state::<LocalState>()
+                .set_test_env(environment(temp.path()));
+            (temp, app, id)
+        }
+        async fn host(app: &App<MockRuntime>, id: &str) -> Host {
+            Host::resolve(&app.state(), &app.state(), id, &lease())
+                .await
+                .unwrap()
+        }
+
+        #[tokio::test]
+        async fn every_command_runs_through_wsl_exe_from_the_home_directory_with_its_environment() {
+            let (temp, app, id) = session("/").await;
+            let host = host(&app, &id).await;
+            static ENVIRONMENT: [(&str, &str); 1] = [("LAZYSH_FROM_COMMAND", "a b; $(x)")];
+            let printed = Box::pin(host.run(
+                &lease(),
+                &Cmd::new(&ENVIRONMENT, &["printenv", "LAZYSH_FROM_COMMAND"]),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(printed, "a b; $(x)\n");
+            // No shell sits between lazysh and the program, so no argument is split or expanded.
+            let printed = Box::pin(host.run(
+                &lease(),
+                &Cmd::new(&[], &["printf", "%s|", "a b", "c;d", "$HOME", "`x`"]),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(printed, "a b|c;d|$HOME|`x`|");
+            // The argument list wsl.exe received, one argument per line.
+            assert!(
+                log(temp.path()).starts_with(
+                    "-d\nUbuntu\n--cd\n~\n-e\nenv\nLAZYSH_FROM_COMMAND=a b; $(x)\nprintenv\nLAZYSH_FROM_COMMAND\n--\n-d\nUbuntu\n--cd\n~\n-e\nprintf\n%s|\na b\n"
+                ),
+                "{}",
+                log(temp.path())
+            );
+            // The home directory is the distribution user's, reported as the command ran in it.
+            let home = Box::pin(host.home(&lease())).await.unwrap();
+            assert_eq!(
+                fs::canonicalize(home).unwrap(),
+                fs::canonicalize(crate::local::home_dir().unwrap()).unwrap()
+            );
+            // The Windows companion cannot serve a distribution.
+            let companion = Box::pin(host.companion(&lease(), "lazysh-agent snapshot".into()))
+                .await
+                .unwrap_err();
+            assert_eq!(companion.kind(), "remote_command_failed");
+            // Uploads and previews would act on Windows, not in the distribution.
+            for what in ["Attachments", "Previews"] {
+                let refused = host.refuse_in_wsl(what).unwrap_err();
+                assert_eq!(refused.kind(), "remote_command_failed");
+                assert!(refused.message().contains(what), "{}", refused.message());
+            }
+        }
+
+        #[tokio::test]
+        async fn files_and_a_repository_diff_are_read_inside_the_distribution() {
+            let (temp, app, id) = session("/").await;
+            let files = temp.path().join("my files & 100%");
+            fs::create_dir_all(files.join("folder")).unwrap();
+            fs::write(files.join("note.txt"), "hello 世界").unwrap();
+            let list = |directory: &Path| {
+                crate::ssh::list_directory(
+                    lease(),
+                    app.state(),
+                    app.state(),
+                    id.clone(),
+                    path(directory),
+                )
+            };
+            let names = ok(list(&files))
+                .await
+                .into_iter()
+                .map(|entry| (entry.name, entry.is_dir))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                [("folder".to_owned(), true), ("note.txt".to_owned(), false)]
+            );
+            let read = crate::ssh::read_file(
+                lease(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                path(&files.join("note.txt")),
+            );
+            assert_eq!(ok(read).await, "hello 世界");
+
+            let repository = temp.path().join("repo");
+            fs::create_dir(&repository).unwrap();
+            git(&repository, &["init", "-q"]);
+            git(&repository, &["config", "user.name", "Wsl Test"]);
+            git(
+                &repository,
+                &["config", "user.email", "wsl@example.invalid"],
+            );
+            fs::write(repository.join("tracked.txt"), "before\n").unwrap();
+            git(&repository, &["add", "--", "."]);
+            git(&repository, &["commit", "-qm", "first"]);
+            fs::write(repository.join("tracked.txt"), "after\n").unwrap();
+            let directory = path(&repository);
+            let status = serde_json::to_value(
+                ok(crate::repository::repository_status(
+                    app.state(),
+                    app.state(),
+                    id.clone(),
+                    directory.clone(),
+                    lease(),
+                ))
+                .await,
+            )
+            .unwrap();
+            assert_eq!(status["changes"][0]["path"], "tracked.txt");
+            assert_eq!(status["changes"][0]["worktree"], "M");
+            let diff = serde_json::to_value(
+                ok(crate::repository::repository_diff(
+                    app.state(),
+                    app.state(),
+                    id.clone(),
+                    status["path"].as_str().unwrap().to_owned(),
+                    "tracked.txt".to_owned(),
+                    false,
+                    lease(),
+                ))
+                .await,
+            )
+            .unwrap();
+            assert!(diff.to_string().contains("+after"), "{diff}");
+            // Git ran inside the distribution, not on this machine.
+            assert!(log(temp.path()).contains("-e\nenv\nGIT_OPTIONAL_LOCKS=0\n"));
+        }
+
+        #[tokio::test]
+        async fn only_this_distributions_paths_are_read_and_a_drive_path_is_translated_by_wslpath()
+        {
+            let (temp, app, id) = session("/").await;
+            let note = temp.path().join("c").join("data").join("note.txt");
+            fs::create_dir_all(note.parent().unwrap()).unwrap();
+            fs::write(&note, "from the drive").unwrap();
+            fs::write(temp.path().join("plain.txt"), "plain").unwrap();
+            let read = |file: String| {
+                crate::ssh::read_file(lease(), app.state(), app.state(), id.clone(), file)
+            };
+            let plain = path(&temp.path().join("plain.txt"));
+            assert_eq!(ok(read(plain.clone())).await, "plain");
+            let unc = format!(r"\\wsl.localhost\Ubuntu{}", plain.replace('/', r"\"));
+            assert_eq!(ok(read(unc)).await, "plain");
+            assert_eq!(ok(read(r"C:\data\note.txt".into())).await, "from the drive");
+            assert!(log(temp.path()).contains("-e\nwslpath\n-u\n-a\nC:\\data\\note.txt\n"));
+            let spawned = log(temp.path());
+
+            for refused in [
+                r"\\server\share\plain.txt".to_owned(),
+                r"\\wsl.localhost\Debian\tmp\plain.txt".to_owned(),
+                r"\\?\C:\Windows\win.ini".to_owned(),
+                r"\\.\pipe\lazysh".to_owned(),
+                format!("{}/../plain.txt", path(&temp.path().join("c"))),
+                r"C:\data\..\..\Windows\win.ini".to_owned(),
+                "plain.txt".to_owned(),
+            ] {
+                assert_eq!(
+                    kind(read(refused.clone())).await,
+                    "invalid_path",
+                    "{refused}"
+                );
+            }
+            // A directory for Git is a Linux path of the distribution.
+            let status = crate::repository::repository_status(
+                app.state(),
+                app.state(),
+                id.clone(),
+                r"C:\data".into(),
+                lease(),
+            );
+            assert_eq!(kind(status).await, "invalid_path");
+            // Refusals never reach wsl.exe.
+            assert_eq!(log(temp.path()), spawned);
+        }
+
+        #[tokio::test]
+        async fn a_link_resolves_to_a_path_of_the_distribution_and_never_outside_it() {
+            let temp = tempfile::tempdir().unwrap();
+            let share = temp.path().join("share");
+            fs::create_dir_all(share.join("home/me")).unwrap();
+            fs::write(share.join("home/me/target.txt"), "target").unwrap();
+            std::os::unix::fs::symlink(
+                share.join("home/me/target.txt"),
+                share.join("home/me/inside"),
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(temp.path(), share.join("home/me/outside")).unwrap();
+            let (app, id) = app(temp.path()).await;
+            let wsl = Wsl::with_root(fake_wsl(), "Ubuntu", share);
+            app.state::<LocalState>().bind_wsl(&id, wsl);
+            let host = host(&app, &id).await;
+            let stat = Box::pin(host.stat_file(&lease(), "/home/me/inside".into()))
+                .await
+                .unwrap();
+            assert_eq!(stat.link.as_deref(), Some("/home/me/target.txt"));
+            let stat = Box::pin(host.stat_file(&lease(), "/home/me/outside".into()))
+                .await
+                .unwrap_err();
+            assert_eq!(stat.kind(), "invalid_path");
+        }
+
+        #[tokio::test]
+        async fn a_distribution_reports_files_and_repository_only_when_git_starts_inside_it() {
+            let temp = tempfile::tempdir().unwrap();
+            let working = Wsl::with_root(fake_wsl(), "Ubuntu", PathBuf::from("/"));
+            let reported = serde_json::to_value(working.tools().await).unwrap();
+            assert_eq!(
+                reported,
+                serde_json::json!({"files": true, "repository": true, "companion": false, "companionSource": null, "attachments": false, "previews": false})
+            );
+            // `wsl.exe` fails when the distribution has no `git`.
+            let missing = script(&temp.path().join("no-git.exe"), "#!/bin/sh\nexit 1\n");
+            let reported = Wsl::with_root(missing, "Ubuntu", PathBuf::from("/"))
+                .tools()
+                .await;
+            assert_eq!(
+                serde_json::to_value(reported).unwrap(),
+                serde_json::json!({"files": false, "repository": false, "companion": false, "companionSource": null, "attachments": false, "previews": false})
+            );
+        }
+    }
+}
+
+/// Herdr is found on the PATH first and in its owner-checked user install directory last.
+#[cfg(unix)]
+mod herdr_install {
+    use crate::host::with_herdr_install;
+    use std::{ffi::OsString, fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    fn install(home: &std::path::Path) -> PathBuf {
+        let directory = home.join(".local/bin");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("herdr"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(directory.join("herdr"), fs::Permissions::from_mode(0o755)).unwrap();
+        directory
+    }
+
+    #[test]
+    fn the_user_install_directory_comes_after_the_path_and_a_path_hit_wins() {
+        let temp = tempfile::tempdir().unwrap();
+        // The admission walk refuses symbolic links, and some temporary roots are one.
+        let home = fs::canonicalize(temp.path()).unwrap();
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        let (empty, found) = (home.join("empty"), home.join("found"));
+        fs::create_dir_all(&found).unwrap();
+        fs::create_dir_all(&empty).unwrap();
+        fs::write(found.join("herdr"), "").unwrap();
+        let join = |directories: &[&std::path::Path]| std::env::join_paths(directories).unwrap();
+        // No install yet: the PATH is returned as it was.
+        assert_eq!(
+            with_herdr_install(Some(join(&[&empty])), Some(home.clone())),
+            Some(join(&[&empty]))
+        );
+        let directory = install(&home);
+        assert_eq!(
+            with_herdr_install(Some(join(&[&empty])), Some(home.clone())),
+            Some(join(&[&empty, &directory]))
+        );
+        let on_path: Option<OsString> = Some(join(&[&found, &empty]));
+        assert_eq!(
+            with_herdr_install(on_path.clone(), Some(home.clone())),
+            on_path
+        );
+        // A group-writable install directory is not trusted.
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o775)).unwrap();
+        assert_eq!(
+            with_herdr_install(Some(join(&[&empty])), Some(home)),
+            Some(join(&[&empty]))
+        );
     }
 }

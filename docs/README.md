@@ -60,18 +60,22 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Planned native Agent view: co-existence rules, data model and per-agent capabilities | [Agent view](agent-view.md) |
 | Agent view load performance: method, fixtures, baseline and budgets (desktop only; no phone number yet) | [Agent view performance](reference/agent-view-performance.md) |
 | Agent view parity: every agent screen element, reference apps, status and open gaps | [Agent view parity](reference/agent-view-parity.md) |
+| Agent view design: the brief, the rules and the type, spacing and colour scale of the Agent view | [Agent view design](reference/agent-view-design.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
+| Explicit install and removal of the optional managed Herdr over SSH: target choice, fixed path, checks, refusals and what is not claimed | [Managed Herdr install and removal](herdr-managed-install.md) |
 | Planned host browser: requirements, opt-in and launch model, threat model, input mapping and milestones | [Host browser](host-browser.md) |
+| Sign-in callbacks on the host's `localhost` that the terminal scanner reports: evidence, limits and event shape | [Sign-in hints](reference/auth-hints.md) |
 | Planned terminal adapter contract, platform matrix, benchmark design and the measured desktop xterm.js baseline (no device or native-candidate measurements yet) | [TerminalAdapter](architecture/terminal-adapter.md) · [Platform integration](architecture/platform-integration.md) · [Terminal benchmarks](architecture/terminal-benchmarks.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |
 | Theme QR evidence and platform acceptance status | [Theme QR acceptance](theme-qr-acceptance.md) |
 | Planned sign-in tunnel and device browser: settings, schemas, limits | [Sign-in tunnel contracts](reference/auth-tunnel.md) |
 | What `aws`, `gcloud`, `az`, `gh`, `claude`, `codex` and other login commands do: callback or device code, launchers, listeners | [Observed sign-in flows](reference/sso-login-flows.md) |
-| Host device Android SDK acceptance | [Device acceptance](reference/devices-acceptance.md) |
+| Host device Android SDK and iOS Simulator idb acceptance | [Device acceptance](reference/devices-acceptance.md) |
 | Attachment destination paths, cancellation and transfer limits | [Attachment transfer](reference/attachments.md) |
 | Sync categories, conflict behavior and cryptography | [Encrypted sync](reference/sync.md) |
+| Confirming a sign-in callback against the host's listeners: states, age rule and fallback | [Sign-in listener check](reference/auth-listeners.md) |
 | Sharing service HTTP contract and verification boundary | [Sharing service](reference/sharing-service.md) |
 | Transcription API, quotas and resource bounds | [Transcription relay](reference/cloud-transcription.md) |
 | Theme rendering and QR processing bounds | [Theme rendering](reference/theme-rendering.md) · [Theme QR processing](reference/theme-qr.md) |
@@ -96,7 +100,8 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Why and how the companion updates on the host: trust model, `lazysh-agent update` contract, bootstrap, rollback and auto-update (planned) | [ADR 0003](architecture/adr-0003-host-side-companion-update.md) |
 | How a sign-in's `localhost` callback reaches the device, why the redirect is never rewritten, and how host browser requests open on the device (planned) | [ADR 0004](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) |
 | How and why the host records quota samples while no app is open (opt-in, bounded, timer-driven) and how a host forbids account quota reads | [ADR 0005](architecture/adr-0005-background-usage-collection.md) |
-| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Linux surface composition PoC](architecture/linux-surface-composition-poc.md) · [Windows, macOS and iOS surface strategies](architecture/windows-macos-ios-surface-strategies.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
+| Why and under which measured conditions CI checks run through Dagger | [ADR 0006](architecture/adr-0006-dagger-for-ci.md) |
+| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Android native surface host](architecture/android-native-surface-host.md) · [Linux surface composition PoC](architecture/linux-surface-composition-poc.md) · [Linux native surface host](architecture/linux-native-surface-host.md) · [Windows surface composition probe](architecture/windows-surface-composition-poc.md) · [Windows, macOS and iOS surface strategies](architecture/windows-macos-ios-surface-strategies.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
 
 ## Evidence and delivery
 

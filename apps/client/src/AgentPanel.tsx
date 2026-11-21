@@ -3,63 +3,27 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 
-import { Archive, ArchiveRestore, ArrowLeft, Bot, ChevronRight, RefreshCw, Search, Settings2 } from 'lucide-react';
-import {StatusRing,agentKind,reportedTones} from './AgentStatus';
-import {formatRelativeTime,pathBasename,useNow} from './relativeTime';
+import { Archive, ArchiveRestore, ArrowLeft, Bot, RefreshCw, Settings2 } from 'lucide-react';
+import {pathBasename,useNow} from './relativeTime';
+import {companionSourceLabels,type CompanionSource} from './localHost';
 import ApprovalPanel from './ApprovalPanel';
 import HerdrAgentsPanel from './HerdrAgentsPanel';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
 import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
+import CompanionUpdateRow from './CompanionUpdateRow';
+import {companionUpdatedEvent,parseCompanionUpdate,type CompanionUpdate} from './companionUpdate';
 import CompanionInstallPanel from './CompanionInstallPanel';
 import CompanionHooksPanel from './CompanionHooksPanel';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {archiveReport,isArchived,readArchive,reconcileArchive,restoreReport,saveArchive,type ArchivedReport} from './agentArchive';
+import {parseReports,projectGroups,reportKey,reportedStateNames,states,type AgentSession,type AgentState} from './agentReports';
+import AllHostsBoard,{distinctHosts,type BoardHost} from './AllHostsBoard';
+import {ReportRowContent,ReportSummary,SearchField,StateFilter} from './AgentReportParts';
 import './AgentPanel.css';
 
-type AgentState = 'working' | 'needs_attention' | 'done';
-export type AgentSession = {
-  sessionId: string;
-  agent: string;
-  project: string;
-  state: AgentState;
-  updatedAt: string;
-  summary: string;
-  paneId: string | null;
-  eventCount: number;
-  /** What a needs-attention report waits for, and since when; from a companion that records it. */
-  waiting?: 'approval' | 'question' | 'plan' | 'menu' | 'unknown';
-  waitingSince?: string;
-};
-const states: AgentState[] = ['needs_attention', 'working', 'done'];
-function reportKey(row:AgentSession) {return JSON.stringify([row.agent,row.sessionId]);}
-export const reportedStateNames = {needs_attention:'agentsNeedsYou',working:'agentsWorking',done:'agentsDone'} as const;
+export {parseSnapshot,reportedStateNames,type AgentSession} from './agentReports';
 const names = reportedStateNames;
-/** Groups reports by project, most recently reported project first. */
-function projectGroups(rows:AgentSession[]) {
-  const groups=new Map<string,AgentSession[]>();
-  for(const row of rows) {const group=groups.get(row.project);if(group)group.push(row);else groups.set(row.project,[row]);}
-  return [...groups];
-}
-
-export function parseSnapshot(value: unknown): AgentSession[] {
-  if (!value || typeof value !== 'object' || !('schemaVersion' in value) || value.schemaVersion !== 1 || !('sessions' in value) || !Array.isArray(value.sessions) || value.sessions.length > 100) {
-    throw new LocalUiError('agentsUnsupportedSnapshot');
-  }
-  return value.sessions.map((item: unknown) => {
-    if (!item || typeof item !== 'object') throw new LocalUiError('agentsInvalidSession');
-    const row = item as Record<string, unknown>;
-    for (const key of ['sessionId', 'agent', 'project', 'updatedAt', 'summary']) {
-      if (typeof row[key] !== 'string' || row[key].length > 4096) throw new LocalUiError('agentsInvalidSession');
-    }
-    if (!states.includes(row.state as AgentState) || !Number.isFinite(Date.parse(row.updatedAt as string)) || !Number.isSafeInteger(row.eventCount) || Number(row.eventCount) < 1 || (row.paneId !== null && typeof row.paneId !== 'string')) {
-      throw new LocalUiError('agentsInvalidSession');
-    }
-    if ((row.waiting !== undefined && !['approval', 'question', 'plan', 'menu', 'unknown'].includes(row.waiting as string))
-      || (row.waitingSince !== undefined && (typeof row.waitingSince !== 'string' || !Number.isFinite(Date.parse(row.waitingSince))))) throw new LocalUiError('agentsInvalidSession');
-    return row as AgentSession;
-  });
-}
 
 export type ReportedHistorySource = Readonly<{
   sessionId:string;agentSessionId:string;path:string;reportedAt:string;paneId:string|null;lease:AccessLease;
@@ -84,7 +48,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSource,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;/** Every connected host, to offer the board that merges them. */hosts?:readonly BoardHost[];local?:boolean;companionSource?:CompanionSource;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const historyVisibility=useRef(activityVisible);historyVisibility.current=activityVisible;
@@ -113,6 +77,9 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     });
   }
   const [query,setQuery]=useState('');
+  const [scope,setScope]=useState<'host'|'all'>('host');
+  const peers=distinctHosts(hosts??[]);
+  const merged=scope==='all' && peers.length>1;
   const [filter,setFilter]=useState<AgentState|'all'>('all');
   const [selection,setSelection]=useState<{source:string;key:string}|null>(null);
   const [mobile,setMobile]=useState(()=>window.matchMedia?.('(max-width: 600px)').matches??false);
@@ -137,6 +104,8 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const now=useNow(30000,panelVisible && activityVisible && visible.length>0);
   const request = useRef(0);
   const snapshotFlight=useRef<number|null>(null);
+  const [companionUpdate,setCompanionUpdate]=useState<CompanionUpdate|undefined>();
+  const lastUpdate=useRef<CompanionUpdate|undefined>(undefined);
   const historyRequest=useRef(0);
   const historyOwner=useRef<{source:string;key:string}|null>(null);
   const historyFlight=useRef<number|null>(null);
@@ -171,6 +140,11 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     }
   },[sessions,sessionId,error,loadedSessionId]);
 
+  /** The host says it is updating its companion to this app's version; once it has, views that waited for it ask again. */
+  function noteCompanionUpdate(next:CompanionUpdate|undefined,source:string) {
+    const was=lastUpdate.current;lastUpdate.current=next;setCompanionUpdate(next);
+    if(next?.state==='done' && was?.state!=='done')window.dispatchEvent(new CustomEvent(companionUpdatedEvent,{detail:{sessionId:source}}));
+  }
   async function refresh() {
     if(!visibility.current || !access.current() || snapshotFlight.current!==null)return;
     const source=sessionId;
@@ -179,9 +153,8 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     setBusy(true);
     try {
       const value = await invoke<unknown>('agent_snapshot', { sessionId });
-      const rows = parseSnapshot(value);
-      if(new Set(rows.map(reportKey)).size!==rows.length)throw new LocalUiError('agentsInvalidSession');
-      if (visibility.current && selectedSource.current===source && current === request.current) { setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); setError(''); updateArchive(previous=>reconcileArchive(previous,rows)); }
+      const rows = parseReports(value);
+      if (visibility.current && selectedSource.current===source && current === request.current) { noteCompanionUpdate(parseCompanionUpdate(value),source);setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); setError(''); updateArchive(previous=>reconcileArchive(previous,rows)); }
     } catch (e) {
       if (visibility.current && selectedSource.current===source && current === request.current) setError(captureUiError(e));
     } finally {
@@ -189,7 +162,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
       if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false);
     }
   }
-  useEffect(()=>{setSessions([]);setLoaded(false);setError('');},[sessionId]);
+  useEffect(()=>{setSessions([]);setLoaded(false);setError('');lastUpdate.current=undefined;setCompanionUpdate(undefined);},[sessionId]);
   useEffect(()=>{
     if(panelVisible && !document.hidden)void refresh();
     else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
@@ -237,28 +210,29 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const approvals=<ApprovalPanel sessionId={sessionId} visible={panelVisible} compactEmpty />;
   const panel=<section className="tool-panel agent-panel" data-activity-detail={!!selected || undefined} hidden={!panelVisible} aria-label={t('agentsTitle')}>
     {!renderNavigation&&approvals}
-    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><label className="agent-search"><Search size={16} aria-hidden="true"/><span className="sr-only">{t('agentsSearch')}</span><input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
-    {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
+    {peers.length>1 && <div className="agent-scope" role="group" aria-label={t('agentsScope')}>{(['host','all'] as const).map(value=><button type="button" className="filter-chip" key={value} aria-pressed={merged===(value==='all')} onClick={()=>setScope(value)}>{t(value==='host'?'agentsScopeHost':'agentsScopeAll')}</button>)}</div>}
+    {merged ? <AllHostsBoard hosts={peers} visible={panelVisible && activityVisible} onOpen={()=>setScope('host')}/> : <>
+    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><SearchField query={query} onChange={setQuery}/><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
+    {ready && !error && companionUpdate && <CompanionUpdateRow update={companionUpdate}/>}
+    {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t(local?'agentsSetupLocal':'agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
       <h3>{t('agentsSetupAction')}</h3>
       <p className="agent-note">{t('agentsReportedHint')}</p>
       <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
-      <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>
+      {local?<p className="agent-note" data-companion-source={companionSource}>{companionSource?t('companionLocalSource',{source:t(companionSourceLabels[companionSource])}):t('companionLocalNote')}</p>:<CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>}
       <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
-      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
+      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} hostKey={archiveHost} visible={panelVisible && !error} />}
     </section>
     {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
     <div className="agent-discovery">
-      <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>
-        {(['all',...states] as const).map(state=><button type="button" className="filter-chip" key={state} aria-pressed={filter===state} onClick={()=>setFilter(state)}>{state==='all'?t('agentsAll'):t(names[state])} {ready && !error && <span>{formatNumber(state==='all'?matching.length:matching.filter(row=>row.state===state).length)}</span>}</button>)}
-      </div>
+      <StateFilter filter={filter} onChange={setFilter} count={ready && !error ? state=>state==='all'?matching.length:matching.filter(row=>row.state===state).length : undefined}/>
       {ready && !error && <p className="agent-result-count" role="status">{t('agentsResultCount',{shown:formatNumber(visible.length),total:formatNumber(activeReports.length)})}</p>}
       {(query!=='' || filter!=='all') && <button className="subtle-button" onClick={()=>{setQuery('');setFilter('all');}}>{t('agentsClearFilters')}</button>}
       {selected && <section ref={selectedReport} tabIndex={-1} className="agent-selected-report" aria-label={t('agentsSelectedReport')}>
         <div className="tool-bar"><button type="button" className="subtle-button agent-report-back" onClick={closeReport}><ArrowLeft size={16} aria-hidden="true"/>{t('navigationBack')}</button><h4>{t('agentsSelectedReport')}</h4><button className="subtle-button agent-report-clear" onClick={closeReport}>{t('agentsClearSelection')}</button></div>
         <strong>{selected.agent}</strong><p>{selected.summary}</p>
         <dl><dt>{t('agentsReportProject')}</dt><dd><code>{selected.project}</code></dd><dt>{t('agentsFilterStatus')}</dt><dd>{t(names[selected.state])}</dd></dl>
-        <details><summary>{t('agentsReportTechnicalDetails')}</summary><dl><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}</dl></details>
+        <details><summary>{t('agentsReportTechnicalDetails')}</summary><dl><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}{selected.paneServer && <><dt>{t('agentsReportPaneServer')}</dt><dd><code>{selected.paneServer}</code></dd></>}</dl></details>
         <p><time dateTime={selected.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(selected.updatedAt))})}</time></p><p className="agent-report-hint">{t('agentsReportContext')}</p>
         <button type="button" className="subtle-button agent-report-archive" onClick={()=>archive(selected)}><Archive size={15} aria-hidden="true"/>{t('agentsArchive')}</button>
         {mobile && selected.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button agent-report-history" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(selected)}>{t('agentsHistoryUse')}</button>}
@@ -270,11 +244,12 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     {historyStatus && <div><p role="status">{t(historyStatus==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous')}</p><p>{t('agentsHistoryManual')}</p></div>}
     {busy && !ready && !error && <p className="loading" role="status">{t('agentsReading')}</p>}
     {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{!setupOpen && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;setSetupSource(sessionId);setHookSetupRequest({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
-    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{projectGroups(visible.filter(s => s.state === state)).map(([project,rows])=><section key={project} className="agent-project-group" aria-label={hostLabel?t('agentsProjectGroup',{project:pathBasename(project),host:hostLabel}):pathBasename(project)}><h5 className="agent-project-heading"><span className="agent-project-name" title={project}>{pathBasename(project)}</span>{hostLabel && <span className="agent-project-host">{hostLabel}</span>}<span className="status-group-count">{formatNumber(rows.length)}</span></h5>{rows.map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><StatusRing tone={reportedTones[s.state]}/><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{pathBasename(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small><time dateTime={s.updatedAt} title={t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}>{formatRelativeTime(s.updatedAt,now)}</time></small></span></span><ChevronRight className="row-chevron" size={18} aria-hidden="true"/></button><div className="agent-card-actions">{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}<button type="button" className="text-button agent-archive" aria-label={t('agentsArchiveReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>archive(s)}><Archive size={14} aria-hidden="true"/>{t('agentsArchive')}</button></div></article>)}</section>)}</section>)}</div>}
+    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{projectGroups(visible.filter(s => s.state === state)).map(([project,rows])=><section key={project} className="agent-project-group" aria-label={hostLabel?t('agentsProjectGroup',{project:pathBasename(project),host:hostLabel}):pathBasename(project)}><h5 className="agent-project-heading"><span className="agent-project-name" title={project}>{pathBasename(project)}</span>{hostLabel && <span className="agent-project-host">{hostLabel}</span>}<span className="status-group-count">{formatNumber(rows.length)}</span></h5>{rows.map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><ReportRowContent row={s} now={now}/></button><div className="agent-card-actions">{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}<button type="button" className="text-button agent-archive" aria-label={t('agentsArchiveReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>archive(s)}><Archive size={14} aria-hidden="true"/>{t('agentsArchive')}</button></div></article>)}</section>)}</section>)}</div>}
     {archivedReports.length>0 && <section className="agent-archived" aria-label={t('agentsArchivedTitle')}>
       <button ref={archiveToggle} type="button" className="subtle-button agent-archive-toggle" aria-expanded={showArchived} onClick={()=>setShowArchived(value=>!value)}><Archive size={15} aria-hidden="true"/>{t('agentsArchived',{total:formatNumber(archivedReports.length)})}</button>
-      {showArchived && <><p className="agent-note">{t('agentsArchivedHint')}</p>{archivedReports.map(s=><article className="agent-archived-card" key={reportKey(s)}><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{pathBasename(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small>{t(names[s.state])}</small></span></span><button type="button" className="text-button agent-restore" aria-label={t('agentsRestoreReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>restore(s)}><ArchiveRestore size={14} aria-hidden="true"/>{t('agentsRestore')}</button></article>)}</>}
+      {showArchived && <><p className="agent-note">{t('agentsArchivedHint')}</p>{archivedReports.map(s=><article className="agent-archived-card" key={reportKey(s)}><ReportSummary row={s}><small>{t(names[s.state])}</small></ReportSummary><button type="button" className="text-button agent-restore" aria-label={t('agentsRestoreReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>restore(s)}><ArchiveRestore size={14} aria-hidden="true"/>{t('agentsRestore')}</button></article>)}</>}
     </section>}
+    </>}
   </section>;
   return renderNavigation?<>{approvals}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:panel;
 }

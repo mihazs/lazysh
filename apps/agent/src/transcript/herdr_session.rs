@@ -39,11 +39,21 @@ pub fn read_herdr_conversation_window(
     limit: u8,
     window: &Window,
 ) -> Result<TranscriptPage> {
+    read_herdr_conversation_window_large(agent, id, limit, window, false)
+}
+
+pub fn read_herdr_conversation_window_large(
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+    window: &Window,
+    allow_large: bool,
+) -> Result<TranscriptPage> {
     let root = session_root(agent, id)?;
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    read_in(&root, agent, id, limit, window)
+    read_in_large(&root, agent, id, limit, window, allow_large)
 }
 
 /// The file `read_herdr_conversation` would read, for cheap change checks only.
@@ -52,8 +62,19 @@ pub(super) fn locate(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
     locate_in(&session_root(agent, id)?, agent, id)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(test, not(any(target_os = "linux", target_os = "macos"))))]
 fn read_in(_: &Path, _: TranscriptAgent, _: &str, _: u8, _: &Window) -> Result<TranscriptPage> {
+    Err(Error::InvalidArgument)
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_in_large(
+    _: &Path,
+    _: TranscriptAgent,
+    _: &str,
+    _: u8,
+    _: &Window,
+    _: bool,
+) -> Result<TranscriptPage> {
     Err(Error::InvalidArgument)
 }
 
@@ -95,13 +116,25 @@ fn open_roots(
     Ok((home, root))
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 fn read_in(
     root: &Path,
     agent: TranscriptAgent,
     id: &str,
     limit: u8,
     window: &Window,
+) -> Result<TranscriptPage> {
+    read_in_large(root, agent, id, limit, window, false)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_in_large(
+    root: &Path,
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+    window: &Window,
+    allow_large: bool,
 ) -> Result<TranscriptPage> {
     let (home, root) = open_roots(root, agent)?;
     let path = find(&root, agent, id)?;
@@ -134,12 +167,13 @@ fn read_in(
             )?
         }
         TranscriptAgent::Codex => {
-            let page = super::anchored_codex(
+            let page = super::anchored_codex_large(
                 home.as_ref().ok_or(Error::InvalidArgument)?,
                 &path,
                 limit,
                 &source,
                 window,
+                allow_large,
             )?;
             if page.branch_id.as_deref() != Some(id) {
                 return Err(Error::InvalidEvent);
