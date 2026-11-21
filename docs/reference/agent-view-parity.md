@@ -154,13 +154,29 @@ OpenCode's prompt box was checked on 2.2.7 in a real tmux pane (an isolated prof
 Tracked by [#1285](https://github.com/mihazs/lazysh/issues/1285). Each cell is what the agent records and what lazysh
 reads from it; "not mapped" means lazysh does not read that record, either because it was not verified or because the work
 is not done yet. Nothing is guessed: the element is absent, or an ordinary tool block. The mapping table itself
-lives in the companion (`apps/agent/src/transcript/interaction.rs` for plans and questions, `work.rs`, `opencode_work.rs` and
-`gemini_conversation.rs` for work items).
+lives in the companion (`apps/agent/src/transcript/interaction.rs` for plans and questions, `work.rs`, `opencode_work.rs`,
+`grok_work.rs` and `gemini_conversation.rs` for work items, `grok_conversation.rs` for a Grok Build edit).
 
 | Element | Claude Code | Codex | OpenCode | Gemini CLI | Grok Build |
 | --- | --- | --- | --- | --- | --- |
 | Plan or todo list | `TodoWrite` | `update_plan` | `todowrite` | `write_todos` (also `blocked`) | ACP `plan` updates (each replaces the whole plan) read as the shared plan card ([#1576](https://github.com/mihazs/lazysh/pull/1576)) |
-| Sub-agent | `Agent` or `Task` calls | `SubAgentActivity` items | `task` calls (V1 and V2) | `invoke_agent` calls | No verified record shape: not mapped |
-| Background job | `Bash` with `run_in_background`, `Monitor` | Background terminals: not recorded while they run (an item is written when the command ends), so none is listed | A background `task` only | `run_shell_command` with `is_background` (no recorded end) | No verified record shape: not mapped |
-| File edit as a diff | `Edit`, `Write` | `apply_patch` (`FileChange` items) | `edit` and `apply_patch` tool calls; the `patch` part lists file names only and shows nothing | `replace`, `write_file` | Recorded diffs show as tool output |
-| Compaction, goal, retry events | `compact_boundary` and others | `compacted`, `thread_goal_updated` | `compaction` parts and V2 messages; `retry` parts: not mapped | `info` messages: not mapped | No verified record shape: not mapped |
+| Sub-agent | `Agent` or `Task` calls | `SubAgentActivity` items | `task` calls (V1 and V2) | `invoke_agent` calls | `subagent_spawned` and `subagent_finished` records |
+| Background job | `Bash` with `run_in_background`, `Monitor` | Background terminals: not recorded while they run (an item is written when the command ends), so none is listed | A background `task` only | `run_shell_command` with `is_background` (no recorded end: the default `silent` setting writes none) | `task_backgrounded` and `task_completed` records (a command or a monitor) |
+| File edit as a diff | `Edit`, `Write` | `apply_patch` (`FileChange` items) | `edit` and `apply_patch` tool calls; the `patch` part lists file names only and shows nothing | `replace`, `write_file` | A completed `edit`-kind call whose output is exactly one ACP `diff` part; any other shape stays an ordinary tool block |
+| Compaction, goal, retry events | `compact_boundary` and others | `compacted`, `thread_goal_updated` | `compaction` parts and V2 messages; `retry` is never recorded | `info` messages are not compression notices: nothing to map | No verified record shape: not mapped |
+
+What the cells that stay unmapped rest on ([#1847](https://github.com/mihazs/lazysh/issues/1847)). Grok Build and Gemini CLI
+are not installed on the development host and no account exists to run them, so no session of either was captured. The Grok
+Build cells are read from the official writer source at the commit the Grok fixtures already pin (`2bdd1d6a`), which
+serializes `subagent_spawned`, `subagent_finished`, `task_backgrounded` and `task_completed` into the session's
+`updates.jsonl` (and reads the two `task_*` lines back itself when it reloads a session), and builds an edit's ACP `diff`
+part; `apps/agent/tests/fixtures/grok-acp/README.md` lists the files. A Grok record of those kinds with another shape, an end
+naming no launch and a task with no recorded end change nothing, so a job with no end stays running. For Gemini CLI, the
+released 0.68.0 package and the current source write an `info` message only for binary tool output (an image a tool
+returned), never for a compression, so the compression notice is not in the session file. A finished background shell
+records nothing under the default `backgroundCompletionBehavior` of `silent`; `inject` and `notify` fold a
+`[Background command completed ...]` text into the next turn in a shape nobody captured, so no end is read from it. For
+OpenCode, 2.x keeps a retry as transient state on the assistant message (`session.retry.scheduled` sets it, the next
+progress clears it); the `retry` part type exists only in the schema, no writer was found, and the host database (100,602
+messages, about 700,000 parts) holds no `retry` record of any kind. None of this is a capture: re-run the check when a real
+session of one of these agents shows the record.
