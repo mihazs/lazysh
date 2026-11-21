@@ -350,8 +350,18 @@ class NativeWorkspaceTest {
         observe: ((Long) -> String)? = null) {
         var firstObservation: String? = null
         var lastObservation: String? = null
+        var unfocusedSince: Long? = null
+        var recovered = false
         while (true) {
             val native = NativeActivityFixture.readiness(scenario)
+            // A system overlay (an expanded shade, a dialog) that took the focus is closed once; the wait stays bounded by the deadline.
+            if (native.activityState == androidx.lifecycle.Lifecycle.State.RESUMED && !native.windowFocused) {
+                val since = unfocusedSince ?: System.nanoTime().also { unfocusedSince = it }
+                if (!recovered && System.nanoTime() - since > TimeUnit.SECONDS.toNanos(5)) {
+                    recovered = true
+                    NativeActivityFixture.clearSystemOverlays()
+                }
+            } else unfocusedSince = null
             if (native.ready && evaluateIfPresent(scenario, expression) == "true") return
             val error = evaluateIfPresent(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
             assertTrue("Native workspace failed at $stage: $error", error == null || error == "\"\"")
@@ -4770,7 +4780,9 @@ class NativeWorkspaceTest {
         assertFalse("Denied notifications must not be visible", context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled())
         assertTrue("Notification shade must open", device.openNotification())
         assertFalse("Denied connection notification must stay out of the shade", device.hasObject(By.text(context.getString(R.string.session_notification_title))))
-        assertTrue(device.pressBack())
+        // Back sent while the shade is still expanding is ignored and the shade then holds the focus: collapse it explicitly.
+        NativeActivityFixture.clearSystemOverlays()
+        awaitDocument(scenario, "shade closed after the denied-notification check", "true")
         openPreferences(scenario)
         preferencesCategory(scenario, "android-notifications")
         webButton("Open Android notification settings")
