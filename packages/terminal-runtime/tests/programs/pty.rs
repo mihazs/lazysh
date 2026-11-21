@@ -39,6 +39,47 @@ pub fn find(name: &str) -> Option<PathBuf> {
     found
 }
 
+const MARKER: &str = "LAZYSH_TEST_PROGRAM";
+
+/// Names this test process's programs: a daemon that detaches (its own session, parent init) keeps it.
+fn marker() -> String {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{n}", std::process::id())
+}
+
+/// Kill every process whose environment carries `marker` (Linux; elsewhere nothing is found) and wait,
+/// bounded, until they are gone.
+pub fn reap_descendants(marker: &str) {
+    let needle = format!("{MARKER}={marker}");
+    let found = || -> Vec<i32> {
+        let me = std::process::id() as i32;
+        let Ok(dir) = std::fs::read_dir("/proc") else {
+            return vec![];
+        };
+        dir.flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|pid| *pid != me)
+            .filter(|pid| {
+                std::fs::read(format!("/proc/{pid}/environ"))
+                    .is_ok_and(|env| env.split(|b| *b == 0).any(|v| v == needle.as_bytes()))
+            })
+            .collect()
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let pids = found();
+        if pids.is_empty() || Instant::now() > deadline {
+            return;
+        }
+        for pid in pids {
+            // SAFETY: signalling a pid has no memory effects.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// A scratch directory that is removed with the guard.
 pub struct Scratch(pub PathBuf);
 
@@ -79,6 +120,7 @@ pub struct Program {
     child: Child,
     /// Commands that stop what the program leaves behind (a server that outlives its client).
     cleanup: Vec<Command>,
+    marker: String,
 }
 
 impl Program {
@@ -123,6 +165,7 @@ impl Program {
         assert_eq!(opened, 0, "openpty: {}", std::io::Error::last_os_error());
         // SAFETY: openpty returned two descriptors that nothing else owns.
         let (master, slave) = unsafe { (File::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+        let marker = marker();
         let mut command = Command::new(program);
         command
             .args(args)
@@ -130,6 +173,7 @@ impl Program {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("TERM", "xterm-256color")
             .env("LANG", "C.UTF-8")
+            .env(MARKER, &marker)
             .envs(env.iter().copied())
             .stdin(slave.try_clone().unwrap())
             .stdout(slave.try_clone().unwrap())
@@ -170,6 +214,7 @@ impl Program {
             output,
             child,
             cleanup: Vec::new(),
+            marker,
         }
     }
 
@@ -321,6 +366,7 @@ impl Drop for Program {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        reap_descendants(&self.marker);
         for command in &mut self.cleanup {
             let _ = command.output();
         }
