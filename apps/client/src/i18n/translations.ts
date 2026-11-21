@@ -1785,6 +1785,7 @@ const translations = {
   hostBrowserStop: ["Parar de carregar", "Detener la carga"],
   hostBrowserAddress: ["Endereço", "Dirección"],
   hostBrowserOpenOnDevice: ["Abrir neste dispositivo", "Abrir en este dispositivo"],
+  hostBrowserOpenOnDeviceHttps: ["Uma página HTTPS do host ainda não pode ser aberta neste dispositivo", "Una página HTTPS del host aún no se puede abrir en este dispositivo"],
   hostBrowserTabs: ["Abas", "Pestañas"],
   hostBrowserNewTab: ["Nova aba", "Nueva pestaña"],
   hostBrowserUntitled: ["Sem título", "Sin título"],

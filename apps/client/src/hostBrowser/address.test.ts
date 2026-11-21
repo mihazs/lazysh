@@ -54,8 +54,11 @@ describe('Open on this device', () => {
     ['http://127.0.0.1:8080/', { kind: 'preview', port: 8080, address: '127.0.0.1', path: '/' }],
     ['http://[::1]:5173/docs', { kind: 'preview', port: 5173, address: '::1', path: '/docs' }],
     ['http://localhost/', { kind: 'preview', port: 80, address: '127.0.0.1', path: '/' }],
-    ['https://localhost/', { kind: 'preview', port: 443, address: '127.0.0.1', path: '/' }],
   ])('forwards the loopback page %s as a Preview', (page, plan) => expect(openOnDevice(page)).toEqual(plan));
+
+  it('never downgrades an HTTPS loopback page to a plain-HTTP Preview', () => {
+    for (const page of ['https://localhost/', 'https://127.0.0.1:8443/x', 'https://[::1]/']) expect(openOnDevice(page), page).toEqual({ kind: 'httpsLoopback' });
+  });
 
   it('names the host of any other page, which is the one the person confirms', () => {
     expect(openOnDevice('https://accounts.example.com/login?next=/')).toEqual({ kind: 'external', host: 'accounts.example.com', url: 'https://accounts.example.com/login?next=/' });

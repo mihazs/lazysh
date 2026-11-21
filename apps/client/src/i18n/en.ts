@@ -1786,6 +1786,7 @@ export const english = {
   hostBrowserStop: "Stop loading",
   hostBrowserAddress: "Address",
   hostBrowserOpenOnDevice: "Open on this device",
+  hostBrowserOpenOnDeviceHttps: "A page served over HTTPS on the host cannot be opened on this device yet",
   hostBrowserTabs: "Tabs",
   hostBrowserNewTab: "New tab",
   hostBrowserUntitled: "Untitled",

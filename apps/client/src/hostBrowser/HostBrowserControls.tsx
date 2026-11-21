@@ -82,7 +82,7 @@ export function HostBrowserControls({ view, dialog, blocked, navigation, onDismi
   }
   function openHere() {
     if (plan?.kind === 'external') setConfirming(plan);
-    else if (plan) onOpenOnDevice?.(plan);
+    else if (plan && plan.kind !== 'httpsLoopback') onOpenOnDevice?.(plan);
   }
 
   return <section className="host-browser-controls" aria-label={t('hostBrowserNavigation')}>
@@ -96,7 +96,7 @@ export function HostBrowserControls({ view, dialog, blocked, navigation, onDismi
         aria-label={t('hostBrowserAddress')} aria-invalid={problem ? true : undefined} value={draft ?? active?.url ?? ''}
         onChange={event => { setDraft(event.target.value); setProblem(null); }}
         onFocus={event => event.currentTarget.select()} onBlur={() => setDraft(null)} />
-      {plan && <button type="button" className="icon-button" title={t('hostBrowserOpenOnDevice')} aria-label={t('hostBrowserOpenOnDevice')} onClick={openHere}><ExternalLink size={18} aria-hidden="true" /></button>}
+      {plan && <button type="button" className="icon-button" title={plan.kind === 'httpsLoopback' ? t('hostBrowserOpenOnDeviceHttps') : t('hostBrowserOpenOnDevice')} aria-label={t('hostBrowserOpenOnDevice')} disabled={plan.kind === 'httpsLoopback'} onClick={openHere}><ExternalLink size={18} aria-hidden="true" /></button>}
     </form>
     {problem && <p className="inline-error" role="alert">{refusalText(problem)}</p>}
     {failed && <p className="inline-error" role="alert">{t('hostBrowserActionFailed')}</p>}
