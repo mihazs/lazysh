@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.95.2] - 2026-11-21
+
+### New
+
+- **terminal:** add a build-time kill switch that keeps every session on xterm.js ([#2154](https://github.com/mihazs/lazysh/pull/2154))
+
 ## [1.95.1] - 2026-11-21
 
 ### Under the hood
