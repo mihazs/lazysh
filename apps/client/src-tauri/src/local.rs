@@ -42,6 +42,8 @@ pub struct Tools {
     /// Which of those it is, for the companion panel; `None` exactly when `companion` is false.
     #[cfg(desktop)]
     companion_source: Option<crate::companion::local::Source>,
+    /// An Android SDK `adb` (or, on macOS, `xcrun`) resolves: the Devices view works.
+    devices: bool,
 }
 /// The login shell (`%ComSpec%` on Windows): what **Open local terminal** starts.
 #[cfg(desktop)]
@@ -60,6 +62,7 @@ pub async fn local_capability() -> Capability {
             // Uploads write files and previews connect to loopback ports from this device.
             attachments: true,
             previews: true,
+            devices: crate::host::local_devices().await,
         };
         let mut targets = vec![Target {
             id: DEFAULT_TARGET.into(),
