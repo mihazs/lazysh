@@ -13,7 +13,7 @@ type Outputs = Record<string, string>;
 const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_mosh',
   'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
-const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
+const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false', android_release_native: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
 // Jobs that are not required to merge: pull requests never select them, pushes to main always do. terminal-perf is report-only
 // too, but it follows the terminal runtime area on a pull request (see the selection test below).
@@ -22,7 +22,7 @@ const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-
   'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-macos'];
 const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
 const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
-const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false',
+const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false', android_release_native: 'false',
   ntfy_variants: '["google"]', native: 'false' };
 
 /** Commit `paths` (and `moves` of seeded files) over a base commit and classify the range as checks.yml does. */
@@ -133,6 +133,18 @@ test.each([
   const outputs = await classify([...paths]);
   expect(outputs).toEqual(pullRequestEverything);
   expect(await runningJobs(outputs)).toEqual(onPullRequest(fullRun));
+});
+
+test('only a pull request that changes the release build configuration builds the release APK with the native engine', async () => {
+  for (const path of ['.github/workflows/release-artifacts.yml', '.github/actions/ghostty-zig/action.yml', '.changeset/release-artifacts.ts']) {
+    const outputs = await classify([path]);
+    expect(outputs, path).toEqual({ ...pullRequestEverything, android_release_native: 'true' });
+    expect((await runningJobs(outputs))['native-android-release-core'], path).toBe(1);
+  }
+  for (const request of [await classify(['.github/workflows/checks.yml']), await classify(['docs/connections.md'], { event: 'push' })]) {
+    expect(request.android_release_native).toBe('false');
+    expect((await runningJobs(request))['native-android-release-core']).toBeUndefined();
+  }
 });
 
 test('pushes and manual runs always select every job and the full matrix, even for documentation', async () => {
