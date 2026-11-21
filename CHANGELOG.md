@@ -10,6 +10,16 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.91.4] - 2026-11-21
+
+### New
+
+- **linux:** place a native terminal surface below the web view on Wayland, in builds with the native terminal only ([#2262](https://github.com/mihazs/lazysh/pull/2262))
+
+### Fixed
+
+- **agent:** keep the transcript-watch heartbeat on time while the stream waits after a slow projection. ([#2248](https://github.com/mihazs/lazysh/pull/2248))
+
 ## [1.91.3] - 2026-11-21
 
 ### Under the hood
