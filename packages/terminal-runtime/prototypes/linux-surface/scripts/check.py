@@ -62,7 +62,7 @@ if real:
     threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", 1420), Page).serve_forever, daemon=True).start()
     home = os.path.abspath(f"{out}/home")
     os.makedirs(home, exist_ok=True)
-    env.update(HOME=home, XDG_CONFIG_HOME=f"{home}/config", XDG_DATA_HOME=f"{home}/data", XDG_CACHE_HOME=f"{home}/cache")
+    env.update(LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU="1", HOME=home, XDG_CONFIG_HOME=f"{home}/config", XDG_DATA_HOME=f"{home}/data", XDG_CACHE_HOME=f"{home}/cache")
     app = subprocess.Popen([real], stdin=subprocess.DEVNULL, stdout=open(f"{out}/app.out", "w"), stderr=open(f"{out}/app.err", "w"), env=env)
 else:
     app = subprocess.Popen([probe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{out}/app.err", "w"), text=True, env=env, bufsize=1)
@@ -148,7 +148,7 @@ def check(name, ok, detail):
         failures.append(name)
 
 
-GREEN, BLUE, RED = (0, 200, 0), (0x33, 0x66, 0xFF), (255, 0, 0)
+GREEN, BLUE, RED, CELL = (0, 200, 0), (0x33, 0x66, 0xFF), (255, 0, 0), (200, 30, 30)
 
 
 def want(x, y, w, h):
@@ -240,6 +240,22 @@ command("create")
 time.sleep(1.2)
 _, _, _, (ox, oy), rel = measure("5-recreated", BLUE)
 check("a recreated surface shows the new colour exactly, at the anchor", rel == want(110, 70, 150, 100), rel)
+if real and mode == "wayland":  # a real session: the renderer host draws the core's screen on the subsurface
+    command("destroy")
+    opened = command("core 17 5")
+    check("a local terminal opens with a native core", opened.startswith("DONE core ") and len(opened) > 20, opened)
+    time.sleep(3)  # the shell starts
+    placed = command("anchor 110 70 150 100")
+    check("the surface of the terminal is placed", placed.startswith("DONE anchor") and '"placed":true' in placed, placed)
+    time.sleep(2)
+    painted = command("paint")
+    check("the terminal takes the painting command", painted.startswith("DONE paint"), painted)
+    time.sleep(2)
+    _, _, _, _, rel = measure("6-terminal", CELL)
+    metric = lambda v: (v * 42 * scale + 20) // 40  # a cell of the 14 px font at this ratio: the renderer's metrics, rounded to whole pixels
+    check("the core's four coloured cells are drawn at the top left of the surface, a whole cell grid wide and high",
+          rel == want(110, 70, 0, 0) | {"w": 4 * metric(8), "h": metric(16)}, rel)
+    command("destroy")
 if mode == "x11":  # the probe only: the app refuses X11 above
     command("focus")
     for name, (x, y) in {"on the surface": (rel["x"] + 20, rel["y"] + 20), "on a DOM field": (400, 50)}.items():

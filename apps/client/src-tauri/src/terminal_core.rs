@@ -94,6 +94,17 @@ pub(crate) trait Core: Send + Sync {
     fn set_active(&self, lease: &AccessLease, active: bool);
     /// The app's terminal theme changed: report these colours to the queries that arrive from now on.
     fn set_theme(&self, theme: &Json) -> Result<(), String>;
+    /// The session a renderer host draws and the inbox its `changed` calls ring, made again for each call
+    /// (a surface that is placed again draws the same session). `None` for a core with nothing to draw.
+    #[cfg(feature = "native-terminal")]
+    fn drawing(
+        &self,
+    ) -> Option<(
+        lazysh_terminal_runtime::Session,
+        crate::native_renderer::Inbox,
+    )> {
+        None
+    }
     /// Free the core now. Idempotent.
     fn close(&self);
 }
@@ -867,7 +878,10 @@ mod native {
     }
 
     /// A core's session, the link to its transport and the doorbell that tells its reader what changed.
-    struct Runtime(Session, Arc<Link>, Arc<Doorbell>);
+    struct Runtime(Session, Arc<Link>, Arc<Doorbell>, Ringer);
+
+    /// The wake of the renderer host that draws the session now, which the session's `changed` hook rings.
+    type Ringer = Arc<Mutex<Option<crate::native_renderer::Wake>>>;
 
     impl From<ControlEvent> for SshEvent {
         fn from(event: ControlEvent) -> Self {
@@ -1036,6 +1050,12 @@ mod native {
             .map_err(|error| error.to_string())
         }
 
+        fn drawing(&self) -> Option<(Session, crate::native_renderer::Inbox)> {
+            let (wake, inbox) = crate::native_renderer::wake();
+            *self.3.lock().unwrap_or_else(PoisonError::into_inner) = Some(wake);
+            Some((self.0.clone(), inbox))
+        }
+
         fn close(&self) {
             self.0.close();
         }
@@ -1082,17 +1102,28 @@ mod native {
         let credit = link.returner();
         let permitted = link.clone();
         let doorbell = Arc::new(Doorbell::new(events, move || permitted.permits()));
+        let (ringer, bell) = (Ringer::default(), doorbell.hook());
+        let drawn = ringer.clone();
         let hooks = Hooks {
             writer: Arc::new(Writer(link.clone())),
             credit: Box::new(move |bytes| credit(bytes)),
-            changed: Some(doorbell.hook()),
+            changed: Some(Box::new(move || {
+                bell();
+                if let Some(wake) = drawn
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                {
+                    wake.ring();
+                }
+            })),
         };
         let session = HUB
             .create(uuid::Uuid::new_v4().to_string(), config, hooks)
             .map_err(|error| error.to_string())?;
         doorbell.bind(session.clone());
         session.set_active(true);
-        Ok((Runtime(session, link.clone(), doorbell), link))
+        Ok((Runtime(session, link.clone(), doorbell, ringer), link))
     }
 
     #[cfg(test)]

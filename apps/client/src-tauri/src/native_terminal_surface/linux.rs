@@ -1,15 +1,20 @@
 //! The Linux surface a native terminal draws on (#1331): one `wl_subsurface` per session, a child of the
 //! toplevel `wl_surface` GDK owns, stacked below the transparent web view at a DOM anchor. Wayland only: on
 //! X11 and Xwayland a child window would cover the page, so the host refuses and the probe says why
-//! (docs/architecture/linux-surface-composition-poc.md). Until a renderer attaches, a surface shows the pane
-//! background from a `wl_shm` buffer. Everything but [`display`] runs on the GTK main thread.
+//! (docs/architecture/linux-surface-composition-poc.md). A surface of a session that has a native core is drawn
+//! by the renderer host with a wgpu swapchain on the subsurface (#1331); any other shows the pane background
+//! from a `wl_shm` buffer. Everything but [`display`] runs on the GTK main thread.
 use super::{Anchor, SurfaceState};
+use crate::native_renderer::{Host as Renderer, Look};
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
+use lazysh_terminal_renderer_wgpu::{Policy, Target, Window};
+use lazysh_terminal_runtime::{RgbColor, Theme};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::fd::{AsFd, FromRawFd};
+use std::ptr::NonNull;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use wayland_backend::client::{Backend, ObjectId};
@@ -61,6 +66,32 @@ fn wayland(display: Option<&str>) -> Result<(), String> {
     }
 }
 
+/// A GPU, or with `LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU` set a CPU rasterizer too: the CI runner has no GPU and
+/// the composition harness draws on Mesa's lavapipe. The shipping policy (the probe's) never allows one.
+fn policy() -> Policy {
+    let policy = Policy::for_platform();
+    if std::env::var_os("LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU").is_some() {
+        policy.with_software()
+    } else {
+        policy
+    }
+}
+
+// shortcut: the font is the system's monospace at 14 CSS pixels and the colours are the default theme on the
+// pane's background; take both from the user's preferences once the page sends them with the anchor.
+fn look(dpr: f64, background: u32) -> Look {
+    let mut theme = Theme::default();
+    let [_, r, g, b] = background.to_be_bytes();
+    theme.background = RgbColor { r, g, b };
+    Look {
+        theme,
+        font_family: "monospace".into(),
+        font_px: 14.0,
+        scale: dpr as f32,
+        system_fonts: true,
+    }
+}
+
 /// No event of these objects matters to the host: buffers are replaced, never reused.
 struct Quiet;
 
@@ -73,12 +104,21 @@ struct Pane {
     child: WlSubsurface,
     anchor: Anchor,
     background: u32,
+    /// The renderer host that draws the session's screen, once one is attached. While it is, the surface's
+    /// buffers are the swapchain's and the host fills none.
+    renderer: Option<Renderer>,
+    /// The surface's size in device pixels, as of the last `show`.
+    size: (i32, i32),
+    /// The ratio and background the renderer's look was made for.
+    looked: (f64, u32),
     /// The attached buffer with the width, height and colour it was filled for.
     shown: Option<(WlBuffer, WlShmPool, (i32, i32, u32))>,
 }
 
 impl Drop for Pane {
     fn drop(&mut self) {
+        // The swapchain goes before the surface it presents on.
+        drop(self.renderer.take());
         self.child.destroy();
         self.surface.destroy();
         if let Some((buffer, pool, _)) = self.shown.take() {
@@ -206,12 +246,18 @@ impl Host {
                     child,
                     anchor,
                     background,
+                    renderer: None,
+                    size: (0, 0),
+                    looked: (anchor.dpr, background),
                     shown: None,
                 }
             }
         };
         (pane.anchor, pane.background) = (anchor, background);
         let shown = self.show(&mut pane);
+        if shown.is_ok() {
+            self.draw(&session, &mut pane);
+        }
         match shown {
             Ok(_) => drop(self.panes.insert(session, pane)),
             // A pane that cannot be shown is not kept: its surface goes with the parent's next commit.
@@ -246,8 +292,26 @@ impl Host {
             (logical(x + width) - left).max(1) * scale,
             (logical(y + height) - top).max(1) * scale,
         );
+        pane.size = (w, h);
         pane.surface.set_buffer_scale(scale);
         pane.child.set_position(left + dx, top + dy);
+        if let Some(renderer) = &pane.renderer {
+            // The swapchain is the size of the surface in device pixels.
+            let _ = renderer.resize(w as u32, h as u32);
+            if pane.looked != (pane.anchor.dpr, pane.background) {
+                let _ = renderer.set_look(look(pane.anchor.dpr, pane.background));
+                pane.looked = (pane.anchor.dpr, pane.background);
+            }
+            pane.surface.commit();
+            self.settle();
+            return Ok(SurfaceState {
+                placed: true,
+                ready: true,
+                generation: 1,
+                width: w as u32,
+                height: h as u32,
+            });
+        }
         let wanted = (w, h, pane.background);
         if pane.shown.as_ref().map(|shown| shown.2) != Some(wanted) {
             let (buffer, pool) = self.filled(w, h, pane.background)?;
@@ -270,6 +334,41 @@ impl Host {
             width: w as u32,
             height: h as u32,
         })
+    }
+
+    /// Hands the pane's surface to the renderer host when its session has a native core: GDK's `wl_display`
+    /// and the subsurface's `wl_surface` as raw handles, the surface's size in device pixels. A session
+    /// without a core, or a device that cannot draw, keeps the background fill.
+    fn draw(&mut self, session: &str, pane: &mut Pane) {
+        if pane.renderer.is_some() {
+            return;
+        }
+        let Some((surface, inbox)) = crate::terminal_core::live(session)
+            .ok()
+            .and_then(|core| core.drawing())
+        else {
+            return;
+        };
+        let handles = (
+            NonNull::new(self.connection.backend().display_ptr().cast()),
+            NonNull::new(pane.surface.id().as_ptr().cast()),
+        );
+        let (Some(display), Some(wl_surface)) = handles else {
+            return;
+        };
+        // SAFETY: both are live objects of GDK's connection; the renderer is destroyed before the pane's
+        // surface (`Pane::drop`), which is destroyed before the window's.
+        let window = unsafe { Window::wayland(display, wl_surface) };
+        let (w, h) = (pane.size.0 as u32, pane.size.1 as u32);
+        let target = Target::on_window(window, w, h).with_policy(policy());
+        let look = look(pane.anchor.dpr, pane.background);
+        match Renderer::attach(surface, inbox, target, 1, look) {
+            Ok(renderer) => {
+                pane.renderer = Some(renderer);
+                pane.looked = (pane.anchor.dpr, pane.background);
+            }
+            Err(error) => eprintln!("native terminal renderer: {error}"),
+        }
     }
 
     // shortcut: a full buffer of one colour per size (33 MiB for a 4K pane), rewritten on every resize; the
@@ -306,13 +405,13 @@ impl Host {
     }
 
     fn state(&self, session: &str) -> Option<SurfaceState> {
-        let (_, _, (w, h, _)) = self.panes.get(session)?.shown.as_ref()?;
+        let (w, h) = self.panes.get(session)?.size;
         Some(SurfaceState {
             placed: true,
             ready: true,
             generation: 1,
-            width: *w as u32,
-            height: *h as u32,
+            width: w as u32,
+            height: h as u32,
         })
     }
 }

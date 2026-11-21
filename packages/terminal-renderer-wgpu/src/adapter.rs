@@ -8,7 +8,12 @@
 //! beats it" and a software rasterizer cannot; CI and tests allow them to exercise the real path.
 
 use lazysh_terminal_runtime::RenderError;
-use wgpu::rwh::{DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle, RawWindowHandle};
+use std::ffi::c_void;
+use std::ptr::NonNull;
+use wgpu::rwh::{
+    DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle, RawWindowHandle,
+    WaylandDisplayHandle, WaylandWindowHandle,
+};
 use wgpu::{Backend, Backends, DeviceType};
 
 /// What a renderer may run on.
@@ -124,6 +129,18 @@ impl Window {
     /// before it lets the platform take the surface back.
     pub unsafe fn new(display: RawDisplayHandle, window: RawWindowHandle) -> Self {
         Self { display, window }
+    }
+
+    /// A `wl_surface` on the connection of `display` (a `wl_display`).
+    ///
+    /// # Safety
+    ///
+    /// The same as [`Window::new`]: both pointers are live Wayland objects of one connection.
+    pub unsafe fn wayland(display: NonNull<c_void>, surface: NonNull<c_void>) -> Self {
+        Self {
+            display: RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display)),
+            window: RawWindowHandle::Wayland(WaylandWindowHandle::new(surface)),
+        }
     }
 }
 
