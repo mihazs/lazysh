@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.95.5
+
+### Patch Changes
+
+- fix(agents): choosing another agent in the Agent view now focuses its terminal pane and shows its composer ([#2301](https://github.com/mihazs/lazysh/pull/2301))
+
+  <details><summary>Details</summary>
+
+  Switching agent from the Agent view's live list moves the Herdr focus to that agent's pane, so the terminal follows and the composer for the newly shown agent appears instead of "Not this pane". Picking an agent or session in the left menu while the Agent view is shown keeps the Agent view open.
+
+  </details>
+
 ## 1.95.4
 
 ### Patch Changes
