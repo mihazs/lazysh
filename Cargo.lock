@@ -3984,6 +3984,7 @@ dependencies = [
  "lazysh-companion-release",
  "lazysh-et-transport",
  "lazysh-mosh-transport",
+ "lazysh-notification-client",
  "lazysh-parakeet-runtime",
  "lazysh-share",
  "lazysh-terminal-renderer-wgpu",
@@ -4140,12 +4141,15 @@ dependencies = [
 name = "lazysh-notification-client"
 version = "1.95.6"
 dependencies = [
+ "axum",
+ "chrono",
  "lazysh-common",
  "rand 0.10.3",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tokio",
  "uuid",
  "zeroize",
 ]
