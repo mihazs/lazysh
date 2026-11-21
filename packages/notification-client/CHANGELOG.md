@@ -1,5 +1,9 @@
 # @lazysh/notification-client
 
+## 1.95.1
+
+No changes in this release.
+
 ## 1.95.0
 
 No changes in this release.
