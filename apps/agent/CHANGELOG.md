@@ -1,5 +1,34 @@
 # @lazysh/agent
 
+## 1.93.0
+
+### Minor Changes
+
+- feat(agents): map Grok Build sub-agent, background job and edit records to the work cards ([#1986](https://github.com/mihazs/lazysh/pull/1986))
+
+  <details><summary>Details</summary>
+
+  Read the sub-agents, background commands and monitors of a Grok Build session into the Agent view's background-work panel, and show a Grok Build edit as the shared diff card (#1847, follow-up of #1285). In the conversation view, `subagent_spawned` and `subagent_finished` become a sub-agent row and `task_backgrounded` and `task_completed` a command or monitor row, each with its recorded end; a launch with no end stays running, and a record of another shape changes nothing. A completed `edit` call whose output is exactly one ACP `diff` becomes an `edit` call carrying that diff, and any other shape stays an ordinary tool block. The shapes come from the official writer source the Grok fixtures pin, not from a live session. No defaults change.
+
+  </details>
+- feat(browser): stream the host's Firefox through WebDriver BiDi in the relay ([#1996](https://github.com/mihazs/lazysh/pull/1996))
+
+  <details><summary>Details</summary>
+
+  Teach the host browser relay (`lazysh-agent host-browser serve`) to stream Firefox 159 or newer over WebDriver BiDi: a private profile, `--no-remote`, a random loopback port used only by the relay (the exact `Host` Firefox requires and no `Origin`), polled and pipelined JPEG screenshots that skip repeats, the page's title and address as text, a closed allow-list for every BiDi command, and a session that is always ended and, when Firefox already holds one, replaced by a Firefox the relay starts. A headless Firefox started this way writes no download, and its profile blocks permission prompts and turns off telemetry and update checks. The command is hidden and the app has no viewer yet; input, tabs, navigation and the adaptive frame rate for Firefox follow the matching Chrome slices.
+
+  </details>
+
+### Patch Changes
+
+- fix(agent): start the Android video preview on an idle screen of a guest that prints a warning line ([#1987](https://github.com/mihazs/lazysh/pull/1987))
+
+  <details><summary>Details</summary>
+
+  Fix the Android video preview never starting on an idle screen of a guest that prints a warning line before its screenshot, such as Waydroid: the screenshots that stand in for a video frame read the PNG without skipping that line, so each was dropped as an invalid image and the stream ended in `DeviceTimeout`. They now read it the way **Capture screen** does.
+
+  </details>
+
 ## 1.92.3
 
 No changes in this release.

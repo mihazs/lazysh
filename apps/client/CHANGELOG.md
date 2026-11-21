@@ -1,5 +1,41 @@
 # @lazysh/client
 
+## 1.93.0
+
+### Minor Changes
+
+- feat(notifications): add the nested-agent and unlocked-desktop switches to the host settings panel ([#1972](https://github.com/mihazs/lazysh/pull/1972))
+
+  <details><summary>Details</summary>
+
+  Add the two notification switches to the host settings panel: **Do not notify for nested agents** and **Do not notify while this desktop is unlocked**, in their own form with their own revision and **Save notification switches** button, so saving them never changes the three host switches. Both are off by default; nothing changes until you turn one on. They read and save the companion's `settings notifications` setting and appear only for a companion that answers it; an older companion shows an update message. The panel says that the unlocked-desktop switch works on Linux hosts only (any other host always notifies) and that the nested-agent switch relies on process ancestry on Linux and macOS and on `LAZYSH_PARENT_SESSION_ID` on every host. The strings are in English, Portuguese (Brazil) and Spanish.
+
+  </details>
+
+### Patch Changes
+
+- feat(agents): send a dialog's keys only after the host reads the pane again and finds that dialog once ([#1968](https://github.com/mihazs/lazysh/pull/1968))
+
+  <details><summary>Details</summary>
+
+  Answer an agent's list dialog from the Agent view only after the host reads the pane again: each arrow, Enter and dialog Cancel now carries the rows of the dialog the card was read from, and the app sends no key unless the pane, captured right before it, still shows exactly that dialog once. A dialog answered at the terminal first, replaced by another prompt in the same pane, drawn twice or gone gets nothing and the card says the dialog changed; the connection stays usable. The fresh capture is tmux's: a pane followed through Herdr or Zellij is answered after their own destination check, as before.
+
+  </details>
+- test(zellij): drive the Zellij shortcut panel against a real session in the Linux GUI ([#1991](https://github.com/mihazs/lazysh/pull/1991))
+
+  <details><summary>Details</summary>
+
+  Add a Linux native GUI case that attaches a real Zellij 0.45.1 session over owned OpenSSH, drives the Zellij shortcut panel (create tab, previous and next tab, quick tab) and asserts each tab change on the host, and checks that a Zellij-attached tab offers no Jump To. The SSH test fixture gained a pinned-Zellij option and the native Linux CI job installs the pinned Zellij before the GUI step. Test infrastructure only; no product change.
+
+  </details>
+- test(android): choose the QR fixture in the Photo Picker that API 36 opens for image inputs ([#2276](https://github.com/mihazs/lazysh/pull/2276))
+
+  <details><summary>Details</summary>
+
+  The QR picker case looked for the fixture by file name, but an image input opens the Photo Picker, which names no file. The case now takes the newest tile. Test only. No user-visible behaviour changes.
+
+  </details>
+
 ## 1.92.3
 
 ### Patch Changes
