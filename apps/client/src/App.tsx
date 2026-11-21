@@ -2621,7 +2621,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   />
                 )}
                 {active.connected && (!active.local || localView(localCapability,'preview',active.target)) && view === "preview" && (
-                  <PreviewPanel key={active.id} sessionId={active.id} />
+                  <PreviewPanel key={active.id} sessionId={active.id} hostKey={active.hostId} />
                 )}
                 {active.connected && (!active.local || localView(localCapability,'attachments',active.target)) && view === "attachments" && (
                   <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} {...composerAttachment===active.id ? {onAttach:addComposerAttachment,attachTarget:'composer' as const} : {}} onRestoreFileTransfer={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{const host=hosts.find(host=>host.id===active.hostId);if(host)setFileRecovery({sessionId:active.id,host,restored});}:undefined} />
