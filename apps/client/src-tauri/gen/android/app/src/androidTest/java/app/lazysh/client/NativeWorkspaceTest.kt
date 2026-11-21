@@ -75,6 +75,7 @@ import androidx.test.uiautomator.Until
 import androidx.test.uiautomator.Configurator
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -3841,50 +3842,24 @@ class NativeWorkspaceTest {
         val name = "Parity lost route"
         val label = "$name / owned-tmux"
         ownedParityCase(listOf(name)) { scenario, parity ->
-            val tmux = parity.fixture.getJSONObject("tmux")
-            require(tmux.getString("name") == "owned-tmux") { "Owned tmux fixture required" }
-            val alpha = tmux.getJSONArray("windows").getJSONObject(0).getString("marker")
-            require(Regex("TMUX_ALPHA_[a-f0-9]{32}").matches(alpha)) { "Owned tmux alpha marker required" }
-            val port = parity.port("primary")
+            val alpha = ownedTmuxAlpha(parity)
             val banner = "Array.from(document.querySelectorAll('section.connection-banner')).some(x=>" +
                 "x.querySelector('h2')?.textContent.trim()===${JSONObject.quote("Connection lost for $label")} && x.textContent.includes('Connection lost.'))"
-            fun awaitFact(stage: String, seconds: Long, accept: (JSONObject) -> Boolean): JSONObject {
-                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-                while (true) {
-                    val facts = parity.control("observe")
-                    if (accept(facts)) return facts
-                    assertTrue("Owned lost-connection host fact not reached at $stage: $facts", System.nanoTime() < deadline)
-                    Thread.sleep(250)
-                }
-            }
-            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port) {
-                // The default transport is Auto, which would try Mosh first; this case is about the SSH route.
-                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
-                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='herdr'])", "tmux")
-                typeInto(scenario, "[role=dialog] input[maxlength='200']", "owned-tmux")
-            }
-            openOwnedConnect(scenario, name)
-            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
-            // Saved credentials are what lets the app reconnect on its own; the key is never typed again below.
-            onWebView().withElement(findElement(Locator.XPATH,
-                "//*[@role='dialog']//label[contains(normalize-space(.),'Save credentials on this device')]/input[@type='checkbox']"))
-                .perform(webScrollIntoView()).perform(webClick())
-            submitOwnedConnect(scenario)
-            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:$port")
+            connectOwnedSaved(scenario, parity, name)
             awaitDocument(scenario, "owned tmux pane before the route is cut", terminalScreenContains(alpha))
-            assertEquals("Exactly one tmux client before the cut", 1, awaitFact("attached", 20) { it.getInt("clients") == 1 }.getInt("clients"))
+            assertEquals("Exactly one tmux client before the cut", 1, parity.awaitFact("attached", 20) { it.getInt("clients") == 1 }.getInt("clients"))
 
             parity.control("cut")
             awaitDocument(scenario, "lost-connection banner after the route is cut", banner)
-            awaitFact("tmux client gone with the route", 30) { it.getInt("clients") == 0 }
+            parity.awaitFact("tmux client gone with the route", 30) { it.getInt("clients") == 0 }
             // The host's observe call also proved the original tmux server and pane processes are still alive.
-            val refused = awaitFact("automatic retry refused by the cut route", 60) { it.getInt("refused") >= 1 }.getInt("refused")
+            val refused = parity.awaitFact("automatic retry refused by the cut route", 60) { it.getInt("refused") >= 1 }.getInt("refused")
             assertEquals("The banner must stay while the route is down", "true", evaluate(scenario, banner))
 
             parity.control("restore")
             awaitDocument(scenario, "banner closes by itself after the route returns", "!($banner)")
             awaitDocument(scenario, "reattached tmux pane shows its original output", terminalScreenContains(alpha))
-            val back = awaitFact("tmux client reattached", 30) { it.getInt("clients") == 1 }
+            val back = parity.awaitFact("tmux client reattached", 30) { it.getInt("clients") == 1 }
             assertTrue("Reconnect must not need a new credential or a dialog: $back refused=$refused",
                 evaluate(scenario, present("[role=dialog]")) == "false")
 
@@ -3901,6 +3876,103 @@ class NativeWorkspaceTest {
             println("lazysh lost connection: banner, refused automatic retry, same tmux pane after the route returned, and Close without reconnecting")
         }
     }
+
+    private val restoreOffer = ".workspace-restore-row > button:first-child"
+    private val restoreHost = "Parity restore"
+
+    /**
+     * What one restore case attaches: the multiplexer, its saved default session, the marker its first display shows, and
+     * whether the pane's tty echoes typed bytes (tmux runs a plain `sleep`; a Herdr receiver records them and echoes nothing,
+     * so the host's `typed` fact is the evidence that they arrived).
+     */
+    private inner class RestoreTarget(val multiplexer: String, val session: String, val echoes: Boolean, val marker: (OwnedParity) -> String) {
+        val label = "$restoreHost / $session"
+    }
+    private val restoreTmux = RestoreTarget("tmux", "owned-tmux", true, this::ownedTmuxAlpha)
+    private val restoreHerdr = RestoreTarget("herdr", "owned-guard", false, this::ownedHerdrSource)
+
+    /** The bytes the pane's tty echoes back when typed through the app, checked against the shape the host writes. */
+    private fun ownedRestoreToken(parity: OwnedParity) = parity.fixture.getString("restoreToken")
+        .also { require(Regex("RESTORE_[a-f0-9]{32}").matches(it)) { "Owned restore token required" } }
+
+    /** One half of a restore case: the shared host, session and the two fixture strings, around `ownedParityCase`. */
+    private fun ownedRestoreCase(target: RestoreTarget, keepOnSuccess: Boolean, body: (ActivityScenario<MainActivity>, OwnedParity, String, String) -> Unit) =
+        ownedParityCase(listOf(restoreHost), listOf(target.label), keepOnSuccess) { scenario, parity ->
+            body(scenario, parity, target.marker(parity), ownedRestoreToken(parity))
+        }
+
+    /**
+     * Waits until the one saved intent of the target's session has its host id in the WebView's on-disk Local Storage. The id
+     * is a random UUID, so an older run's descriptor cannot satisfy it, and page memory alone would not survive the host's force-stop.
+     */
+    private fun awaitWorkspaceOnDisk(scenario: ActivityScenario<MainActivity>, target: RestoreTarget) {
+        val intents = "JSON.stringify(JSON.parse(localStorage.getItem('lazysh.workspace.v1')||'[]')" +
+            ".filter(x=>x.attached&&x.attached.kind===${JSONObject.quote(target.multiplexer)}&&x.attached.name===${JSONObject.quote(target.session)}).map(x=>x.hostId))"
+        awaitDocument(scenario, "saved ${target.multiplexer} workspace intent", "($intents)!=='[]'")
+        val hostId = JSONArray(JSONTokener(evaluate(scenario, intents)).nextValue() as String).getString(0)
+        require(Regex("[a-f0-9-]{36}").matches(hostId)) { "Saved host id must be a UUID" }
+        val storage = java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.dataDir, "app_webview/Default/Local Storage")
+        val encodings = listOf(Charsets.UTF_8, Charsets.UTF_16LE).map { hostId.toByteArray(it) }
+        fun indexOf(bytes: ByteArray, needle: ByteArray): Boolean = bytes.size >= needle.size &&
+            (0..bytes.size - needle.size).any { start -> needle.indices.all { bytes[start + it] == needle[it] } }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+        while (true) {
+            val files = storage.walkTopDown().filter { it.isFile && it.length() in 1..(16L shl 20) }.take(256).toList()
+            if (files.any { file -> val bytes = file.readBytes(); encodings.any { indexOf(bytes, it) } }) return
+            assertTrue("The workspace descriptor never reached the WebView's on-disk storage (${files.size} files)", System.nanoTime() < deadline)
+            Thread.sleep(250)
+        }
+    }
+
+    /**
+     * First half of the restore after a force-stop (#1639, #1827). tests/support/androidForceStopRestore.ts runs this case, force-stops
+     * the app from the host and then runs the matching `...RestoreAfterForceStop` in a fresh instrumentation process; one method
+     * cannot do both because the instrumentation lives in the app process. A passing phase 1 leaves the host and its open
+     * session in place for phase 2.
+     */
+    private fun ownedRestoreBefore(target: RestoreTarget) {
+        ownedRestoreCase(target, keepOnSuccess = true) { scenario, parity, marker, token ->
+            connectOwnedSaved(scenario, parity, restoreHost, target.multiplexer, target.session)
+            awaitDocument(scenario, "owned ${target.multiplexer} display before the force-stop", terminalScreenContains(marker))
+            sendOwnedCommand(scenario, token, parity.label)
+            // tmux redraws what its pane echoed after the restore; a Herdr receiver echoes nothing, so only the host's byte file shows arrival.
+            if (target.echoes) awaitDocument(scenario, "bytes typed into the owned ${target.multiplexer} pane", terminalScreenContains(token))
+            else parity.awaitFact("typed bytes reached the owned ${target.multiplexer} receiver", 20) { it.getBoolean("typed") }
+            parity.awaitFact("one ${target.multiplexer} client before the force-stop", 20) { it.getInt("clients") == 1 }
+            awaitWorkspaceOnDisk(scenario, target)
+            println("lazysh restore phase 1: saved-credential ${target.multiplexer} session open, typed bytes in the pane and the workspace descriptor on disk")
+        }
+    }
+
+    /**
+     * Second half, in a fresh process after the host force-stopped the app: the restore offer shows with no terminal and no host
+     * client, and only a click on it reattaches the same display with the saved credential.
+     */
+    private fun ownedRestoreAfter(target: RestoreTarget) {
+        ownedRestoreCase(target, keepOnSuccess = false) { scenario, parity, marker, token ->
+            val offer = "Array.from(document.querySelectorAll(${JSONObject.quote(restoreOffer)})).some(x=>x.textContent.trim()==='Restore previous workspace' && !x.disabled)"
+            awaitDocument(scenario, "restore offer once the saved hosts load", offer)
+            assertEquals("Relaunch alone must not open a terminal or ask for a credential", "false", evaluate(scenario,
+                "Boolean(document.querySelector('.terminal-canvas .xterm-screen')||document.querySelector('[role=dialog]'))"))
+            // A wrongful automatic restore would attach within this window; the original pane must stay unattended.
+            Thread.sleep(5_000)
+            parity.awaitFact("no ${target.multiplexer} client after the relaunch", 5) { it.getInt("clients") == 0 }
+
+            clickOwnedButton("Restore previous workspace")
+            awaitDocument(scenario, "restored ${target.multiplexer} display shows what it showed before the force-stop",
+                terminalScreenContains(marker) + if (target.echoes) " && " + terminalScreenContains(token) else "")
+            // The host fails `observe` itself if the original server or processes changed, or a Herdr receiver got a byte it was not typed.
+            val restored = parity.awaitFact("exactly one ${target.multiplexer} client after the restore", 30) { it.getInt("clients") == 1 && (target.echoes || it.getBoolean("typed")) }
+            assertTrue("Restore must use the saved credential without a dialog: $restored", evaluate(scenario, present("[role=dialog]")) == "false")
+            assertEquals("The offer is gone once the workspace is restored", "false", evaluate(scenario, present(".workspace-restore")))
+            println("lazysh restore phase 2: offer only on click, same ${target.multiplexer} display and typed bytes back, one client, saved credential used")
+        }
+    }
+
+    @Test fun ownedTmuxRestoreBeforeForceStop() = ownedRestoreBefore(restoreTmux)
+    @Test fun ownedTmuxRestoreAfterForceStop() = ownedRestoreAfter(restoreTmux)
+    @Test fun ownedHerdrRestoreBeforeForceStop() = ownedRestoreBefore(restoreHerdr)
+    @Test fun ownedHerdrRestoreAfterForceStop() = ownedRestoreAfter(restoreHerdr)
 
     // The toolbar editor's Agents and Workspaces keys open each view for the real
     // connection, and the destination heading's back control returns to the terminal.
@@ -5458,6 +5530,16 @@ class NativeWorkspaceTest {
                 return reply
             }
         }
+        /** Polls the host's closed `observe` facts until `accept` holds; the host fails the call itself if an original process is gone. */
+        fun awaitFact(stage: String, seconds: Long, accept: (JSONObject) -> Boolean): JSONObject {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+            while (true) {
+                val facts = control("observe")
+                if (accept(facts)) return facts
+                assertTrue("Owned host fact not reached at $stage: $facts", System.nanoTime() < deadline)
+                Thread.sleep(250)
+            }
+        }
         fun mark(vararg servers: String) { for (server in servers) control("mark", "server" to server) }
         fun observe(server: String) = control("observe", "server" to server)
     }
@@ -5465,8 +5547,49 @@ class NativeWorkspaceTest {
     private val parityPassword = "[role=dialog] form.form-stack > label > input[type=password]"
     private val parityKey = "[role=dialog] form.form-stack > label > textarea"
 
-    /** Runs one parity case, then dismisses its dialogs, ends its sessions and deletes its hosts. */
-    private fun ownedParityCase(hosts: List<String>, body: (ActivityScenario<MainActivity>, OwnedParity) -> Unit) {
+    /** The owned tmux fixture's first window marker, checked against the shape the host writes. */
+    private fun ownedTmuxAlpha(parity: OwnedParity): String {
+        val tmux = parity.fixture.getJSONObject("tmux")
+        require(tmux.getString("name") == "owned-tmux") { "Owned tmux fixture required" }
+        return tmux.getJSONArray("windows").getJSONObject(0).getString("marker")
+            .also { require(Regex("TMUX_ALPHA_[a-f0-9]{32}").matches(it)) { "Owned tmux alpha marker required" } }
+    }
+
+    /** The owned stock Herdr fixture's first display marker: its source receiver prints it after clearing the screen. */
+    private fun ownedHerdrSource(parity: OwnedParity): String {
+        val herdr = parity.fixture.getJSONObject("herdr")
+        require(herdr.getString("name") == "owned-guard") { "Owned Herdr fixture required" }
+        return herdr.getJSONObject("navigation").getJSONObject("source").getString("marker")
+            .also { require(Regex("NAV_SOURCE_[a-f0-9]{32}").matches(it)) { "Owned Herdr source marker required" } }
+    }
+
+    /**
+     * Adds a host whose default multiplexer is the owned `session` of `multiplexer`, connects with the fixture key over SSH, saves
+     * the credentials and trusts the host key. Saved credentials are what lets the app reconnect or restore on its own.
+     */
+    private fun connectOwnedSaved(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, name: String, multiplexer: String = "tmux", session: String = "owned-tmux") {
+        val port = parity.port("primary")
+        addOwnedHost(scenario, name, "127.0.0.1", parity.username, port) {
+            // The default transport is Auto, which would try Mosh first; these cases are about the SSH route.
+            selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='ssh'])", "ssh")
+            selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='herdr'])", multiplexer)
+            typeInto(scenario, "[role=dialog] input[maxlength='200']", session)
+        }
+        openOwnedConnect(scenario, name)
+        chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+        onWebView().withElement(findElement(Locator.XPATH,
+            "//*[@role='dialog']//label[contains(normalize-space(.),'Save credentials on this device')]/input[@type='checkbox']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        submitOwnedConnect(scenario)
+        trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:$port")
+    }
+
+    /**
+     * Runs one parity case, then dismisses its dialogs, ends its `sessions` and deletes its hosts. `keepOnSuccess` leaves a
+     * passing case's host and open session in place, for a case whose second half runs in a fresh process.
+     */
+    private fun ownedParityCase(hosts: List<String>, sessions: List<String> = hosts, keepOnSuccess: Boolean = false,
+        body: (ActivityScenario<MainActivity>, OwnedParity) -> Unit) {
         val parity = OwnedParity(ownedSshFixture())
         grantOwnedNotifications()
         val scenario = NativeActivityFixture.scenario
@@ -5476,9 +5599,9 @@ class NativeWorkspaceTest {
         catch (failure: Throwable) { primary = failure; throw failure }
         finally {
             android.util.Log.i("LazyshOwnedCase", "end:${parity.nonce}:pid:${android.os.Process.myPid()}")
-            val cleanup = runCatching {
+            val cleanup = if (keepOnSuccess && primary == null) null else runCatching {
                 dismissOwnedAuthentication(scenario)
-                for (name in hosts) if (evaluate(scenario, present("button[aria-label='Disconnect $name']")) == "true") endOwnedConnection(scenario, name)
+                for (name in sessions) if (evaluate(scenario, present("button[aria-label='Disconnect $name']")) == "true") endOwnedConnection(scenario, name)
                 for (name in hosts) if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") deleteOwnedHost(scenario, name)
             }.exceptionOrNull()
             if (cleanup != null) { if (primary != null) primary.addSuppressed(cleanup) else throw cleanup }

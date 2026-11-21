@@ -274,6 +274,31 @@ export function ownedDeviceCleanup(device:(args:string[])=>Promise<unknown>,owne
   ] as const satisfies readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[];
 }
 
+/**
+ * The device side of an owned-emulator case: reverses each host port, selects the AOSP software keyboard and pushes `fixture`
+ * (private, at most 16 KiB) to a private device directory. Everything allocated is recorded in `state` as it happens, so
+ * `ownedDeviceCleanup` also undoes a setup that failed halfway. Returns the fixture's device path.
+ */
+export type OwnedDeviceState={keyboard?:{restore():Promise<unknown>};reverses:number[];remote?:string};
+export async function prepareOwnedDevice(emulator:ReturnType<typeof ownedEmulator>,state:OwnedDeviceState,
+  ports:readonly number[],ssh:{nonce:string;directory:string},fixture:object) {
+  const {adb,serial,device}=emulator;
+  for(const port of ports) {
+    await device(['reverse','--no-rebind',`tcp:${port}`,`tcp:${port}`]);
+    state.reverses.push(port);
+  }
+  state.keyboard=await ownedSoftwareKeyboard(adb,serial,5000,'aosp-latin');
+  const remote=`/data/local/tmp/lazysh-ui-ssh-${ssh.nonce}`;
+  await device(['shell','mkdir','-m','700',remote]);
+  state.remote=remote;
+  const data=join(ssh.directory,'android-owned-fixture.json');
+  await writeFile(data,JSON.stringify(fixture),{mode:0o600});
+  if((await stat(data)).size>16*1024)throw new Error('Owned Android fixture exceeds native bound');
+  await device(['push',data,`${remote}/fixture.json`]);
+  await device(['shell','chmod','600',`${remote}/fixture.json`]);
+  return `${remote}/fixture.json`;
+}
+
 // No raw crash output enters OwnedProcess's retained output windows. This is a
 // best-effort diagnostic child on the explicitly selected owned emulator only.
 export async function recoverOwnedCaseCrash(adb:string,serial:string,source:OwnedCaseCrashParser) {
