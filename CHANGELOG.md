@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.93.9] - 2026-11-21
+
+### New
+
+- **terminal:** select text with the pointer on the native terminal adapter ([#2291](https://github.com/mihazs/lazysh/pull/2291))
+
 ## [1.93.8] - 2026-11-21
 
 ### Under the hood

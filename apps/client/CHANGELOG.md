@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.93.9
+
+### Patch Changes
+
+- feat(terminal): select text with the pointer on the native terminal adapter ([#2291](https://github.com/mihazs/lazysh/pull/2291))
+
+  <details><summary>Details</summary>
+
+  A mouse drag, a double click (word), a triple click (line), shift-click and a touch long press now select on the native adapter's anchor. The native engine stays opt-in; xterm.js remains the default.
+
+  </details>
+
 ## 1.93.8
 
 ### Patch Changes

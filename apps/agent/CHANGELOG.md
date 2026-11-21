@@ -1,5 +1,9 @@
 # @lazysh/agent
 
+## 1.93.9
+
+No changes in this release.
+
 ## 1.93.8
 
 No changes in this release.
