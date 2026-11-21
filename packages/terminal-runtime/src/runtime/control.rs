@@ -24,6 +24,23 @@ const MOUSE_MODES: [(u16, MouseTracking); 4] = [
     (9, MouseTracking::X10),
 ];
 
+/// DEC private modes an ANSI snapshot restores, each with its value in a fresh terminal: cursor keys, wraparound,
+/// the mouse tracking levels and encodings, cursor visibility, focus reports and bracketed paste.
+const SNAPSHOT_MODES: [(u16, bool); 12] = [
+    (1, false),
+    (7, true),
+    (9, false),
+    (25, true),
+    (1000, false),
+    (1002, false),
+    (1003, false),
+    (1004, false),
+    (1005, false),
+    (1006, false),
+    (1016, false),
+    (2004, false),
+];
+
 /// The rows of text per answer for a reader's request: [`CONTROL_WINDOW_DEFAULT`] when absent, never more than
 /// [`CONTROL_WINDOW_MAX`] and never less than one.
 pub fn control_window(requested: Option<usize>) -> usize {
@@ -212,6 +229,36 @@ impl TerminalRuntime {
             .chain(directories)
             .chain(writes)
             .collect()
+    }
+
+    /// The live screen as bytes that rebuild it in a FRESH terminal of the same size (#1342): the alternate screen
+    /// if the program is on it, the visible rows with their styles, the cursor, and each mode of
+    /// [`SNAPSHOT_MODES`] that differs from a fresh terminal's. Scrollback, the screen the program is not on,
+    /// margins, tab stops and the Kitty keyboard flags are not carried over. A scrolled reader stays where they are.
+    pub fn ansi_snapshot(&mut self) -> Result<String, Error> {
+        let (x, y) = self.live_cursor(self.viewport()?)?;
+        let last = self.terminal.total_rows()?.saturating_sub(1);
+        let first = last.saturating_sub(usize::from(self.size.rows) - 1);
+        let mut out = String::new();
+        if self.terminal.active_screen()? == ActiveScreen::Alternate {
+            out.push_str("\x1b[?1049h");
+        }
+        out.push_str(&self.terminal.read_ansi_screen(
+            (0, first as u32),
+            (self.size.cols - 1, last as u32),
+            false,
+            false,
+        )?);
+        // The modes come after the cursor: wraparound off or a mouse mode must not change how the rows replay.
+        out.push_str(&format!("\x1b[0m\x1b[{};{}H", y + 1, x + 1));
+        for (mode, fresh) in SNAPSHOT_MODES {
+            // A mode this VT does not know reads as its fresh value: nothing to restore.
+            let set = self.terminal.mode_get(mode).unwrap_or(fresh);
+            if set != fresh {
+                out.push_str(&format!("\x1b[?{mode}{}", if set { 'h' } else { 'l' }));
+            }
+        }
+        Ok(out)
     }
 
     fn mouse_tracking(&self) -> Result<MouseTracking, Error> {
