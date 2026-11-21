@@ -1065,6 +1065,8 @@ export const english = {
   "gestureModeHandles": "Handles",
   "gestureModeEdges": "Edge swipes (advanced)",
   "gestureModeOff": "Off (buttons only)",
+  "gestureShowLines": "Show gesture lines",
+  "gestureShowLinesHint": "Draws the thin lines that mark where the edge gestures start. They are hidden by default; the gestures work the same either way.",
   "gestureModeHint": "Automatic uses handles with Android gesture navigation and edge swipes with three-button navigation. Handles are tabs you drag or tap, and a swipe that starts in the zone beside them works too: they sit just past the zones the system keeps for Back and Home, which the system always detects from the screen edge, so it never takes them. Edge swipes start at the screen edge instead and limit Back on the side edges where they are used.",
   "gestureHandleLeftMenu": "Open the menu (drag right or tap)",
   "gestureHandleViewSwitch": "Switch to the Agent view (drag left or tap)",

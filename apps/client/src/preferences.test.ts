@@ -174,10 +174,10 @@ describe("OSC52 clipboard requests", () => {
   expect(keepDevicePreferences(null, mine)).toBeNull();
  });
  it("defaults the edge gestures on at 40 dp, stores only changes and ignores malformed values", () => {
-  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode: "auto"});
+  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode: "auto", showLines: false});
   expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {leftMenu: true, zoneWidth: 40}}), "edgeGestures")).toBe(false);
   const saved = parsePreferences(JSON.parse(JSON.stringify({...defaults, edgeGestures: {leftMenu: false, zoneWidth: 64}})));
-  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 64, mode: "auto"});
+  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 64, mode: "auto", showLines: false});
   // The gesture style is stored only when it is not the automatic one, and an unknown value falls back to it.
   expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {mode: "auto"}}), "edgeGestures")).toBe(false);
   for (const mode of ["handles", "edges", "off"] as const) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {mode}})).mode).toBe(mode);
