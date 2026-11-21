@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.93.6
+
+### Patch Changes
+
+- test(android): read the system clipboard after Copy of a terminal selection ([#1989](https://github.com/mihazs/lazysh/pull/1989))
+
+  <details><summary>Details</summary>
+
+  Add an Android instrumentation case that long-presses a word in an owned SSH terminal, taps Copy in the selection actions and reads the system `ClipboardManager`, which must hold exactly that word and must not hold it before Copy. Test coverage only; no app behaviour changes.
+
+  </details>
+
 ## 1.93.5
 
 ### Patch Changes
