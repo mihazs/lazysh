@@ -125,7 +125,7 @@ it('drops the previous file\'s player when the next file is refused', async () =
   await open('clip.mp4');
   await screen.findByTitle('Preview of ./clip.mp4');
   vi.mocked(invoke).mockRejectedValueOnce({kind: 'media_mislabeled', message: 'host text'});
-  await open('page.mp4');
+  await open('tune.mp3');
   await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/^This file is not the video or audio/));
   expect(document.querySelector('iframe')).toBeNull();
 });
