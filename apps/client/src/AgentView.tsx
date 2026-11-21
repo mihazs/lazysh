@@ -6,6 +6,7 @@ import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
 import AgentStartFolder from './AgentStartFolder';
 import {knownDirectories} from './herdrCreate';
+import {herdrFocusAction} from './multiplexerTabs';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
@@ -282,7 +283,11 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{
     request.current++;setSelecting(false);setUnavailable(false);
-    setPicked(herdrSelection(live,server,{focusKey:lastFocus.current,enter:{server,target:{kind:'pane',workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id}}}));
+    const target={kind:'pane' as const,workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id};
+    setPicked(herdrSelection(live,server,{focusKey:lastFocus.current,enter:{server,target}}));
+    // Switching agents here also focuses its pane, so the terminal follows and the pane's own composer shows; a refused focus leaves the read-only pick.
+    const snapshot=navigation.data?.snapshot;
+    if(herdrSession && snapshot)void (async()=>{await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(snapshot,target)});await navigation.refresh();})().catch(()=>undefined);
   };
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;
   const focusCreated=(workspace:string)=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined);
