@@ -30,6 +30,17 @@ export async function workspaceAction(gui:NativeGui,name:string) {
   return opener;
 }
 
+/** Names of every control in the visible Workspace tools menu, across its pages; leaves the menu closed. */
+export async function workspaceToolNames(gui:NativeGui) {
+  const browser=gui.browser!,opener=await browser.$('button[aria-label="Workspace tools"]');
+  await opener.click();
+  const menu=await browser.$('[role="dialog"][aria-label="Workspace tools"]');await menu.waitForDisplayed();
+  const names=await browser.execute(()=>Array.from(document.querySelectorAll('[role="dialog"][aria-label="Workspace tools"] .workspace-tools-page button'))
+    .map(button=>(button.getAttribute('aria-label')||button.textContent||'').trim()));
+  await browser.keys('Escape');await menu.waitForDisplayed({reverse:true});
+  return names;
+}
+
 export async function typeText(browser:NonNullable<NativeGui['browser']>,text:string) {
   const action=browser.action('key');
   // keys([...]) holds the entire sequence as a chord; controlled fields need individual presses.
