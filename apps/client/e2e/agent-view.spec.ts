@@ -819,7 +819,7 @@ test('stock Herdr: the Agent view lists the live agents, and selecting one opens
   expect([...new Set((await herdrFixture(page)).conversations)]).toEqual(['00000005-0000-4000-8000-000000000000']);
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
-  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'}]);
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'},{type:'focusPane',target:'w5:p1'}]); // the pick focuses the pane, then Enter session does
 });
 
 test('stock Herdr: the composer sends through Herdr\'s own agent input, and a refused send shows one notice that keeps the draft',async({page})=>{
@@ -895,7 +895,7 @@ test('stock Herdr with an old companion: the Agent view says to update it and st
   await expect(agent.getByRole('button',{name:'Host companion installation',exact:true})).toBeVisible();
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
-  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w0:p1'}]);
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w0:p1'},{type:'focusPane',target:'w0:p1'}]); // the pick focuses the pane, then Enter session does
 });
 
 test('a selected conversation keeps its chrome to one compact row and shows harness records as events, not raw tags',async({page},testInfo)=>{

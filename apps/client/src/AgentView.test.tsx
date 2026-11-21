@@ -621,6 +621,22 @@ it('lets the user look at another agent and come back to the pane\'s own, keepin
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
 });
 
+it('focuses the pane of an agent chosen in the Agent view so its composer shows',async()=>{
+  const state={focus:'w2E:p3'};server(state);
+  const base=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
+    if(command==='herdr_action'){state.focus=(args as {action:{target:string}}).action.target;return {};}
+    return base(command,args,options);
+  });
+  render(view());await advance(0);
+  expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+  fireEvent.click(within(screen.getByText('/work/two').closest('article')!).getByRole('button',{name:/Open conversation/}));await advance(0);await advance(0);
+  expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusPane',target:'w2E:p2'}}]);
+  expect(screen.getByText('Answer of session-two')).toBeTruthy();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
+  expect(screen.queryByText('Not this pane')).toBeNull();
+});
+
 it('drops a hand-picked conversation when focus moves to another pane',async()=>{
   const state={focus:'w2E:p3'};server(state);
   render(view());await advance(0);
