@@ -1,6 +1,7 @@
 import {isAndroidApp} from './isAndroidApp';
 import type {NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeInputCapture} from './nativeInputCapture';
+import {attachPointerSelection} from './nativePointerSelection';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
   Disposable, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
@@ -50,6 +51,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private askAgain = false;
   private anchor: HTMLElement | undefined;
   private capture: NativeInputCapture | undefined;
+  private pointer: Disposable | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
   private preferences: TerminalPreferences | undefined;
   private active = true;
@@ -82,12 +84,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     const anchor = target.kind === 'native' ? document.getElementById(target.anchorId) : target.element;
     if (!anchor) throw new Error('The native terminal anchor is not mounted.');
     this.anchor = anchor;
-    this.capture?.dispose();
+    this.capture?.dispose(); this.pointer?.dispose();
+    this.pointer = attachPointerSelection(this, anchor);
     // Android types through a native input connection (#1328), not a DOM editor.
     this.capture = isAndroidApp() ? undefined : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences: () => this.preferences});
   }
 
-  async detach() { this.capture?.dispose(); this.capture = this.anchor = undefined; }
+  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.pointer = this.capture = this.anchor = undefined; }
 
   screenReaderMirrored(): Disposable {
     this.mirrored = true;
@@ -103,7 +106,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   dispose() {
     if (this.disposed) return this.disposed;
-    this.source.dispose(); this.capture?.dispose(); this.events.clear(); this.anchor = this.capture = undefined;
+    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = undefined;
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
     // Queued commands finish first: closing the core under one would turn its answer into an error.
@@ -316,6 +319,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     return range;
   }
 
+  /** The whole row under a cell, or the wrapped line it belongs to once the core answers. */
+  selectLineAt(row: number): TerminalRange {
+    const range = {start: {x: 0, y: row}, end: {x: this.mirror.state.columns - 1, y: row}};
+    this.refine(range, {kind: 'lineAt', row});
+    return range;
+  }
+
   selectAll() {
     const range = {start: {x: 0, y: 0}, end: {x: this.mirror.state.columns - 1, y: this.mirror.state.viewport.length - 1}};
     this.select(range);
@@ -323,7 +333,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
 
   /** The contract answers synchronously from the window; the core's answer replaces `guess` if that is still the selection (an empty buffer selects nothing). */
-  private refine(guess: TerminalRange, query: NativeCoreQuery & {kind: 'wordAt' | 'bufferRange'}) {
+  private refine(guess: TerminalRange, query: NativeCoreQuery & {kind: 'wordAt' | 'lineAt' | 'bufferRange'}) {
     if (!this.bridge.query || this.disposed) return;
     this.ask(query).then(answer => {
       const now = this.selected;
