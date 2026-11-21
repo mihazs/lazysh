@@ -207,6 +207,13 @@ user state directory); a hook run with a different state directory records
 elsewhere. When the hook files are configured and `localEvent` is `none`, the panel
 says the host has recorded no event from that agent and what to do next.
 
+The store is opened through a read-only file system layer: every file is opened
+without write or create rights, every delete is refused and the write-ahead index is
+mapped read-only, so `status` never creates, changes or removes the store, its log or
+its index, even when another process removes one while it reads (the read then fails
+and the state is `notChecked`). A store whose log or index is missing reads as
+`notChecked` rather than being repaired.
+
 The report is additive in both directions. A client that predates it ignores
 `readiness`; a client that has it shows every step as not checked when an older
 companion sends none, and ignores a report with another `schemaVersion` or a

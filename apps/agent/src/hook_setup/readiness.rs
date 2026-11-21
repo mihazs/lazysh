@@ -4,7 +4,7 @@ use super::AgentProfile;
 #[cfg(not(windows))]
 use chrono::{DateTime, SecondsFormat};
 #[cfg(not(windows))]
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::io;
 #[cfg(not(windows))]
@@ -68,17 +68,7 @@ fn latest(agent: &str) -> io::Result<Option<String>> {
 
 #[cfg(not(windows))]
 fn newest(path: &Path, agent: &str) -> rusqlite::Result<Option<String>> {
-    let connection = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?;
-    // Same as the store itself: closing must never checkpoint or remove another process's log.
-    connection.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
-        true,
-    )?;
+    let connection = super::readonly_store::open_store(path)?;
     connection.busy_timeout(Duration::from_millis(500))?;
     let seconds: Option<f64> = connection
         .query_row(
