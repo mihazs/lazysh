@@ -61,7 +61,7 @@ export let generationBase=0;
 
 export const unlockedStatus = () => ({initialized:true,supported:true,reason:'',enabled:false,locked:false,generation:String(generationBase),nonce:'a'.repeat(64)});
 
-vi.mock("@tauri-apps/api/core", () => ({ isTauri:()=>true, invoke: (...request:[string,unknown?,unknown?]) => {
+vi.mock("@tauri-apps/api/core", () => ({ isTauri:()=>true, Channel: class { onmessage?: unknown; }, invoke: (...request:[string,unknown?,unknown?]) => {
   const [command]=request;
   if(command==='app_lock_status')return Promise.resolve(unlockedStatus());
   if(command==='app_lock_ready')return Promise.resolve();
