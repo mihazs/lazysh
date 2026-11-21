@@ -11,12 +11,12 @@ use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
 
+#[cfg(all(target_os = "android", feature = "native-terminal"))]
+mod android;
 #[cfg(all(target_os = "linux", feature = "native-terminal"))]
 pub(crate) mod linux;
 #[cfg(feature = "native-terminal")]
 mod panes;
-#[cfg(all(target_os = "android", feature = "native-terminal"))]
-mod android;
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
 const MAX_SESSION_LEN: usize = 64;
