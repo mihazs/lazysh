@@ -10,6 +10,16 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.95.0] - 2026-11-21
+
+### New
+
+- **terminal:** hide the gesture indicator lines by default and add a setting to show them ([#2303](https://github.com/mihazs/lazysh/pull/2303))
+
+### Fixed
+
+- **terminal:** Long-press a URL selects and copies the whole address, however it wraps ([#2295](https://github.com/mihazs/lazysh/pull/2295))
+
 ## [1.94.0] - 2026-11-21
 
 ### New
