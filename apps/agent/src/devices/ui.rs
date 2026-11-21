@@ -333,7 +333,7 @@ mod tests {
             self.calls.push(arguments.to_vec());
             Ok(self.outputs.remove(0))
         }
-        fn launch(&mut self, _: Tool, _: &[String]) -> Result<()> {
+        fn launch(&mut self, _: Tool, _: &[String], _: std::time::Duration) -> Result<bool> {
             panic!("an accessibility read never launches a process");
         }
     }
