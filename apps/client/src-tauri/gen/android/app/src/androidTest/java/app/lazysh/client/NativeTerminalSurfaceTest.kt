@@ -53,7 +53,7 @@ class NativeTerminalSurfaceTest {
 
     @Before fun developerBuild() {
         TerminalSurfaces.enabled = true
-        TerminalSurfaces.clientFactory = { Recorder(it).also { made -> recorder = made } }
+        TerminalSurfaces.clientFactory = { _, background -> Recorder(background).also { made -> recorder = made } }
         PageDriver.awaitStartPage()
     }
 
@@ -187,6 +187,15 @@ class NativeTerminalSurfaceTest {
         assertFalse(gone.getBoolean("placed"))
         assertEquals(0, gone.getInt("generation"))
         assertEquals("removing what is not there is not an error", "null", PageDriver.invoke("native_terminal_surface_remove", "{session:'$session'}"))
+    }
+
+    @Test fun theDefaultClientKeepsTheBackgroundForASessionTheRendererHostCannotDraw() {
+        // No native core exists for this id (and a build without the feature has no renderer host at all): the renderer host
+        // refuses and the surface still shows the pane background rather than undrawn memory.
+        TerminalSurfaces.clientFactory = factoryBefore
+        place(PageDriver.anchor("left:10%;top:25%;width:50%;height:30%"))
+        awaitReady(1)
+        awaitBackground()
     }
 
     @Test fun aReleaseBuildRefusesAndShowsNothing() {
