@@ -10,6 +10,24 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.93.0] - 2026-11-21
+
+### New
+
+- **notifications:** add the nested-agent and unlocked-desktop switches to the host settings panel ([#1972](https://github.com/mihazs/lazysh/pull/1972))
+- **agents:** send a dialog's keys only after the host reads the pane again and finds that dialog once ([#1968](https://github.com/mihazs/lazysh/pull/1968))
+- **agents:** map Grok Build sub-agent, background job and edit records to the work cards ([#1986](https://github.com/mihazs/lazysh/pull/1986))
+- **browser:** stream the host's Firefox through WebDriver BiDi in the relay ([#1996](https://github.com/mihazs/lazysh/pull/1996))
+
+### Fixed
+
+- **agent:** start the Android video preview on an idle screen of a guest that prints a warning line ([#1987](https://github.com/mihazs/lazysh/pull/1987))
+
+### Under the hood
+
+- **zellij:** drive the Zellij shortcut panel against a real session in the Linux GUI ([#1991](https://github.com/mihazs/lazysh/pull/1991))
+- **android:** choose the QR fixture in the Photo Picker that API 36 opens for image inputs ([#2276](https://github.com/mihazs/lazysh/pull/2276))
+
 ## [1.92.3] - 2026-11-21
 
 ### Fixed
