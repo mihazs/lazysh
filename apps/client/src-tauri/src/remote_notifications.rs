@@ -43,32 +43,58 @@ struct Shared {
     generation: u64,
     error: Option<&'static str>,
 }
-/// Serializes start, stop and every report of the running poller.
+/// Serializes start, stop and every report of the running poller. The second field is the commit gate: the
+/// physical changes to the credential store and the settings file take it, one at a time.
 #[derive(Default)]
-pub struct RemoteState(Arc<Mutex<Shared>>);
+pub struct RemoteState(Arc<Mutex<Shared>>, Mutex<()>);
 fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
     shared
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 impl RemoteState {
-    fn stop(&self) {
+    /// Enters a request that starts receiving or changes what is stored. Its ticket stays valid until any
+    /// newer request, pause or removal enters, so an older operation that is still running cannot finish
+    /// after a newer one: it starts nothing and writes nothing.
+    fn request(&self) -> u64 {
+        let mut shared = lock(&self.0);
+        shared.generation += 1;
+        shared.generation
+    }
+    /// Pause or removal: ends the poller and returns the ticket for the changes that go with it.
+    fn stop(&self) -> u64 {
         let mut shared = lock(&self.0);
         shared.generation += 1;
         shared.error = None;
         if let Some(task) = shared.task.take() {
             task.abort();
         }
+        shared.generation
     }
+    /// Runs `change` (a write to the credential store or the settings file) alone, and only while `ticket`
+    /// is still the newest request; `None` when a newer one entered first. A native keychain call cannot be
+    /// cancelled once it started, so the gate orders the whole change instead of trying to interrupt it.
+    fn commit<T>(&self, ticket: u64, change: impl FnOnce() -> T) -> Option<T> {
+        let _gate = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (lock(&self.0).generation == ticket).then(change)
+    }
+    /// Starts the poller for `ticket`; false, and nothing started, when a newer request or a pause came first.
     fn start(
         &self,
+        ticket: u64,
         reader: Reader,
         interval: Duration,
         show: impl Fn() -> Result<(), &'static str> + Send + 'static,
-    ) {
-        self.stop();
+    ) -> bool {
         let mut shared = lock(&self.0);
-        let generation = shared.generation;
+        if shared.generation != ticket {
+            return false;
+        }
+        if let Some(task) = shared.task.take() {
+            task.abort();
+        }
+        shared.error = None;
+        let generation = ticket;
         let state = self.0.clone();
         shared.task = Some(tauri::async_runtime::spawn(async move {
             let report = {
@@ -91,10 +117,11 @@ impl RemoteState {
                 shared.task = None;
             }
         }));
+        true
     }
-    fn begin(&self, app: &AppHandle, reader: Reader) {
+    fn begin(&self, app: &AppHandle, ticket: u64, reader: Reader) -> bool {
         let app = app.clone();
-        self.start(reader, INTERVAL, move || notify(&app));
+        self.start(ticket, reader, INTERVAL, move || notify(&app))
     }
     fn snapshot(&self) -> (bool, Option<&'static str>) {
         let shared = lock(&self.0);
@@ -184,7 +211,7 @@ fn require_desktop() -> Result<(), String> {
     }
 }
 /// Reads the saved token and starts the poller; the first poll only records a baseline.
-fn resume(app: &AppHandle, state: &RemoteState, origin: &str) -> Result<(), String> {
+fn resume(app: &AppHandle, state: &RemoteState, ticket: u64, origin: &str) -> Result<(), String> {
     let stored = Zeroizing::new(
         app.vault()
             .get(ACCOUNT)
@@ -192,7 +219,7 @@ fn resume(app: &AppHandle, state: &RemoteState, origin: &str) -> Result<(), Stri
             .ok_or("credentials")?,
     );
     let secret: Secret = serde_json::from_str(&stored).map_err(|_| "credentials")?;
-    state.begin(app, Reader::new(client()?, origin, &secret.token)?);
+    state.begin(app, ticket, Reader::new(client()?, origin, &secret.token)?);
     Ok(())
 }
 
@@ -203,22 +230,32 @@ pub fn install(app: &tauri::App) {
         return;
     }
     let handle = app.handle().clone();
-    if let Ok(Some(Meta {
-        origin,
-        enabled: true,
-    })) = meta_path(&handle).and_then(|path| read_meta(&path))
-    {
-        tauri::async_runtime::spawn_blocking(move || {
-            let state = handle.state::<RemoteState>();
-            if let Err(code) = resume(&handle, &state, &origin) {
-                lock(&state.0).error = Some(if code == "credentials" {
+    // The startup takes its place in the request order now, and reads the settings again under the gate, so
+    // a pause or removal that lands before it runs wins.
+    let ticket = handle.state::<RemoteState>().request();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<RemoteState>();
+        let started = state.commit(ticket, || {
+            let Ok(Some(Meta {
+                origin,
+                enabled: true,
+            })) = meta_path(&handle).and_then(|path| read_meta(&path))
+            else {
+                return Ok(());
+            };
+            resume(&handle, &state, ticket, &origin)
+        });
+        if let Some(Err(code)) = started {
+            let mut shared = lock(&state.0);
+            if shared.generation == ticket {
+                shared.error = Some(if code == "credentials" {
                     "credentials"
                 } else {
                     "storage"
                 });
             }
-        });
-    }
+        }
+    });
 }
 
 #[tauri::command]
@@ -243,6 +280,7 @@ pub async fn remote_notifications_configure(
     access
         .run(async {
             require_desktop()?;
+            let ticket = state.request();
             if !valid_gotify_token(&token) {
                 return Err("token".to_owned());
             }
@@ -261,14 +299,19 @@ pub async fn remote_notifications_configure(
                 origin,
                 enabled: true,
             };
-            tauri::async_runtime::spawn_blocking(move || {
-                saved.vault().set(ACCOUNT, &stored)?;
-                write_meta(&meta_path(&saved)?, &meta)
+            let committed = tauri::async_runtime::spawn_blocking(move || {
+                saved.state::<RemoteState>().commit(ticket, || {
+                    saved.vault().set(ACCOUNT, &stored)?;
+                    write_meta(&meta_path(&saved)?, &meta)
+                })
             })
             .await
-            .map_err(|_| "storage")?
             .map_err(|_| "storage")?;
-            state.begin(&app, reader);
+            // `None`: a newer request or a pause came first, and its result stands.
+            if let Some(saved) = committed {
+                saved.map_err(|_: String| "storage")?;
+                state.begin(&app, ticket, reader);
+            }
             Ok(status(&app, &state))
         })
         .await
@@ -284,12 +327,16 @@ pub async fn remote_notifications_pause(
     access
         .run(async {
             require_desktop()?;
-            state.stop();
-            let path = meta_path(&app)?;
-            if let Some(mut meta) = read_meta(&path)? {
-                meta.enabled = false;
-                write_meta(&path, &meta)?;
-            }
+            let ticket = state.stop();
+            let paused = state.commit(ticket, || {
+                let path = meta_path(&app)?;
+                if let Some(mut meta) = read_meta(&path)? {
+                    meta.enabled = false;
+                    write_meta(&path, &meta)?;
+                }
+                Ok::<(), String>(())
+            });
+            paused.transpose()?;
             Ok(status(&app, &state))
         })
         .await
@@ -304,18 +351,21 @@ pub async fn remote_notifications_resume(
     access
         .run(async {
             require_desktop()?;
-            let path = meta_path(&app)?;
-            let mut meta = read_meta(&path)?.ok_or("credentials")?;
+            let ticket = state.request();
             let handle = app.clone();
-            let origin = meta.origin.clone();
-            let state_handle = app.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                resume(&handle, &state_handle.state::<RemoteState>(), &origin)
+            let resumed = tauri::async_runtime::spawn_blocking(move || {
+                let state = handle.state::<RemoteState>();
+                state.commit(ticket, || {
+                    let path = meta_path(&handle)?;
+                    let mut meta = read_meta(&path)?.ok_or("credentials")?;
+                    resume(&handle, &state, ticket, &meta.origin)?;
+                    meta.enabled = true;
+                    write_meta(&path, &meta)
+                })
             })
             .await
-            .map_err(|_| "storage")??;
-            meta.enabled = true;
-            write_meta(&path, &meta)?;
+            .map_err(|_| "storage")?;
+            resumed.transpose()?;
             Ok(status(&app, &state))
         })
         .await
@@ -332,19 +382,22 @@ pub async fn remote_notifications_forget(
     access
         .run(async {
             require_desktop()?;
-            state.stop();
+            let ticket = state.stop();
             let removed = app.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                removed.vault().delete(ACCOUNT).map_err(|_| "storage")?;
-                match std::fs::remove_file(meta_path(&removed)?) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        Err("storage".to_owned())
+            let forgotten = tauri::async_runtime::spawn_blocking(move || {
+                removed.state::<RemoteState>().commit(ticket, || {
+                    removed.vault().delete(ACCOUNT).map_err(|_| "storage")?;
+                    match std::fs::remove_file(meta_path(&removed)?) {
+                        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                            Err("storage".to_owned())
+                        }
+                        _ => Ok(()),
                     }
-                    _ => Ok(()),
-                }
+                })
             })
             .await
-            .map_err(|_| "storage")??;
+            .map_err(|_| "storage")?;
+            forgotten.transpose()?;
             Ok(status(&app, &state))
         })
         .await
@@ -418,12 +471,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_start_requested_before_a_pause_never_polls_after_it() {
+        let server = server().await;
+        let state = Arc::new(RemoteState::default());
+        let ticket = state.request();
+        // The pending start is scheduled, then Pause returns, then the start runs.
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let pending = state.clone();
+        let reader = server.reader;
+        let worker = tokio::spawn(async move {
+            wait.await.unwrap();
+            pending.start(ticket, reader, Duration::from_millis(20), || Ok(()))
+        });
+        state.stop();
+        release.send(()).unwrap();
+        assert!(!worker.await.unwrap());
+        assert_eq!(state.snapshot(), (false, None));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_newer_request_wins_over_an_older_one_that_is_still_running() {
+        let server = server().await;
+        let state = RemoteState::default();
+        let (older, newer) = (state.request(), state.request());
+        let rival = Reader::new(lazysh_notification_client::http_client().unwrap(), "https://gotify.example.com", "client-token").unwrap();
+        assert!(!state.start(older, rival, Duration::from_millis(20), || Ok(())));
+        assert!(state.start(newer, server.reader, Duration::from_millis(20), || Ok(())));
+        assert_eq!(state.snapshot(), (true, None));
+        state.stop();
+    }
+
+    #[test]
+    fn a_change_is_refused_after_a_pause_or_a_newer_request_and_changes_never_overlap() {
+        let state = Arc::new(RemoteState::default());
+        let (resume, other) = (state.request(), state.request());
+        assert_eq!(state.commit(resume, || "stale"), None);
+        let removal = state.stop();
+        assert_eq!(state.commit(other, || "stale"), None);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (first, shared) = (state.request(), log.clone());
+        let running = state.clone();
+        let started = Arc::new(std::sync::Barrier::new(2));
+        let barrier = started.clone();
+        let slow = std::thread::spawn(move || {
+            running.commit(first, || {
+                barrier.wait();
+                std::thread::sleep(Duration::from_millis(100));
+                shared.lock().unwrap().push("configure");
+            })
+        });
+        started.wait();
+        // The removal's ticket is already stale; a newer pause waits for the running change, then writes.
+        assert_eq!(state.commit(removal, || ()), None);
+        let pause = state.stop();
+        assert_eq!(state.commit(pause, || log.lock().unwrap().push("pause")), Some(()));
+        assert_eq!(slow.join().unwrap(), Some(()));
+        assert_eq!(*log.lock().unwrap(), ["configure", "pause"]);
+    }
+
+    #[tokio::test]
     async fn one_generic_alert_per_new_attention_event_and_nothing_after_a_pause() {
         let server = server().await;
         let shown = Arc::new(AtomicUsize::new(0));
         let state = RemoteState::default();
         let count = shown.clone();
-        state.start(server.reader, Duration::from_millis(20), move || {
+        state.start(state.request(), server.reader, Duration::from_millis(20), move || {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         });
@@ -468,7 +582,7 @@ mod tests {
     ) {
         let server = server().await;
         let state = RemoteState::default();
-        state.start(server.reader, Duration::from_millis(20), || {
+        state.start(state.request(), server.reader, Duration::from_millis(20), || {
             Err("notification_permission")
         });
         until(|| server.requests.load(Ordering::SeqCst) >= 1).await;
