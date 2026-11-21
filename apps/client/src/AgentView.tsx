@@ -282,6 +282,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{
     request.current++;setSelecting(false);setUnavailable(false);
+    // The focused pane's own agent is not "another pane": choosing it returns to the linked view with its composer.
+    if(focus?.link && focus.link.pane_id===live.pane_id && focus.link.terminal_id===live.terminal_id){setPicked(undefined);setChoosing(false);return;}
     setPicked(herdrSelection(live,server,{focusKey:lastFocus.current,enter:{server,target:{kind:'pane',workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id}}}));
   };
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;

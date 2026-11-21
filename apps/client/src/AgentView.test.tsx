@@ -621,6 +621,15 @@ it('lets the user look at another agent and come back to the pane\'s own, keepin
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
 });
 
+it('treats choosing the focused pane\'s own agent as this pane, keeping its composer',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  render(view());await advance(0);
+  fireEvent.click(within(options()).getByRole('button',{name:'Choose another agent'}));await advance(0);
+  fireEvent.click(within(screen.getByText('/work/one').closest('article')!).getByRole('button',{name:/Open conversation/}));await advance(0);
+  expect(screen.queryByText('Not this pane')).toBeNull();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
+});
+
 it('drops a hand-picked conversation when focus moves to another pane',async()=>{
   const state={focus:'w2E:p3'};server(state);
   render(view());await advance(0);
