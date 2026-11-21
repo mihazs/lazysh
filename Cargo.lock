@@ -4087,6 +4087,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "url",
