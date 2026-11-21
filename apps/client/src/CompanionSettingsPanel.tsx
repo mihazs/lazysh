@@ -3,6 +3,7 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 import HostBrowserSwitch from './HostBrowserSwitch';
+import NotificationSwitches from './NotificationSwitches';
 
 
 const policies=['install','notify','off'] as const;
@@ -90,6 +91,7 @@ export default function CompanionSettingsPanel({sessionId,hostKey=sessionId,visi
     </fieldset></form>}
     {saved&&<p role="status">{t('companionSaved')}</p>}
     <HostBrowserSwitch key={sessionId} sessionId={sessionId} hostKey={hostKey} visible={visible} reload={reload}/>
+    {draft&&loadedSource.current===sessionId&&<NotificationSwitches key={`notifications:${sessionId}`} sessionId={sessionId} visible={visible} reload={reload}/>}
     <p className="agent-note">{t('companionIndependent')}</p>
   </section>;
 }

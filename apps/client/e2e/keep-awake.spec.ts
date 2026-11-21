@@ -1,5 +1,5 @@
 import {expect,test,type Page} from '@playwright/test';
-import {installNativeBridge} from './fixtures/nativeBridge';
+import {idleHostSettings,installNativeBridge} from './fixtures/nativeBridge';
 import {openAgentSetup} from './fixtures/workspaceControl';
 import type {mountAgentAwakeHarness} from './fixtures/AgentAwakeHarness';
 declare global {interface Window {
@@ -8,7 +8,7 @@ declare global {interface Window {
 }}
 async function fixture(page:Page) {
   await installNativeBridge(page,undefined,{nativeEvents:true});
-  await page.addInitScript(()=>{
+  await page.addInitScript(hostSettings=>{
     const f=window.awakeFixture={calls:[] as string[],active:null as number|null,epoch:'0/11111111-1111-4111-8111-111111111111',ticket:0,closed:0,available:true};
     const status=(ticket:number)=>({epoch:f.epoch,ticket,available:f.available,active:f.active!==null,reason:'Synthetic native display ownership; no OS inhibitor is acquired.'});
     window.nativeFixtureInvoke=async(command,args)=>{
@@ -17,8 +17,7 @@ async function fixture(page:Page) {
       if(command==='local_capability')return {available:false,reason:'Synthetic board fixture.'};
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
-      if(command==='get_companion_settings')return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
-      if(command==='get_host_browser_settings')return {schemaVersion:1,revision:0,hostBrowserEnabled:false};
+      if(command in hostSettings)return hostSettings[command as keyof typeof hostSettings];
       if(command==='board_keep_awake_status')return status(++f.ticket);
       if(command==='board_keep_awake_acquire'){
         const owner=args.request as {epoch:string;ticket:number};
@@ -33,7 +32,7 @@ async function fixture(page:Page) {
       if(command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected board fixture command: ${command}`);
     };
-  });
+  },idleHostSettings);
   await page.goto('/');
   await page.evaluate(async()=>{
     const {mountAgentAwakeHarness}=await import('/e2e/fixtures/AgentAwakeHarness.tsx');

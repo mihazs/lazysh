@@ -6,7 +6,7 @@ import AgentPanel from '../AgentPanel';
 import ApprovalPanel from '../ApprovalPanel';
 import CompanionSettingsPanel from '../CompanionSettingsPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
-import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,hostBrowserSettings,inactiveBoardDisplay} from '../test/agentBoardData';
+import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,hostBrowserSettings,notificationPolicy,inactiveBoardDisplay} from '../test/agentBoardData';
 import {t,uiI18n} from './core';
 vi.mock('@tauri-apps/api/core',async original=>(await import('../test/nativeCoreMock')).mockNativeCore(original));
 beforeEach(()=>{
@@ -16,7 +16,7 @@ beforeEach(()=>{
 afterEach(async()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.clearAllMocks();await uiI18n.changeLanguage('en');});
 async function languagesKeep(check:()=>void){const calls=[...vi.mocked(invoke).mock.calls];for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);}}
 it('preserves reported rows, unsaved switches and all child ownership while translating the complete board',async()=>{
-  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:inactiveBoardDisplay);
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:command==='get_notification_policy'?notificationPolicy:inactiveBoardDisplay);
   const view=render(<AgentPanel sessionId={agentBoardSession}/>);
   await screen.findByText(agentBoardRecord.summary);fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
   const card=view.container.querySelector('.agent-card');const keepAwake=screen.getByRole('region',{name:t('keepAwakeRegion')});
@@ -79,7 +79,7 @@ it('leaves expired decisions disabled in every interface language',async()=>{
 });
 it('retains the exact settings revision/booleans through held save and translates its local refresh warning around raw host text',async()=>{
   let reject!:(reason:unknown)=>void;
-  vi.mocked(invoke).mockImplementation(async command=>command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:new Promise((_,no)=>{reject=no;}));
+  vi.mocked(invoke).mockImplementation(async command=>command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:command==='get_notification_policy'?notificationPolicy:new Promise((_,no)=>{reject=no;}));
   render(<CompanionSettingsPanel sessionId={agentBoardSession}/>);fireEvent.click(await screen.findByLabelText(t('companionDevices')));fireEvent.click(screen.getByRole('button',{name:t('companionSave')}));
   await languagesKeep(()=>{expect(screen.getByRole('status').textContent).toBe(t('companionBusy'));expect(screen.getByLabelText(t('companionDevices'))).toHaveProperty('checked',false);});
   expect(invoke).toHaveBeenLastCalledWith('update_companion_settings',{sessionId:agentBoardSession,settings:{expectedRevision:7,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:false}},{headers:{'X-Lazysh-Access':'c'.repeat(64)}});

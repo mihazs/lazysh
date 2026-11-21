@@ -237,6 +237,8 @@ fn main() {
         "update_companion_settings",
         "get_host_browser_settings",
         "update_host_browser_settings",
+        "get_notification_policy",
+        "update_notification_policy",
         "agent_transcript",
         "agent_usage",
         "account_usage",
