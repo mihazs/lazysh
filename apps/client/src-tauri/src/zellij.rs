@@ -182,6 +182,10 @@ fn command(session: &str, action: &ZellijAction) -> Result<Cmd> {
     };
     session_command(session, args)
 }
+/// The whole scrollback of the session's focused pane on stdout; Zellij bounds it with `scroll_buffer_size`.
+pub(crate) fn history_command(session: &str) -> Result<String> {
+    Ok(session_command(session, vec!["dump-screen".into(), "--full".into()])?.render())
+}
 /// One tab of a session as `zellij action list-tabs --json` reports it. `id` is the stable `tab_id` that close and rename address; a Zellij that does not report one leaves it out and the tab can still be selected.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct ZellijTab {
@@ -643,6 +647,29 @@ mod tests {
             panes_command("a'$(touch nope)").unwrap().render(),
             "zellij '--session=a'\\''$(touch nope)' action list-panes --json --all"
         );
+    }
+    #[test]
+    fn history_runs_dump_screen_for_a_hostile_session_name_without_running_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let canary = dir.path().join("nope");
+        let hostile = format!(
+            "a'$(touch {0});`touch {0}`;touch {0} #\"x y\\",
+            canary.display()
+        );
+        let command = history_command(&hostile).unwrap();
+        // A stub `zellij` prints its argv one word per line, so a name that split into words or ran a substitution shows.
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("zellij() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            format!("--session={hostile}\naction\ndump-screen\n--full\n")
+        );
+        assert!(!canary.exists());
+        assert!(history_command("").is_err());
+        assert!(history_command("a\nb").is_err());
     }
     #[test]
     fn lists_tabs_from_the_json_the_cli_prints_and_refuses_anything_else() {
@@ -1456,6 +1483,16 @@ mod tests {
         assert_eq!(tab_count().unwrap(), 1);
         assert_eq!(active_tab().unwrap(), 0);
         assert!(!temp.path().join("nope").exists());
+        // History: the focused pane's scrollback comes from Zellij, so line 1 survives 5000 lines.
+        for input in ["write-chars 'seq 1 5000'", "write 10"] {
+            run(format!("zellij --session={} action {input}", quote(&name)));
+        }
+        let history = crate::multiplexer_history::read_numbered_5000(
+            || run(history_command(&name).unwrap()),
+            None,
+        );
+        assert!(!history.truncated);
+        assert!(history.text.lines().any(|line| line == "1"));
         // Close the second pane by its number: the first stays, with the name it was given.
         run(command(
             &name,

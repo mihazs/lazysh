@@ -203,3 +203,20 @@ it('follows a renamed or closed Zellij session in the session list and hides Ren
   expect(screen.getByRole('button', { name: 'Control Zellij other' })).toBeTruthy();
   view.unmount();
 });
+
+it('offers History for the attached multiplexer only while discovery does not mark it missing', async () => {
+  const attached = { kind: 'herdr', name: 'work' } as const;
+  const tools = (missing: string[]) => ({ ...tree, herdrAvailable: true, tools: [{ kind: 'herdr', version: '0.9.5', support: 'full', missing }] });
+  vi.mocked(invoke).mockResolvedValue(tools([]));
+  const full = render(<MuxPanel sessionId="ssh1" attached={attached} onAttach={vi.fn()} />);
+  expect(await screen.findByRole('button', { name: 'Read history' })).toBeTruthy();
+  full.unmount();
+  vi.mocked(invoke).mockResolvedValue(tools(['history']));
+  const limited = render(<MuxPanel sessionId="ssh1" attached={attached} onAttach={vi.fn()} />);
+  await screen.findByText('Herdr 0.9.5 (Supported)', { exact: false });
+  expect(screen.queryByRole('button', { name: 'Read history' })).toBeNull();
+  limited.unmount();
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
+  await screen.findByRole('button', { name: 'Attach work' });
+  expect(screen.queryByRole('button', { name: 'Read history' })).toBeNull();
+});
