@@ -1958,6 +1958,14 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
         }
         drop(peer);
         if attempt == 1 {
+            // Serialized first, so the killed session stays listed as exited and a reattach could resurrect it (#2047).
+            exec_for_access(
+                &native,
+                format!("zellij --session {} action save-session", quote(name)),
+                &lease,
+            )
+            .await
+            .unwrap();
             exec_for_access(
                 &native,
                 format!("zellij kill-session -- {}", quote(name)),
@@ -2003,12 +2011,15 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
     );
     let listed = exec_for_access(
         &bootstrap,
-        "zellij list-sessions --short --no-formatting || true".into(),
+        "zellij list-sessions --no-formatting || true".into(),
         &lease,
     )
     .await
     .unwrap();
-    assert_eq!(listed.trim(), "", "no session may have been created");
+    assert!(
+        listed.lines().all(|line| line.is_empty() || line.contains("(EXITED")),
+        "no session may have been created or resurrected: {listed}"
+    );
     disconnect_inner(&state, gone.session_id.clone())
         .await
         .unwrap();

@@ -6852,7 +6852,7 @@ mod tests {
     }
     #[tokio::test]
     async fn a_zellij_reattach_needs_the_session_and_never_creates_it() {
-        let (outcome, commands) = attach_zellij(Some(false), "other\n").await;
+        let (outcome, commands) = attach_zellij(Some(false), "other [Created 1m ago] \n").await;
         assert_eq!(
             outcome, "multiplexer_unavailable",
             "a vanished session must fail instead of starting an empty one"
@@ -6861,7 +6861,19 @@ mod tests {
             commands.iter().all(|command| !command.contains("attach")),
             "{commands:?}"
         );
-        let (outcome, commands) = attach_zellij(Some(false), "other\nnotes\n").await;
+        // A serialized exited session is listed too, and `zellij attach` would resurrect it.
+        let (outcome, commands) = attach_zellij(
+            Some(false),
+            "notes [Created 1h ago] (EXITED - attach to resurrect)\n",
+        )
+        .await;
+        assert_eq!(outcome, "multiplexer_unavailable");
+        assert!(
+            commands.iter().all(|command| !command.contains("attach")),
+            "{commands:?}"
+        );
+        let (outcome, commands) =
+            attach_zellij(Some(false), "other [Created 1m ago] \nnotes [Created 2s ago] \n").await;
         assert_eq!(outcome, "attached");
         let attach = commands
             .iter()
