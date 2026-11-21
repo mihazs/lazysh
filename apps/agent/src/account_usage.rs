@@ -3,6 +3,10 @@ use crate::{Error, Result};
 use lazysh_account_usage::Response;
 use tokio::{io::AsyncReadExt, sync::watch};
 pub fn run(watch_channel: bool) -> Result<Response> {
+    // Checked before any credential file, helper process or request: a forbidden read is unknown, never zero.
+    if !crate::usage_collection::read(&crate::state_directory()?)?.account_quota_enabled {
+        return Ok(Response::unavailable("disabled"));
+    }
     let (cancel, mut cancelled) = watch::channel(false);
     ctrlc::set_handler(move || {
         cancel.send_replace(true);

@@ -61,6 +61,7 @@ mod tmux_jump;
 mod tmux_server;
 mod transcript_watch;
 mod ui_locale;
+mod usage_collector;
 mod vault;
 mod voice;
 mod zellij;
@@ -178,6 +179,7 @@ pub fn run() {
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
                 account_usage::account_usage,
+                usage_collector::usage_collector_status,
                 clipboard::clipboard_read,
                 clipboard::clipboard_cancel,
                 clipboard::clipboard_is_android,
