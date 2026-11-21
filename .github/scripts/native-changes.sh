@@ -28,12 +28,12 @@ package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
     # The app's native-terminal bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt (native-terminal-bridge).
-    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge terminal_windows ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
+    herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge terminal_windows android_core ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
     herdr-upstream/*) add herdr terminal_runtime ;;
     herdr-guard/*) add herdr ;;
     terminal-runtime/prototypes) add linux_surface ;; # a standalone prototype crate with its own lock file: only its own job builds it.
-    terminal-runtime/*) add terminal_runtime terminal_bridge terminal_windows ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt. terminal-windows builds and tests it again on Windows.
-    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge terminal_windows ;; # the app compiles it with the native-terminal feature.
+    terminal-runtime/*) add terminal_runtime terminal_bridge terminal_windows android_core ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt. terminal-windows builds and tests it again on Windows.
+    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge terminal_windows android_core ;; # the app compiles it with the native-terminal feature.
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
@@ -84,7 +84,7 @@ classify() {
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/regression-check.test.ts | tests/native-changes.test.ts | \
       tests/pinned-download.test.ts | tests/herdr-release.test.ts | tests/speech-fixtures.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
-      tests/waydroid-lane.test.ts | \
+      tests/waydroid-lane.test.ts | tests/native-lib-size.test.ts | \
       .github/workflows/main-verdict.yml | .github/workflows/conventional-commits.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
     *.md) add docs ;;
@@ -135,6 +135,7 @@ for output in \
   "desktop=$(flag any client agent)" \
   "android=$(flag any client android)" \
   "android_runtime=$android_runtime" \
+  "android_terminal_core=$(flag any client android android_core)" \
   "android_mosh=$(flag has mosh)" \
   "android_herdr=$android_herdr" \
   "android_appium=$android_appium" \
