@@ -160,6 +160,10 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 - New dock buttons ignore taps for 400 ms after they appear.
 - Android back from the Agent view returns to the terminal view of the same session.
   The keyboard, IME composition and attachments follow the existing composer rules.
+  A touch keyboard can keep the last word as an open composition with no `compositionend`
+  (seen on an Android 13 WebView, #1840): Send, Stage in terminal and Stop stay enabled and
+  first leave the field, which ends the composition, then act once on the committed draft.
+  Enter on a hardware keyboard is still ignored while composing.
 - The composer is always under a followed conversation (`AgentComposer`). On tmux it
   binds itself to the pane a hook report names: the destination returned by the guarded
   `snapshot` must carry that exact pane ID before the guarded `bind` is sent, so no
